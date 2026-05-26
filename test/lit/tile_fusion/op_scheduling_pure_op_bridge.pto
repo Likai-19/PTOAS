@@ -1,0 +1,39 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Guards OpScheduling against treating memory-effect-free non-fusion ops as
+// hard barriers. Pure ops like arith.constant / arith.index_cast may appear
+// between planned group members without preventing the group from becoming one
+// contiguous fusion span.
+//
+// RUN: ptoas --pto-arch=a5 --pto-level=level2 --enable-op-fusion --emit-pto-ir %s --mlir-print-ir-after=pto-op-scheduling -o /dev/null 2>&1 | FileCheck %s --check-prefix=SCHEDULE
+
+module {
+  func.func @op_scheduling_pure_op_bridge(
+      %full0: !pto.tile_buf<vec, 32x32xf32>,
+      %full1: !pto.tile_buf<vec, 32x32xf32>,
+      %full2: !pto.tile_buf<vec, 32x32xf32>) {
+    %tmp0 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %tmp1 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %out = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+
+    pto.tadd ins(%full0, %full1 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%tmp0 : !pto.tile_buf<vec, 32x32xf32>)
+    %c0 = arith.constant 0 : index
+    pto.tsub ins(%tmp0, %full2 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%tmp1 : !pto.tile_buf<vec, 32x32xf32>)
+    %c1 = arith.index_cast %c0 : index to i32
+    pto.tadd ins(%tmp1, %tmp0 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%out : !pto.tile_buf<vec, 32x32xf32>)
+    return
+  }
+}
+
+// SCHEDULE: // -----// IR Dump After OpScheduling (pto-op-scheduling) //----- //
+// SCHEDULE-LABEL: func.func @op_scheduling_pure_op_bridge(
+// SCHEDULE: pto.tadd{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 0 : i64}
+// SCHEDULE-NEXT: pto.tsub{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 1 : i64}
+// SCHEDULE-NEXT: pto.tadd{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 2 : i64}
+// SCHEDULE-NOT: expected one contiguous span per pto.fusion.group_id within a basic block

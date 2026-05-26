@@ -1,0 +1,53 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Guards PTOMarkLastUse when the same tile SSA value occupies multiple tile
+// operand slots of the same fused op. Each slot must be evaluated separately,
+// so repeated SSA operands can still both be last-use.
+//
+// RUN: { ptoas --pto-arch=a5 --pto-level=level2 --enable-op-fusion %s --mlir-print-ir-after=pto-mark-last-use -o /dev/null 2>&1 || true; } | FileCheck %s
+// RUN: ptoas --pto-arch=a5 --pto-level=level2 --enable-op-fusion %s -o - | FileCheck %s --check-prefix=CPP
+
+module {
+  func.func @mark_last_use_repeated_ssa_level2(
+      %dst_ptr: !pto.ptr<f32>,
+      %src: !pto.tile_buf<vec, 32x32xf32>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c32 = arith.constant 32 : index
+
+    %dst_view = pto.make_tensor_view %dst_ptr,
+      shape = [%c32, %c32], strides = [%c32, %c1]
+      : !pto.tensor_view<?x?xf32>
+    %dst_part = pto.partition_view %dst_view,
+      offsets = [%c0, %c0], sizes = [%c32, %c32]
+      : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<32x32xf32>
+
+    %tmp = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %out = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+
+    pto.tadd ins(%src, %src : !pto.tile_buf<vec, 32x32xf32>,
+                            !pto.tile_buf<vec, 32x32xf32>)
+             outs(%tmp : !pto.tile_buf<vec, 32x32xf32>)
+    pto.tadd ins(%tmp, %tmp : !pto.tile_buf<vec, 32x32xf32>,
+                            !pto.tile_buf<vec, 32x32xf32>)
+             outs(%out : !pto.tile_buf<vec, 32x32xf32>)
+    pto.tstore ins(%out : !pto.tile_buf<vec, 32x32xf32>)
+               outs(%dst_part : !pto.partition_tensor_view<32x32xf32>)
+    return
+  }
+}
+
+// CHECK: // -----// IR Dump After PTOMarkLastUse (pto-mark-last-use) //----- //
+// CHECK-LABEL: func.func @mark_last_use_repeated_ssa_level2(
+// CHECK: pto.tadd ins(%{{.*}}, %{{.*}} : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%{{.*}} : !pto.tile_buf<vec, 32x32xf32>) {pto.fusion.group_id = 0 : i64, pto.fusion.order = 0 : i64, pto.last_use = array<i64: 1, 1, 0>}
+// CHECK-NEXT: pto.tadd ins(%{{.*}}, %{{.*}} : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%{{.*}} : !pto.tile_buf<vec, 32x32xf32>) {pto.fusion.group_id = 0 : i64, pto.fusion.order = 1 : i64, pto.last_use = array<i64: 1, 1, 0>}
+
+// CPP-LABEL: __global__ AICORE void mark_last_use_repeated_ssa_level2(
+// CPP: {{\[\[pto::last_use\(0, 1, 1\)\]\] TADD\(}}
+// CPP: {{\[\[pto::last_use\(0, 1, 1\)\]\] TADD\(}}

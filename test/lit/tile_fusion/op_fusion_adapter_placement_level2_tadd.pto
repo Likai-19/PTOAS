@@ -1,0 +1,75 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Guards level2 fusion adapter placement around flat scheduled fusion spans,
+// shared memref lowering, optional sync insertion, and the non-fused baseline.
+//
+// RUN: ptoas --pto-arch=a5 --pto-level=level2 %s --emit-pto-ir -o - | FileCheck %s --check-prefix=NOFUSE
+// RUN: { ptoas --pto-arch=a5 --pto-level=level2 --enable-op-fusion --emit-pto-ir %s --mlir-print-ir-after=pto-view-to-memref -o /dev/null 2>&1 || true; } | FileCheck %s --check-prefix=SEAM
+// RUN: { ptoas --pto-arch=a5 --pto-level=level2 --enable-op-fusion --enable-insert-sync --emit-pto-ir %s --mlir-print-ir-after=pto-insert-sync -o /dev/null 2>&1 || true; } | FileCheck %s --check-prefix=SYNC
+
+module {
+  func.func @fusion_adapter_placement_level2_tadd(%dst_ptr: !pto.ptr<f32>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c32 = arith.constant 32 : index
+
+    %dst_view = pto.make_tensor_view %dst_ptr,
+      shape = [%c32, %c32], strides = [%c32, %c1]
+      : !pto.tensor_view<?x?xf32>
+    %dst_part = pto.partition_view %dst_view,
+      offsets = [%c0, %c0], sizes = [%c32, %c32]
+      : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<32x32xf32>
+
+    %a = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %b = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %c = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %d = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %tmp0 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %tmp1 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %out = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+
+    pto.tadd ins(%a, %b : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%tmp0 : !pto.tile_buf<vec, 32x32xf32>)
+    pto.tadd ins(%c, %d : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%tmp1 : !pto.tile_buf<vec, 32x32xf32>)
+    pto.tadd ins(%tmp0, %tmp1 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%out : !pto.tile_buf<vec, 32x32xf32>)
+    pto.tstore ins(%out : !pto.tile_buf<vec, 32x32xf32>)
+               outs(%dst_part : !pto.partition_tensor_view<32x32xf32>)
+    return
+  }
+}
+
+// NOFUSE-LABEL: func.func @fusion_adapter_placement_level2_tadd(
+// NOFUSE-NOT: pto.fusion_region
+// NOFUSE: pto.tadd ins(
+// NOFUSE-NEXT: pto.tadd ins(
+// NOFUSE-NEXT: pto.tadd ins(
+// NOFUSE: pto.tstore ins(
+// NOFUSE: return
+
+// SEAM-LABEL: func.func @fusion_adapter_placement_level2_tadd(
+// SEAM-NOT: pto.fusion_region
+// SEAM: memref.alloc()
+// SEAM: pto.bind_tile
+// SEAM: memref.alloc()
+// SEAM: pto.bind_tile
+// SEAM: memref.alloc()
+// SEAM: pto.bind_tile
+// SEAM: pto.tadd{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 0 : i64{{.*}}}
+// SEAM: pto.tadd{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 1 : i64{{.*}}}
+// SEAM: pto.tadd{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 2 : i64{{.*}}}
+// SEAM: pto.tstore ins(
+// SEAM: return
+
+// SYNC-LABEL: func.func @fusion_adapter_placement_level2_tadd(
+// SYNC-NOT: pto.fusion_region
+// SYNC: pto.tadd{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 0 : i64{{.*}}}
+// SYNC: pto.tadd{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 1 : i64{{.*}}}
+// SYNC: pto.tadd{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 2 : i64{{.*}}}
+// SYNC: pto.tstore ins(
+// SYNC: pto.barrier <PIPE_ALL> {pto.auto_sync_tail_barrier}
+// SYNC: return

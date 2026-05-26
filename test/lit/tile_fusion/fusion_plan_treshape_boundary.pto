@@ -1,0 +1,44 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Guards FusionPlan boundaries around pto.treshape while allowing a later
+// unrelated same-domain chain to form a normal fusion group.
+//
+// RUN: ptoas --pto-arch=a5 --pto-level=level2 --enable-op-fusion --emit-pto-ir %s --mlir-print-ir-after=pto-fusion-plan -o /dev/null 2>&1 | FileCheck %s
+
+module {
+  func.func @fusion_plan_treshape_boundary(
+      %arg0: !pto.tile_buf<vec, 32x32xf32>,
+      %arg1: !pto.tile_buf<vec, 64x16xf32>,
+      %arg2: !pto.tile_buf<vec, 32x32xf32>) {
+    %tmp0 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %tmp1 = pto.alloc_tile : !pto.tile_buf<vec, 64x16xf32>
+    %tmp2 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %tmp3 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+
+    pto.tadd ins(%arg0, %arg0 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%tmp0 : !pto.tile_buf<vec, 32x32xf32>)
+    %view = pto.treshape %tmp0 : !pto.tile_buf<vec, 32x32xf32> -> !pto.tile_buf<vec, 64x16xf32>
+    pto.tmul ins(%view, %arg1 : !pto.tile_buf<vec, 64x16xf32>, !pto.tile_buf<vec, 64x16xf32>) outs(%tmp1 : !pto.tile_buf<vec, 64x16xf32>)
+    pto.tadd ins(%arg2, %arg2 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%tmp2 : !pto.tile_buf<vec, 32x32xf32>)
+    pto.tmul ins(%tmp2, %arg2 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%tmp3 : !pto.tile_buf<vec, 32x32xf32>)
+    return
+  }
+}
+
+// CHECK: // -----// IR Dump After FusionPlan (pto-fusion-plan) //----- //
+// CHECK-LABEL: func.func @fusion_plan_treshape_boundary(
+// CHECK: pto.tadd ins(%arg0, %arg0
+// CHECK-NOT: pto.fusion.group_id
+// CHECK: %[[VIEW:.*]] = pto.treshape %0
+// CHECK: pto.tmul ins(%[[VIEW]], %arg1
+// CHECK-NOT: pto.fusion.group_id
+// CHECK: pto.tadd ins(%arg2, %arg2
+// CHECK-SAME: {pto.fusion.group_id = 0 : i64, pto.fusion.order = 0 : i64}
+// CHECK: pto.tmul ins(%2, %arg2
+// CHECK-SAME: {pto.fusion.group_id = 0 : i64, pto.fusion.order = 1 : i64}
+// CHECK: return

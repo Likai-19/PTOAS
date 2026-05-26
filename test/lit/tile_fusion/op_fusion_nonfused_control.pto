@@ -1,0 +1,49 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Guards the non-fused control surface for frontend fusion:
+// - no flag keeps the baseline unfused
+// - A3 with the flag warns and stays unfused
+// - level1 with the flag warns and stays unfused
+//
+// RUN: ptoas --pto-arch=a5 --pto-level=level2 --emit-pto-ir %s -o - | FileCheck %s --check-prefix=NOFUSE
+// RUN: ptoas --pto-arch=a3 --enable-op-fusion --emit-pto-ir %s -o - 2>&1 | FileCheck %s --check-prefix=A3
+// RUN: ptoas --pto-arch=a5 --pto-level=level1 --enable-op-fusion --emit-pto-ir %s -o - 2>&1 | FileCheck %s --check-prefix=LEVEL1
+
+module {
+  func.func @fusion_nonfused_control(
+      %a: !pto.tile_buf<vec, 32x32xf32>,
+      %b: !pto.tile_buf<vec, 32x32xf32>,
+      %c: !pto.tile_buf<vec, 32x32xf32>) {
+    %tmp = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %out = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    pto.tadd ins(%a, %b : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>)
+             outs(%tmp : !pto.tile_buf<vec, 32x32xf32>)
+    pto.tadd ins(%tmp, %c : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>)
+             outs(%out : !pto.tile_buf<vec, 32x32xf32>)
+    return
+  }
+}
+
+// NOFUSE-LABEL: func.func @fusion_nonfused_control(
+// NOFUSE-NOT: pto.fusion_region
+// NOFUSE: pto.tadd ins(
+// NOFUSE-NEXT: pto.tadd ins(
+// NOFUSE: return
+
+// A3: Warning: --enable-op-fusion is ignored because --pto-arch=a5 is required.
+// A3-LABEL: func.func @fusion_nonfused_control(
+// A3-NOT: pto.fusion_region
+// A3: pto.tadd ins(
+// A3-NEXT: pto.tadd ins(
+
+// LEVEL1: Warning: --enable-op-fusion is ignored because --pto-level=level2 or level3 is required.
+// LEVEL1-LABEL: func.func @fusion_nonfused_control(
+// LEVEL1-NOT: pto.fusion_region
+// LEVEL1: pto.tadd ins(
+// LEVEL1-NEXT: pto.tadd ins(

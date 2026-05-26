@@ -1,0 +1,38 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Guards OpScheduling against moving planned fusion members across an unrelated
+// function call boundary.
+//
+// RUN: not ptoas --pto-arch=a5 --pto-level=level2 --enable-op-fusion --emit-pto-ir %s --mlir-print-ir-after=pto-op-scheduling -o /dev/null 2>&1 | FileCheck %s
+
+module {
+  func.func private @touch_boundary()
+
+  func.func @op_scheduling_negative_call_boundary(
+      %full0: !pto.tile_buf<vec, 32x32xf32>,
+      %full1: !pto.tile_buf<vec, 32x32xf32>,
+      %full2: !pto.tile_buf<vec, 32x32xf32>) {
+    %tmp0 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %tmp1 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+
+    pto.tadd ins(%full0, %full1 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%tmp0 : !pto.tile_buf<vec, 32x32xf32>)
+    func.call @touch_boundary() : () -> ()
+    pto.tadd ins(%tmp0, %full2 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%tmp1 : !pto.tile_buf<vec, 32x32xf32>)
+    return
+  }
+}
+
+// CHECK: // -----// IR Dump After OpScheduling (pto-op-scheduling) //----- //
+// CHECK-LABEL: func.func @op_scheduling_negative_call_boundary(
+// CHECK: pto.tadd{{.*}}outs(%[[DST0:[0-9]+]]
+// CHECK-SAME: {pto.fusion.group_id = 0 : i64, pto.fusion.order = 0 : i64}
+// CHECK-NEXT: call @touch_boundary()
+// CHECK-NEXT: pto.tadd ins(%[[DST0]], %arg2
+// CHECK-SAME: {pto.fusion.group_id = 0 : i64, pto.fusion.order = 1 : i64}
+// CHECK: error: expected one contiguous span per pto.fusion.group_id within a basic block

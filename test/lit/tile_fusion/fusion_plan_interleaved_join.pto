@@ -1,0 +1,45 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Guards FusionPlan group discovery when unrelated compute ops are interleaved
+// with an otherwise valid join-shaped fusion group.
+//
+// RUN: ptoas --pto-arch=a5 --pto-level=level2 --enable-op-fusion --emit-pto-ir %s --mlir-print-ir-after=pto-fusion-plan -o /dev/null 2>&1 | FileCheck %s
+
+module {
+  func.func @fusion_plan_interleaved_join(
+      %full0: !pto.tile_buf<vec, 32x32xf32>,
+      %full1: !pto.tile_buf<vec, 32x32xf32>,
+      %full2: !pto.tile_buf<vec, 32x32xf32>,
+      %full3: !pto.tile_buf<vec, 32x32xf32>,
+      %row0: !pto.tile_buf<vec, 32x1xf32>,
+      %row1: !pto.tile_buf<vec, 32x1xf32>) {
+    %tmp0 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %noise0 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %tmp1 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %noise1 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %tmp2 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+
+    pto.trowexpandmul ins(%full0, %row0 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x1xf32>) outs(%tmp0 : !pto.tile_buf<vec, 32x32xf32>)
+    pto.tadd ins(%full2, %full3 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%noise0 : !pto.tile_buf<vec, 32x32xf32>)
+    pto.trowexpandmul ins(%full1, %row1 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x1xf32>) outs(%tmp1 : !pto.tile_buf<vec, 32x32xf32>)
+    pto.tmul ins(%full2, %full3 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%noise1 : !pto.tile_buf<vec, 32x32xf32>)
+    pto.tadd ins(%tmp0, %tmp1 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%tmp2 : !pto.tile_buf<vec, 32x32xf32>)
+    return
+  }
+}
+
+// CHECK: // -----// IR Dump After FusionPlan (pto-fusion-plan) //----- //
+// CHECK-LABEL: func.func @fusion_plan_interleaved_join(
+// CHECK: pto.trowexpandmul{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 0 : i64}
+// CHECK: pto.tadd ins(%arg2, %arg3
+// CHECK-NOT: pto.fusion.group_id
+// CHECK: pto.trowexpandmul{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 1 : i64}
+// CHECK: pto.tmul ins(%arg2, %arg3
+// CHECK-NOT: pto.fusion.group_id
+// CHECK: pto.tadd{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 2 : i64}

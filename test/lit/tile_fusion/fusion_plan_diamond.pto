@@ -1,0 +1,52 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Guards FusionPlan annotation for a diamond-shaped tile DAG so all supported
+// block-local compute ops remain in one ordered fusion group.
+//
+// RUN: ptoas --pto-arch=a5 --pto-level=level2 --enable-op-fusion --emit-pto-ir %s --mlir-print-ir-after=pto-fusion-plan -o /dev/null 2>&1 | FileCheck %s
+
+module {
+  func.func @fusion_plan_diamond(
+      %arg0: !pto.tile_buf<vec, 32x32xf32>,
+      %arg1: !pto.tile_buf<vec, 32x32xf32>,
+      %arg2: !pto.tile_buf<vec, 32x32xf32>,
+      %arg3: !pto.tile_buf<vec, 32x32xf32>,
+      %arg4: !pto.tile_buf<vec, 32x32xf32>,
+      %arg5: !pto.tile_buf<vec, 32x32xf32>) {
+    %tmp0 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %tmp1 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %tmp2 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %tmp3 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %tmp4 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %tmp5 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %tmp6 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+    %tmp7 = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf32>
+
+    pto.tmax ins(%arg0, %arg1 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%tmp0 : !pto.tile_buf<vec, 32x32xf32>)
+    pto.tsub ins(%tmp0, %arg2 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%tmp1 : !pto.tile_buf<vec, 32x32xf32>)
+    pto.tsub ins(%tmp0, %arg3 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%tmp2 : !pto.tile_buf<vec, 32x32xf32>)
+    pto.texp ins(%tmp1 : !pto.tile_buf<vec, 32x32xf32>) outs(%tmp3 : !pto.tile_buf<vec, 32x32xf32>)
+    pto.texp ins(%tmp2 : !pto.tile_buf<vec, 32x32xf32>) outs(%tmp4 : !pto.tile_buf<vec, 32x32xf32>)
+    pto.tmul ins(%tmp3, %arg4 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%tmp5 : !pto.tile_buf<vec, 32x32xf32>)
+    pto.tmul ins(%tmp4, %arg5 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%tmp6 : !pto.tile_buf<vec, 32x32xf32>)
+    pto.tadd ins(%tmp5, %tmp6 : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%tmp7 : !pto.tile_buf<vec, 32x32xf32>)
+    return
+  }
+}
+
+// CHECK: // -----// IR Dump After FusionPlan (pto-fusion-plan) //----- //
+// CHECK-LABEL: func.func @fusion_plan_diamond(
+// CHECK: pto.tmax{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 0 : i64}
+// CHECK: pto.tsub{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 1 : i64}
+// CHECK: pto.tsub{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 2 : i64}
+// CHECK: pto.texp{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 3 : i64}
+// CHECK: pto.texp{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 4 : i64}
+// CHECK: pto.tmul{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 5 : i64}
+// CHECK: pto.tmul{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 6 : i64}
+// CHECK: pto.tadd{{.*}}{pto.fusion.group_id = 0 : i64, pto.fusion.order = 7 : i64}

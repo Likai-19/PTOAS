@@ -167,6 +167,42 @@ def PTOLoweringSyncToPipe : Pass<"pto-lowering-sync-to-pipe", "func::FuncOp"> {
   ];
 }
 
+def FusionPlan : Pass<"pto-fusion-plan", "func::FuncOp"> {
+  let summary = "Build conservative tile-fusion planning groups from block-local analysis";
+  let description = [{
+    Consumes PreFusionAnalysis results, forms conservative block-local fusion
+    groups for currently supported tile-native compute ops, and annotates
+    accepted group members with:
+      - pto.fusion.group_id
+      - pto.fusion.order
+  }];
+  let constructor = "mlir::pto::createFusionPlanPass()";
+  let dependentDialects = ["mlir::pto::PTODialect"];
+}
+
+def OpScheduling : Pass<"pto-op-scheduling", "func::FuncOp"> {
+  let summary = "Compact planned fusion groups into block-local contiguous spans";
+  let description = [{
+    Consumes fusion planning metadata emitted by FusionPlanPass and performs
+    block-local instruction scheduling to make each accepted fusion group a
+    contiguous span without redefining group membership.
+  }];
+  let constructor = "mlir::pto::createOpSchedulingPass()";
+  let dependentDialects = ["mlir::pto::PTODialect"];
+}
+
+def PTOMarkLastUse : Pass<"pto-mark-last-use", "func::FuncOp"> {
+  let summary = "Mark scheduled tile-fusion operand last-use slots";
+  let description = [{
+    Walks scheduled tile-fusion spans identified by pto.fusion.group_id /
+    pto.fusion.order and annotates each op with a stable per-input last-use
+    bit mask. The analysis considers both later in-span uses and later
+    post-span uses in the enclosing block.
+  }];
+  let constructor = "mlir::pto::createPTOMarkLastUsePass()";
+  let dependentDialects = ["mlir::pto::PTODialect"];
+}
+
 def PTOWrapFunctionsInSections : Pass<"pto-wrap-functions-in-sections", "func::FuncOp"> {
   let summary = "Wrap attributed single-core functions in PTO cube/vector sections";
   let description = [{

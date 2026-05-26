@@ -12,12 +12,18 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 
 add_mlir_dialect_library(PTOTransforms
+  TileFusion/FusionAnalysis.cpp
+  TileFusion/FusionOpSemantics.cpp
+  TileFusion/PTOFusionPlan.cpp
+  TileFusion/PTOOpScheduling.cpp
+  TileFusion/PTOMarkLastUse.cpp
   InsertSync/PTOInsertSync.cpp
   PTOInjectBarrierAllSync.cpp
   InsertSync/InsertSyncDebug.cpp
   PTOViewToMemref.cpp
   PTOValidateIntToPtrUses.cpp
   PTOToEmitC.cpp
+  CppPostprocess.cpp
   Utils.cpp
   OptMemPlanForPipeline.cpp
   AllocToPointerCast.cpp

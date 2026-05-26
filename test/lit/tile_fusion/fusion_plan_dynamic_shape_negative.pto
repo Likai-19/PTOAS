@@ -1,0 +1,34 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Guards FusionPlan's conservative dynamic-shape behavior: dynamic valid-shape
+// tile ops must not receive pto.fusion.* metadata.
+//
+// RUN: ptoas --pto-arch=a5 --pto-level=level2 --enable-op-fusion --emit-pto-ir %s --mlir-print-ir-after=pto-fusion-plan -o /dev/null 2>&1 | FileCheck %s
+
+module {
+  func.func @fusion_plan_dynamic_shape_negative(
+      %arg0: !pto.tile_buf<vec, 64x32xf32, valid=?x?>,
+      %vrow: index,
+      %vcol: index) {
+    %tmp0 = pto.alloc_tile valid_row = %vrow valid_col = %vcol : !pto.tile_buf<vec, 64x32xf32, valid=?x?>
+    %tmp1 = pto.alloc_tile valid_row = %vrow valid_col = %vcol : !pto.tile_buf<vec, 64x32xf32, valid=?x?>
+
+    pto.tadd ins(%arg0, %arg0 : !pto.tile_buf<vec, 64x32xf32, valid=?x?>, !pto.tile_buf<vec, 64x32xf32, valid=?x?>) outs(%tmp0 : !pto.tile_buf<vec, 64x32xf32, valid=?x?>)
+    pto.tmul ins(%tmp0, %arg0 : !pto.tile_buf<vec, 64x32xf32, valid=?x?>, !pto.tile_buf<vec, 64x32xf32, valid=?x?>) outs(%tmp1 : !pto.tile_buf<vec, 64x32xf32, valid=?x?>)
+    return
+  }
+}
+
+// CHECK: // -----// IR Dump After FusionPlan (pto-fusion-plan) //----- //
+// CHECK-LABEL: func.func @fusion_plan_dynamic_shape_negative(
+// CHECK: pto.tadd ins(%arg0, %arg0
+// CHECK-NOT: pto.fusion.group_id
+// CHECK: pto.tmul ins(%0, %arg0
+// CHECK-NOT: pto.fusion.group_id
+// CHECK: return
