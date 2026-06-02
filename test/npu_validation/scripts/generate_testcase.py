@@ -75,7 +75,6 @@ UNSTABLE_A3_CUSTOM_GOLDEN_CASES = frozenset({
     "abs",
     "partmin",
     "prelu",
-    "rope_kv_cache",
     "rowexpanddiv",
     "rowexpandmul",
     "rowexpandsub",

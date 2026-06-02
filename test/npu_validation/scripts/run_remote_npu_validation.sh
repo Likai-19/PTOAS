@@ -170,6 +170,9 @@ if [[ "${RUN_MODE}" == "sim" ]]; then
 elif [[ "$(printf '%s' "${_board_chip}" | tr '[:upper:]' '[:lower:]')" == *910b* ]]; then
   export PTOAS_BOARD_IS_A3=1
   log "Detected A3 board from npu-smi chip name: ${_board_chip}"
+elif [[ "$(printf '%s' "${SOC_VERSION} ${SIM_SOC_VERSION}" | tr '[:upper:]' '[:lower:]')" == *950* \
+     || "$(printf '%s' "${SOC_VERSION} ${SIM_SOC_VERSION}" | tr '[:upper:]' '[:lower:]')" == *a5* ]]; then
+  log "Detected A5 target from SOC_VERSION=${SOC_VERSION} SIM_SOC_VERSION=${SIM_SOC_VERSION}; skipping A3 simulator dir fallback."
 else
   for _sim_dir in "${ASCEND_HOME_PATH}/aarch64-linux/simulator" \
                   "${ASCEND_HOME_PATH}/x86_64-linux/simulator" \
@@ -184,6 +187,7 @@ else
     done
   done
 fi
+export PTOAS_BOARD_IS_A3=0
 log "SIM_SOC_VERSION=${SIM_SOC_VERSION}"
 log "PTOAS_BOARD_IS_A3=${PTOAS_BOARD_IS_A3}"
 
