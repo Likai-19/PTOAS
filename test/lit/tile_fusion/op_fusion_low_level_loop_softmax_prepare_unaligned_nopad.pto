@@ -84,9 +84,10 @@ module attributes { pto.kernel_kind = #pto.kernel_kind<vector>,pto.target_arch =
 // CHECK: pto.vmax
 // CHECK: scf.yield {{.*}} : !pto.vreg<64xf32>, index
 // CHECK: }
+// vdup broadcasts the row-max to a full vector; loop-invariant -> hoisted.
+// CHECK: pto.vdup
 // Fused epilogue: trowexpandsub + texp share one col loop (two mask accumulators).
 // CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}) -> (index, index) {
-// CHECK: pto.vdup
 // CHECK: pto.vsub
 // CHECK: pto.vexp
 // CHECK: }

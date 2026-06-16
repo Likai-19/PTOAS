@@ -202,6 +202,7 @@ class _AuthoringRenderer:
         self._constant_cache: dict[tuple[str, object], str] = {}
         self._castptr_cache: dict[tuple[str, str], str] = {}
         self._tile_memref_cache: dict[str, _RenderedValue] = {}
+        self._tile_ptr_cache: dict[str, _RenderedValue] = {}
         self._tile_valid_dim_cache: dict[tuple[str, int], _RenderedValue] = {}
         self._used_tile_buffers = self._collect_used_tile_buffers(kernel.body)
         self._temp_counter = 0
@@ -871,24 +872,42 @@ class _AuthoringRenderer:
             lines = []
             source = self._lower_expr(stmt.value.args[0], env, indent=indent, into=lines)
             index_args = stmt.value.args[1:-1]
+
+            # Convert tile directly to ptr (not memref) — same as vldas.
             if isinstance(source.type, SemanticTileType):
-                source = self._materialize_tile_memref(source, indent=indent, into=lines)
+                source = self._materialize_tile_ptr(source, indent=indent, into=lines)
+
             if (
                 isinstance(stmt.value.args[0].type, SemanticTileType)
                 and stmt.value.args[0].type.rank == 2
                 and len(index_args) == 2
             ):
-                source = self._materialize_rank2_tile_subview(
-                    source,
-                    stmt.value.args[0].type,
-                    index_args,
-                    env,
-                    indent=indent,
-                    into=lines,
+                orig_tile_type = stmt.value.args[0].type
+                row_index, col_index = index_args
+                row_value = self._lower_expr(row_index, env, indent=indent, into=lines)
+                col_value = self._lower_expr(col_index, env, indent=indent, into=lines)
+                total_cols = orig_tile_type.shape[1]
+                total_cols_const = self._materialize_constant(
+                    total_cols, SemanticIndexType()
                 )
-            if self._is_memref_like_type(source.type):
-                ptr_name, ptr_type = self._materialize_copy_buffer_ptr(source, indent=indent, into=lines)
-                source = _RenderedValue(name=ptr_name, type=_RenderedTextualType(ptr_type))
+                # offset = row * total_cols + col
+                row_offset = self._new_temp()
+                lines.append(
+                    self._indent(indent)
+                    + f"{row_offset} = arith.muli {row_value.name}, {total_cols_const} : index"
+                )
+                elem_offset = self._new_temp()
+                lines.append(
+                    self._indent(indent)
+                    + f"{elem_offset} = arith.addi {row_offset}, {col_value.name} : index"
+                )
+                ptr_name = self._new_temp()
+                lines.append(
+                    self._indent(indent)
+                    + f"{ptr_name} = pto.addptr {source.name}, {elem_offset} : "
+                    + f"{self._render_type(source.type)} -> {self._render_type(source.type)}"
+                )
+                source = _RenderedValue(name=ptr_name, type=source.type)
             align = self._lower_expr(stmt.value.args[-1], env, indent=indent, into=lines)
             result_target, align_target = stmt.targets
             result_type, align_type = stmt.value.type.elements
@@ -1868,24 +1887,47 @@ class _AuthoringRenderer:
         if expr.name == "vldas":
             source = self._lower_expr(expr.args[0], env, indent=indent, into=into)
             index_args = expr.args[1:]
+
+            # Convert tile directly to ptr (not memref) for vldas.
+            # vldas only accepts !pto.ptr, and the memref→subview→castptr
+            # path is broken.  Instead: tile → ptr via tile_buf_addr, then
+            # pto.addptr with the element offset computed from the indices.
             if isinstance(source.type, SemanticTileType):
-                source = self._materialize_tile_memref(source, indent=indent, into=into)
+                source = self._materialize_tile_ptr(source, indent=indent, into=into)
+
             if (
                 isinstance(expr.args[0].type, SemanticTileType)
                 and expr.args[0].type.rank == 2
                 and len(index_args) == 2
             ):
-                source = self._materialize_rank2_tile_subview(
-                    source,
-                    expr.args[0].type,
-                    index_args,
-                    env,
-                    indent=indent,
-                    into=into,
+                orig_tile_type = expr.args[0].type
+                row_index, col_index = index_args
+                row_value = self._lower_expr(row_index, env, indent=indent, into=into)
+                col_value = self._lower_expr(col_index, env, indent=indent, into=into)
+                # uniform offset formula: row * shape[1] + col.
+                # Works for row_major [M,N] and col_major [M,1] (col=0).
+                total_cols = orig_tile_type.shape[1]
+                total_cols_const = self._materialize_constant(
+                    total_cols, SemanticIndexType()
                 )
-            if self._is_memref_like_type(source.type):
-                ptr_name, ptr_type = self._materialize_copy_buffer_ptr(source, indent=indent, into=into)
-                source = _RenderedValue(name=ptr_name, type=_RenderedTextualType(ptr_type))
+                # offset = row * total_cols + col
+                row_offset = self._new_temp()
+                into.append(
+                    self._indent(indent)
+                    + f"{row_offset} = arith.muli {row_value.name}, {total_cols_const} : index"
+                )
+                elem_offset = self._new_temp()
+                into.append(
+                    self._indent(indent)
+                    + f"{elem_offset} = arith.addi {row_offset}, {col_value.name} : index"
+                )
+                ptr_name = self._new_temp()
+                into.append(
+                    self._indent(indent)
+                    + f"{ptr_name} = pto.addptr {source.name}, {elem_offset} : "
+                    + f"{self._render_type(source.type)} -> {self._render_type(source.type)}"
+                )
+                source = _RenderedValue(name=ptr_name, type=source.type)
             into.append(
                 self._indent(indent)
                 + f"{result_name} = pto.vldas {source.name} : "
@@ -3224,6 +3266,35 @@ class _AuthoringRenderer:
             return cast_name, ptr_type
 
         return value.name, ptr_type
+
+    def _materialize_tile_ptr(
+        self,
+        value: _RenderedValue,
+        *,
+        indent: int,
+        into: list[str],
+    ) -> _RenderedValue:
+        """Convert a SemanticTileType value directly to a typed !pto.ptr.
+
+        Unlike _materialize_tile_memref which produces a memref, this emits
+        pto.tile_buf_addr with a !pto.ptr<...> result type so the ptr can be
+        used directly with pto.addptr / pto.vldas / pto.vldus.
+        """
+        existing = self._tile_ptr_cache.get(value.name)
+        if existing is not None:
+            return existing
+        if not isinstance(value.type, SemanticTileType):
+            return value
+        ptr_type = self._render_copy_buffer_type(value.type)
+        ptr_name = self._new_temp()
+        into.append(
+            self._indent(indent)
+            + f"{ptr_name} = pto.tile_buf_addr {value.name} : "
+            + f"{self._render_type(value.type)} -> {ptr_type}"
+        )
+        rendered = _RenderedValue(name=ptr_name, type=_RenderedTextualType(ptr_type))
+        self._tile_ptr_cache[value.name] = rendered
+        return rendered
 
     def _coerce_rendered_value(
         self,

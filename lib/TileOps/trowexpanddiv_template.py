@@ -60,35 +60,64 @@ def _constraint_trowexpanddiv_row_major(src0: pto.Tile, src1: pto.Tile, dst: pto
     constraints=[_constraint_trowexpanddiv_row_major],
 )
 def template_trowexpanddiv_f32(src0: pto.Tile, src1: pto.Tile, dst: pto.Tile):
-    """Template for pto.trowexpanddiv with f32 dtype and optional high-precision mode."""
+    """Template for pto.trowexpanddiv with f32 dtype and optional high-precision mode.
+
+    When src1 is col_major with shape [M, 1] (a per-row scalar column),
+    vlds on the col_major tile slice would access UB at non-512B-aligned
+    addresses (error 340 on A5).  Use vldas+vldus (unaligned load pipeline)
+    for src1 in that case; keep the aligned vlds path for row_major src1.
+    """
     dtype = dst.element_type
     valid_rows, valid_cols = dst.valid_shape
-
     precision_type = pto.get_op_attr("precisionType", "default")
     if pto.constexpr(precision_type == "high_precision"):
-        for row in range(0, valid_rows, 1):
-            remained = valid_cols
-            for col in range(0, valid_cols, pto.get_lanes(dtype)):
-                mask, remained = pto.make_mask(dtype, remained)
-                # Load the scalar vector from src1[row, :]
-                # For row-major src1, valid_shape[1] is 32/sizeof(dtype) (e.g., 8 for f32)
-                # vdup broadcasts the first element to the full vector width
-                scalar_vec = pto.vlds(src1[row, :])
-                broadcasted = pto.vdup(scalar_vec, mask)
-                lhs = pto.vlds(src0[row, col:])
-                result = _div_ieee754_f32_impl(lhs, broadcasted, mask)
-                pto.vsts(result, dst[row, col:], mask)
+        if pto.constexpr(src1.config.b_layout == pto.BLayout.COL_MAJOR):
+            # col_major / high_precision
+            for row in range(0, valid_rows, 1):
+                align_src1 = pto.vldas(src1[row, :])
+                scalar_vec, _ = pto.vldus(src1[row, :], align_src1)
+                broadcasted = pto.vdup(scalar_vec, pto.make_mask(dtype, pto.PAT.ALL))
+                remained = valid_cols
+                for col in range(0, valid_cols, pto.get_lanes(dtype)):
+                    mask, remained = pto.make_mask(dtype, remained)
+                    lhs = pto.vlds(src0[row, col:])
+                    result = _div_ieee754_f32_impl(lhs, broadcasted, mask)
+                    pto.vsts(result, dst[row, col:], mask)
+        else:
+            # row_major / high_precision
+            for row in range(0, valid_rows, 1):
+                remained = valid_cols
+                for col in range(0, valid_cols, pto.get_lanes(dtype)):
+                    mask, remained = pto.make_mask(dtype, remained)
+                    scalar_vec = pto.vlds(src1[row, :])
+                    broadcasted = pto.vdup(scalar_vec, mask)
+                    lhs = pto.vlds(src0[row, col:])
+                    result = _div_ieee754_f32_impl(lhs, broadcasted, mask)
+                    pto.vsts(result, dst[row, col:], mask)
     else:
-        for row in range(0, valid_rows, 1):
-            remained = valid_cols
-            for col in range(0, valid_cols, pto.get_lanes(dtype)):
-                mask, remained = pto.make_mask(dtype, remained)
-                # Load the scalar vector from src1[row, :]
-                scalar_vec = pto.vlds(src1[row, :])
-                broadcasted = pto.vdup(scalar_vec, mask)
-                lhs = pto.vlds(src0[row, col:])
-                result = pto.vdiv(lhs, broadcasted, mask)
-                pto.vsts(result, dst[row, col:], mask)
+        if pto.constexpr(src1.config.b_layout == pto.BLayout.COL_MAJOR):
+            # col_major / default precision
+            for row in range(0, valid_rows, 1):
+                align_src1 = pto.vldas(src1[row, :])
+                scalar_vec, _ = pto.vldus(src1[row, :], align_src1)
+                broadcasted = pto.vdup(scalar_vec, pto.make_mask(dtype, pto.PAT.ALL))
+                remained = valid_cols
+                for col in range(0, valid_cols, pto.get_lanes(dtype)):
+                    mask, remained = pto.make_mask(dtype, remained)
+                    lhs = pto.vlds(src0[row, col:])
+                    result = pto.vdiv(lhs, broadcasted, mask)
+                    pto.vsts(result, dst[row, col:], mask)
+        else:
+            # row_major / default precision (existing behaviour)
+            for row in range(0, valid_rows, 1):
+                remained = valid_cols
+                for col in range(0, valid_cols, pto.get_lanes(dtype)):
+                    mask, remained = pto.make_mask(dtype, remained)
+                    scalar_vec = pto.vlds(src1[row, :])
+                    broadcasted = pto.vdup(scalar_vec, mask)
+                    lhs = pto.vlds(src0[row, col:])
+                    result = pto.vdiv(lhs, broadcasted, mask)
+                    pto.vsts(result, dst[row, col:], mask)
     return
 
 
@@ -99,33 +128,62 @@ def template_trowexpanddiv_f32(src0: pto.Tile, src1: pto.Tile, dst: pto.Tile):
     constraints=[_constraint_trowexpanddiv_row_major],
 )
 def template_trowexpanddiv_f16(src0: pto.Tile, src1: pto.Tile, dst: pto.Tile):
-    """Template for pto.trowexpanddiv with f16 dtype and optional high-precision mode."""
+    """Template for pto.trowexpanddiv with f16 dtype and optional high-precision mode.
+
+    When src1 is col_major with shape [M, 1] (a per-row scalar column),
+    vlds on the col_major tile slice would access UB at non-512B-aligned
+    addresses (error 340 on A5).  Use vldas+vldus (unaligned load pipeline)
+    for src1 in that case; keep the aligned vlds path for row_major src1.
+    """
     dtype = dst.element_type
     valid_rows, valid_cols = dst.valid_shape
-
     precision_type = pto.get_op_attr("precisionType", "default")
     if pto.constexpr(precision_type == "high_precision"):
-        for row in range(0, valid_rows, 1):
-            remained = valid_cols
-            for col in range(0, valid_cols, pto.get_lanes(dtype)):
-                mask, remained = pto.make_mask(dtype, remained)
-                # Load the scalar vector from src1[row, :]
-                # For row-major src1, valid_shape[1] is 32/sizeof(dtype) (e.g., 16 for f16)
-                # vdup broadcasts the first element to the full vector width
-                scalar_vec = pto.vlds(src1[row, :])
-                broadcasted = pto.vdup(scalar_vec, mask)
-                lhs = pto.vlds(src0[row, col:])
-                result = _div_ieee754_f16_impl(lhs, broadcasted, mask)
-                pto.vsts(result, dst[row, col:], mask)
+        if pto.constexpr(src1.config.b_layout == pto.BLayout.COL_MAJOR):
+            # col_major / high_precision
+            for row in range(0, valid_rows, 1):
+                align_src1 = pto.vldas(src1[row, :])
+                scalar_vec, _ = pto.vldus(src1[row, :], align_src1)
+                broadcasted = pto.vdup(scalar_vec, pto.make_mask(dtype, pto.PAT.ALL))
+                remained = valid_cols
+                for col in range(0, valid_cols, pto.get_lanes(dtype)):
+                    mask, remained = pto.make_mask(dtype, remained)
+                    lhs = pto.vlds(src0[row, col:])
+                    result = _div_ieee754_f16_impl(lhs, broadcasted, mask)
+                    pto.vsts(result, dst[row, col:], mask)
+        else:
+            # row_major / high_precision
+            for row in range(0, valid_rows, 1):
+                remained = valid_cols
+                for col in range(0, valid_cols, pto.get_lanes(dtype)):
+                    mask, remained = pto.make_mask(dtype, remained)
+                    scalar_vec = pto.vlds(src1[row, :])
+                    broadcasted = pto.vdup(scalar_vec, mask)
+                    lhs = pto.vlds(src0[row, col:])
+                    result = _div_ieee754_f16_impl(lhs, broadcasted, mask)
+                    pto.vsts(result, dst[row, col:], mask)
     else:
-        for row in range(0, valid_rows, 1):
-            remained = valid_cols
-            for col in range(0, valid_cols, pto.get_lanes(dtype)):
-                mask, remained = pto.make_mask(dtype, remained)
-                # Load the scalar vector from src1[row, :]
-                scalar_vec = pto.vlds(src1[row, :])
-                broadcasted = pto.vdup(scalar_vec, mask)
-                lhs = pto.vlds(src0[row, col:])
-                result = pto.vdiv(lhs, broadcasted, mask)
-                pto.vsts(result, dst[row, col:], mask)
+        if pto.constexpr(src1.config.b_layout == pto.BLayout.COL_MAJOR):
+            # col_major / default precision
+            for row in range(0, valid_rows, 1):
+                align_src1 = pto.vldas(src1[row, :])
+                scalar_vec, _ = pto.vldus(src1[row, :], align_src1)
+                broadcasted = pto.vdup(scalar_vec, pto.make_mask(dtype, pto.PAT.ALL))
+                remained = valid_cols
+                for col in range(0, valid_cols, pto.get_lanes(dtype)):
+                    mask, remained = pto.make_mask(dtype, remained)
+                    lhs = pto.vlds(src0[row, col:])
+                    result = pto.vdiv(lhs, broadcasted, mask)
+                    pto.vsts(result, dst[row, col:], mask)
+        else:
+            # row_major / default precision (existing behaviour)
+            for row in range(0, valid_rows, 1):
+                remained = valid_cols
+                for col in range(0, valid_cols, pto.get_lanes(dtype)):
+                    mask, remained = pto.make_mask(dtype, remained)
+                    scalar_vec = pto.vlds(src1[row, :])
+                    broadcasted = pto.vdup(scalar_vec, mask)
+                    lhs = pto.vlds(src0[row, col:])
+                    result = pto.vdiv(lhs, broadcasted, mask)
+                    pto.vsts(result, dst[row, col:], mask)
     return

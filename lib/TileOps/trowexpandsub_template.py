@@ -57,20 +57,41 @@ def template_trowexpandsub(src0: pto.Tile, src1: pto.Tile, dst: pto.Tile):
 
     Subtract a per-row scalar from src1[row, 0] from each row of src0.
     Semantics: dst[row, col] = src0[row, col] - src1[row, 0]
+
+    When src1 is col_major with shape [M, 1] (a per-row scalar column),
+    vlds on the col_major tile slice would access UB at non-512B-aligned
+    addresses (error 340 on A5).  Use vldas+vldus (unaligned load pipeline)
+    for src1 in that case; keep the aligned vlds path for row_major src1.
     """
     dtype = dst.element_type
     valid_rows, valid_cols = dst.valid_shape
 
-    for row in range(0, valid_rows, 1):
-        remained = valid_cols
-        for col in range(0, valid_cols, pto.get_lanes(dtype)):
-            mask, remained = pto.make_mask(dtype, remained)
-            # Load the scalar vector from src1[row, :]
-            # For row-major src1, valid_shape[1] is 32/sizeof(dtype) (e.g., 8 for f32)
-            # vdup broadcasts the first element to the full vector width
-            scalar_vec = pto.vlds(src1[row, :])
-            broadcasted = pto.vdup(scalar_vec, mask)
-            lhs = pto.vlds(src0[row, col:])
-            result = pto.vsub(lhs, broadcasted, mask)
-            pto.vsts(result, dst[row, col:], mask)
+    if pto.constexpr(src1.config.b_layout == pto.BLayout.COL_MAJOR):
+        # ---- col_major [M, 1] path: unaligned load for src1 ----
+        for row in range(0, valid_rows, 1):
+            # vldas+vldus once per row, broadcast across all col iterations
+            align_src1 = pto.vldas(src1[row, :])
+            scalar_vec, _ = pto.vldus(src1[row, :], align_src1)
+            broadcasted = pto.vdup(scalar_vec, pto.make_mask(dtype, pto.PAT.ALL))
+            remained = valid_cols
+            for col in range(0, valid_cols, pto.get_lanes(dtype)):
+                mask, remained = pto.make_mask(dtype, remained)
+                lhs = pto.vlds(src0[row, col:])
+                result = pto.vsub(lhs, broadcasted, mask)
+                pto.vsts(result, dst[row, col:], mask)
+    else:
+        # ---- row_major path: aligned vlds (existing behaviour) ----
+        for row in range(0, valid_rows, 1):
+            remained = valid_cols
+            for col in range(0, valid_cols, pto.get_lanes(dtype)):
+                mask, remained = pto.make_mask(dtype, remained)
+                # Load the scalar vector from src1[row, :]
+                # For row-major src1, valid_shape[1] is 32/sizeof(dtype)
+                # (e.g., 8 for f32).  vdup broadcasts the first element
+                # to the full vector width.
+                scalar_vec = pto.vlds(src1[row, :])
+                broadcasted = pto.vdup(scalar_vec, mask)
+                lhs = pto.vlds(src0[row, col:])
+                result = pto.vsub(lhs, broadcasted, mask)
+                pto.vsts(result, dst[row, col:], mask)
     return

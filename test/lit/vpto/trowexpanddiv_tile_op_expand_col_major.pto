@@ -1,0 +1,61 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Test that ExpandTileOp + InlineLibCall + FoldTileBufIntrinsics pipeline
+// expands pto.trowexpanddiv when src1 is a col_major [M,1] scalar column
+// with default (hardware) precision.
+//
+// The col_major path must use the unaligned load pipeline (vldas+vldus)
+// for src1 instead of vlds, to avoid non-512B-aligned UB access on A5.
+//
+// Pipeline: PTOMaterializeTileHandles -> ExpandTileOp -> InlineLibCall -> FoldTileBufIntrinsics
+//
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto --enable-tile-op-expand %s -o - 2>/dev/null | FileCheck %s
+
+// After expansion the original pto.trowexpanddiv must be gone.
+// CHECK: func.func @TROWEXPANDDIV_COLMAJOR
+// CHECK-NOT: pto.trowexpanddiv ins
+// CHECK: pto.vecscope
+// The col_major src1 path uses vldas+vldus (unaligned load pipeline).
+// CHECK: pto.vldas
+// CHECK: pto.vldus
+// Broadcast is still used to replicate the scalar across the vector.
+// CHECK: pto.vdup
+// src0 (row_major) still uses aligned vlds.
+// CHECK: pto.vlds
+// Core arithmetic: default precision uses hardware vdiv.
+// CHECK: pto.vdiv
+// Result store:
+// CHECK: pto.vsts
+
+module attributes {pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @TROWEXPANDDIV_COLMAJOR() {
+    // src0: 32x32 matrix (row-major)
+    %src0 = pto.alloc_tile
+      : !pto.tile_buf<loc=vec, dtype=f32, rows=32, cols=32, v_row=32, v_col=32,
+                      blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    // src1: 32x1 col_major column — one scalar per row.
+    // When src1 is col_major, the template uses vldas+vldus (unaligned)
+    // instead of vlds to handle the non-512B-aligned slice access.
+    %src1 = pto.alloc_tile
+      : !pto.tile_buf<loc=vec, dtype=f32, rows=32, cols=1, v_row=32, v_col=1,
+                      blayout=col_major, slayout=none_box, fractal=512, pad=0>
+    // dst: 32x32 result (row-major)
+    %dst = pto.alloc_tile
+      : !pto.tile_buf<loc=vec, dtype=f32, rows=32, cols=32, v_row=32, v_col=32,
+                      blayout=row_major, slayout=none_box, fractal=512, pad=0>
+
+    pto.trowexpanddiv ins(%src0, %src1 : !pto.tile_buf<loc=vec, dtype=f32, rows=32, cols=32, v_row=32, v_col=32,
+                                   blayout=row_major, slayout=none_box, fractal=512, pad=0>,
+                               !pto.tile_buf<loc=vec, dtype=f32, rows=32, cols=1, v_row=32, v_col=1,
+                                   blayout=col_major, slayout=none_box, fractal=512, pad=0>)
+                       outs(%dst : !pto.tile_buf<loc=vec, dtype=f32, rows=32, cols=32, v_row=32, v_col=32,
+                                   blayout=row_major, slayout=none_box, fractal=512, pad=0>)
+    return
+  }
+}

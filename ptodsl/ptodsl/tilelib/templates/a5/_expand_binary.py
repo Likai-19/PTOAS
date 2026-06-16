@@ -232,14 +232,24 @@ def _emit_row_expand_body(src0, src1, dst, vector_op):
     lanes = pto.elements_per_vreg(dtype)
 
     with pto.for_(0, valid_rows, step=1) as row:
+        # Load the scalar from src1 once per row (outside the inner col loop).
+        # When src1 is col_major with shape [M, 1], use the unaligned load
+        # pipeline (vldas+vldus) to avoid non-512B-aligned UB access on A5.
+        # The broadcast uses a full mask (PAT.ALL) so the vdup is
+        # loop-invariant and can be hoisted by canonicalization.
+        if src1.config.b_layout == "col_major":
+            align_src1 = pto.vldas(src1[row, :])
+            scalar_vec, _ = pto.vldus(src1[row, :], align_src1)
+        else:
+            scalar_vec = pto.vlds(src1[row, :])
+        broadcasted = pto.vdup(scalar_vec, pto.make_mask(dtype, pto.PAT.ALL))
+
         col_loop = pto.for_(0, valid_cols, step=lanes).carry(remained=valid_cols)
         with col_loop:
             col = col_loop.iv
             mask, remained = pto.make_mask(dtype, col_loop.remained)
             lhs = pto.vlds(src0[row, col:])
-            scalar_vec = pto.vlds(src1[row, :])
-            rhs = pto.vdup(scalar_vec, mask)
-            result = vector_op(lhs, rhs, mask)
+            result = vector_op(lhs, broadcasted, mask)
             pto.vsts(result, dst[row, col:], mask)
             col_loop.update(remained=remained)
 
