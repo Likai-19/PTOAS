@@ -34,6 +34,9 @@ add_mlir_dialect_library(PTOTransforms
   PTOVPTOPtrBoundary.cpp
   VPTOBufferMaterialization.cpp
   PTOValidateVPTOIR.cpp
+  PTOValidateVMIIR.cpp
+  VMILayoutAssignment.cpp
+  VMIToVPTO.cpp
   PTOInferVPTOVecScope.cpp
 
   InsertSync/PTOInsertSync.cpp
