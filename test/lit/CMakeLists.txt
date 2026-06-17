@@ -27,6 +27,7 @@ configure_lit_site_cfg(
 set(PTOIR_TEST_DEPENDS
   FileCheck count not
   pto-opt
+  pto-test-opt
 )
 
 add_lit_testsuite(check-pto "Running the pto regression tests"

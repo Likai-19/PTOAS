@@ -1,0 +1,57 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not pto-test-opt %s -split-input-file -vmi-layout-assignment 2>&1 | FileCheck %s
+
+module {
+  func.func @vmi_load_element_type_invalid(%src: !pto.ptr<f32>, %offset: index) {
+    %value = pto.vmi.load %src[%offset]
+        : !pto.ptr<f32> -> !pto.vmi.vreg<128xf16>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.load' op requires memory source element type to match VMI data element type
+
+// -----
+
+module {
+  func.func @vmi_store_element_type_invalid(
+      %value: !pto.vmi.vreg<128xf16>, %dst: !pto.ptr<f32>, %offset: index) {
+    pto.vmi.store %value, %dst[%offset]
+        : !pto.vmi.vreg<128xf16>, !pto.ptr<f32>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.store' op requires memory destination element type to match VMI data element type
+
+// -----
+
+module {
+  func.func @vmi_tile_read_element_type_invalid(%src: memref<128xf32>) {
+    %value = pto.vmi.tile_read %src
+        : memref<128xf32> -> !pto.vmi.vreg<128xf16>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.tile_read' op requires memory source element type to match VMI data element type
+
+// -----
+
+module {
+  func.func @vmi_tile_write_element_type_invalid(
+      %value: !pto.vmi.vreg<128xf16>, %dst: memref<128xf32>) {
+    pto.vmi.tile_write %value, %dst
+        : !pto.vmi.vreg<128xf16>, memref<128xf32>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.tile_write' op requires memory destination element type to match VMI data element type

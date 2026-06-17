@@ -107,6 +107,14 @@ LogicalResult validateVPTOEmissionIR(ModuleOp module,
                                      llvm::raw_ostream *diagOS = nullptr);
 std::unique_ptr<Pass> createPTOValidateVPTOIRPass();
 std::unique_ptr<Pass> createPTOValidateVPTOEmissionIRPass();
+LogicalResult validateVMIProducerBoundaryIR(ModuleOp module,
+                                            llvm::raw_ostream *diagOS = nullptr);
+LogicalResult validateVMILayoutAssignedIR(ModuleOp module,
+                                          llvm::raw_ostream *diagOS = nullptr);
+std::unique_ptr<Pass> createPTOValidateVMIIRPass();
+std::unique_ptr<Pass> createPTOValidateVMILayoutIRPass();
+std::unique_ptr<Pass> createVMILayoutAssignmentPass();
+std::unique_ptr<Pass> createVMIToVPTOPass();
 std::unique_ptr<Pass> createExpandTileOpPass();
 std::unique_ptr<Pass> createExpandTileOpPass(const ExpandTileOpOptions &options);
 std::unique_ptr<Pass> createFoldTileBufIntrinsicsPass();
