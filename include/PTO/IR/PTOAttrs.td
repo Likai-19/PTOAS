@@ -38,6 +38,8 @@ class PTO_Attr<string attrName, string attrMnemonic, list<Trait> traits = []>
   let mnemonic = attrMnemonic;
 }
 
+include "PTO/IR/VMIAttrs.td"
+
 //===----------------------------------------------------------------------===//
 // Address Space
 //===----------------------------------------------------------------------===//
