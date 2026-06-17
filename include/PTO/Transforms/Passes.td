@@ -878,6 +878,77 @@ def PTOValidateVPTOIR : Pass<"pto-validate-vpto-ir", "ModuleOp"> {
                            "mlir::scf::SCFDialect"];
 }
 
+def PTOValidateVMIIR : Pass<"pto-validate-vmi-ir", "ModuleOp"> {
+  let summary = "Validate VMI producer-boundary semantic IR";
+  let description = [{
+    Checks that VMI producer-boundary IR uses only surface VMI data/mask types,
+    native pto.vmi semantic ops, and structural control-flow/function ops. This
+    pass runs before layout assignment, so layout-assigned VMI types, VMI helper
+    ops, and physical VPTO register types are rejected.
+  }];
+  let constructor = "mlir::pto::createPTOValidateVMIIRPass()";
+  let dependentDialects = ["mlir::cf::ControlFlowDialect",
+                           "mlir::func::FuncDialect",
+                           "mlir::pto::PTODialect",
+                           "mlir::memref::MemRefDialect",
+                           "mlir::scf::SCFDialect"];
+}
+
+def PTOValidateVMILayoutIR
+    : Pass<"pto-validate-vmi-layout-ir", "ModuleOp"> {
+  let summary = "Validate layout-assigned VMI IR";
+  let description = [{
+    Checks the post-layout-assignment VMI stage: every VMI data value must have
+    a concrete VMI layout, every VMI mask must have concrete b8/b16/b32
+    granularity and layout, physical VPTO register values must not appear yet,
+    and VMI typed values must stay inside VMI semantic/helper or structural ops.
+  }];
+  let constructor = "mlir::pto::createPTOValidateVMILayoutIRPass()";
+  let dependentDialects = ["mlir::cf::ControlFlowDialect",
+                           "mlir::func::FuncDialect",
+                           "mlir::pto::PTODialect",
+                           "mlir::memref::MemRefDialect",
+                           "mlir::scf::SCFDialect"];
+}
+
+def VMILayoutAssignment : Pass<"vmi-layout-assignment", "ModuleOp"> {
+  let summary = "Assign concrete VMI layouts and mask granularities";
+  let description = [{
+    Solves VMI layout constraints and materializes the chosen layout and mask
+    granularity into VMI types. This pass is the boundary between surface VMI
+    semantic IR and layout-assigned VMI IR.
+  }];
+  let constructor = "mlir::pto::createVMILayoutAssignmentPass()";
+  let dependentDialects = ["mlir::cf::ControlFlowDialect",
+                           "mlir::func::FuncDialect",
+                           "mlir::pto::PTODialect",
+                           "mlir::memref::MemRefDialect",
+                           "mlir::scf::SCFDialect"];
+}
+
+def VMIToVPTO : Pass<"vmi-to-vpto", "ModuleOp"> {
+  let summary = "Convert layout-assigned VMI IR to physical VPTO IR";
+  let description = [{
+    Converts layout-assigned VMI aggregate data/mask types to ordered physical
+    VPTO register and mask value lists using MLIR OneToNTypeConversion. This
+    pass is responsible for VMI 1:N type conversion, structural control-flow
+    and function/call signature conversion, and VMI semantic op physicalization.
+  }];
+  let constructor = "mlir::pto::createVMIToVPTOPass()";
+  let options = [
+    Option<"enableStableGatherMaskedLoad",
+           "enable-stable-gather-masked-load", "bool",
+           /*default=*/"false",
+           "Reserve the stable VGATHER-based lowering path for VMI masked "
+           "loads; currently emits a TODO diagnostic when used.">
+  ];
+  let dependentDialects = ["mlir::cf::ControlFlowDialect",
+                           "mlir::func::FuncDialect",
+                           "mlir::pto::PTODialect",
+                           "mlir::memref::MemRefDialect",
+                           "mlir::scf::SCFDialect"];
+}
+
 def PTOValidateVPTOEmissionIR
     : Pass<"pto-validate-vpto-emission-ir", "ModuleOp"> {
   let summary =

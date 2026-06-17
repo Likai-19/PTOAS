@@ -415,4 +415,5 @@ def F4E2M1x2Type : TypeDef<PTO_Dialect, "F4E2M1x2", [
       "tile_buf shape counts pairs; each pair occupies 1 byte.";
 }
 
+include "PTO/IR/VMITypeDefs.td"
 include "PTO/IR/VPTOTypeDefs.td"

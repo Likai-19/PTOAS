@@ -77,6 +77,7 @@ class PTO_DpsOp<string mnemonic, list<Trait> traits = []>
 class PTO_Op<string mnemonic, list<Trait> traits = []>
     : Op<PTO_Dialect, mnemonic, !listconcat(traits, [ ])>;
 
+include "PTO/IR/VMIOps.td"
 include "PTO/IR/VPTOOps.td"
 include "PTO/IR/VPTOUbOps.td"
 
