@@ -143,7 +143,7 @@ static FailureOr<int64_t> getLayoutFactor(Type type) {
   FailureOr<VMILayoutAttr> layout = getAssignedVMILayout(type);
   if (failed(layout))
     return failure();
-  return (*layout).isContiguous() ? 1 : (*layout).getFactor();
+  return (*layout).isDeinterleaved() ? (*layout).getFactor() : 1;
 }
 
 static FailureOr<int64_t> getPhysicalLanesPerPart(Type type) {
@@ -294,6 +294,17 @@ static LogicalResult verifyMemoryElementMatches(Operation *op, Type memoryType,
   return success();
 }
 
+static LogicalResult verifyNumGroups(Operation *op, VMIVRegType type,
+                                     int64_t numGroups) {
+  if (numGroups <= 0)
+    return op->emitOpError("requires num_groups to be positive");
+  if (type.getElementCount() % numGroups != 0)
+    return op->emitOpError()
+           << "requires num_groups to evenly divide VMI logical lane count "
+           << type.getElementCount();
+  return success();
+}
+
 static LogicalResult verifyPhysicalParts(Operation *op, Type vmiType,
                                          TypeRange physicalTypes) {
   FailureOr<int64_t> expectedArity = getVMIPhysicalArity(vmiType);
@@ -354,6 +365,11 @@ VMILayoutAttr VMILayoutAttr::getDeinterleaved(MLIRContext *context,
   return VMILayoutAttr::get(context, "deinterleaved", factor);
 }
 
+VMILayoutAttr VMILayoutAttr::getGroupSlots(MLIRContext *context,
+                                           int64_t numGroups) {
+  return VMILayoutAttr::get(context, "num_groups", numGroups);
+}
+
 Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
   SMLoc loc = parser.getCurrentLocation();
   StringRef kind;
@@ -367,10 +383,13 @@ Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
   } else if (kind == "deinterleaved") {
     if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor)))
       return {};
+  } else if (kind == "num_groups") {
+    if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor)))
+      return {};
   } else {
     parser.emitError(parser.getCurrentLocation(),
                      "expected VMI layout kind 'contiguous' or "
-                     "'deinterleaved'");
+                     "'deinterleaved' or 'num_groups'");
     return {};
   }
 
@@ -383,7 +402,7 @@ Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
 
 void VMILayoutAttr::print(AsmPrinter &printer) const {
   printer << "<" << getKind();
-  if (isDeinterleaved())
+  if (isDeinterleaved() || isGroupSlots())
     printer << " = " << getFactor();
   printer << ">";
 }
@@ -406,8 +425,16 @@ VMILayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
     return success();
   }
 
+  if (kind == "num_groups") {
+    if (factor <= 0)
+      return emitError()
+             << "#pto.vmi.layout<num_groups = " << factor
+             << "> requires num_groups to be positive";
+    return success();
+  }
+
   return emitError() << "expected VMI layout kind to be 'contiguous' or "
-                        "'deinterleaved'";
+                        "'deinterleaved' or 'num_groups'";
 }
 
 Type VMIVRegType::parse(AsmParser &parser) {
@@ -454,6 +481,14 @@ LogicalResult VMIVRegType::verify(function_ref<InFlightDiagnostic()> emitError,
     return emitError() << "'" << formatVMIVRegType(elementCount, elementType,
                                                   layout)
                        << "' expected layout to be #pto.vmi.layout";
+  if (auto layoutAttr = llvm::dyn_cast_or_null<VMILayoutAttr>(layout)) {
+    if (layoutAttr.isGroupSlots() &&
+        elementCount % layoutAttr.getNumGroups() != 0)
+      return emitError() << "'" << formatVMIVRegType(elementCount, elementType,
+                                                    layout)
+                         << "' expected num_groups layout to evenly divide "
+                            "the VMI logical lane count";
+  }
 
   return success();
 }
@@ -509,6 +544,12 @@ LogicalResult VMIMaskType::verify(function_ref<InFlightDiagnostic()> emitError,
     return emitError() << "'" << formatVMIMaskType(elementCount, granularity,
                                                   layout)
                        << "' expected layout to be #pto.vmi.layout";
+  if (auto layoutAttr = llvm::dyn_cast_or_null<VMILayoutAttr>(layout)) {
+    if (layoutAttr.isGroupSlots())
+      return emitError() << "'" << formatVMIMaskType(elementCount, granularity,
+                                                    layout)
+                         << "' mask type must not carry num_groups layout";
+  }
 
   if (granularity == "pred" && layout)
     return emitError() << "'" << formatVMIMaskType(elementCount, granularity,
@@ -958,6 +999,65 @@ LogicalResult VMIReduceMinFOp::verify() {
   return verifyReduceMinMaxFOp(*this);
 }
 
+LogicalResult VMIGroupReduceAddFOp::verify() {
+  auto sourceType = cast<VMIVRegType>(getSource().getType());
+  auto maskType = cast<VMIMaskType>(getMask().getType());
+  auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (!getOperation()->hasAttr("reassoc"))
+    return emitOpError(
+        "requires reassoc attr because grouped lowering uses pair-wise "
+        "floating-point reductions");
+  if (!isVMIFloatLikeType(sourceType.getElementType()))
+    return emitOpError("requires floating-point-like VMI source element type");
+  if (sourceType.getElementCount() != resultType.getElementCount())
+    return emitOpError(
+        "requires source and result logical lane counts to match");
+  if (sourceType.getElementType() != resultType.getElementType())
+    return emitOpError("requires source and result element types to match");
+  if (auto sourceLayout = sourceType.getLayoutAttr()) {
+    if (!sourceLayout.isContiguous())
+      return emitOpError(
+          "requires layout-assigned source to use contiguous layout");
+  }
+  if (auto resultLayout = resultType.getLayoutAttr()) {
+    if (!resultLayout.isGroupSlots() ||
+        resultLayout.getNumGroups() != getNumGroupsAttr().getInt())
+      return emitOpError()
+             << "requires layout-assigned result to use "
+                "#pto.vmi.layout<num_groups = "
+             << getNumGroupsAttr().getInt() << ">";
+  }
+  if (failed(verifyMaskMatchesData(getOperation(), maskType, sourceType)))
+    return failure();
+  return verifyNumGroups(getOperation(), sourceType,
+                         getNumGroupsAttr().getInt());
+}
+
+LogicalResult VMIGroupBroadcastOp::verify() {
+  auto sourceType = cast<VMIVRegType>(getSource().getType());
+  auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (sourceType.getElementCount() != resultType.getElementCount())
+    return emitOpError(
+        "requires source and result logical lane counts to match");
+  if (sourceType.getElementType() != resultType.getElementType())
+    return emitOpError("requires source and result element types to match");
+  if (auto sourceLayout = sourceType.getLayoutAttr()) {
+    if (!sourceLayout.isGroupSlots() ||
+        sourceLayout.getNumGroups() != getNumGroupsAttr().getInt())
+      return emitOpError()
+             << "requires layout-assigned source to use "
+                "#pto.vmi.layout<num_groups = "
+             << getNumGroupsAttr().getInt() << ">";
+  }
+  if (auto resultLayout = resultType.getLayoutAttr()) {
+    if (resultLayout.isGroupSlots())
+      return emitOpError(
+          "requires layout-assigned result to use a dense VMI layout");
+  }
+  return verifyNumGroups(getOperation(), sourceType,
+                         getNumGroupsAttr().getInt());
+}
+
 LogicalResult VMIExtFOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
@@ -1020,6 +1120,21 @@ LogicalResult VMILoadOp::verify() {
 }
 
 void VMILoadOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getSourceMutable());
+}
+
+LogicalResult VMIGroupLoadOp::verify() {
+  auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
+                                        resultType, "source")))
+    return failure();
+  return verifyNumGroups(getOperation(), resultType,
+                         getNumGroupsAttr().getInt());
+}
+
+void VMIGroupLoadOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Read::get(), &getSourceMutable());
@@ -1104,6 +1219,22 @@ LogicalResult VMIStoreOp::verify() {
 }
 
 void VMIStoreOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(), &getDestinationMutable());
+}
+
+LogicalResult VMIGroupStoreOp::verify() {
+  auto valueType = cast<VMIVRegType>(getValue().getType());
+  if (failed(verifyMemoryElementMatches(getOperation(),
+                                        getDestination().getType(), valueType,
+                                        "destination")))
+    return failure();
+  return verifyNumGroups(getOperation(), valueType,
+                         getNumGroupsAttr().getInt());
+}
+
+void VMIGroupStoreOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Write::get(), &getDestinationMutable());
