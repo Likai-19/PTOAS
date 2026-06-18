@@ -488,7 +488,7 @@ FailureOr<int64_t> getDataLayoutFactor(VMIVRegType type) {
   VMILayoutAttr layout = type.getLayoutAttr();
   if (!layout)
     return failure();
-  return layout.isContiguous() ? 1 : layout.getFactor();
+  return layout.isDeinterleaved() ? layout.getFactor() : 1;
 }
 
 FailureOr<int64_t> getDataChunksInPart(VMIVRegType type, int64_t part) {
@@ -568,7 +568,7 @@ FailureOr<int64_t> getVMITypeLayoutFactor(Type type) {
   auto layoutAttr = dyn_cast_or_null<VMILayoutAttr>(layout);
   if (!layoutAttr)
     return failure();
-  return layoutAttr.isContiguous() ? 1 : layoutAttr.getFactor();
+  return layoutAttr.isDeinterleaved() ? layoutAttr.getFactor() : 1;
 }
 
 FailureOr<int64_t> getVMITypeElementCount(Type type) {
@@ -1085,6 +1085,80 @@ LogicalResult checkSupportedStoreShape(
                     "value ") +
               fullChunkReason + ", materialization " +
               materializationReason);
+}
+
+FailureOr<int64_t> getGroupSizeFromNumGroups(VMIVRegType type,
+                                             int64_t numGroups,
+                                             std::string *reason = nullptr) {
+  auto fail = [&](const Twine &message) -> FailureOr<int64_t> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+  if (numGroups <= 0)
+    return fail("requires num_groups to be positive");
+  if (type.getElementCount() % numGroups != 0)
+    return fail("requires num_groups to evenly divide logical lane count");
+  return type.getElementCount() / numGroups;
+}
+
+LogicalResult checkSupportedGroupChunkShape(VMIVRegType type,
+                                            int64_t groupSize,
+                                            std::string *reason) {
+  auto fail = [&](const Twine &message) -> LogicalResult {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  VMILayoutAttr layout = type.getLayoutAttr();
+  if (!layout || !layout.isContiguous())
+    return fail("requires assigned contiguous layout");
+  std::string fullChunkReason;
+  if (failed(checkFullDataPhysicalChunks(type, &fullChunkReason)))
+    return fail(Twine("requires full physical chunks; ") + fullChunkReason);
+  FailureOr<int64_t> lanesPerPart = getDataLanesPerPart(type.getElementType());
+  if (failed(lanesPerPart))
+    return fail("requires known physical lanes per part");
+  if (groupSize <= 0 || type.getElementCount() % groupSize != 0)
+    return fail("requires derived group size to evenly divide logical lane "
+                "count");
+  if (groupSize % *lanesPerPart != 0)
+    return fail("currently requires group size to be a multiple of physical "
+                "lanes per part");
+  return success();
+}
+
+LogicalResult checkSupportedGroupLoadShape(
+    const VMITargetCapabilityRegistry &capabilities, VMIGroupLoadOp op,
+    std::string *reason) {
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
+  FailureOr<int64_t> groupSize =
+      getGroupSizeFromNumGroups(resultType, op.getNumGroupsAttr().getInt(),
+                                reason);
+  if (failed(groupSize))
+    return failure();
+  if (failed(checkSupportedLoadShape(capabilities, resultType, op.getSource(),
+                                     op.getSource().getType(),
+                                     std::nullopt, reason)))
+    return failure();
+  return checkSupportedGroupChunkShape(resultType, *groupSize, reason);
+}
+
+LogicalResult checkSupportedGroupStoreShape(
+    const VMITargetCapabilityRegistry &capabilities, VMIGroupStoreOp op,
+    std::string *reason) {
+  auto valueType = cast<VMIVRegType>(op.getValue().getType());
+  FailureOr<int64_t> groupSize =
+      getGroupSizeFromNumGroups(valueType, op.getNumGroupsAttr().getInt(),
+                                reason);
+  if (failed(groupSize))
+    return failure();
+  if (failed(checkSupportedStoreShape(capabilities, valueType,
+                                      op.getDestination(),
+                                      op.getDestination().getType(), reason)))
+    return failure();
+  return checkSupportedGroupChunkShape(valueType, *groupSize, reason);
 }
 
 LogicalResult
@@ -1766,7 +1840,7 @@ computeConstantMaskMaterialization(VMIConstantMaskOp op, std::string *reason) {
     return fail("requires known physical mask lanes per part");
 
   auto boolValues = denseAttr.getValues<bool>();
-  int64_t factor = layout.isContiguous() ? 1 : layout.getFactor();
+  int64_t factor = layout.isDeinterleaved() ? layout.getFactor() : 1;
   SmallVector<ConstantMaskChunkMaterialization> materializations;
   for (int64_t part = 0; part < factor; ++part) {
     for (int64_t chunk = 0;; ++chunk) {
@@ -1897,12 +1971,244 @@ materializeConstantMaskChunk(Location loc, MaskType maskType,
   return materializePrefixMask(loc, maskType, 0, *lanesPerPart, rewriter);
 }
 
+FailureOr<Value> createScalarOffsetConstant(Location loc, Type type,
+                                            int64_t value,
+                                            PatternRewriter &rewriter);
+
 Value createChunkOffset(Location loc, Value baseOffset, int64_t laneOffset,
                         PatternRewriter &rewriter) {
   if (laneOffset == 0)
     return baseOffset;
   Value delta = rewriter.create<arith::ConstantIndexOp>(loc, laneOffset);
   return rewriter.create<arith::AddIOp>(loc, baseOffset, delta).getResult();
+}
+
+Value createGroupChunkOffset(Location loc, Value baseOffset, Value rowStride,
+                             int64_t group, int64_t inGroupLaneOffset,
+                             PatternRewriter &rewriter) {
+  Value offset = baseOffset;
+  if (group != 0) {
+    Value groupIndex = rewriter.create<arith::ConstantIndexOp>(loc, group);
+    Value rowOffset =
+        rewriter.create<arith::MulIOp>(loc, rowStride, groupIndex).getResult();
+    offset = rewriter.create<arith::AddIOp>(loc, offset, rowOffset).getResult();
+  }
+  return createChunkOffset(loc, offset, inGroupLaneOffset, rewriter);
+}
+
+LogicalResult checkContiguousFullGroupChunks(Operation *op, VMIVRegType type,
+                                             int64_t groupSize,
+                                             int64_t *lanesPerPart,
+                                             int64_t *groupCount,
+                                             int64_t *chunksPerGroup,
+                                             PatternRewriter &rewriter) {
+  auto fail = [&](const Twine &message) {
+    return rewriter.notifyMatchFailure(op, message);
+  };
+
+  VMILayoutAttr layout = type.getLayoutAttr();
+  if (!layout || !layout.isContiguous())
+    return fail("group op requires contiguous VMI layout");
+  if (failed(checkFullDataPhysicalChunks(type, nullptr)))
+    return fail("group op requires full physical chunks");
+  FailureOr<int64_t> lanes = getDataLanesPerPart(type.getElementType());
+  if (failed(lanes))
+    return fail("group op requires known physical lanes per part");
+  if (groupSize <= 0 || type.getElementCount() % groupSize != 0)
+    return fail("group op requires derived group size to evenly divide lane "
+                "count");
+  if (groupSize % *lanes != 0)
+    return fail("group op currently requires group size to be a multiple of "
+                "physical lanes per part");
+
+  *lanesPerPart = *lanes;
+  *groupCount = type.getElementCount() / groupSize;
+  *chunksPerGroup = groupSize / *lanes;
+  return success();
+}
+
+LogicalResult checkFullGroupSlotSourceShape(Operation *op, VMIVRegType type,
+                                            int64_t groupSize,
+                                            int64_t numGroups,
+                                            int64_t *lanesPerPart,
+                                            int64_t *groupCount,
+                                            PatternRewriter &rewriter) {
+  auto fail = [&](const Twine &message) {
+    return rewriter.notifyMatchFailure(op, message);
+  };
+
+  VMILayoutAttr layout = type.getLayoutAttr();
+  if (!layout || !layout.isGroupSlots() ||
+      layout.getNumGroups() != numGroups)
+    return fail("group slot op requires matching num_groups VMI layout");
+  if (failed(checkFullDataPhysicalChunks(type, nullptr)))
+    return fail("group slot op requires full physical chunks");
+  FailureOr<int64_t> lanes = getDataLanesPerPart(type.getElementType());
+  if (failed(lanes))
+    return fail("group slot op requires known physical lanes per part");
+  if (groupSize <= 0 || type.getElementCount() % groupSize != 0)
+    return fail(
+        "group slot op requires derived group size to evenly divide lane count");
+  if (*lanes % groupSize != 0 && groupSize % *lanes != 0)
+    return fail("group slot op requires group size to divide or be a "
+                "multiple of physical lanes per part");
+
+  *lanesPerPart = *lanes;
+  *groupCount = type.getElementCount() / groupSize;
+  return success();
+}
+
+LogicalResult checkFullGroupBroadcastResultShape(Operation *op,
+                                                 VMIVRegType type,
+                                                 int64_t groupSize,
+                                                 int64_t lanesPerPart,
+                                                 int64_t *layoutFactor,
+                                                 int64_t *groupCount,
+                                                 PatternRewriter &rewriter) {
+  auto fail = [&](const Twine &message) {
+    return rewriter.notifyMatchFailure(op, message);
+  };
+
+  VMILayoutAttr layout = type.getLayoutAttr();
+  if (!layout)
+    return fail("group_broadcast result requires assigned VMI layout");
+  if (layout.isGroupSlots())
+    return fail("group_broadcast result requires a dense VMI layout");
+  if (failed(checkFullDataPhysicalChunks(type, nullptr)))
+    return fail("group_broadcast result requires full physical chunks");
+  FailureOr<int64_t> resultLanes =
+      getDataLanesPerPart(type.getElementType());
+  if (failed(resultLanes) || *resultLanes != lanesPerPart)
+    return fail("group_broadcast result requires matching physical lanes");
+  if (groupSize <= 0 || type.getElementCount() % groupSize != 0)
+    return fail("group_broadcast result requires derived group size to evenly "
+                "divide lane count");
+  FailureOr<int64_t> factor = getDataLayoutFactor(type);
+  if (failed(factor))
+    return fail("group_broadcast result requires known layout factor");
+
+  if (*factor == 1) {
+    if (lanesPerPart % groupSize != 0 && groupSize % lanesPerPart != 0)
+      return fail("group_broadcast contiguous result requires group size to "
+                  "divide or be a multiple of physical lanes per part");
+  } else {
+    int64_t logicalSpanPerResultChunk = lanesPerPart * *factor;
+    if (groupSize < lanesPerPart ||
+        groupSize % logicalSpanPerResultChunk != 0)
+      return fail("group_broadcast deinterleaved result requires every "
+                  "physical result chunk to stay within one logical group");
+  }
+
+  *layoutFactor = *factor;
+  *groupCount = type.getElementCount() / groupSize;
+  return success();
+}
+
+FailureOr<Value> createZeroVector(Location loc, VRegType type,
+                                  PatternRewriter &rewriter) {
+  FailureOr<Value> zero =
+      createScalarOffsetConstant(loc, type.getElementType(), 0, rewriter);
+  FailureOr<Value> mask = createAllTrueMaskForVReg(loc, type, rewriter);
+  if (failed(zero) || failed(mask))
+    return failure();
+  return rewriter.create<VdupOp>(loc, type, *zero, *mask,
+                                 /*position=*/nullptr)
+      .getResult();
+}
+
+FailureOr<Value> createLaneRangeMask(Location loc, MaskType maskType,
+                                     int64_t begin, int64_t end,
+                                     PatternRewriter &rewriter) {
+  FailureOr<int64_t> lanesPerPart =
+      getMaskLanesPerPart(maskType.getGranularity());
+  if (failed(lanesPerPart) || begin < 0 || begin > end ||
+      end > *lanesPerPart)
+    return failure();
+  SmallVector<int8_t> active(*lanesPerPart, 0);
+  for (int64_t lane = begin; lane < end; ++lane)
+    active[lane] = 1;
+  return materializeConstantMaskChunk(loc, maskType, active, rewriter);
+}
+
+FailureOr<Value> createGroupSlotIndexVector(Location loc, VRegType indexType,
+                                            int64_t groupSize,
+                                            PatternRewriter &rewriter) {
+  int64_t lanesPerPart = indexType.getElementCount();
+  FailureOr<Value> zero =
+      createZeroVector(loc, indexType, rewriter);
+  FailureOr<MaskType> maskType = getMaskTypeForVReg(indexType, rewriter.getContext());
+  FailureOr<Value> allMask = createAllTrueMaskForVReg(loc, indexType, rewriter);
+  if (failed(zero) || failed(maskType) || failed(allMask))
+    return failure();
+  if (groupSize >= lanesPerPart)
+    return *zero;
+  if (lanesPerPart % groupSize != 0)
+    return failure();
+
+  Value result = *zero;
+  int64_t groupsPerChunk = lanesPerPart / groupSize;
+  for (int64_t localGroup = 1; localGroup < groupsPerChunk; ++localGroup) {
+    FailureOr<Value> groupScalar = createScalarOffsetConstant(
+        loc, indexType.getElementType(), localGroup, rewriter);
+    FailureOr<Value> laneMask =
+        createLaneRangeMask(loc, *maskType, localGroup * groupSize,
+                            (localGroup + 1) * groupSize, rewriter);
+    if (failed(groupScalar) || failed(laneMask))
+      return failure();
+    Value splat =
+        rewriter
+            .create<VdupOp>(loc, indexType, *groupScalar, *allMask,
+                            /*position=*/nullptr)
+            .getResult();
+    result = rewriter.create<VselOp>(loc, indexType, splat, result, *laneMask)
+                 .getResult();
+  }
+  return result;
+}
+
+LogicalResult checkVcgaddGroupReduceShape(VMIVRegType sourceType,
+                                          VMIMaskType maskType,
+                                          VMIVRegType resultType,
+                                          int64_t groupSize,
+                                          std::string *reason) {
+  auto fail = [&](const Twine &message) -> LogicalResult {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  if (!sourceType.getElementType().isF32() ||
+      sourceType.getElementType() != resultType.getElementType())
+    return fail("vcgadd group_reduce_addf path requires f32 source/result");
+  if (groupSize != 8)
+    return fail("vcgadd group_reduce_addf path requires group size = 8 for "
+                "f32 32-byte VLane groups");
+  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  VMILayoutAttr maskLayout = maskType.getLayoutAttr();
+  int64_t numGroups = sourceType.getElementCount() / groupSize;
+  if (!sourceLayout || !resultLayout || !maskLayout ||
+      !sourceLayout.isContiguous() || !resultLayout.isGroupSlots() ||
+      resultLayout.getNumGroups() != numGroups ||
+      !maskLayout.isContiguous())
+    return fail("vcgadd group_reduce_addf path requires contiguous source/mask "
+                "layouts and matching num_groups result layout");
+  std::string sourceFullReason;
+  if (failed(checkFullDataPhysicalChunks(sourceType, &sourceFullReason)))
+    return fail(Twine("vcgadd group_reduce_addf path requires full source "
+                      "chunks; ") +
+                sourceFullReason);
+  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
+  FailureOr<int64_t> maskArity = getVMIPhysicalArity(maskType);
+  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
+  if (failed(sourceArity) || failed(maskArity) || failed(resultArity))
+    return fail("vcgadd group_reduce_addf path requires computable physical "
+                "arity");
+  if (*sourceArity < 1 || *sourceArity != *maskArity ||
+      *sourceArity != *resultArity)
+    return fail("vcgadd group_reduce_addf path requires matching non-empty "
+                "source/mask/result physical arity");
+  return success();
 }
 
 std::optional<std::string> getX2MemoryDistToken(Type elementType,
@@ -2713,9 +3019,10 @@ FailureOr<Value> createScalarOffsetConstant(Location loc, Type type,
   }
   if (auto floatType = dyn_cast<FloatType>(type)) {
     return rewriter
-        .create<arith::ConstantOp>(
-            loc, FloatAttr::get(floatType,
-                                llvm::APFloat(static_cast<double>(value))))
+        .create<arith::ConstantOp>(loc,
+                                   rewriter.getFloatAttr(floatType,
+                                                         static_cast<double>(
+                                                             value)))
         .getResult();
   }
   return failure();
@@ -2987,7 +3294,7 @@ struct OneToNVMICreateMaskOpPattern
         return failure();
 
       TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
-      int64_t factor = layout.isContiguous() ? 1 : layout.getFactor();
+      int64_t factor = layout.isDeinterleaved() ? layout.getFactor() : 1;
       if (resultTypes.size() % factor != 0)
         return rewriter.notifyMatchFailure(
             op, "dynamic create_mask physical result count does not match "
@@ -3034,7 +3341,7 @@ struct OneToNVMICreateMaskOpPattern
       activeLanes = resultVMIType.getElementCount();
 
     TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
-    int64_t factor = layout.isContiguous() ? 1 : layout.getFactor();
+    int64_t factor = layout.isDeinterleaved() ? layout.getFactor() : 1;
     SmallVector<Value> results;
     results.reserve(resultTypes.size());
 
@@ -3180,6 +3487,73 @@ struct OneToNVMILoadOpPattern : OneToNOpConversionPattern<VMILoadOp> {
       return failure();
 
     rewriter.replaceOp(op, *results, adaptor.getResultMapping());
+    return success();
+  }
+};
+
+struct OneToNVMIGroupLoadOpPattern
+    : OneToNOpConversionPattern<VMIGroupLoadOp> {
+  using OneToNOpConversionPattern<
+      VMIGroupLoadOp>::OneToNOpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(VMIGroupLoadOp op, OpAdaptor adaptor,
+                  OneToNPatternRewriter &rewriter) const override {
+    auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
+    FailureOr<Value> source =
+        getSingleValue(op, adaptor.getSource(),
+                       "group_load source must convert to one value",
+                       rewriter);
+    FailureOr<Value> offset =
+        getSingleValue(op, adaptor.getOffset(),
+                       "group_load offset must convert to one value",
+                       rewriter);
+    FailureOr<Value> rowStride =
+        getSingleValue(op, adaptor.getRowStride(),
+                       "group_load row_stride must convert to one value",
+                       rewriter);
+    if (failed(source) || failed(offset) || failed(rowStride))
+      return failure();
+
+    int64_t lanesPerPart = 0;
+    int64_t groupCount = 0;
+    int64_t chunksPerGroup = 0;
+    FailureOr<int64_t> groupSize = getGroupSizeFromNumGroups(
+        resultVMIType, op.getNumGroupsAttr().getInt());
+    if (failed(groupSize))
+      return rewriter.notifyMatchFailure(
+          op, "group_load requires num_groups to evenly divide lane count");
+    if (failed(checkContiguousFullGroupChunks(
+            op, resultVMIType, *groupSize, &lanesPerPart, &groupCount,
+            &chunksPerGroup, rewriter)))
+      return failure();
+
+    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    if (static_cast<int64_t>(resultTypes.size()) !=
+        groupCount * chunksPerGroup)
+      return rewriter.notifyMatchFailure(op, "group_load arity mismatch");
+
+    SmallVector<Value> results;
+    results.reserve(resultTypes.size());
+    for (auto [index, resultType] : llvm::enumerate(resultTypes)) {
+      auto vregType = dyn_cast<VRegType>(resultType);
+      if (!vregType)
+        return rewriter.notifyMatchFailure(op,
+                                           "group_load result must be vreg");
+      int64_t group = index / chunksPerGroup;
+      int64_t chunkInGroup = index % chunksPerGroup;
+      Value chunkOffset = createGroupChunkOffset(
+          op.getLoc(), *offset, *rowStride, group,
+          chunkInGroup * lanesPerPart, rewriter);
+      results.push_back(
+          rewriter
+              .create<VldsOp>(op.getLoc(), resultType,
+                              /*updated_base=*/Type{}, *source, chunkOffset,
+                              /*dist=*/nullptr)
+              .getResult());
+    }
+
+    rewriter.replaceOp(op, results, adaptor.getResultMapping());
     return success();
   }
 };
@@ -3492,6 +3866,73 @@ struct OneToNVMIStoreOpPattern : OneToNOpConversionPattern<VMIStoreOp> {
             op, "unsupported element type for store mask");
       Value chunkOffset = createChunkOffset(
           op.getLoc(), *offset, index * *lanesPerPart, rewriter);
+      rewriter.create<VstsOp>(op.getLoc(),
+                              /*updated_base=*/Type{}, value, *destination,
+                              chunkOffset, /*dist=*/nullptr, *mask);
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct OneToNVMIGroupStoreOpPattern
+    : OneToNOpConversionPattern<VMIGroupStoreOp> {
+  using OneToNOpConversionPattern<
+      VMIGroupStoreOp>::OneToNOpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(VMIGroupStoreOp op, OpAdaptor adaptor,
+                  OneToNPatternRewriter &rewriter) const override {
+    auto valueVMIType = cast<VMIVRegType>(op.getValue().getType());
+    int64_t lanesPerPart = 0;
+    int64_t groupCount = 0;
+    int64_t chunksPerGroup = 0;
+    FailureOr<int64_t> groupSize = getGroupSizeFromNumGroups(
+        valueVMIType, op.getNumGroupsAttr().getInt());
+    if (failed(groupSize))
+      return rewriter.notifyMatchFailure(
+          op, "group_store requires num_groups to evenly divide lane count");
+    if (failed(checkContiguousFullGroupChunks(
+            op, valueVMIType, *groupSize, &lanesPerPart, &groupCount,
+            &chunksPerGroup, rewriter)))
+      return failure();
+
+    FailureOr<Value> destination =
+        getSingleValue(op, adaptor.getDestination(),
+                       "group_store destination must convert to one value",
+                       rewriter);
+    FailureOr<Value> offset =
+        getSingleValue(op, adaptor.getOffset(),
+                       "group_store offset must convert to one value",
+                       rewriter);
+    FailureOr<Value> rowStride =
+        getSingleValue(op, adaptor.getRowStride(),
+                       "group_store row_stride must convert to one value",
+                       rewriter);
+    if (failed(destination) || failed(offset) || failed(rowStride))
+      return failure();
+
+    ValueRange valueParts = adaptor.getValue();
+    if (static_cast<int64_t>(valueParts.size()) !=
+        groupCount * chunksPerGroup)
+      return rewriter.notifyMatchFailure(op, "group_store arity mismatch");
+
+    for (auto [index, value] : llvm::enumerate(valueParts)) {
+      auto vregType = dyn_cast<VRegType>(value.getType());
+      if (!vregType)
+        return rewriter.notifyMatchFailure(op,
+                                           "group_store value must be vreg");
+      FailureOr<Value> mask =
+          createAllTrueMaskForVReg(op.getLoc(), vregType, rewriter);
+      if (failed(mask))
+        return rewriter.notifyMatchFailure(
+            op, "unsupported element type for group_store mask");
+      int64_t group = index / chunksPerGroup;
+      int64_t chunkInGroup = index % chunksPerGroup;
+      Value chunkOffset = createGroupChunkOffset(
+          op.getLoc(), *offset, *rowStride, group,
+          chunkInGroup * lanesPerPart, rewriter);
       rewriter.create<VstsOp>(op.getLoc(),
                               /*updated_base=*/Type{}, value, *destination,
                               chunkOffset, /*dist=*/nullptr, *mask);
@@ -4346,6 +4787,284 @@ struct OneToNVMIReduceAddFOpPattern
   }
 };
 
+struct OneToNVMIGroupReduceAddFOpPattern
+    : OneToNOpConversionPattern<VMIGroupReduceAddFOp> {
+  using OneToNOpConversionPattern<
+      VMIGroupReduceAddFOp>::OneToNOpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(VMIGroupReduceAddFOp op, OpAdaptor adaptor,
+                  OneToNPatternRewriter &rewriter) const override {
+    auto sourceVMIType = cast<VMIVRegType>(op.getSource().getType());
+    auto maskVMIType = cast<VMIMaskType>(op.getMask().getType());
+    auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
+    ValueRange sourceParts = adaptor.getSource();
+    ValueRange maskParts = adaptor.getMask();
+    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<int64_t> groupSize = getGroupSizeFromNumGroups(
+        sourceVMIType, op.getNumGroupsAttr().getInt());
+    if (failed(groupSize))
+      return rewriter.notifyMatchFailure(
+          op,
+          "group_reduce_addf requires num_groups to evenly divide lane count");
+    if (succeeded(checkVcgaddGroupReduceShape(
+            sourceVMIType, maskVMIType, resultVMIType,
+            *groupSize, nullptr))) {
+      if (sourceParts.size() != maskParts.size() ||
+          sourceParts.size() != resultTypes.size() || sourceParts.empty())
+        return rewriter.notifyMatchFailure(
+            op, "vcgadd group_reduce_addf path requires matching physical "
+                "arity");
+      auto resultType = dyn_cast<VRegType>(resultTypes.front());
+      auto maskType = dyn_cast<MaskType>(maskParts.front().getType());
+      if (!resultType || !maskType)
+        return rewriter.notifyMatchFailure(
+            op, "vcgadd group_reduce_addf path requires physical vreg/mask");
+      for (auto [sourcePart, maskPart, physicalResultType] :
+           llvm::zip_equal(sourceParts, maskParts, resultTypes)) {
+        if (sourcePart.getType() != resultType ||
+            maskPart.getType() != maskType || physicalResultType != resultType)
+          return rewriter.notifyMatchFailure(
+              op, "vcgadd group_reduce_addf path requires uniform physical "
+                  "chunk types");
+      }
+
+      SmallVector<Value> results;
+      results.reserve(resultTypes.size());
+      for (auto [sourceIndex, sourcePart] : llvm::enumerate(sourceParts)) {
+        results.push_back(
+            rewriter
+                .create<VcgaddOp>(op.getLoc(), resultType, sourcePart,
+                                  maskParts[sourceIndex])
+                .getResult());
+      }
+
+      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      return success();
+    }
+
+    int64_t lanesPerPart = 0;
+    int64_t groupCount = 0;
+    int64_t chunksPerGroup = 0;
+    if (failed(checkContiguousFullGroupChunks(
+            op, sourceVMIType, *groupSize, &lanesPerPart, &groupCount,
+            &chunksPerGroup, rewriter)))
+      return failure();
+    if (sourceParts.size() != maskParts.size() ||
+        static_cast<int64_t>(sourceParts.size()) !=
+            groupCount * chunksPerGroup ||
+        resultTypes.size() != sourceParts.size())
+      return rewriter.notifyMatchFailure(
+          op, "group_reduce_addf requires matching source/mask/result arity");
+
+    SmallVector<Value> results;
+    results.reserve(resultTypes.size());
+    for (Type resultType : resultTypes) {
+      auto vregType = dyn_cast<VRegType>(resultType);
+      if (!vregType)
+        return rewriter.notifyMatchFailure(
+            op, "group_reduce_addf result must be vreg");
+      FailureOr<Value> zero = createZeroVector(op.getLoc(), vregType, rewriter);
+      if (failed(zero))
+        return rewriter.notifyMatchFailure(
+            op, "failed to materialize group_reduce_addf zero result");
+      results.push_back(*zero);
+    }
+
+    auto resultType = dyn_cast<VRegType>(resultTypes.front());
+    auto maskType = dyn_cast<MaskType>(maskParts.front().getType());
+    if (!resultType || !maskType)
+      return rewriter.notifyMatchFailure(
+          op, "group_reduce_addf requires physical vreg result and mask");
+
+    FailureOr<Value> firstLaneMask =
+        createPrefixMask(op.getLoc(), maskType, "PAT_VL1", rewriter);
+    if (failed(firstLaneMask))
+      return rewriter.notifyMatchFailure(
+          op, "failed to create group_reduce_addf masks");
+
+    for (int64_t group = 0; group < groupCount; ++group) {
+      FailureOr<Value> accumulator =
+          createZeroVector(op.getLoc(), resultType, rewriter);
+      if (failed(accumulator))
+        return rewriter.notifyMatchFailure(
+            op, "failed to create group_reduce_addf accumulator");
+
+      for (int64_t chunk = 0; chunk < chunksPerGroup; ++chunk) {
+        int64_t index = group * chunksPerGroup + chunk;
+        if (sourceParts[index].getType() != resultType ||
+            maskParts[index].getType() != maskType)
+          return rewriter.notifyMatchFailure(
+              op, "group_reduce_addf requires uniform physical chunk types");
+        Value reduced =
+            rewriter
+                .create<VcaddOp>(op.getLoc(), resultType, sourceParts[index],
+                                 maskParts[index])
+                .getResult();
+        *accumulator =
+            rewriter
+                .create<VaddOp>(op.getLoc(), resultType, reduced,
+                                *accumulator, *firstLaneMask)
+                .getResult();
+      }
+
+      int64_t destChunk = group * chunksPerGroup;
+      results[destChunk] =
+          rewriter
+              .create<VselOp>(op.getLoc(), resultType, *accumulator,
+                              results[destChunk], *firstLaneMask)
+              .getResult();
+    }
+
+    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    return success();
+  }
+};
+
+struct OneToNVMIGroupBroadcastOpPattern
+    : OneToNOpConversionPattern<VMIGroupBroadcastOp> {
+  using OneToNOpConversionPattern<
+      VMIGroupBroadcastOp>::OneToNOpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(VMIGroupBroadcastOp op, OpAdaptor adaptor,
+                  OneToNPatternRewriter &rewriter) const override {
+    auto sourceVMIType = cast<VMIVRegType>(op.getSource().getType());
+    auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
+    FailureOr<int64_t> groupSize = getGroupSizeFromNumGroups(
+        sourceVMIType, op.getNumGroupsAttr().getInt());
+    if (failed(groupSize))
+      return rewriter.notifyMatchFailure(
+          op,
+          "group_broadcast requires num_groups to evenly divide lane count");
+    int64_t lanesPerPart = 0;
+    int64_t groupCount = 0;
+    if (failed(checkFullGroupSlotSourceShape(
+            op, sourceVMIType, *groupSize, op.getNumGroupsAttr().getInt(),
+            &lanesPerPart, &groupCount, rewriter)))
+      return failure();
+    int64_t resultLayoutFactor = 0;
+    int64_t resultGroupCount = 0;
+    if (failed(checkFullGroupBroadcastResultShape(
+            op, resultVMIType, *groupSize, lanesPerPart, &resultLayoutFactor,
+            &resultGroupCount, rewriter)))
+      return failure();
+    if (resultGroupCount != groupCount)
+      return rewriter.notifyMatchFailure(
+          op, "group_broadcast requires matching source/result group slots");
+
+    ValueRange sourceParts = adaptor.getSource();
+    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    if (sourceParts.empty() || resultTypes.empty())
+      return rewriter.notifyMatchFailure(op, "group_broadcast arity mismatch");
+
+    auto firstSourceType = dyn_cast<VRegType>(sourceParts.front().getType());
+    if (!firstSourceType)
+      return rewriter.notifyMatchFailure(
+          op, "group_broadcast source must be vreg");
+    unsigned indexBits =
+        pto::getPTOStorageElemBitWidth(firstSourceType.getElementType());
+    if (indexBits != 8 && indexBits != 16 && indexBits != 32)
+      return rewriter.notifyMatchFailure(
+          op, "group_broadcast requires 8/16/32-bit index elements");
+    auto indexElementType = IntegerType::get(rewriter.getContext(), indexBits);
+    auto indexType =
+        VRegType::get(rewriter.getContext(), firstSourceType.getElementCount(),
+                      indexElementType);
+    std::optional<Value> groupSlotIndex;
+    FailureOr<Value> allMask =
+        createAllTrueMaskForVReg(op.getLoc(), firstSourceType, rewriter);
+    if (failed(allMask))
+      return rewriter.notifyMatchFailure(
+          op, "failed to create group_broadcast all mask");
+    if (*groupSize < lanesPerPart) {
+      FailureOr<Value> index = createGroupSlotIndexVector(
+          op.getLoc(), indexType, *groupSize, rewriter);
+      if (failed(index))
+        return rewriter.notifyMatchFailure(
+            op, "failed to create group_broadcast group-slot index vector");
+      groupSlotIndex = *index;
+    }
+
+    SmallVector<Value> results;
+    results.resize(resultTypes.size());
+    for (auto [flatIndex, resultType] : llvm::enumerate(resultTypes)) {
+      auto resultVRegType = dyn_cast<VRegType>(resultType);
+      if (!resultVRegType || resultVRegType != firstSourceType)
+        return rewriter.notifyMatchFailure(
+            op, "group_broadcast requires uniform physical vreg types");
+      int64_t sourceChunk = flatIndex;
+      if (resultLayoutFactor == 1) {
+        if (*groupSize >= lanesPerPart) {
+          int64_t chunksPerGroup = *groupSize / lanesPerPart;
+          int64_t group = flatIndex / chunksPerGroup;
+          sourceChunk = group * chunksPerGroup;
+        }
+      } else {
+        int64_t runningFlatIndex = 0;
+        bool found = false;
+        for (int64_t part = 0; part < resultLayoutFactor && !found; ++part) {
+          FailureOr<int64_t> chunks = getDataChunksInPart(resultVMIType, part);
+          if (failed(chunks))
+            return rewriter.notifyMatchFailure(
+                op, "group_broadcast failed to enumerate result chunks");
+          for (int64_t chunk = 0; chunk < *chunks; ++chunk, ++runningFlatIndex) {
+            if (runningFlatIndex != static_cast<int64_t>(flatIndex))
+              continue;
+            FailureOr<int64_t> firstLogical =
+                mapPhysicalLaneToLogical(resultVMIType, part, chunk, 0);
+            FailureOr<int64_t> lastLogical = mapPhysicalLaneToLogical(
+                resultVMIType, part, chunk, lanesPerPart - 1);
+            if (failed(firstLogical) || failed(lastLogical))
+              return rewriter.notifyMatchFailure(
+                  op, "group_broadcast failed to map result chunk lanes");
+            int64_t firstGroup = *firstLogical / *groupSize;
+            int64_t lastGroup = *lastLogical / *groupSize;
+            if (firstGroup != lastGroup)
+              return rewriter.notifyMatchFailure(
+                  op, "group_broadcast result chunk crosses logical groups");
+            int64_t chunksPerGroup = *groupSize / lanesPerPart;
+            sourceChunk = firstGroup * chunksPerGroup;
+            found = true;
+            break;
+          }
+        }
+        if (!found)
+          return rewriter.notifyMatchFailure(
+              op, "group_broadcast result chunk index is out of range");
+      }
+      if (*groupSize >= lanesPerPart) {
+        if (sourceChunk < 0 ||
+            sourceChunk >= static_cast<int64_t>(sourceParts.size()))
+          return rewriter.notifyMatchFailure(
+              op, "group_broadcast source chunk is out of range");
+        results[flatIndex] =
+            rewriter
+                .create<VdupOp>(op.getLoc(), resultType, sourceParts[sourceChunk],
+                                *allMask, rewriter.getStringAttr("LOWEST"))
+                .getResult();
+      } else {
+        if (resultLayoutFactor != 1)
+          return rewriter.notifyMatchFailure(
+              op, "group_broadcast small-group deinterleaved result is not "
+                  "supported");
+        if (sourceChunk < 0 ||
+            sourceChunk >= static_cast<int64_t>(sourceParts.size()))
+          return rewriter.notifyMatchFailure(
+              op, "group_broadcast source chunk is out of range");
+        results[flatIndex] =
+            rewriter
+                .create<VselrOp>(op.getLoc(), resultType,
+                                 sourceParts[sourceChunk], *groupSlotIndex)
+                .getResult();
+      }
+    }
+
+    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    return success();
+  }
+};
+
 template <typename SourceOp, typename ChunkReduceOp, typename CombineOp>
 struct OneToNVMIReduceMinMaxFOpPattern
     : OneToNOpConversionPattern<SourceOp> {
@@ -5032,10 +5751,12 @@ void populateVMIOneToNConversionPatterns(
                OneToNVMIMaskBinaryOpPattern<VMIMaskXOrOp, PxorOp>,
                OneToNVMIMaskUnaryOpPattern<VMIMaskNotOp, PnotOp>,
                OneToNVMILoadOpPattern,
+               OneToNVMIGroupLoadOpPattern,
                OneToNVMIMaskedLoadOpPattern,
                OneToNVMIGatherOpPattern,
                OneToNVMIExpandLoadOpPattern,
                OneToNVMIStoreOpPattern,
+               OneToNVMIGroupStoreOpPattern,
                OneToNVMIMaskedStoreOpPattern,
                OneToNVMIScatterOpPattern,
                OneToNVMITileReadOpPattern,
@@ -5071,6 +5792,8 @@ void populateVMIOneToNConversionPatterns(
                OneToNVMICompressStoreOpPattern,
                OneToNVMIReduceAddIOpPattern,
                OneToNVMIReduceAddFOpPattern,
+               OneToNVMIGroupReduceAddFOpPattern,
+               OneToNVMIGroupBroadcastOpPattern,
                OneToNVMIReduceMinMaxFOpPattern<VMIReduceMaxFOp, VcmaxOp,
                                                 VmaxOp>,
                OneToNVMIReduceMinMaxFOpPattern<VMIReduceMinFOp, VcminOp,
@@ -5533,6 +6256,122 @@ checkSupportedReduceShape(const VMITargetCapabilityRegistry &capabilities,
   return success();
 }
 
+LogicalResult checkSupportedGroupReduceAddFShape(
+    const VMITargetCapabilityRegistry &capabilities, VMIGroupReduceAddFOp op,
+    std::string *reason = nullptr) {
+  auto fail = [&](const Twine &message) -> LogicalResult {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  if (!op->hasAttr("reassoc"))
+    return fail("requires reassoc attr for pair-wise floating-point reduction");
+  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
+  auto maskType = cast<VMIMaskType>(op.getMask().getType());
+  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  VMILayoutAttr maskLayout = maskType.getLayoutAttr();
+  if (!sourceLayout || !resultLayout || !maskLayout)
+    return fail("requires assigned source, mask, and result layouts");
+  if (!sourceLayout.isContiguous() || !resultLayout.isGroupSlots() ||
+      resultLayout.getNumGroups() != op.getNumGroupsAttr().getInt() ||
+      !maskLayout.isContiguous())
+    return fail("requires contiguous source/mask layouts and matching "
+                "num_groups result layout");
+  VMICapabilityResult elementCapability =
+      capabilities.supportsReductionElementType(VMIReductionKind::AddF,
+                                                sourceType.getElementType());
+  if (!elementCapability.isSupported())
+    return fail(elementCapability.reason);
+  if (sourceType.getElementType() != resultType.getElementType())
+    return fail("requires source/result element type to match");
+  if (sourceType.getElementCount() != resultType.getElementCount())
+    return fail("requires source/result lane count to match");
+  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
+  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
+  FailureOr<int64_t> maskArity = getVMIPhysicalArity(maskType);
+  if (failed(sourceArity) || failed(resultArity) || failed(maskArity))
+    return fail("requires computable source/result/mask physical arity");
+  if (*sourceArity != *resultArity || *sourceArity != *maskArity)
+    return fail("requires source/result/mask physical arity to match");
+  FailureOr<int64_t> groupSize =
+      getGroupSizeFromNumGroups(sourceType, op.getNumGroupsAttr().getInt(),
+                                reason);
+  if (failed(groupSize))
+    return failure();
+  if (succeeded(checkVcgaddGroupReduceShape(
+          sourceType, maskType, resultType, *groupSize, nullptr)))
+    return success();
+  return checkSupportedGroupChunkShape(sourceType, *groupSize, reason);
+}
+
+LogicalResult checkSupportedGroupBroadcastShape(
+    const VMITargetCapabilityRegistry &capabilities, VMIGroupBroadcastOp op,
+    std::string *reason = nullptr) {
+  (void)capabilities;
+  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
+  if (sourceType.getElementType() != resultType.getElementType() ||
+      sourceType.getElementCount() != resultType.getElementCount()) {
+    if (reason)
+      *reason = "requires source/result shape and element type to match";
+    return failure();
+  }
+  auto fail = [&](const Twine &message) -> LogicalResult {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  if (!sourceLayout || !resultLayout)
+    return fail("requires assigned source/result layouts");
+  if (!sourceLayout.isGroupSlots() ||
+      sourceLayout.getNumGroups() != op.getNumGroupsAttr().getInt())
+    return fail("requires matching num_groups source layout");
+  if (resultLayout.isGroupSlots())
+    return fail("requires dense result layout");
+
+  std::string fullChunkReason;
+  if (failed(checkFullDataPhysicalChunks(sourceType, &fullChunkReason)))
+    return fail(Twine("requires full source physical chunks; ") +
+                fullChunkReason);
+  if (failed(checkFullDataPhysicalChunks(resultType, &fullChunkReason)))
+    return fail(Twine("requires full result physical chunks; ") +
+                fullChunkReason);
+
+  FailureOr<int64_t> lanesPerPart =
+      getDataLanesPerPart(sourceType.getElementType());
+  FailureOr<int64_t> resultLanesPerPart =
+      getDataLanesPerPart(resultType.getElementType());
+  if (failed(lanesPerPart) || failed(resultLanesPerPart) ||
+      *lanesPerPart != *resultLanesPerPart)
+    return fail("requires matching physical lanes per part");
+  FailureOr<int64_t> groupSize =
+      getGroupSizeFromNumGroups(sourceType, op.getNumGroupsAttr().getInt(),
+                                reason);
+  if (failed(groupSize))
+    return failure();
+  if (*lanesPerPart % *groupSize != 0 && *groupSize % *lanesPerPart != 0)
+    return fail("requires derived group size to divide or be a multiple of "
+                "physical lanes per part");
+
+  FailureOr<int64_t> resultFactor = getDataLayoutFactor(resultType);
+  if (failed(resultFactor))
+    return fail("requires known result layout factor");
+  if (*resultFactor == 1)
+    return success();
+  int64_t logicalSpanPerResultChunk = *lanesPerPart * *resultFactor;
+  if (*groupSize < *lanesPerPart ||
+      *groupSize % logicalSpanPerResultChunk != 0)
+    return fail("deinterleaved result requires every physical result chunk to "
+                "stay within one logical group");
+  return success();
+}
+
 LogicalResult
 checkSupportedFmaShape(const VMITargetCapabilityRegistry &capabilities,
                        VMIFmaOp op, std::string *reason = nullptr) {
@@ -5678,11 +6517,37 @@ LogicalResult verifySupportedVMIToVPTOOps(
       return emitMaskableUnsupported(
           op, "pto.vmi.broadcast",
           cast<VMIVRegType>(broadcast.getResult().getType()));
+    if (auto broadcast = dyn_cast<VMIGroupBroadcastOp>(op)) {
+      std::string reason;
+      if (succeeded(checkSupportedGroupBroadcastShape(capabilities, broadcast,
+                                                      &reason)))
+        return WalkResult::advance();
+      broadcast.emitError()
+          << kVMIDiagUnsupportedPrefix
+          << "pto.vmi.group_broadcast requires full source chunks with "
+             "#pto.vmi.layout<num_groups = G>, a dense full result layout, "
+             "and num_groups deriving a group size that divides or is a "
+             "multiple of physical chunk lanes ("
+          << reason << ")";
+      return WalkResult::interrupt();
+    }
 
     if (auto load = dyn_cast<VMILoadOp>(op))
       return emitMemoryUnsupported(
           op, "pto.vmi.load", cast<VMIVRegType>(load.getResult().getType()),
           load.getSource(), getConstantIndexValue(load.getOffset()));
+    if (auto load = dyn_cast<VMIGroupLoadOp>(op)) {
+      std::string reason;
+      if (succeeded(checkSupportedGroupLoadShape(capabilities, load, &reason)))
+        return WalkResult::advance();
+      load.emitError()
+          << kVMIDiagUnsupportedPrefix
+          << "pto.vmi.group_load requires contiguous full result chunks, a "
+             "supported UB source, and num_groups deriving a group size "
+             "aligned to physical chunks ("
+          << reason << ")";
+      return WalkResult::interrupt();
+    }
     if (auto load = dyn_cast<VMIMaskedLoadOp>(op)) {
       if (enableStableGatherMaskedLoad) {
         load.emitError()
@@ -5741,6 +6606,19 @@ LogicalResult verifySupportedVMIToVPTOOps(
           << "pto.vmi.store requires an 8/16/32-bit predicate-maskable "
              "element type and either full physical chunks or contiguous "
              "tail-store layout, with UB-backed destination ("
+          << reason << ")";
+      return WalkResult::interrupt();
+    }
+    if (auto store = dyn_cast<VMIGroupStoreOp>(op)) {
+      std::string reason;
+      if (succeeded(checkSupportedGroupStoreShape(capabilities, store,
+                                                  &reason)))
+        return WalkResult::advance();
+      store.emitError()
+          << kVMIDiagUnsupportedPrefix
+          << "pto.vmi.group_store requires contiguous full value chunks, a "
+             "supported UB destination, and num_groups deriving a group size "
+             "aligned to physical chunks ("
           << reason << ")";
       return WalkResult::interrupt();
     }
@@ -6059,6 +6937,22 @@ LogicalResult verifySupportedVMIToVPTOOps(
           << "pto.vmi.reduce_addf lowers through pto.vcadd only with "
              "reassoc, f32 contiguous full source chunks, matching mask "
              "chunks, and one init/result chunk ("
+          << reason << ")";
+      return WalkResult::interrupt();
+    }
+
+    if (auto reduce = dyn_cast<VMIGroupReduceAddFOp>(op)) {
+      std::string reason;
+      if (succeeded(checkSupportedGroupReduceAddFShape(capabilities, reduce,
+                                                       &reason)))
+        return WalkResult::advance();
+      reduce.emitError()
+          << kVMIDiagUnsupportedPrefix
+          << "pto.vmi.group_reduce_addf lowers through pto.vcgadd for f32 "
+             "32B groups or through pto.vcadd with reassoc, contiguous full "
+             "source/mask chunks, #pto.vmi.layout<num_groups = G> result "
+             "chunks, and num_groups deriving a group size aligned to "
+             "physical chunks ("
           << reason << ")";
       return WalkResult::interrupt();
     }

@@ -391,6 +391,26 @@ def VMIReduceMinFOp : VMI_Op<"reduce_minf"> {
   let assemblyFormat = "$source `,` $init `,` $mask attr-dict `:` type($source) `,` type($init) `,` type($mask) `->` type($result)";
 }
 
+def VMIGroupReduceAddFOp : VMI_Op<"group_reduce_addf"> {
+  let summary = "VMI masked floating-point add reduction within fixed logical groups";
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                       VMI_MaskTypeConstraint:$mask,
+                       I64Attr:$num_groups,
+                       OptionalAttr<UnitAttr>:$reassoc);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `,` $mask attr-dict `:` type($source) `,` type($mask) `->` type($result)";
+}
+
+def VMIGroupBroadcastOp : VMI_Op<"group_broadcast"> {
+  let summary = "VMI broadcast group-slot values back to each logical group";
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                       I64Attr:$num_groups);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
+}
+
 def VMIExtFOp : VMI_Op<"extf"> {
   let summary = "VMI floating-point elementwise extension";
   let arguments = (ins VMI_VRegTypeConstraint:$source);
@@ -421,6 +441,15 @@ def VMILoadOp : VMI_Op<"load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterfa
   let results = (outs VMI_VRegTypeConstraint:$result);
   let hasVerifier = 1;
   let assemblyFormat = "$source `[` $offset `]` attr-dict `:` type($source) `->` type($result)";
+}
+
+def VMIGroupLoadOp : VMI_Op<"group_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "VMI logical grouped vector load with a row stride between groups";
+  let arguments = (ins PtrOrMemRef:$source, Index:$offset, Index:$row_stride,
+                       I64Attr:$num_groups);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `[` $offset `]` `,` $row_stride attr-dict `:` type($source) `->` type($result)";
 }
 
 def VMIMaskedLoadOp : VMI_Op<"masked_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
@@ -460,6 +489,15 @@ def VMIStoreOp : VMI_Op<"store", [DeclareOpInterfaceMethods<MemoryEffectsOpInter
   let results = (outs);
   let hasVerifier = 1;
   let assemblyFormat = "$value `,` $destination `[` $offset `]` attr-dict `:` type($value) `,` type($destination)";
+}
+
+def VMIGroupStoreOp : VMI_Op<"group_store", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "VMI logical grouped vector store with a row stride between groups";
+  let arguments = (ins VMI_VRegTypeConstraint:$value, PtrOrMemRef:$destination,
+                       Index:$offset, Index:$row_stride, I64Attr:$num_groups);
+  let results = (outs);
+  let hasVerifier = 1;
+  let assemblyFormat = "$value `,` $destination `[` $offset `]` `,` $row_stride attr-dict `:` type($value) `,` type($destination)";
 }
 
 def VMIMaskedStoreOp : VMI_Op<"masked_store", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {

@@ -25,9 +25,13 @@ def VMILayoutAttr : PTO_Attr<"VMILayout", "vmi.layout"> {
     static VMILayoutAttr getContiguous(::mlir::MLIRContext *context);
     static VMILayoutAttr getDeinterleaved(::mlir::MLIRContext *context,
                                           int64_t factor);
+    static VMILayoutAttr getGroupSlots(::mlir::MLIRContext *context,
+                                       int64_t numGroups);
 
     bool isContiguous() const { return getKind() == "contiguous"; }
     bool isDeinterleaved() const { return getKind() == "deinterleaved"; }
+    bool isGroupSlots() const { return getKind() == "num_groups"; }
+    int64_t getNumGroups() const { return getFactor(); }
   }];
 }
 
