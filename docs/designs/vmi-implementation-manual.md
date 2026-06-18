@@ -748,6 +748,11 @@ deinterleaved=4:
   part1 chunks for lanes 1,5,9,...
   part2 chunks for lanes 2,6,10,...
   part3 chunks for lanes 3,7,11,...
+
+num_groups=G:
+  sparse group-slot reduce result layout
+  physical storage is contiguous chunk order
+  only canonical group_slot(g) lanes contain semantic values
 ```
 
 每个 semantic pattern 必须从 adaptor 拿 physical parts，不允许从 defining op 反推：
@@ -1595,6 +1600,11 @@ The type converter must define one canonical physical ordering and every pattern
      part1 lanes [1,5,9,...]
      part2 lanes [2,6,10,...]
      part3 lanes [3,7,11,...]
+
+!pto.vmi.vreg<NxT, num_groups=G>
+  -> chunks in contiguous physical storage order
+     only derived group_slot(g) lanes contain semantic values
+     this layout is valid only for group reduce/broadcast exchange values
 
 !pto.vmi.mask<NxG, layout, granularity>
   -> same part/chunk ordering as its data layout, one !pto.mask<granularity> per physical part/chunk
@@ -2931,6 +2941,117 @@ pto.vmi.reduce_addf:
     missing reassoc attr
     f16 until accumulator precision and rounding contract are designed
     partial/tail source chunks because padding lanes must not participate
+
+pto.vmi.group_load / pto.vmi.group_store:
+  semantic:
+    num_groups is the only static grouping attribute.
+    N = logical lane count; G = num_groups; S = N / G.
+    group_load reads each logical group as one contiguous row:
+      result[g * S + i] = source[offset + g * row_stride + i]
+      for 0 <= g < G and 0 <= i < S
+    group_store writes the inverse row mapping:
+      destination[offset + g * row_stride + i] = value[g * S + i]
+    row_stride is an index operand, measured in elements, and may be dynamic.
+    Tail/valid-lane information is not an attr; it must be represented by a
+    mask in the producing/consuming computation. The current direct
+    group_load/group_store path is for full physical chunks.
+  layout assignment:
+    group_load result natural layout is contiguous
+    group_store value use is requested as contiguous
+  current direct lowering:
+    source/value element width must be maskable by b8/b16/b32
+    layout must be contiguous with full physical chunks
+    num_groups must evenly divide N, and the derived group size S must be a
+    multiple of the physical lanes
+    per part, so every physical chunk belongs to exactly one group
+    lower each physical chunk with pto.vlds/pto.vsts at:
+      offset + group * row_stride + chunk_in_group * lanes_per_part
+  unsupported cases:
+    derived group size splitting a physical chunk, because this needs partial-vreg
+    lane insertion/extraction or a gather/scatter plan
+    partial/tail physical chunks
+    GM-backed direct vector load/store paths not already accepted by the normal
+    VMI memory access plan
+
+pto.vmi.group_reduce_addf:
+  semantic:
+    requires {reassoc}
+    N = logical lane count; G = num_groups; S = N / G
+    L = physical lanes per 256B chunk for the element type.
+    The result carries #pto.vmi.layout<num_groups = G>, a sparse group-slot
+    layout. It is not a dense vector layout: only group_slot(g) lanes have
+    semantic values.
+    group_slot(g) is canonical and derived from N, G, and L:
+      if S < L:
+        low_elems = L / S
+        chunk_stride = 1
+      if S >= L:
+        low_elems = 1
+        chunk_stride = S / L
+      group_slot(g) = (g / low_elems) * chunk_stride * L + (g % low_elems)
+    for each group g:
+      result[group_slot(g)] =
+          reduce_add(source[g * S .. (g + 1) * S), mask in same range)
+    Non-slot lanes are not consumed by pto.vmi.group_broadcast. The current
+    direct lowering materializes them as zero where the hardware path does not
+    already define them.
+    The result remains a VMI vector with the same element type and logical lane
+    count as the source, but its layout is #pto.vmi.layout<num_groups = G>.
+  layout assignment:
+    source use is requested as contiguous
+    result natural layout is #pto.vmi.layout<num_groups = G>
+    mask use is requested as contiguous with granularity derived from source
+    element width
+  current direct lowering:
+    source/result element type must be f32
+    source, result, and mask must have matching physical arity and full chunks
+    if S=8 for f32, lower each physical chunk with pto.vcgadd. This is the
+    hardware 32B VLane group reduction path for f32: each source chunk produces
+    eight 8-lane group sums in the low lanes of that physical chunk. The
+    lowering preserves this natural no-pack result.
+    Otherwise:
+    derived group size S must be a multiple of physical lanes per part
+    lower each source chunk with pto.vcadd, combine chunks in the same group
+    with pto.vadd under PAT_VL1, then place group g at group_slot(g) in the
+    #pto.vmi.layout<num_groups = G> result. All other result chunks/lane values
+    are zero.
+  unsupported cases:
+    missing reassoc attr
+    f16 or integer group reductions until accumulator and result contracts are
+    designed
+    derived group size S that neither divides nor is a multiple of L
+
+pto.vmi.group_broadcast:
+  semantic:
+    N = logical lane count; G = num_groups; S = N / G
+    source must carry #pto.vmi.layout<num_groups = G>. For each group g, the
+    source value is read from group_slot(g), using the same canonical group_slot
+    definition as pto.vmi.group_reduce_addf. The result broadcasts it back to
+    each logical group:
+      result[g * S + i] = source[group_slot(g)]
+  layout assignment:
+    source use is requested as #pto.vmi.layout<num_groups = G>
+    result is consumer-driven. If no consumer requests another layout, it
+    defaults to contiguous.
+  current direct lowering:
+    source must carry #pto.vmi.layout<num_groups = G> with full physical chunks
+    result may be contiguous with full physical chunks
+    result may also be deinterleaved when S is large enough that every physical
+    result chunk stays inside one logical group, for example N=512, G=2, S=256,
+    L=64, deinterleaved=4
+    derived group size S must divide or be a multiple of L for canonical
+    group-slot addressing
+    if result is contiguous and S < L, each physical chunk contains multiple group
+    slots. Lower by
+    creating an index vector [0...0, 1...1, ...] and applying pto.vselr to the
+    corresponding source chunk.
+    if S >= L and each result physical chunk belongs to one group, lower by
+    duplicating the first lane of that group's source chunk with pto.vdup LOWEST.
+  unsupported cases:
+    partial/tail physical chunks
+    derived group size S that neither divides nor is a multiple of L
+    deinterleaved small-group broadcast where one physical result chunk needs
+    values from multiple source chunks
 
 pto.vmi.reduce_maxf / pto.vmi.reduce_minf:
   semantic:

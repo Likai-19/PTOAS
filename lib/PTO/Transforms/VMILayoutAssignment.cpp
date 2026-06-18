@@ -224,6 +224,10 @@ struct LayoutSolver {
     return VMILayoutAttr::getContiguous(ctx);
   }
 
+  VMILayoutAttr getGroupSlotsLayout(int64_t numGroups) {
+    return VMILayoutAttr::getGroupSlots(ctx, numGroups);
+  }
+
   VMILayoutAttr getDataLayout(Value value) {
     unsigned id = addDataValue(value);
     if (id == ~0u)
@@ -537,6 +541,21 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
+      if (auto reduce = dyn_cast<VMIGroupReduceAddFOp>(op)) {
+        requestDataUse(reduce.getSourceMutable(), getContiguousLayout());
+        if (failed(setNaturalLayout(reduce.getResult(),
+                                    getGroupSlotsLayout(
+                                        reduce.getNumGroupsAttr().getInt()),
+                                    op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto broadcast = dyn_cast<VMIGroupBroadcastOp>(op)) {
+        requestDataUse(broadcast.getSourceMutable(),
+                       getGroupSlotsLayout(
+                           broadcast.getNumGroupsAttr().getInt()));
+        return WalkResult::advance();
+      }
       if (auto extf = dyn_cast<VMIExtFOp>(op)) {
         auto sourceType = cast<VMIVRegType>(extf.getSource().getType());
         auto resultType = cast<VMIVRegType>(extf.getResult().getType());
@@ -607,7 +626,17 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
+      if (auto load = dyn_cast<VMIGroupLoadOp>(op)) {
+        if (failed(setNaturalLayout(load.getResult(), getContiguousLayout(),
+                                    op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
       if (auto store = dyn_cast<VMIStoreOp>(op)) {
+        requestDataUse(store.getValueMutable(), getContiguousLayout());
+        return WalkResult::advance();
+      }
+      if (auto store = dyn_cast<VMIGroupStoreOp>(op)) {
         requestDataUse(store.getValueMutable(), getContiguousLayout());
         return WalkResult::advance();
       }
@@ -1127,6 +1156,16 @@ struct LayoutSolver {
         return WalkResult::advance();
       }
       if (auto reduce = dyn_cast<VMIReduceMinFOp>(op)) {
+        auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
+        if (failed(requestMaskUse(reduce.getMaskMutable(),
+                                  sourceType.getLayoutAttr(),
+                                  getMaskGranularityForElement(
+                                      sourceType.getElementType()),
+                                  op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto reduce = dyn_cast<VMIGroupReduceAddFOp>(op)) {
         auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
         if (failed(requestMaskUse(reduce.getMaskMutable(),
                                   sourceType.getLayoutAttr(),
