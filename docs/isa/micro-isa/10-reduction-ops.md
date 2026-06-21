@@ -206,7 +206,9 @@ VLane 4: [32..39] VLane 5: [40..47] VLane 6: [48..55] VLane 7: [56..63]
 
 - **syntax:** `%result = pto.vcgadd %input, %mask : !pto.vreg<NxT>, !pto.mask<G> -> !pto.vreg<NxT>`
 - **A5 types:** i16-i32, f16, f32
-- **semantics:** Sum within each VLane. 8 results at indices 0, 8, 16, 24, 32, 40, 48, 56 (for f32).
+- **semantics:** Sum within each 32-byte VLane. The 8 VLane results are written
+  continuously to the low lanes of the destination vector. For f32, results are
+  at indices 0, 1, 2, 3, 4, 5, 6, 7.
 
 ```c
 int K = N / 8;  // elements per VLane
@@ -214,17 +216,17 @@ for (int g = 0; g < 8; g++) {
     T sum = 0;
     for (int i = 0; i < K; i++)
         sum += src[g*K + i];
-    dst[g*K] = sum;
-    for (int i = 1; i < K; i++)
-        dst[g*K + i] = 0;
+    dst[g] = sum;
 }
-// For f32: results at dst[0], dst[8], dst[16], dst[24], dst[32], dst[40], dst[48], dst[56]
+for (int i = 8; i < N; i++)
+    dst[i] = 0;
+// For f32: results at dst[0], dst[1], ..., dst[7].
 ```
 
 - **inputs:** `%input` is the source vector and `%mask` selects participating
   lanes.
 - **outputs:** `%result` contains one sum per 32-byte VLane group, written
-  contiguously into the low slot of each group.
+  continuously to the low lanes of the destination vector.
 - **constraints and limitations:** This is a per-32-byte VLane-group reduction.
   Inactive lanes are treated as zero.
 
@@ -242,10 +244,10 @@ for (int g = 0; g < 8; g++) {
     T mx = -INF;
     for (int i = 0; i < K; i++)
         if (src[g*K + i] > mx) mx = src[g*K + i];
-    dst[g*K] = mx;
-    for (int i = 1; i < K; i++)
-        dst[g*K + i] = 0;
+    dst[g] = mx;
 }
+for (int i = 8; i < N; i++)
+    dst[i] = 0;
 ```
 
 - **inputs:** `%input` is the source vector and `%mask` selects participating
@@ -268,10 +270,10 @@ for (int g = 0; g < 8; g++) {
     T mn = INF;
     for (int i = 0; i < K; i++)
         if (src[g*K + i] < mn) mn = src[g*K + i];
-    dst[g*K] = mn;
-    for (int i = 1; i < K; i++)
-        dst[g*K + i] = 0;
+    dst[g] = mn;
 }
+for (int i = 8; i < N; i++)
+    dst[i] = 0;
 ```
 
 - **inputs:** `%input` is the source vector and `%mask` selects participating
@@ -320,7 +322,7 @@ for (int i = 1; i < N; i++)
 
 // Row-wise sum using vcgadd (for 8-row tile)
 %row_sums = pto.vcgadd %tile, %mask : !pto.vreg<64xf32>, !pto.mask<G> -> !pto.vreg<64xf32>
-// Results at indices 0, 8, 16, 24, 32, 40, 48, 56
+// Results at indices 0, 1, 2, 3, 4, 5, 6, 7
 
 // Full vector sum for normalization
 %total = pto.vcadd %values, %mask : !pto.vreg<64xf32>, !pto.mask<G> -> !pto.vreg<64xf32>
