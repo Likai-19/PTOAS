@@ -1,10 +1,12 @@
 // Copyright (c) 2026 Huawei Technologies Co., Ltd.
-// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
-// CANN Open Software License Agreement Version 2.0 (the "License").
-// Please refer to the License for details. You may not use this file except in compliance with the License.
-// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
-// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
-// See LICENSE in the root of the software repository for the full text of the License.
+// This program is free software, you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). Please refer to the License for details. You may not use
+// this file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON
+// AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+// FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+// for the full text of the License.
 
 //===- VMILayoutAssignment.cpp - Assign VMI layouts ----------------------===//
 //===----------------------------------------------------------------------===//
@@ -63,6 +65,8 @@ struct MaskUseRequest {
   std::string granularity;
 };
 
+static constexpr const char *kVMISelectedPlanAttrName = "vmi.selected_plan";
+
 static unsigned getElementBitWidth(Type type) {
   if (isa<IndexType>(type))
     return 64;
@@ -82,6 +86,15 @@ static StringRef getMaskGranularityForElement(Type elementType) {
   }
 }
 
+static std::optional<int64_t> getConstantIndexValue(Value value) {
+  if (auto constant = value.getDefiningOp<arith::ConstantIndexOp>())
+    return constant.value();
+  if (auto constant = value.getDefiningOp<arith::ConstantOp>())
+    if (auto integerAttr = dyn_cast<IntegerAttr>(constant.getValue()))
+      return integerAttr.getInt();
+  return std::nullopt;
+}
+
 static bool isLane0SplatShuffle(VMIShuffleOp op) {
   auto sourceType = cast<VMIVRegType>(op.getSource().getType());
   ArrayRef<int64_t> indices = op.getIndices();
@@ -93,12 +106,10 @@ bool containsVMIType(Type type) {
   if (isa<VMIVRegType, VMIMaskType>(type))
     return true;
   if (auto functionType = dyn_cast<FunctionType>(type)) {
-    return llvm::any_of(functionType.getInputs(), [](Type input) {
-             return containsVMIType(input);
-           }) ||
-           llvm::any_of(functionType.getResults(), [](Type result) {
-             return containsVMIType(result);
-           });
+    return llvm::any_of(functionType.getInputs(),
+                        [](Type input) { return containsVMIType(input); }) ||
+           llvm::any_of(functionType.getResults(),
+                        [](Type result) { return containsVMIType(result); });
   }
   if (auto shapedType = dyn_cast<ShapedType>(type))
     return containsVMIType(shapedType.getElementType());
@@ -191,11 +202,10 @@ struct LayoutSolver {
     if (!lhsNode.requestedGranularity.empty() &&
         !rhsNode.requestedGranularity.empty() &&
         lhsNode.requestedGranularity != rhsNode.requestedGranularity)
-      return op->emitError()
-             << kVMIDiagLayoutContractPrefix
-             << "conflicting mask granularities "
-             << lhsNode.requestedGranularity << " and "
-             << rhsNode.requestedGranularity;
+      return op->emitError() << kVMIDiagLayoutContractPrefix
+                             << "conflicting mask granularities "
+                             << lhsNode.requestedGranularity << " and "
+                             << rhsNode.requestedGranularity;
 
     rhsNode.parent = lhsRoot;
     if (!lhsNode.requestedLayout)
@@ -228,6 +238,123 @@ struct LayoutSolver {
     return VMILayoutAttr::getGroupSlots(ctx, numGroups);
   }
 
+  VMILayoutAttr getPreferredGroupSlotsLayout(VMIVRegType type,
+                                             int64_t numGroups) {
+    if (VMILayoutAttr existing = type.getLayoutAttr())
+      if (existing.isGroupSlots() && existing.getSlots() > 0)
+        return existing;
+    if (numGroups > 0 && type.getElementCount() % numGroups == 0) {
+      int64_t groupSize = type.getElementCount() / numGroups;
+      if (groupSize == 8)
+        return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/8);
+      if (groupSize == 16)
+        return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/8);
+      if (groupSize == 32)
+        return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/8);
+      if (groupSize == 64)
+        return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/1);
+    }
+    return getGroupSlotsLayout(numGroups);
+  }
+
+  VMILayoutAttr getPreferredGroupReduceSourceLayout(VMIVRegType type,
+                                                    int64_t numGroups) {
+    if (VMILayoutAttr existing = type.getLayoutAttr())
+      return existing;
+    if (numGroups > 0 && type.getElementCount() % numGroups == 0) {
+      int64_t groupSize = type.getElementCount() / numGroups;
+      if (groupSize == 16)
+        return VMILayoutAttr::getDeinterleaved(ctx, 2, /*blockElems=*/8);
+      if (groupSize == 32)
+        return VMILayoutAttr::getDeinterleaved(ctx, 4, /*blockElems=*/8);
+    }
+    return getContiguousLayout();
+  }
+
+  VMILayoutAttr getPreferredGroupSlotLoadLayout(VMIVRegType type,
+                                                int64_t numGroups) {
+    if (VMILayoutAttr existing = type.getLayoutAttr())
+      if (existing.isGroupSlots() && existing.getSlots() > 0)
+        return existing;
+    if (numGroups > 0 && type.getElementCount() % numGroups == 0) {
+      int64_t groupSize = type.getElementCount() / numGroups;
+      if (groupSize == 64)
+        return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/1);
+    }
+    return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/8);
+  }
+
+  VMILayoutAttr getPreferredGroupLoadResultLayout(VMIGroupLoadOp op) {
+    auto type = cast<VMIVRegType>(op.getResult().getType());
+    if (VMILayoutAttr existing = type.getLayoutAttr())
+      return existing;
+
+    int64_t numGroups = op.getNumGroupsAttr().getInt();
+    if (numGroups <= 0 || type.getElementCount() % numGroups != 0)
+      return getContiguousLayout();
+
+    if (!type.getElementType().isF32())
+      return getContiguousLayout();
+
+    int64_t groupSize = type.getElementCount() / numGroups;
+    std::optional<int64_t> rowStride = getConstantIndexValue(op.getRowStride());
+    if (!rowStride || *rowStride <= 0 || *rowStride % 8 != 0)
+      return getContiguousLayout();
+
+    if (groupSize == 16)
+      return VMILayoutAttr::getDeinterleaved(ctx, 2, /*blockElems=*/8);
+    if (groupSize == 32)
+      return VMILayoutAttr::getDeinterleaved(ctx, 4, /*blockElems=*/8);
+
+    return getContiguousLayout();
+  }
+
+  LogicalResult validateGroupLoadLayoutPlan(VMIGroupLoadOp op) {
+    auto type = cast<VMIVRegType>(op.getResult().getType());
+    if (type.getLayoutAttr())
+      return success();
+
+    int64_t numGroups = op.getNumGroupsAttr().getInt();
+    if (numGroups <= 0 || type.getElementCount() % numGroups != 0)
+      return success();
+    if (!type.getElementType().isF32())
+      return success();
+
+    int64_t groupSize = type.getElementCount() / numGroups;
+    if (groupSize != 16 && groupSize != 32)
+      return success();
+
+    std::optional<int64_t> rowStride = getConstantIndexValue(op.getRowStride());
+    if (rowStride && *rowStride > 0 && *rowStride % 8 == 0)
+      return success();
+
+    return op.emitError()
+           << kVMIDiagLayoutContractPrefix << "pto.vmi.group_load group_size "
+           << groupSize
+           << " requires constant positive row_stride divisible by 8 f32 "
+              "elements for the block8 stride plan; stable gather fallback is "
+              "not implemented";
+  }
+
+  VMILayoutAttr getPreferredGroupStoreUseLayout(Value value,
+                                                int64_t numGroups) {
+    auto type = dyn_cast<VMIVRegType>(value.getType());
+    if (!type)
+      return getContiguousLayout();
+    if (VMILayoutAttr existing = type.getLayoutAttr())
+      if (existing.isGroupSlots() && existing.getSlots() > 0)
+        return existing;
+    VMILayoutAttr solved = getDataLayout(value);
+    if (solved && solved.isGroupSlots() && solved.getNumGroups() == numGroups &&
+        solved.getSlots() > 0)
+      return solved;
+    if (value.getDefiningOp<VMIGroupReduceAddFOp>())
+      return getPreferredGroupSlotsLayout(type, numGroups);
+    if (value.getDefiningOp<VMIGroupSlotLoadOp>())
+      return getPreferredGroupSlotLoadLayout(type, numGroups);
+    return getContiguousLayout();
+  }
+
   VMILayoutAttr getDataLayout(Value value) {
     unsigned id = addDataValue(value);
     if (id == ~0u)
@@ -236,6 +363,35 @@ struct LayoutSolver {
     if (dataNodes[root].naturalLayout)
       return dataNodes[root].naturalLayout;
     return getContiguousLayout();
+  }
+
+  VMILayoutAttr getExplicitDataLayout(Value value) {
+    unsigned id = addDataValue(value);
+    if (id == ~0u)
+      return {};
+    return dataNodes[find(id)].naturalLayout;
+  }
+
+  bool hasCompatibleTruncFUseForGroupReduce(Value value, int64_t groupSize) {
+    auto sourceType = dyn_cast<VMIVRegType>(value.getType());
+    if (!sourceType || !sourceType.getElementType().isF32())
+      return false;
+
+    for (OpOperand &use : value.getUses()) {
+      auto truncf = dyn_cast<VMITruncFOp>(use.getOwner());
+      if (!truncf || use.getOperandNumber() != 0)
+        continue;
+
+      auto resultType = dyn_cast<VMIVRegType>(truncf.getResult().getType());
+      if (!resultType)
+        continue;
+      unsigned resultBits = getElementBitWidth(resultType.getElementType());
+      if (groupSize == 16 && resultBits == 16)
+        return true;
+      if (groupSize == 32 && resultBits == 8)
+        return true;
+    }
+    return false;
   }
 
   LogicalResult requestMask(Value mask, VMILayoutAttr layout,
@@ -256,8 +412,8 @@ struct LayoutSolver {
         node.requestedGranularity != granularity)
       return op->emitError()
              << kVMIDiagLayoutContractPrefix
-             << "conflicting mask granularities "
-             << node.requestedGranularity << " and " << granularity;
+             << "conflicting mask granularities " << node.requestedGranularity
+             << " and " << granularity;
     node.requestedLayout = layout;
     node.requestedGranularity = granularity.str();
     return success();
@@ -268,17 +424,54 @@ struct LayoutSolver {
       dataUseRequests.push_back(DataUseRequest{&operand, layout});
   }
 
-  bool canAdoptConsumerRequestedLayout(Value value) {
-    if (!value.hasOneUse())
+  bool canProducerAdoptConsumerLayout(Operation *op) {
+    if (!op)
       return false;
+    return isa<VMILoadOp, VMITileReadOp, VMIBroadcastOp, VMIConstantOp,
+               VMIIotaOp, VMIAddFOp, VMIAddIOp, VMISubFOp, VMISubIOp, VMIMulFOp,
+               VMIMulIOp, VMIFmaOp, VMIDivFOp, VMIMinFOp, VMIMaxFOp, VMINegFOp,
+               VMIAbsFOp, VMIAbsIOp, VMISqrtOp, VMIExpOp, VMILnOp, VMIReluOp,
+               VMIAndIOp, VMIOrIOp, VMIXOrIOp, VMIShLIOp, VMIShRUIOp, VMINotOp,
+               VMISelectOp, VMIBitcastOp>(op);
+  }
+
+  bool canAdoptConsumerRequestedLayout(Value value,
+                                       VMILayoutAttr requestedLayout) {
     Operation *definingOp = value.getDefiningOp();
-    return definingOp && isa<VMILoadOp, VMITileReadOp>(definingOp);
+    if (!definingOp)
+      return false;
+    if (!isa<VMILoadOp, VMITileReadOp>(definingOp)) {
+      if (!requestedLayout || requestedLayout.isContiguous())
+        return false;
+      if (!canProducerAdoptConsumerLayout(definingOp))
+        return false;
+    }
+    if (value.hasOneUse())
+      return true;
+
+    unsigned matchingRequests = 0;
+    unsigned totalUses = 0;
+    for (OpOperand &use : value.getUses()) {
+      ++totalUses;
+      bool foundRequest = false;
+      for (DataUseRequest request : dataUseRequests) {
+        if (request.operand != &use)
+          continue;
+        if (request.layout != requestedLayout)
+          return false;
+        foundRequest = true;
+      }
+      if (!foundRequest)
+        return false;
+      ++matchingRequests;
+    }
+    return matchingRequests == totalUses;
   }
 
   LogicalResult applyConsumerDrivenDataLayouts() {
     for (DataUseRequest request : dataUseRequests) {
       Value value = request.operand->get();
-      if (!canAdoptConsumerRequestedLayout(value))
+      if (!canAdoptConsumerRequestedLayout(value, request.layout))
         continue;
       unsigned id = addDataValue(value);
       if (id == ~0u)
@@ -287,8 +480,7 @@ struct LayoutSolver {
       VMILayoutAttr existing = dataNodes[root].naturalLayout;
       if (existing && existing != request.layout)
         return request.operand->getOwner()->emitError()
-               << kVMIDiagLayoutContractPrefix
-               << "conflicting natural layouts "
+               << kVMIDiagLayoutContractPrefix << "conflicting natural layouts "
                << existing << " and " << request.layout;
       dataNodes[root].naturalLayout = request.layout;
     }
@@ -321,6 +513,71 @@ struct LayoutSolver {
             addMaskValue(arg);
           }
     });
+    return success();
+  }
+
+  bool shouldCommuteTruncFAfterGroupBroadcast(VMIGroupBroadcastOp broadcast) {
+    auto truncf = broadcast.getSource().getDefiningOp<VMITruncFOp>();
+    if (!truncf)
+      return false;
+
+    auto truncSourceType = dyn_cast<VMIVRegType>(truncf.getSource().getType());
+    auto truncResultType = dyn_cast<VMIVRegType>(truncf.getResult().getType());
+    auto broadcastResultType =
+        dyn_cast<VMIVRegType>(broadcast.getResult().getType());
+    if (!truncSourceType || !truncResultType || !broadcastResultType)
+      return false;
+    if (truncSourceType.getElementCount() !=
+            truncResultType.getElementCount() ||
+        truncResultType.getElementCount() !=
+            broadcastResultType.getElementCount())
+      return false;
+
+    VMILayoutAttr sourceLayout = truncSourceType.getLayoutAttr();
+    bool sourceIsGroupSlotValue =
+        (sourceLayout && sourceLayout.isGroupSlots()) ||
+        truncf.getSource().getDefiningOp<VMIGroupReduceAddFOp>() ||
+        truncf.getSource().getDefiningOp<VMIGroupSlotLoadOp>();
+    if (!sourceIsGroupSlotValue)
+      return false;
+
+    unsigned sourceBits = getElementBitWidth(truncSourceType.getElementType());
+    unsigned resultBits = getElementBitWidth(truncResultType.getElementType());
+    return truncSourceType.getElementType().isF32() && sourceBits > resultBits;
+  }
+
+  LogicalResult commuteTruncFAfterGroupBroadcast() {
+    SmallVector<VMIGroupBroadcastOp> broadcasts;
+    module.walk([&](VMIGroupBroadcastOp broadcast) {
+      if (shouldCommuteTruncFAfterGroupBroadcast(broadcast))
+        broadcasts.push_back(broadcast);
+    });
+
+    OpBuilder builder(ctx);
+    for (VMIGroupBroadcastOp broadcast : broadcasts) {
+      auto truncf = broadcast.getSource().getDefiningOp<VMITruncFOp>();
+      if (!truncf)
+        continue;
+
+      auto truncSourceType = cast<VMIVRegType>(truncf.getSource().getType());
+      auto broadcastResultType =
+          cast<VMIVRegType>(broadcast.getResult().getType());
+      auto wideBroadcastType =
+          VMIVRegType::get(ctx, broadcastResultType.getElementCount(),
+                           truncSourceType.getElementType(),
+                           broadcastResultType.getLayoutAttr());
+
+      builder.setInsertionPoint(broadcast);
+      auto wideBroadcast = builder.create<VMIGroupBroadcastOp>(
+          broadcast.getLoc(), wideBroadcastType, truncf.getSource(),
+          broadcast.getNumGroupsAttr());
+      auto narrow = builder.create<VMITruncFOp>(
+          broadcast.getLoc(), broadcastResultType, wideBroadcast.getResult());
+      broadcast.getResult().replaceAllUsesWith(narrow.getResult());
+      broadcast.erase();
+      if (truncf->use_empty())
+        truncf.erase();
+    }
     return success();
   }
 
@@ -504,56 +761,117 @@ struct LayoutSolver {
       }
       if (auto compress = dyn_cast<VMICompressOp>(op)) {
         requestDataUse(compress.getSourceMutable(), getContiguousLayout());
-        if (failed(setNaturalLayout(compress.getResult(),
-                                    getContiguousLayout(), op)))
+        if (failed(setNaturalLayout(compress.getResult(), getContiguousLayout(),
+                                    op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto reduce = dyn_cast<VMIReduceAddIOp>(op)) {
         requestDataUse(reduce.getSourceMutable(), getContiguousLayout());
         requestDataUse(reduce.getInitMutable(), getContiguousLayout());
-        if (failed(setNaturalLayout(reduce.getResult(),
-                                    getContiguousLayout(), op)))
+        if (failed(setNaturalLayout(reduce.getResult(), getContiguousLayout(),
+                                    op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto reduce = dyn_cast<VMIReduceAddFOp>(op)) {
         requestDataUse(reduce.getSourceMutable(), getContiguousLayout());
         requestDataUse(reduce.getInitMutable(), getContiguousLayout());
-        if (failed(setNaturalLayout(reduce.getResult(),
-                                    getContiguousLayout(), op)))
+        if (failed(setNaturalLayout(reduce.getResult(), getContiguousLayout(),
+                                    op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto reduce = dyn_cast<VMIReduceMaxFOp>(op)) {
         requestDataUse(reduce.getSourceMutable(), getContiguousLayout());
         requestDataUse(reduce.getInitMutable(), getContiguousLayout());
-        if (failed(setNaturalLayout(reduce.getResult(),
-                                    getContiguousLayout(), op)))
+        if (failed(setNaturalLayout(reduce.getResult(), getContiguousLayout(),
+                                    op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto reduce = dyn_cast<VMIReduceMinFOp>(op)) {
         requestDataUse(reduce.getSourceMutable(), getContiguousLayout());
         requestDataUse(reduce.getInitMutable(), getContiguousLayout());
-        if (failed(setNaturalLayout(reduce.getResult(),
-                                    getContiguousLayout(), op)))
-          return WalkResult::interrupt();
-        return WalkResult::advance();
-      }
-      if (auto reduce = dyn_cast<VMIGroupReduceAddFOp>(op)) {
-        requestDataUse(reduce.getSourceMutable(), getContiguousLayout());
-        if (failed(setNaturalLayout(reduce.getResult(),
-                                    getGroupSlotsLayout(
-                                        reduce.getNumGroupsAttr().getInt()),
+        if (failed(setNaturalLayout(reduce.getResult(), getContiguousLayout(),
                                     op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
+      if (auto reduce = dyn_cast<VMIGroupReduceAddFOp>(op)) {
+        auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
+        auto resultType = cast<VMIVRegType>(reduce.getResult().getType());
+        VMILayoutAttr sourceLayout = getPreferredGroupReduceSourceLayout(
+            sourceType, reduce.getNumGroupsAttr().getInt());
+        VMILayoutAttr solvedSourceLayout =
+            getExplicitDataLayout(reduce.getSource());
+        int64_t numGroups = reduce.getNumGroupsAttr().getInt();
+        if (solvedSourceLayout && numGroups > 0 &&
+            sourceType.getElementCount() % numGroups == 0) {
+          int64_t groupSize = sourceType.getElementCount() / numGroups;
+          if (groupSize == 16 && solvedSourceLayout.isDeinterleaved() &&
+              solvedSourceLayout.getFactor() == 2 &&
+              (solvedSourceLayout.getBlockElems() == 1 ||
+               solvedSourceLayout.getBlockElems() == 8))
+            sourceLayout = solvedSourceLayout;
+          if (groupSize == 32 && solvedSourceLayout.isDeinterleaved() &&
+              solvedSourceLayout.getFactor() == 4 &&
+              (solvedSourceLayout.getBlockElems() == 1 ||
+               solvedSourceLayout.getBlockElems() == 8))
+            sourceLayout = solvedSourceLayout;
+        } else if (!sourceType.getLayoutAttr() && numGroups > 0 &&
+                   sourceType.getElementCount() % numGroups == 0) {
+          int64_t groupSize = sourceType.getElementCount() / numGroups;
+          if (hasCompatibleTruncFUseForGroupReduce(reduce.getSource(),
+                                                   groupSize)) {
+            if (groupSize == 16)
+              sourceLayout =
+                  VMILayoutAttr::getDeinterleaved(ctx, 2, /*blockElems=*/1);
+            if (groupSize == 32)
+              sourceLayout =
+                  VMILayoutAttr::getDeinterleaved(ctx, 4, /*blockElems=*/1);
+          }
+        }
+        if (sourceLayout && sourceLayout.isDeinterleaved() &&
+            sourceLayout.getFactor() == 4 &&
+            sourceLayout.getBlockElems() == 8 && numGroups > 0 &&
+            sourceType.getElementCount() % numGroups == 0) {
+          int64_t groupSize = sourceType.getElementCount() / numGroups;
+          if (groupSize == 32) {
+            if (auto groupMask =
+                    reduce.getMask().getDefiningOp<VMICreateGroupMaskOp>()) {
+              std::optional<int64_t> activeElems =
+                  getConstantIndexValue(groupMask.getActiveElemsPerGroup());
+              if (activeElems && *activeElems >= 0 &&
+                  *activeElems < groupSize) {
+                reduce.emitError()
+                    << kVMIDiagUnsupportedPrefix
+                    << "pto.vmi.group_reduce_addf s32 block8 lowering does "
+                       "not yet support partial create_group_mask "
+                       "active_elems_per_group during layout assignment";
+                return WalkResult::interrupt();
+              }
+            }
+          }
+        }
+        requestDataUse(reduce.getSourceMutable(), sourceLayout);
+        if (failed(requestMaskUse(
+                reduce.getMaskMutable(), sourceLayout,
+                getMaskGranularityForElement(sourceType.getElementType()), op)))
+          return WalkResult::interrupt();
+        if (failed(setNaturalLayout(
+                reduce.getResult(),
+                getPreferredGroupSlotsLayout(
+                    resultType, reduce.getNumGroupsAttr().getInt()),
+                op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
       if (auto broadcast = dyn_cast<VMIGroupBroadcastOp>(op)) {
+        auto sourceType = cast<VMIVRegType>(broadcast.getSource().getType());
         requestDataUse(broadcast.getSourceMutable(),
-                       getGroupSlotsLayout(
-                           broadcast.getNumGroupsAttr().getInt()));
+                       getPreferredGroupSlotsLayout(
+                           sourceType, broadcast.getNumGroupsAttr().getInt()));
         return WalkResult::advance();
       }
       if (auto extf = dyn_cast<VMIExtFOp>(op)) {
@@ -581,6 +899,14 @@ struct LayoutSolver {
         auto resultType = cast<VMIVRegType>(truncf.getResult().getType());
         unsigned sourceBits = getElementBitWidth(sourceType.getElementType());
         unsigned resultBits = getElementBitWidth(resultType.getElementType());
+        VMILayoutAttr sourceLayout = getDataLayout(truncf.getSource());
+        if (sourceBits == 32 && resultBits == 16 && sourceLayout &&
+            sourceLayout.isGroupSlots() && sourceLayout.getSlots() == 1) {
+          requestDataUse(truncf.getSourceMutable(), sourceLayout);
+          if (failed(setNaturalLayout(truncf.getResult(), sourceLayout, op)))
+            return WalkResult::interrupt();
+          return WalkResult::advance();
+        }
         if (sourceBits == 32 && resultBits == 16)
           requestDataUse(truncf.getSourceMutable(),
                          VMILayoutAttr::getDeinterleaved(ctx, 2));
@@ -599,8 +925,8 @@ struct LayoutSolver {
       }
       if (auto load = dyn_cast<VMIMaskedLoadOp>(op)) {
         requestDataUse(load.getPassthruMutable(), getContiguousLayout());
-        if (failed(setNaturalLayout(load.getResult(), getContiguousLayout(),
-                                    op)))
+        if (failed(
+                setNaturalLayout(load.getResult(), getContiguousLayout(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
@@ -608,27 +934,37 @@ struct LayoutSolver {
         auto resultType = cast<VMIVRegType>(gather.getResult().getType());
         requestDataUse(gather.getIndicesMutable(), getContiguousLayout());
         requestDataUse(gather.getPassthruMutable(), getContiguousLayout());
-        if (failed(requestMaskUse(gather.getMaskMutable(),
-                                  getContiguousLayout(),
-                                  getMaskGranularityForElement(
-                                      resultType.getElementType()),
-                                  op)))
+        if (failed(requestMaskUse(
+                gather.getMaskMutable(), getContiguousLayout(),
+                getMaskGranularityForElement(resultType.getElementType()), op)))
           return WalkResult::interrupt();
-        if (failed(setNaturalLayout(gather.getResult(),
-                                    getContiguousLayout(), op)))
+        if (failed(setNaturalLayout(gather.getResult(), getContiguousLayout(),
+                                    op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto load = dyn_cast<VMIExpandLoadOp>(op)) {
         requestDataUse(load.getPassthruMutable(), getContiguousLayout());
-        if (failed(setNaturalLayout(load.getResult(), getContiguousLayout(),
-                                    op)))
+        if (failed(
+                setNaturalLayout(load.getResult(), getContiguousLayout(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto load = dyn_cast<VMIGroupLoadOp>(op)) {
-        if (failed(setNaturalLayout(load.getResult(), getContiguousLayout(),
-                                    op)))
+        if (failed(validateGroupLoadLayoutPlan(load)))
+          return WalkResult::interrupt();
+        if (failed(setNaturalLayout(
+                load.getResult(), getPreferredGroupLoadResultLayout(load), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto load = dyn_cast<VMIGroupSlotLoadOp>(op)) {
+        auto resultType = cast<VMIVRegType>(load.getResult().getType());
+        if (failed(setNaturalLayout(
+                load.getResult(),
+                getPreferredGroupSlotLoadLayout(
+                    resultType, load.getNumGroupsAttr().getInt()),
+                op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
@@ -637,17 +973,18 @@ struct LayoutSolver {
         return WalkResult::advance();
       }
       if (auto store = dyn_cast<VMIGroupStoreOp>(op)) {
-        requestDataUse(store.getValueMutable(), getContiguousLayout());
+        requestDataUse(
+            store.getValueMutable(),
+            getPreferredGroupStoreUseLayout(store.getValue(),
+                                            store.getNumGroupsAttr().getInt()));
         return WalkResult::advance();
       }
       if (auto store = dyn_cast<VMIMaskedStoreOp>(op)) {
         auto valueType = cast<VMIVRegType>(store.getValue().getType());
         requestDataUse(store.getValueMutable(), getContiguousLayout());
-        if (failed(requestMaskUse(store.getMaskMutable(),
-                                  getContiguousLayout(),
-                                  getMaskGranularityForElement(
-                                      valueType.getElementType()),
-                                  op)))
+        if (failed(requestMaskUse(
+                store.getMaskMutable(), getContiguousLayout(),
+                getMaskGranularityForElement(valueType.getElementType()), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
@@ -655,22 +992,18 @@ struct LayoutSolver {
         auto valueType = cast<VMIVRegType>(scatter.getValue().getType());
         requestDataUse(scatter.getValueMutable(), getContiguousLayout());
         requestDataUse(scatter.getIndicesMutable(), getContiguousLayout());
-        if (failed(requestMaskUse(scatter.getMaskMutable(),
-                                  getContiguousLayout(),
-                                  getMaskGranularityForElement(
-                                      valueType.getElementType()),
-                                  op)))
+        if (failed(requestMaskUse(
+                scatter.getMaskMutable(), getContiguousLayout(),
+                getMaskGranularityForElement(valueType.getElementType()), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto store = dyn_cast<VMICompressStoreOp>(op)) {
         auto valueType = cast<VMIVRegType>(store.getValue().getType());
         requestDataUse(store.getValueMutable(), getContiguousLayout());
-        if (failed(requestMaskUse(store.getMaskMutable(),
-                                  getContiguousLayout(),
-                                  getMaskGranularityForElement(
-                                      valueType.getElementType()),
-                                  op)))
+        if (failed(requestMaskUse(
+                store.getMaskMutable(), getContiguousLayout(),
+                getMaskGranularityForElement(valueType.getElementType()), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
@@ -680,16 +1013,14 @@ struct LayoutSolver {
       }
       if (auto split = dyn_cast<VMIChannelSplitOp>(op)) {
         int64_t channels = split.getNumResults();
-        VMICapabilityResult capability =
-            capabilities.supportsChannelCount("pto.vmi.channel_split",
-                                              channels);
+        VMICapabilityResult capability = capabilities.supportsChannelCount(
+            "pto.vmi.channel_split", channels);
         if (!capability.isSupported()) {
           split.emitError() << kVMIDiagUnsupportedPrefix << capability.reason;
           return WalkResult::interrupt();
         }
-        requestDataUse(
-            split.getSourceMutable(),
-            VMILayoutAttr::getDeinterleaved(ctx, channels));
+        requestDataUse(split.getSourceMutable(),
+                       VMILayoutAttr::getDeinterleaved(ctx, channels));
         for (Value result : split.getResults())
           if (failed(setNaturalLayout(result, getContiguousLayout(), op)))
             return WalkResult::interrupt();
@@ -697,9 +1028,8 @@ struct LayoutSolver {
       }
       if (auto merge = dyn_cast<VMIChannelMergeOp>(op)) {
         int64_t channels = merge.getInputs().size();
-        VMICapabilityResult capability =
-            capabilities.supportsChannelCount("pto.vmi.channel_merge",
-                                              channels);
+        VMICapabilityResult capability = capabilities.supportsChannelCount(
+            "pto.vmi.channel_merge", channels);
         if (!capability.isSupported()) {
           merge.emitError() << kVMIDiagUnsupportedPrefix << capability.reason;
           return WalkResult::interrupt();
@@ -771,9 +1101,8 @@ struct LayoutSolver {
         if (failed(addBranchConstraints(switchOp.getDefaultDestination(),
                                         switchOp.getDefaultOperands(), op)))
           return WalkResult::interrupt();
-        for (auto [dest, operands] :
-             llvm::zip(switchOp.getCaseDestinations(),
-                       switchOp.getCaseOperands())) {
+        for (auto [dest, operands] : llvm::zip(switchOp.getCaseDestinations(),
+                                               switchOp.getCaseOperands())) {
           if (failed(addBranchConstraints(dest, operands, op)))
             return WalkResult::interrupt();
         }
@@ -825,8 +1154,7 @@ struct LayoutSolver {
       for (Region *region : {&ifOp.getThenRegion(), &ifOp.getElseRegion()}) {
         if (region->empty())
           continue;
-        auto yieldOp =
-            dyn_cast<scf::YieldOp>(region->front().getTerminator());
+        auto yieldOp = dyn_cast<scf::YieldOp>(region->front().getTerminator());
         if (!yieldOp || resultNo >= yieldOp.getNumOperands())
           continue;
         if (failed(uniteEquivalentValues(result, yieldOp.getOperand(resultNo),
@@ -852,8 +1180,8 @@ struct LayoutSolver {
     WalkResult result = executeOp.getRegion().walk([&](scf::YieldOp yieldOp) {
       if (yieldOp->getParentOp() != executeOp.getOperation())
         return WalkResult::advance();
-      if (failed(addYieldConstraints(executeOp->getResults(), yieldOp,
-                                     executeOp)))
+      if (failed(
+              addYieldConstraints(executeOp->getResults(), yieldOp, executeOp)))
         return WalkResult::interrupt();
       return WalkResult::advance();
     });
@@ -903,8 +1231,8 @@ struct LayoutSolver {
                                        whileOp)))
         return failure();
       if (index < whileOp.getNumResults() &&
-          failed(uniteEquivalentValues(anchor, whileOp.getResult(index),
-                                       whileOp)))
+          failed(
+              uniteEquivalentValues(anchor, whileOp.getResult(index), whileOp)))
         return failure();
     }
     return success();
@@ -927,8 +1255,8 @@ struct LayoutSolver {
           failed(uniteEquivalentValues(anchor, results[index], forOp)))
         return failure();
       if (yieldOp && index < yieldOp.getNumOperands() &&
-          failed(uniteEquivalentValues(anchor, yieldOp.getOperand(index),
-                                       forOp)))
+          failed(
+              uniteEquivalentValues(anchor, yieldOp.getOperand(index), forOp)))
         return failure();
     }
     return success();
@@ -963,7 +1291,8 @@ struct LayoutSolver {
     for (auto [index, operand] : llvm::enumerate(returnOp.getOperands())) {
       if (index >= firstOperands.size())
         break;
-      if (failed(uniteEquivalentValues(firstOperands[index], operand, returnOp)))
+      if (failed(
+              uniteEquivalentValues(firstOperands[index], operand, returnOp)))
         return failure();
     }
     return success();
@@ -1020,13 +1349,12 @@ struct LayoutSolver {
   }
 
   std::optional<Value> rematerializeDataUse(Value value, VMIVRegType resultType,
-                                            Location loc,
-                                            OpBuilder &builder) {
+                                            Location loc, OpBuilder &builder) {
     if (auto constant = value.getDefiningOp<VMIConstantOp>()) {
       auto denseAttr = dyn_cast<DenseElementsAttr>(constant.getValue());
       if (denseAttr && denseAttr.isSplat())
-        return builder.create<VMIConstantOp>(loc, resultType,
-                                             constant.getValue())
+        return builder
+            .create<VMIConstantOp>(loc, resultType, constant.getValue())
             .getResult();
     }
     if (auto broadcast = value.getDefiningOp<VMIBroadcastOp>())
@@ -1034,8 +1362,9 @@ struct LayoutSolver {
           .create<VMIBroadcastOp>(loc, resultType, broadcast.getValue())
           .getResult();
     if (auto iota = value.getDefiningOp<VMIIotaOp>())
-      return builder.create<VMIIotaOp>(loc, resultType, iota.getBase(),
-                                       iota.getOrderAttr())
+      return builder
+          .create<VMIIotaOp>(loc, resultType, iota.getBase(),
+                             iota.getOrderAttr())
           .getResult();
     return std::nullopt;
   }
@@ -1060,9 +1389,8 @@ struct LayoutSolver {
           VMIVRegType::get(ctx, sourceType.getElementCount(),
                            sourceType.getElementType(), request.layout);
       builder.setInsertionPoint(request.operand->getOwner());
-      std::optional<Value> rematerialized =
-          rematerializeDataUse(value, resultType,
-                               request.operand->getOwner()->getLoc(), builder);
+      std::optional<Value> rematerialized = rematerializeDataUse(
+          value, resultType, request.operand->getOwner()->getLoc(), builder);
       if (rematerialized) {
         request.operand->set(*rematerialized);
         continue;
@@ -1078,120 +1406,97 @@ struct LayoutSolver {
     WalkResult result = module.walk([&](Operation *op) -> WalkResult {
       if (auto cmpf = dyn_cast<VMICmpFOp>(op)) {
         auto lhsType = cast<VMIVRegType>(cmpf.getLhs().getType());
-        if (failed(requestMask(cmpf.getResult(), lhsType.getLayoutAttr(),
-                               getMaskGranularityForElement(
-                                   lhsType.getElementType()),
-                               op)))
+        if (failed(requestMask(
+                cmpf.getResult(), lhsType.getLayoutAttr(),
+                getMaskGranularityForElement(lhsType.getElementType()), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto cmpi = dyn_cast<VMICmpIOp>(op)) {
         auto lhsType = cast<VMIVRegType>(cmpi.getLhs().getType());
-        if (failed(requestMask(cmpi.getResult(), lhsType.getLayoutAttr(),
-                               getMaskGranularityForElement(
-                                   lhsType.getElementType()),
-                               op)))
+        if (failed(requestMask(
+                cmpi.getResult(), lhsType.getLayoutAttr(),
+                getMaskGranularityForElement(lhsType.getElementType()), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto select = dyn_cast<VMISelectOp>(op)) {
         auto resultType = cast<VMIVRegType>(select.getResult().getType());
-        if (failed(requestMaskUse(select.getMaskMutable(),
-                                  resultType.getLayoutAttr(),
-                                  getMaskGranularityForElement(
-                                      resultType.getElementType()),
-                                  op)))
+        if (failed(requestMaskUse(
+                select.getMaskMutable(), resultType.getLayoutAttr(),
+                getMaskGranularityForElement(resultType.getElementType()), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto activePrefix = dyn_cast<VMIActivePrefixIndexOp>(op)) {
-        auto resultType =
-            cast<VMIVRegType>(activePrefix.getResult().getType());
-        if (failed(requestMaskUse(activePrefix.getMaskMutable(),
-                                  resultType.getLayoutAttr(),
-                                  getMaskGranularityForElement(
-                                      resultType.getElementType()),
-                                  op)))
+        auto resultType = cast<VMIVRegType>(activePrefix.getResult().getType());
+        if (failed(requestMaskUse(
+                activePrefix.getMaskMutable(), resultType.getLayoutAttr(),
+                getMaskGranularityForElement(resultType.getElementType()), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto compress = dyn_cast<VMICompressOp>(op)) {
         auto resultType = cast<VMIVRegType>(compress.getResult().getType());
-        if (failed(requestMaskUse(compress.getMaskMutable(),
-                                  resultType.getLayoutAttr(),
-                                  getMaskGranularityForElement(
-                                      resultType.getElementType()),
-                                  op)))
+        if (failed(requestMaskUse(
+                compress.getMaskMutable(), resultType.getLayoutAttr(),
+                getMaskGranularityForElement(resultType.getElementType()), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto reduce = dyn_cast<VMIReduceAddIOp>(op)) {
         auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
-        if (failed(requestMaskUse(reduce.getMaskMutable(),
-                                  sourceType.getLayoutAttr(),
-                                  getMaskGranularityForElement(
-                                      sourceType.getElementType()),
-                                  op)))
+        if (failed(requestMaskUse(
+                reduce.getMaskMutable(), sourceType.getLayoutAttr(),
+                getMaskGranularityForElement(sourceType.getElementType()), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto reduce = dyn_cast<VMIReduceAddFOp>(op)) {
         auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
-        if (failed(requestMaskUse(reduce.getMaskMutable(),
-                                  sourceType.getLayoutAttr(),
-                                  getMaskGranularityForElement(
-                                      sourceType.getElementType()),
-                                  op)))
+        if (failed(requestMaskUse(
+                reduce.getMaskMutable(), sourceType.getLayoutAttr(),
+                getMaskGranularityForElement(sourceType.getElementType()), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto reduce = dyn_cast<VMIReduceMaxFOp>(op)) {
         auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
-        if (failed(requestMaskUse(reduce.getMaskMutable(),
-                                  sourceType.getLayoutAttr(),
-                                  getMaskGranularityForElement(
-                                      sourceType.getElementType()),
-                                  op)))
+        if (failed(requestMaskUse(
+                reduce.getMaskMutable(), sourceType.getLayoutAttr(),
+                getMaskGranularityForElement(sourceType.getElementType()), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto reduce = dyn_cast<VMIReduceMinFOp>(op)) {
         auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
-        if (failed(requestMaskUse(reduce.getMaskMutable(),
-                                  sourceType.getLayoutAttr(),
-                                  getMaskGranularityForElement(
-                                      sourceType.getElementType()),
-                                  op)))
+        if (failed(requestMaskUse(
+                reduce.getMaskMutable(), sourceType.getLayoutAttr(),
+                getMaskGranularityForElement(sourceType.getElementType()), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto reduce = dyn_cast<VMIGroupReduceAddFOp>(op)) {
         auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
-        if (failed(requestMaskUse(reduce.getMaskMutable(),
-                                  sourceType.getLayoutAttr(),
-                                  getMaskGranularityForElement(
-                                      sourceType.getElementType()),
-                                  op)))
+        if (failed(requestMaskUse(
+                reduce.getMaskMutable(), sourceType.getLayoutAttr(),
+                getMaskGranularityForElement(sourceType.getElementType()), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto load = dyn_cast<VMIMaskedLoadOp>(op)) {
         auto resultType = cast<VMIVRegType>(load.getResult().getType());
-        if (failed(requestMaskUse(load.getMaskMutable(),
-                                  resultType.getLayoutAttr(),
-                                  getMaskGranularityForElement(
-                                      resultType.getElementType()),
-                                  op)))
+        if (failed(requestMaskUse(
+                load.getMaskMutable(), resultType.getLayoutAttr(),
+                getMaskGranularityForElement(resultType.getElementType()), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto load = dyn_cast<VMIExpandLoadOp>(op)) {
         auto resultType = cast<VMIVRegType>(load.getResult().getType());
-        if (failed(requestMaskUse(load.getMaskMutable(),
-                                  resultType.getLayoutAttr(),
-                                  getMaskGranularityForElement(
-                                      resultType.getElementType()),
-                                  op)))
+        if (failed(requestMaskUse(
+                load.getMaskMutable(), resultType.getLayoutAttr(),
+                getMaskGranularityForElement(resultType.getElementType()), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
@@ -1203,8 +1508,8 @@ struct LayoutSolver {
   void rewriteMaskTypes() {
     for (MaskNode &node : maskNodes) {
       MaskNode &root = maskNodes[findMask(maskIds.lookup(node.value))];
-      VMILayoutAttr layout = root.requestedLayout ? root.requestedLayout
-                                                  : getContiguousLayout();
+      VMILayoutAttr layout =
+          root.requestedLayout ? root.requestedLayout : getContiguousLayout();
       StringRef granularity = root.requestedGranularity.empty()
                                   ? StringRef("b32")
                                   : StringRef(root.requestedGranularity);
@@ -1214,11 +1519,17 @@ struct LayoutSolver {
   }
 
   std::optional<Value> rematerializeMaskUse(Value value, VMIMaskType resultType,
-                                            Location loc,
-                                            OpBuilder &builder) {
+                                            Location loc, OpBuilder &builder) {
     if (auto createMask = value.getDefiningOp<VMICreateMaskOp>())
-      return builder.create<VMICreateMaskOp>(loc, resultType,
-                                             createMask.getActiveLanes())
+      return builder
+          .create<VMICreateMaskOp>(loc, resultType, createMask.getActiveLanes())
+          .getResult();
+    if (auto createGroupMask = value.getDefiningOp<VMICreateGroupMaskOp>())
+      return builder
+          .create<VMICreateGroupMaskOp>(
+              loc, resultType, createGroupMask.getActiveElemsPerGroup(),
+              createGroupMask.getNumGroupsAttr(),
+              createGroupMask.getGroupSizeAttr())
           .getResult();
     if (auto constantMask = value.getDefiningOp<VMIConstantMaskOp>())
       return builder
@@ -1245,9 +1556,9 @@ struct LayoutSolver {
       builder.setInsertionPoint(request.operand->getOwner());
       Value current = value;
       VMIMaskType currentType = sourceType;
-      auto requestedType = VMIMaskType::get(ctx, sourceType.getElementCount(),
-                                            request.granularity,
-                                            request.layout);
+      auto requestedType =
+          VMIMaskType::get(ctx, sourceType.getElementCount(),
+                           request.granularity, request.layout);
       if (sourceType != requestedType) {
         std::optional<Value> rematerialized = rematerializeMaskUse(
             value, requestedType, request.operand->getOwner()->getLoc(),
@@ -1259,9 +1570,9 @@ struct LayoutSolver {
       }
 
       if (sourceLayout != request.layout) {
-        auto layoutType = VMIMaskType::get(ctx, currentType.getElementCount(),
-                                           currentType.getGranularity(),
-                                           request.layout);
+        auto layoutType =
+            VMIMaskType::get(ctx, currentType.getElementCount(),
+                             currentType.getGranularity(), request.layout);
         auto ensureLayout = builder.create<VMIEnsureMaskLayoutOp>(
             request.operand->getOwner()->getLoc(), layoutType, current);
         current = ensureLayout.getResult();
@@ -1272,10 +1583,8 @@ struct LayoutSolver {
         auto granularityType =
             VMIMaskType::get(ctx, currentType.getElementCount(),
                              request.granularity, request.layout);
-        auto ensureGranularity =
-            builder.create<VMIEnsureMaskGranularityOp>(
-                request.operand->getOwner()->getLoc(), granularityType,
-                current);
+        auto ensureGranularity = builder.create<VMIEnsureMaskGranularityOp>(
+            request.operand->getOwner()->getLoc(), granularityType, current);
         current = ensureGranularity.getResult();
       }
 
@@ -1283,6 +1592,143 @@ struct LayoutSolver {
         request.operand->set(current);
     }
     return success();
+  }
+
+  std::optional<StringRef> getGroupReduceSelectedPlan(VMIGroupReduceAddFOp op) {
+    auto sourceType = dyn_cast<VMIVRegType>(op.getSource().getType());
+    if (!sourceType)
+      return std::nullopt;
+    VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+    if (!sourceLayout)
+      return std::nullopt;
+
+    int64_t numGroups = op.getNumGroupsAttr().getInt();
+    if (numGroups <= 0 || sourceType.getElementCount() % numGroups != 0)
+      return std::nullopt;
+    int64_t groupSize = sourceType.getElementCount() / numGroups;
+
+    if (sourceLayout.isContiguous()) {
+      if (groupSize == 8)
+        return StringRef("s8_reduce_contiguous");
+      if (groupSize == 64)
+        return StringRef("s64_reduce_row_local");
+      return std::nullopt;
+    }
+
+    if (!sourceLayout.isDeinterleaved())
+      return std::nullopt;
+
+    if (groupSize == 16 && sourceLayout.getFactor() == 2) {
+      if (sourceLayout.getBlockElems() == 1)
+        return StringRef("s16_reduce_parity");
+      if (sourceLayout.getBlockElems() == 8)
+        return StringRef("s16_reduce_block8");
+    }
+
+    if (groupSize == 32 && sourceLayout.getFactor() == 4) {
+      if (sourceLayout.getBlockElems() == 1)
+        return StringRef("s32_reduce_dintlv4");
+      if (sourceLayout.getBlockElems() == 8)
+        return StringRef("s32_reduce_block8_stride");
+    }
+
+    return std::nullopt;
+  }
+
+  std::optional<StringRef> getGroupSlotLoadSelectedPlan(VMIGroupSlotLoadOp op) {
+    auto resultType = dyn_cast<VMIVRegType>(op.getResult().getType());
+    if (!resultType)
+      return std::nullopt;
+    VMILayoutAttr layout = resultType.getLayoutAttr();
+    if (!layout || !layout.isGroupSlots() ||
+        layout.getNumGroups() != op.getNumGroupsAttr().getInt())
+      return std::nullopt;
+    if (layout.getSlots() == 8)
+      return StringRef("group_slot_load_slots8_unit_stride");
+    if (layout.getSlots() == 1)
+      return StringRef("group_slot_load_slots1_row_local");
+    return std::nullopt;
+  }
+
+  std::optional<StringRef> getGroupLoadSelectedPlan(VMIGroupLoadOp op) {
+    auto resultType = dyn_cast<VMIVRegType>(op.getResult().getType());
+    if (!resultType)
+      return std::nullopt;
+    VMILayoutAttr layout = resultType.getLayoutAttr();
+    if (!layout)
+      return std::nullopt;
+    if (layout.isContiguous())
+      return StringRef("group_load_contiguous_chunks");
+    if (!layout.isDeinterleaved() || layout.getBlockElems() != 8)
+      return std::nullopt;
+
+    int64_t numGroups = op.getNumGroupsAttr().getInt();
+    if (numGroups <= 0 || resultType.getElementCount() % numGroups != 0)
+      return std::nullopt;
+    int64_t groupSize = resultType.getElementCount() / numGroups;
+    if (groupSize == 16 && layout.getFactor() == 2)
+      return StringRef("s16_group_load_block8_stride");
+    if (groupSize == 32 && layout.getFactor() == 4)
+      return StringRef("s32_group_load_block8_stride");
+    return std::nullopt;
+  }
+
+  std::optional<StringRef>
+  getGroupBroadcastSelectedPlan(VMIGroupBroadcastOp op) {
+    auto sourceType = dyn_cast<VMIVRegType>(op.getSource().getType());
+    auto resultType = dyn_cast<VMIVRegType>(op.getResult().getType());
+    if (!sourceType || !resultType)
+      return std::nullopt;
+    VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+    VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+    if (!sourceLayout || !resultLayout || !sourceLayout.isGroupSlots() ||
+        sourceLayout.getNumGroups() != op.getNumGroupsAttr().getInt() ||
+        resultLayout.isGroupSlots())
+      return std::nullopt;
+    if (sourceLayout.getSlots() == 8)
+      return StringRef("group_broadcast_slots8_vselr");
+    if (sourceLayout.getSlots() == 1)
+      return StringRef("group_broadcast_slots1_vselr");
+    return std::nullopt;
+  }
+
+  std::optional<StringRef> getTruncFSelectedPlan(VMITruncFOp op) {
+    auto sourceType = dyn_cast<VMIVRegType>(op.getSource().getType());
+    auto resultType = dyn_cast<VMIVRegType>(op.getResult().getType());
+    if (!sourceType || !resultType)
+      return std::nullopt;
+
+    VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+    VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+    if (!sourceLayout || !resultLayout || sourceLayout != resultLayout ||
+        !sourceLayout.isGroupSlots() || sourceLayout.getSlots() != 1)
+      return std::nullopt;
+
+    unsigned sourceBits = getElementBitWidth(sourceType.getElementType());
+    unsigned resultBits = getElementBitWidth(resultType.getElementType());
+    if (sourceBits == 32 && resultBits == 16)
+      return StringRef("group_slot_cast_slots1_f32_to_f16");
+    return std::nullopt;
+  }
+
+  void attachSelectedPlanAttrs() {
+    Builder builder(ctx);
+    module.walk([&](Operation *op) {
+      std::optional<StringRef> plan;
+      if (auto reduce = dyn_cast<VMIGroupReduceAddFOp>(op))
+        plan = getGroupReduceSelectedPlan(reduce);
+      else if (auto load = dyn_cast<VMIGroupLoadOp>(op))
+        plan = getGroupLoadSelectedPlan(load);
+      else if (auto load = dyn_cast<VMIGroupSlotLoadOp>(op))
+        plan = getGroupSlotLoadSelectedPlan(load);
+      else if (auto broadcast = dyn_cast<VMIGroupBroadcastOp>(op))
+        plan = getGroupBroadcastSelectedPlan(broadcast);
+      else if (auto truncf = dyn_cast<VMITruncFOp>(op))
+        plan = getTruncFSelectedPlan(truncf);
+
+      if (plan)
+        op->setAttr(kVMISelectedPlanAttrName, builder.getStringAttr(*plan));
+    });
   }
 
   void rewriteFunctionType() {
@@ -1320,6 +1766,8 @@ struct LayoutSolver {
   }
 
   LogicalResult run() {
+    if (failed(commuteTruncFAfterGroupBroadcast()))
+      return failure();
     if (failed(collect()))
       return failure();
     if (failed(addConstraints()))
@@ -1329,6 +1777,7 @@ struct LayoutSolver {
     rewriteDataTypes();
     if (failed(insertDataUseMaterializations()))
       return failure();
+    attachSelectedPlanAttrs();
     if (failed(inferMaskRequests()))
       return failure();
     rewriteMaskTypes();
@@ -1351,8 +1800,7 @@ struct LayoutSolver {
 };
 
 struct VMILayoutAssignmentPass
-    : public mlir::pto::impl::VMILayoutAssignmentBase<
-          VMILayoutAssignmentPass> {
+    : public mlir::pto::impl::VMILayoutAssignmentBase<VMILayoutAssignmentPass> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VMILayoutAssignmentPass)
 
   void runOnOperation() override {

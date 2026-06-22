@@ -76,6 +76,22 @@ def VMICreateMaskOp : VMI_Op<"create_mask"> {
   let assemblyFormat = "$active_lanes attr-dict `:` type($active_lanes) `->` type($result)";
 }
 
+def VMICreateGroupMaskOp : VMI_Op<"create_group_mask"> {
+  let summary = "Create a VMI logical grouped predicate mask";
+  let description = [{
+    Creates a mask where lane i is active iff
+    `(i % group_size) < active_elems_per_group`.
+  }];
+  let arguments = (ins
+    Index:$active_elems_per_group,
+    I64Attr:$num_groups,
+    I64Attr:$group_size
+  );
+  let results = (outs VMI_MaskTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$active_elems_per_group attr-dict `:` type($active_elems_per_group) `->` type($result)";
+}
+
 def VMIConstantMaskOp : VMI_Op<"constant_mask"> {
   let summary = "VMI logical predicate mask constant";
   let arguments = (ins AnyAttr:$value);
@@ -437,7 +453,8 @@ def VMIBitcastOp : VMI_Op<"bitcast"> {
 
 def VMILoadOp : VMI_Op<"load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "VMI logical vector load";
-  let arguments = (ins PtrOrMemRef:$source, Index:$offset);
+  let arguments = (ins PtrOrMemRef:$source, Index:$offset,
+                       OptionalAttr<I64Attr>:$full_read_elems);
   let results = (outs VMI_VRegTypeConstraint:$result);
   let hasVerifier = 1;
   let assemblyFormat = "$source `[` $offset `]` attr-dict `:` type($source) `->` type($result)";
@@ -450,6 +467,15 @@ def VMIGroupLoadOp : VMI_Op<"group_load", [DeclareOpInterfaceMethods<MemoryEffec
   let results = (outs VMI_VRegTypeConstraint:$result);
   let hasVerifier = 1;
   let assemblyFormat = "$source `[` $offset `]` `,` $row_stride attr-dict `:` type($source) `->` type($result)";
+}
+
+def VMIGroupSlotLoadOp : VMI_Op<"group_slot_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "VMI load one scalar value per logical group into group slots";
+  let arguments = (ins PtrOrMemRef:$source, Index:$offset, Index:$source_group_stride,
+                       I64Attr:$num_groups);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `[` $offset `]` `,` $source_group_stride attr-dict `:` type($source) `->` type($result)";
 }
 
 def VMIMaskedLoadOp : VMI_Op<"masked_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {

@@ -255,6 +255,11 @@ ptoas test/lit/pto/empty_func.pto --pto-arch=a5 -o outputfile.cpp
 # 指定构建 Level（level3 会禁用 PlanMemory/InsertSync）
 ptoas test/lit/pto/empty_func.pto --pto-level=level3 -o outputfile.cpp
 
+# 启用实验性 VMI -> VPTO 语义 pipeline
+# 该模式要求 --pto-backend=vpto，或输入 IR 中带 pto.backend = "vpto"
+# public function signature 不能直接暴露 !pto.vmi.* 类型
+ptoas test/lit/vmi/vmi_ptoas_cli_pipeline.pto --pto-arch=a5 --pto-backend=vpto --enable-vmi --emit-vpto -o -
+
 # 查看当前 ptoas release 版本号
 ptoas --version
 
