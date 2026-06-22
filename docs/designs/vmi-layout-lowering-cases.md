@@ -197,6 +197,7 @@ the immediately following complete endpoints.
 3.42 group_slots scf.for loop-carried accumulator        complete
 3.43 internal function argument boundary materialization complete/design
 3.44 masked_load grouped tail feeding S=32 reduce        complete
+3.45 dynamic S=32 create_group_mask                      complete/lit
 ```
 
 ### 3.1 `f16 -> f32 -> store`
@@ -5224,7 +5225,6 @@ for r = 0..7:
 
 Required assignment rule:
 
-```text
 `masked_load` and `group_reduce` must share the same grouped mask layout.  The
 passthrough value defines inactive loaded lanes, while the reduce mask defines
 participation.  Assignment materializes two explicit mask values when needed:
@@ -5244,4 +5244,76 @@ Runtime coverage:
 ```text
 test/vpto/cases/vmi/masked-load-group-tail-s32-reduce-store
 ```
+
+### 3.45 Dynamic S=32 `create_group_mask`
+
+This is the dynamic-shape form of section 3.44.  The active column count is an
+SSA `index`, not a constant.  The semantic mask is still grouped:
+
+```text
+lane i active iff (i % 32) < active_cols
 ```
+
+VMI input:
+
+```text
+%mask = pto.vmi.create_group_mask %active_cols
+  {num_groups = 8, group_size = 32}
+  : index -> !pto.vmi.mask<256xpred>
+```
+
+Assigned layouts:
+
+```text
+%mask for masked_load:
+  !pto.vmi.mask<256xb32, #pto.vmi.layout<contiguous>>
+
+%mask for S=32 group_reduce:
+  !pto.vmi.mask<256xb32,
+    #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+```
+
+Contiguous VPTO lowering for one b32 physical chunk:
+
+```text
+%active_i32 = arith.index_cast %active_cols : index to i32
+%active_nonneg = arith.maxsi %active_i32, %c0_i32 : i32
+%active_clamped = arith.minui %active_nonneg, %c32_i32 : i32
+
+%all = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+%lane = pto.vci %c0_i32 : i32 -> !pto.vreg<64xi32>
+%row = pto.vshrs %lane, %c5_i16, %all
+  : !pto.vreg<64xi32>, i16, !pto.mask<b32> -> !pto.vreg<64xi32>
+%row_base = pto.vshls %row, %c5_i16, %all
+  : !pto.vreg<64xi32>, i16, !pto.mask<b32> -> !pto.vreg<64xi32>
+%col = pto.vsub %lane, %row_base, %all
+  : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32>
+  -> !pto.vreg<64xi32>
+%m = pto.vcmps %col, %active_clamped, %all, "lt"
+  : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.mask<b32>
+```
+
+For `deinterleaved = 4, block_elems = 8`, lowering first emits four contiguous
+chunks with the sequence above, then applies the same predicate deinterleave
+tree used by section 3.44:
+
+```text
+%rm0, %rm1, %rm2, %rm3 = dynamic contiguous grouped masks
+%rm01_lo, %rm01_hi = pto.pdintlv_b32 %rm0, %rm1
+%rm23_lo, %rm23_hi = pto.pdintlv_b32 %rm2, %rm3
+%mask_p0, %mask_p2 = pto.pdintlv_b32 %rm01_lo, %rm23_lo
+%mask_p1, %mask_p3 = pto.pdintlv_b32 %rm01_hi, %rm23_hi
+```
+
+The current lit coverage validates the IR lowering:
+
+```text
+test/lit/vmi/vmi_layout_assignment_create_group_mask_s32_dynamic.pto
+```
+
+Runtime SIM coverage is intentionally not listed yet.  A direct runtime case
+needs a supported way to feed a dynamic scalar `active_cols` into a vector
+kernel.  Experiments with GM `pto.ldg` and UB `pto.load_scalar` either crashed
+the Bisheng vector backend or produced an invalid scalar LSU address in the
+SIM.  That is an ABI/source-materialization gap, not a `create_group_mask`
+layout-lowering gap.
