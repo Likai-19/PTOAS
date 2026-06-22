@@ -133,8 +133,10 @@ dynamic active_elems_per_group runtime source:
   scalar loads or surrounding context.
 
 private vector function runtime:
-  assignment/lowering semantics are defined; full ptoas runtime depends on
-  backend support or an inlining policy for physical VPTO vector callees.
+  private/internal single-block helpers are runtime-covered by ptoas inlining
+  private physical VMI helpers after vmi-to-vpto and before VPTO vecscope/backend
+  emission. This is a post-physicalization backend hygiene step; vmi-to-vpto
+  still lowers only from assigned layouts and helper ops.
 
 diagnostic-only cases:
   compact S=12 gather fallback, packed slots=8 width-changing cast, public VMI
@@ -683,8 +685,10 @@ the initial value or previous iteration during lowering.
 Internal/private VMI function boundaries must make layout choices explicit in
 the assigned IR.  The baseline implementation keeps function arguments in a
 contiguous VMI ABI and inserts callee-entry `ensure_layout` helpers when the
-callee body needs another layout.  A later private-function optimization may
-specialize signatures directly:
+callee body needs another layout.  Private helpers are then physicalized by
+`vmi-to-vpto` and inlined before VPTO vecscope/backend emission so physical
+`!pto.vreg`/`!pto.mask` values do not become a backend function ABI.  A later
+private-function optimization may specialize signatures directly:
 
 ```text
 func @producer() -> !vmi.vreg<256xf32, deinterleaved=4>
