@@ -22,6 +22,19 @@ module attributes {pto.target_arch = "a5"} {
           : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
       return
     }
+
+    func.func @vmi_ptoas_cli_fold_consumers_pipeline(
+        %src: !pto.ptr<f16, ub>,
+        %dst: !pto.ptr<f32, ub>,
+        %offset: index) {
+      %x16 = pto.vmi.load %src[%offset]
+          : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
+      %x32 = pto.vmi.extf %x16
+          : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
+      pto.vmi.store %x32, %dst[%offset]
+          : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
+      return
+    }
   }
 }
 
@@ -30,6 +43,16 @@ module attributes {pto.target_arch = "a5"} {
 // CHECK: pto.vdup
 // CHECK: pto.vsts
 // CHECK: pto.vsts
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast
+
+// CHECK-LABEL: func.func @vmi_ptoas_cli_fold_consumers_pipeline
+// CHECK: pto.vlds
+// CHECK: pto.vcvt {{.*}} {part = "EVEN"}
+// CHECK: pto.vcvt {{.*}} {part = "ODD"}
+// CHECK-NOT: pto.vintlv
+// CHECK: pto.vstsx2
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
 // CHECK-NOT: unrealized_conversion_cast

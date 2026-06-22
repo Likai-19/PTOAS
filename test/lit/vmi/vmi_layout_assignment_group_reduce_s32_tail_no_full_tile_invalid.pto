@@ -15,13 +15,12 @@ module {
       %dst: !pto.ptr<f32, ub>,
       %off: index) {
     %c1 = arith.constant 1 : index
-    // CHECK: {{VMI-UNSUPPORTED}}: pto.vmi.group_reduce_addf operand #0 has type
+    // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.group_reduce_addf operand #0 has type
     // CHECK-SAME: #pto.vmi.layout<contiguous>
     // CHECK-SAME: requires
     // CHECK-SAME: #pto.vmi.layout<deinterleaved = 4, block_elems = 8>
-    // CHECK-SAME: pto.vmi.ensure_layout cannot materialize this conversion
+    // CHECK-SAME: pto.vmi.ensure_layout has no registered materialization recipe
     // CHECK: requires source and result to have the same physical arity
-    // CHECK-SAME: partial/tail layout materialization requires an explicit packing plan
     %sum = pto.vmi.group_reduce_addf %source, %mask
         {num_groups = 6, reassoc}
         : !pto.vmi.vreg<192xf32>, !pto.vmi.mask<192xpred>

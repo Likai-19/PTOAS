@@ -19,7 +19,7 @@ module {
         {num_groups = 8, reassoc}
         : !pto.vmi.vreg<512xf32>, !pto.vmi.mask<512xpred>
         -> !pto.vmi.vreg<512xf32>
-    // CHECK: VMI-UNSUPPORTED: pto.vmi.group_store
+    // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.group_store has no registered group_slots local recipe
     // CHECK-SAME: slots=1 group_store currently lowers as one lane-0 vsts per group
     // CHECK-SAME: requires constant positive row_stride divisible by 8 elements
     // CHECK-SAME: packed or unaligned contiguous store lowering is not implemented

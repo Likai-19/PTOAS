@@ -930,6 +930,75 @@ def VMILayoutAssignment : Pass<"vmi-layout-assignment", "ModuleOp"> {
                            "mlir::scf::SCFDialect"];
 }
 
+def VMILayoutFoldConsumers : Pass<"vmi-layout-fold-consumers", "ModuleOp"> {
+  let summary = "Fold VMI layout materialization into layout-aware consumers";
+  let description = [{
+    Optimizes legal layout-assigned VMI IR by replacing selected use-site
+    ensure_layout consumers with consumers that can directly lower from the
+    source layout while preserving the same logical effect. The pass does not
+    choose layouts by inspecting producer/user context for vmi-to-vpto; it only
+    rewrites explicit helper IR into an equivalent local-consumer form.
+  }];
+  let constructor = "mlir::pto::createVMILayoutFoldConsumersPass()";
+  let dependentDialects = ["mlir::cf::ControlFlowDialect",
+                           "mlir::func::FuncDialect",
+                           "mlir::pto::PTODialect",
+                           "mlir::memref::MemRefDialect",
+                           "mlir::scf::SCFDialect"];
+}
+
+def VMILayoutRematerialize : Pass<"vmi-layout-rematerialize", "ModuleOp"> {
+  let summary = "Rematerialize cheap VMI producers at layout helpers";
+  let description = [{
+    Optimizes legal layout-assigned VMI IR by replacing selected ensure_layout,
+    ensure_mask_layout, and ensure_mask_granularity helpers with cloned cheap
+    producers that directly create the requested result type. The pass is
+    deliberately limited to pure construction ops, so memory, control-flow, and
+    mask-tail proofs remain explicit in the IR.
+  }];
+  let constructor = "mlir::pto::createVMILayoutRematerializePass()";
+  let dependentDialects = ["mlir::cf::ControlFlowDialect",
+                           "mlir::func::FuncDialect",
+                           "mlir::pto::PTODialect",
+                           "mlir::memref::MemRefDialect",
+                           "mlir::scf::SCFDialect"];
+}
+
+def VMILayoutSinkMaterialization
+    : Pass<"vmi-layout-sink-materialization", "ModuleOp"> {
+  let summary = "Sink VMI layout materialization through transfer ops";
+  let description = [{
+    Optimizes legal layout-assigned VMI IR by moving matching operand
+    ensure_layout helpers across pure layout-transparent elementwise operations.
+    The rewritten IR keeps the layout conversion explicit as a result
+    ensure_layout, so vmi-to-vpto still lowers from local op information only.
+  }];
+  let constructor = "mlir::pto::createVMILayoutSinkMaterializationPass()";
+  let dependentDialects = ["mlir::cf::ControlFlowDialect",
+                           "mlir::func::FuncDialect",
+                           "mlir::pto::PTODialect",
+                           "mlir::memref::MemRefDialect",
+                           "mlir::scf::SCFDialect"];
+}
+
+def VMILegalizeArithSelect : Pass<"vmi-legalize-arith-select", "ModuleOp"> {
+  let summary = "Legalize canonical arith.select over VMI values";
+  let description = [{
+    Rewrites scalar-condition arith.select operations that produce VMI values
+    back to scf.if. MLIR canonicalization may fold simple scf.if regions into
+    arith.select, but VMI values must not cross non-VMI semantic ops before
+    vmi-to-vpto. This pass restores an explicit structural control-flow form
+    that the VMI converter already handles.
+  }];
+  let constructor = "mlir::pto::createVMILegalizeArithSelectPass()";
+  let dependentDialects = ["mlir::arith::ArithDialect",
+                           "mlir::cf::ControlFlowDialect",
+                           "mlir::func::FuncDialect",
+                           "mlir::pto::PTODialect",
+                           "mlir::memref::MemRefDialect",
+                           "mlir::scf::SCFDialect"];
+}
+
 def VMIToVPTO : Pass<"vmi-to-vpto", "ModuleOp"> {
   let summary = "Convert layout-assigned VMI IR to physical VPTO IR";
   let description = [{

@@ -19,13 +19,8 @@ module {
         {num_groups = 8, reassoc}
         : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
         -> !pto.vmi.vreg<128xf32>
-    // CHECK: {{VMI-UNSUPPORTED}}: pto.vmi.truncf operand #0 has type
-    // CHECK-SAME: #pto.vmi.layout<num_groups = 8, slots = 8>
-    // CHECK-SAME: requires
-    // CHECK-SAME: #pto.vmi.layout<deinterleaved = 2>
-    // CHECK-SAME: pto.vmi.ensure_layout cannot materialize this conversion
-    // CHECK: failed helper conversion
-    // CHECK-SAME: unsupported source/result layout pair
+    // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.truncf operand #0 has type !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>> but requires !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>; pto.vmi.ensure_layout has no registered materialization recipe: unsupported source/result layout pair
+    // CHECK: failed helper conversion '!pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>' -> '!pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>' (unsupported source/result layout pair)
     %h = pto.vmi.truncf %sum
         : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
     pto.vmi.group_store %h, %dst[%off], %c1 {num_groups = 8}
