@@ -421,6 +421,109 @@ compact S=12 logical S=16:
   diagnose if gather fallback is disabled/missing
 ```
 
+### 6.3.1 Request Builders
+
+Implement request generation as small per-op builders.  The builders produce
+candidate plans and use-site requests; they do not rewrite IR.
+
+```text
+buildStoreRequests:
+  ordinary store -> dense contiguous request unless a layout-aware store plan is
+  selected
+  group_store -> group_slots(G,K) request plus stride/alignment capability
+  checks
+
+buildCastRequests:
+  extf f16->f32 -> source contiguous, result deinterleaved=2
+  extf f8->f32  -> source contiguous, result deinterleaved=4
+  truncf f32->f16 -> source deinterleaved=2/block_elems=1, result contiguous
+  truncf f32->f8  -> source deinterleaved=4/block_elems=1, result contiguous
+  group_slots slots=1 f32->f16 -> slot-preserving plan
+  group_slots slots=8 width-changing cast -> diagnostic unless a packed plan
+  exists
+
+buildGroupReduceRequests:
+  derive S = logical_lanes / num_groups
+  S=8  -> contiguous source, group_slots(G,8) result
+  S=16 -> deinterleaved=2/block_elems=1 or block_elems=8 source,
+          group_slots(G,8) result
+  S=32 -> deinterleaved=4/block_elems=1 or block_elems=8 source,
+          group_slots(G,8) result
+  S=64 -> contiguous source, group_slots(G,1) result
+  other S -> diagnostic unless an explicit fallback plan is enabled
+
+buildGroupMemoryRequests:
+  group_load S=16/S=32 with aligned constant stride -> block_elems=8 plan
+  group_load row-local full chunks -> contiguous plan
+  group_slot_load unit stride -> group_slots(G,8)
+  group_slot_load aligned row-local stride -> group_slots(G,1)
+  unsupported dynamic/unaligned grouped memory -> diagnostic
+
+buildMaskRequests:
+  mask layout follows each consuming data layout
+  predicate granularity follows each consuming element type
+  create_mask/create_group_mask may be cloned for incompatible mask layout or
+  granularity requests
+
+buildControlFlowRequests:
+  region yields, branch operands, loop iter_args, call operands, and returns
+  create equality requests on the carried VMI layout variable
+```
+
+Request builders must record the requesting op.  Diagnostics and inserted
+helpers are use-site operations, so the user can see which consumer forced a
+layout.
+
+### 6.3.2 Producer Classes
+
+The solver uses producer classes to decide whether a conflict can be solved by
+cloning, equivalence propagation, or materialization.
+
+```text
+cheap rematerializable producers:
+  load when address operands dominate the clone site, no intervening may-alias
+  write exists, and any full_read_elems proof is preserved
+  broadcast
+  create_mask
+  create_group_mask
+  group_broadcast
+  group_slot_load when the same address/no-alias/proof conditions as load hold
+  and the selected memory plan is legal at the clone site
+
+layout-transparent producers:
+  add/sub/mul/fma/min/max/neg/abs
+  select
+  bitcast
+  integer bitwise and shift ops
+
+fixed-layout producers:
+  extf/truncf physical conversion plans
+  group_load block-fragment plans
+  group_reduce result group_slots
+  masked_load when the physical memory-safety proof fixes a full-read plan
+```
+
+Conflict policy:
+
+```text
+cheap producer:
+  clone for each incompatible request when cloning does not duplicate a
+  side-effect, cross an aliasing write, or duplicate an illegal memory read
+
+layout-transparent producer:
+  merge into the consumer-requested equivalence class; insert materialization
+  only at incompatible uses
+
+fixed-layout producer:
+  use registered materialization only; otherwise diagnose
+```
+
+This is the rule that keeps case 3.32 legal: a plain `load` can be assigned to
+`deinterleaved=4, block_elems=1` for both `truncf f32->f8` and S=32
+`group_reduce`.  It also keeps case 3.19.2 diagnostic: a strided `group_load`
+that selected `block_elems=8` is fixed unless a block8-to-parity
+materialization or rematerialized memory plan is registered.
+
 ### 6.4 Solving And Rewriting
 
 Algorithm:
@@ -450,6 +553,80 @@ No context-sensitive VMI op after assignment lacks selected_plan.
 Every ensure_* helper has a registered materialization plan.
 Every function/call signature carrying VMI is specialized or diagnosed.
 ```
+
+### 6.5 Rewrite Artifacts
+
+Assignment rewrites the IR so that later lowering has no hidden choices.
+
+```text
+type rewrite:
+  every VMI data/mask result and block argument receives a layout attr
+
+selected_plan rewrite:
+  context-sensitive ops receive vmi.selected_plan
+  examples: group_reduce_addf, group_load, group_slot_load, group_broadcast,
+  group_slot cast, full-read masked_load plans
+
+clone rewrite:
+  cheap producers are cloned before their divergent use sites
+  each clone receives its own layout and selected_plan
+
+ensure rewrite:
+  non-cheap values use pto.vmi.ensure_layout or ensure_mask_layout at the use
+  site, with source and target layouts visible in the types
+
+granularity rewrite:
+  one semantic mask used by f32 and f16 consumers gets
+  ensure_mask_granularity or cloned mask producers
+
+control-flow rewrite:
+  scf.if/scf.for yields and block arguments are rewritten to one agreed layout;
+  materialization is inserted before yield when branches differ
+
+function rewrite:
+  private VMI functions are specialized or get callee-entry ensure_layout
+  public/external VMI functions are diagnosed
+```
+
+Canonical assigned IR shape for a conflicting load:
+
+```text
+%x = pto.vmi.load ... {vmi.selected_plan = "load_dintlv4"}
+  : ... -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
+
+%x_dense = pto.vmi.ensure_layout %x
+  : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
+ -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>
+
+pto.vmi.store %x_dense, ...
+```
+
+Canonical assigned IR shape for a cloned cheap producer:
+
+```text
+%x_s16 = pto.vmi.load ... {vmi.selected_plan = "load_dintlv2"}
+  : ... -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
+
+%x_s32 = pto.vmi.load ... {vmi.selected_plan = "load_dintlv4"}
+  : ... -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
+```
+
+Canonical assigned IR shape for `group_broadcast` multi-use:
+
+```text
+%b0 = pto.vmi.group_broadcast %slots
+  {vmi.selected_plan = "group_broadcast_slots8_vselr"}
+  : !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+ -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
+
+%b1 = pto.vmi.group_broadcast %slots
+  {vmi.selected_plan = "group_broadcast_slots8_vselr"}
+  : !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+ -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>
+```
+
+If the assigned IR does not have one of these explicit shapes, `vmi-to-vpto`
+must reject it instead of attempting to recover the missing decision.
 
 ## 7. OneToN Type Conversion
 
