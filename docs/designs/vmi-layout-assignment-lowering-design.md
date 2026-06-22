@@ -72,6 +72,7 @@ control flow:
 mask and tail:
   prefix mask
   group-periodic mask
+  dynamic group-periodic mask
   masked_load tail with explicit passthrough instead of padding
   masked_load grouped tail feeding group_reduce
   masked select/store
@@ -84,6 +85,59 @@ strided memory:
   strided group_load feeding broadcast and a second group_reduce
   group_slot_load slots=1 with non-unit source stride
   group_store slots=1 with non-unit output stride
+```
+
+### 1.1 Case-Set Sufficiency
+
+The current case set is sufficient to define the first implementation of layout
+assignment and lowering.  It covers every decision axis that has changed the
+design so far:
+
+```text
+physical dense layout:
+  contiguous, deinterleaved=2/4, block_elems=1/8
+
+sparse result layout:
+  group_slots(G, slots=8) for packed VCG results
+  group_slots(G, slots=1) for row-local S=64 results
+
+producer-driven layout:
+  load, group_load, group_slot_load, broadcast, create_mask,
+  create_group_mask
+
+consumer-driven pressure:
+  dense store, group_reduce, group_store, group_broadcast, truncf,
+  elementwise/select, masked_load/masked_store
+
+conflict resolution:
+  cheap rematerialization, explicit ensure_layout, explicit diagnostics
+
+control-flow propagation:
+  scf.if, scf.for iter_args/results, internal/private function boundaries,
+  public ABI rejection
+
+memory legality:
+  full_tile_readable proof, grouped masks, predicate granularity, aligned
+  strided group memory, stable gather diagnostic
+```
+
+No extra layout kind should be added unless a new case proves that the existing
+layouts and plans cannot express the logical behavior.  The remaining open
+items are not missing layout semantics:
+
+```text
+dynamic active_elems_per_group runtime source:
+  create_group_mask layout lowering is defined and has lit coverage; runtime
+  SIM still needs a supported scalar source/ABI for vector kernels.
+
+private vector function runtime:
+  assignment/lowering semantics are defined; full ptoas runtime depends on
+  backend support or an inlining policy for physical VPTO vector callees.
+
+diagnostic-only cases:
+  compact S=12 gather fallback, packed slots=8 width-changing cast, public VMI
+  ABI, unsafe masked_load tail, and unaligned/dynamic group memory remain
+  explicit capability boundaries.
 ```
 
 ## 2. Layout Domain
@@ -626,5 +680,6 @@ The design is complete only when:
 3. every unsupported case has a precise capability diagnostic
 4. every control-flow/function boundary either specializes layout or diagnoses
 5. every mask has explicit data layout and predicate granularity
-6. every case has an end-to-end test and simulator validation
+6. every positive case has end-to-end lit coverage
+7. every simulator-supported positive case has simulator validation
 ```

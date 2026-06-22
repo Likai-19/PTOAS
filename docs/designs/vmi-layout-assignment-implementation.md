@@ -876,13 +876,13 @@ the case catalog.
 Current broad runtime sweep:
 
 ```text
-WORK_SPACE=$PWD/.tmp/vmi-runtime-batch-40 CASE_PREFIX='vmi/' JOBS=4 \
+WORK_SPACE=$PWD/.tmp/vmi-runtime-batch-dynamic-mask CASE_PREFIX='vmi/' JOBS=4 \
   test/vpto/scripts/run_host_vpto_validation_parallel.sh
 
 PASS=40 FAIL=0
-summary: .tmp/vmi-runtime-batch-40/parallel-summary.tsv
+summary: .tmp/vmi-runtime-batch-dynamic-mask/parallel-summary.tsv
 log scan: rg -n "RV_|alignment|\[ERROR\]|\[error\]|ERROR" \
-  .tmp/vmi-runtime-batch-40.log
+  .tmp/vmi-runtime-batch-dynamic-mask.log
 result: no matches
 ```
 
@@ -1066,10 +1066,20 @@ reduce:
 ```text
 lit:
   test/lit/vmi/vmi_layout_assignment_masked_load_group_tail_s32.pto
-  test/lit/vmi/vmi_layout_assignment_create_group_mask_s32_dynamic.pto
 
 runtime SIM:
   test/vpto/cases/vmi/masked-load-group-tail-s32-reduce-store
+```
+
+Current checked-in lit coverage for 3.45 dynamic S=32 `create_group_mask`:
+
+```text
+lit:
+  test/lit/vmi/vmi_layout_assignment_create_group_mask_s32_dynamic.pto
+
+runtime SIM:
+  blocked by the current dynamic scalar source gap for vector kernels; see
+  known implementation gaps below
 ```
 
 Current checked-in runtime coverage for 3.12 control-flow join before S=32
