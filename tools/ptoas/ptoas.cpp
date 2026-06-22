@@ -20,6 +20,8 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/IR/IRMapping.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/InitAllDialects.h"
 #include "mlir/InitAllPasses.h"
 #include "mlir/Parser/Parser.h"
@@ -2804,6 +2806,117 @@ static LogicalResult verifyNoPublicVMISignature(ModuleOp module) {
   return failure(result.wasInterrupted());
 }
 
+static bool containsVMIPhysicalType(Type type) {
+  if (isa<pto::VRegType, pto::MaskType>(type))
+    return true;
+  if (auto functionType = dyn_cast<FunctionType>(type)) {
+    return llvm::any_of(functionType.getInputs(), containsVMIPhysicalType) ||
+           llvm::any_of(functionType.getResults(), containsVMIPhysicalType);
+  }
+  return false;
+}
+
+static bool isPrivatePhysicalVMIHelper(func::FuncOp func) {
+  return !func.isPublic() && !func.isExternal() &&
+         func.getBody().hasOneBlock() &&
+         containsVMIPhysicalType(func.getFunctionType());
+}
+
+static LogicalResult inlinePrivatePhysicalVMIHelperCall(func::CallOp call,
+                                                       func::FuncOp callee) {
+  if (callee.isExternal())
+    return call.emitOpError("callee must have a body before inlining");
+  if (!callee.getBody().hasOneBlock())
+    return call.emitOpError("callee must be single-block before inlining");
+
+  Block &entry = callee.getBody().front();
+  if (entry.getNumArguments() != call.getNumOperands())
+    return call.emitOpError("callee argument count mismatch during inlining");
+
+  auto returnOp = dyn_cast<func::ReturnOp>(entry.getTerminator());
+  if (!returnOp)
+    return call.emitOpError("callee must terminate with func.return");
+  if (returnOp.getNumOperands() != call.getNumResults())
+    return call.emitOpError("callee return/result arity mismatch during inlining");
+
+  OpBuilder builder(call);
+  IRMapping mapping;
+  for (auto [arg, operand] : llvm::zip(entry.getArguments(), call.getOperands()))
+    mapping.map(arg, operand);
+
+  for (Operation &op : entry.without_terminator()) {
+    Operation *newOp = builder.clone(op, mapping);
+    for (auto [oldResult, newResult] :
+         llvm::zip(op.getResults(), newOp->getResults()))
+      mapping.map(oldResult, newResult);
+  }
+
+  for (auto [callResult, returnOperand] :
+       llvm::zip(call.getResults(), returnOp.getOperands()))
+    callResult.replaceAllUsesWith(mapping.lookup(returnOperand));
+
+  call.erase();
+  return success();
+}
+
+static LogicalResult inlinePrivatePhysicalVMIHelpersInModule(ModuleOp module) {
+  bool madeProgress = true;
+  while (madeProgress) {
+    madeProgress = false;
+
+    SmallVector<func::CallOp, 16> calls;
+    module.walk([&](func::CallOp call) { calls.push_back(call); });
+
+    for (func::CallOp call : calls) {
+      if (!call || !call->getBlock())
+        continue;
+
+      func::FuncOp caller = call->getParentOfType<func::FuncOp>();
+      auto calleeAttr = call.getCalleeAttr();
+      if (!caller || !calleeAttr)
+        continue;
+
+      func::FuncOp callee =
+          SymbolTable::lookupNearestSymbolFrom<func::FuncOp>(
+              call, calleeAttr.getAttr());
+      if (!callee || !isPrivatePhysicalVMIHelper(callee))
+        continue;
+      if (callee == caller)
+        return call.emitOpError("recursive private VMI helper call cannot be "
+                                "inlined before VPTO emission");
+
+      if (failed(inlinePrivatePhysicalVMIHelperCall(call, callee)))
+        return failure();
+      madeProgress = true;
+    }
+  }
+
+  SymbolTable symbolTable(module);
+  SmallVector<func::FuncOp, 8> deadFuncs;
+  for (func::FuncOp func : module.getOps<func::FuncOp>()) {
+    if (!isPrivatePhysicalVMIHelper(func))
+      continue;
+    auto uses = symbolTable.getSymbolUses(func, module);
+    if (uses && uses->empty())
+      deadFuncs.push_back(func);
+  }
+  for (func::FuncOp func : deadFuncs)
+    func.erase();
+
+  return success();
+}
+
+static LogicalResult inlinePrivatePhysicalVMIHelpers(ModuleOp module) {
+  if (failed(inlinePrivatePhysicalVMIHelpersInModule(module)))
+    return failure();
+  WalkResult result = module.walk([&](ModuleOp nestedModule) {
+    if (failed(inlinePrivatePhysicalVMIHelpersInModule(nestedModule)))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  return failure(result.wasInterrupted());
+}
+
 static LogicalResult runVMISemanticPipeline(OwningOpRef<ModuleOp> &module) {
   if (failed(verifyNoPublicVMISignature(module.get())))
     return failure();
@@ -2819,6 +2932,10 @@ static LogicalResult runVMISemanticPipeline(OwningOpRef<ModuleOp> &module) {
     return failure();
   if (failed(pm.run(module.get()))) {
     llvm::errs() << "Error: VMI-to-VPTO pipeline failed.\n";
+    return failure();
+  }
+  if (failed(inlinePrivatePhysicalVMIHelpers(module.get()))) {
+    llvm::errs() << "Error: failed to inline private VMI physical helpers.\n";
     return failure();
   }
   return success();
