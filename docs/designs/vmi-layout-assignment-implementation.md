@@ -692,6 +692,138 @@ Canonical assigned IR shape for `group_broadcast` multi-use:
 If the assigned IR does not have one of these explicit shapes, `vmi-to-vpto`
 must reject it instead of attempting to recover the missing decision.
 
+### 6.6 Case-To-Implementation Closure Matrix
+
+The current case catalog is sufficient for the first implementation.  No new
+layout kind is justified by the supported endpoints.  The implementation work
+should instead close the following finite matrix.  Each row names the request
+builder that owns the decision, the assignment artifact that must appear in IR,
+and the `vmi-to-vpto` contract.
+
+```text
+case family                     builder / owner             assignment artifact
+3.1, 3.2, 3.3 dense casts       buildCastRequests           dense layout on each cast result
+3.29 mask width split           buildMaskRequests           per-use mask granularity helper
+3.31, 3.32 dense fanout         conflict resolver           cloned load or ensure_layout
+
+vmi-to-vpto contract:
+  consume only the assigned dense layouts.  It may emit VCVT and dense
+  materialization, but it must not choose deinterleaved=2/4 by inspecting a
+  later truncf, store, or group_reduce user.
+```
+
+```text
+case family                     builder / owner             assignment artifact
+3.4 S=8 reduce                  buildGroupReduceRequests    s8_reduce_contiguous plan
+3.5 S=16 reduce                 buildGroupReduceRequests    s16_reduce_parity/block8 plan
+3.6 S=32 reduce                 buildGroupReduceRequests    s32_reduce_dintlv4/block8 plan
+3.7 S=64 reduce                 buildGroupReduceRequests    s64_reduce_row_local plan
+3.11.1 S=64 active-row tail     buildMaskRequests           active-row store/reduce masks
+3.19.1 S=16 block_elems choice  buildGroupReduceRequests    selected block_elems reduce plan
+3.38 multi-tile S=32 reduce     buildGroupReduceRequests    multiple group_slots chunks
+3.26 grouped tail               buildMaskRequests           split grouped masks
+3.44, 3.45 grouped S=32 masks   buildMaskRequests           explicit deinterleaved mask values
+
+vmi-to-vpto contract:
+  lower each reduce from source layout, result group_slots layout, and
+  selected_plan.  It must not walk to the load/group_load producer to decide
+  parity versus block8, row-local versus packed slots, or static versus dynamic
+  mask generation.
+```
+
+```text
+case family                     builder / owner             assignment artifact
+3.15.1 S=16 row stride 16       buildGroupMemoryRequests    block_elems=8 group_load plan
+3.15.2 S=16 row stride > 16     buildGroupMemoryRequests    strided block_elems=8 plan
+3.16.1 group_slot_load slots=8  buildGroupMemoryRequests    unit-stride packed slots plan
+3.16.2 group_slot_load slots=1  buildGroupMemoryRequests    row-local aligned slots plan
+3.27 strided group_load         buildGroupMemoryRequests    positive block_elems=8 plan
+3.28 slots=1 non-unit load      buildGroupMemoryRequests    row-local group_slot_load plan
+3.37 slots=1 strided store      buildStoreRequests          group_store stride/alignment proof
+3.39 strided load fanout        conflict resolver           preserving layout or materialization
+
+vmi-to-vpto contract:
+  consume only explicit memory stride/alignment attrs, selected_plan, and
+  layouts.  It must not infer safe read/write placement from neighboring
+  compute ops.  Unsupported dynamic, unaligned, or compact-row gather shapes
+  stay diagnostics until a gather plan is registered.
+```
+
+```text
+case family                     builder / owner             assignment artifact
+3.8 reduce->truncf->broadcast   conflict resolver           slot cast plus dense materialization
+3.10 non-load S=32 producer     buildElementwiseRequests    transparent deinterleaved chain
+3.17 broadcast deint consumer   conflict resolver           use-site group_broadcast layout
+3.18 dense + reduce users       conflict resolver           clone/rematerialize/ensure_layout
+3.23 broadcast multi-user       conflict resolver           cloned group_broadcast
+3.33 S=16 + S=32 users          conflict resolver           cloned load or materialization
+3.34 S=64 slots=1 cast          buildCastRequests           group_slot_cast selected plan
+3.35 slots fanout               buildElementwiseRequests    same group_slots layout on users
+3.36 scalar slots=8/slots=1     conflict resolver           cloned group_slot_load/broadcast
+3.40 scalar dense + grouped     conflict resolver           cloned broadcast
+3.41 incompatible fixed value   conflict resolver           diagnostic or ensure_layout
+
+vmi-to-vpto contract:
+  each op instance is already single-plan.  The lowering pass never scans
+  sibling users to decide whether to clone, pack, broadcast, or materialize.
+```
+
+```text
+case family                     builder / owner             assignment artifact
+3.21 S=32 safe full-read tail    buildMaskRequests           full_read_elems memory proof
+3.24 mask/select/store          buildMaskRequests           explicit mask layout/granularity
+3.12 scf.if before reduce       buildControlFlowRequests    common yielded layout
+3.20 group_slots scf.if         buildControlFlowRequests    common group_slots layout
+3.22 scf.for carried value      buildControlFlowRequests    fixed-point iter_arg layout
+3.25 function boundary          buildFunctionBoundary       specialized/internal boundary
+3.42 loop accumulator           buildControlFlowRequests    loop-carried group_slots layout
+3.43 call argument materialize  buildFunctionBoundary       callee-entry/return helper
+
+vmi-to-vpto contract:
+  block argument, region result, call operand, and function result layouts are
+  visible in types or helper ops.  It must not inspect branch bodies, loop
+  bodies, callers, or callees to discover a layout.
+```
+
+```text
+diagnostic family               builder / owner             required failure
+3.7.4 slots=1 unit-stride store buildStoreRequests          no aligned row-local store plan
+3.9 dense store of group slots  buildStoreRequests          use group_store/group_broadcast
+3.11.2 S=32 unsafe tail         buildMaskRequests           missing full_tile_readable/gather
+3.13 slots=8 width cast         buildCastRequests           no packed slot cast plan
+3.14 unsupported group size     buildGroupReduceRequests    no registered reduce plan
+3.15.3 compact S=12            buildGroupMemoryRequests    no compact gather plan
+3.16.1 slots=8 non-unit load    buildGroupMemoryRequests    no packed strided slot load plan
+3.16.2 slots=1 bad stride       buildGroupMemoryRequests    no dynamic/unaligned row-local plan
+3.19.2 invalid block_elems use  conflict resolver           no preserving materialization
+3.25.2 public/external ABI      buildFunctionBoundary       no stable public VMI ABI
+3.27 unaligned group_load       buildGroupMemoryRequests    no gather/block fallback plan
+3.30 masked_load unsafe tail    buildMaskRequests           no padding/gather fallback
+
+vmi-to-vpto contract:
+  these cases must fail before or at the layout contract boundary with the
+  requesting op named.  They must not be accepted by falling back to a generic
+  dense load, dense store, or producer/user inspection.
+```
+
+Additional cases are needed only when the scope changes:
+
+```text
+stable gather fallback enabled:
+  add compact S=12 positive lowering and masked_load unsafe-tail positive
+  lowering before accepting either path.
+
+pack-to-slots=8 or unaligned row-local stores enabled:
+  add positive S=64 unit-stride group_store and reduce->pack->dense store cases.
+
+public VMI ABI enabled:
+  add public call/return ABI cases before removing the public-boundary
+  diagnostic.
+
+packed group-slot width cast enabled:
+  add slots=8 f32->f16 cast and downstream group_store/broadcast cases.
+```
+
 ## 7. OneToN Type Conversion
 
 `vmi-to-vpto` should use OneToN conversion for VMI values.
@@ -1648,8 +1780,7 @@ lit:
   test/lit/vmi/vmi_to_vpto_stable_gather_masked_load_todo_invalid.pto
 ```
 
-Known implementation gaps before all catalog cases can become runtime SIM
-coverage:
+Capability boundaries and runtime evidence notes:
 
 ```text
 private physical function ABI:
@@ -1745,14 +1876,22 @@ public ABI diagnostic
 
 ## 13. Completion Checklist
 
-The implementation is not complete until:
+Current evidence for the case-catalog objective:
 
 ```text
-1. every case has a layout-assignment test
-2. every positive case has a vmi-to-vpto test
-3. every simulator-supported case has a sim validation
-4. every unsupported case has a diagnostic test
-5. vmi-to-vpto contains no producer/user context inference
-6. missing selected_plan on context-sensitive ops is a hard failure
-7. release docs are updated only after the design stabilizes
+1. every catalog endpoint is mapped in section 6.6 to an assignment owner,
+   assignment artifact, and vmi-to-vpto contract
+2. every SIM-backed positive endpoint is listed in section 11.3 and has a
+   checked-in runtime case directory
+3. every runtime case directory contains kernel.pto, launch.cpp, main.cpp,
+   golden.py, and compare.py
+4. the latest broad VMI runtime sweep passed: PASS=43 FAIL=0
+5. the latest full VMI lit sweep passed: 314/314
+6. every unsupported endpoint listed in section 11.3 has a diagnostic lit test
+7. vmi-to-vpto context-sensitive decisions are represented by assigned layouts,
+   selected_plan, helper ops, rematerialization, or diagnostics
+8. missing selected_plan on registered context-sensitive shapes is a hard
+   validation failure
+9. release docs remain untouched; this is still a design/implementation plan
+   under docs/designs
 ```
