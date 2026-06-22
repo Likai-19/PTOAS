@@ -422,6 +422,117 @@ one mask used by f32 and f16 consumers:
   vmi-to-vpto consumes the assigned per-use mask materialization
 ```
 
+### 5.5 Case-Driven Request Matrix
+
+The first implementation should build requests from the following finite table.
+This table is deliberately case-derived; adding a new request kind requires a
+new catalog case or a proof that it is equivalent to one listed here.
+
+```text
+dense store:
+  requests dense contiguous source
+  if source is deinterleaved, assignment must insert ensure_layout or select a
+  store plan such as vstsx2 that consumes the assigned layout explicitly
+
+truncf f32 -> f16:
+  requests source deinterleaved=2, block_elems=1
+  requests result contiguous f16
+
+truncf f32 -> f8:
+  requests source deinterleaved=4, block_elems=1
+  requests result contiguous f8
+
+group_reduce S=8:
+  requests source contiguous
+  requests result group_slots(num_groups, slots=8)
+
+group_reduce S=16:
+  requests source deinterleaved=2, block_elems=1 or block_elems=8
+  requests result group_slots(num_groups, slots=8)
+
+group_reduce S=32:
+  requests source deinterleaved=4, block_elems=1 or block_elems=8
+  requests result group_slots(num_groups, slots=8)
+
+group_reduce S=64:
+  requests source contiguous
+  requests result group_slots(num_groups, slots=1)
+
+group_broadcast:
+  requests source group_slots(num_groups, slots=K)
+  produces one dense result layout per consumer request
+  is cloned per incompatible dense consumer
+
+group_store:
+  requests source group_slots(num_groups, slots=K)
+  selected plan also records output stride legality
+
+group_slot_load:
+  requests result group_slots(num_groups, slots=8) for packed unit-stride slots
+  requests result group_slots(num_groups, slots=1) for row-local aligned slots
+
+group_load:
+  requests result deinterleaved=2/4, block_elems=8 for S=16/S=32 block
+  fragment plans, or contiguous for row-local full-chunk plans
+
+masked_load:
+  requests result layout from its consumers
+  requests mask layout matching the result
+  requires explicit passthrough; padding is not synthesized
+
+create_mask/create_group_mask:
+  produces whichever mask layout each consumer requests
+  may be cloned per incompatible mask layout or granularity
+```
+
+Important negative requests:
+
+```text
+ordinary dense add/mul/store/truncf cannot request group_slots
+packed group_slots(slots=8) cannot request width-changing cast unless a packed
+slot-preserving cast plan is registered
+slots=1 group_store cannot request unit-stride row-major output until a pack or
+unaligned-store plan exists
+```
+
+### 5.6 Conflict Resolution Matrix
+
+When one value receives incompatible requests, assignment resolves it using the
+first legal row below.  `vmi-to-vpto` never repeats this decision.
+
+```text
+cheap producer with multiple requested layouts:
+  clone the producer and assign each clone independently
+  examples: load, broadcast, create_mask, create_group_mask, group_broadcast
+  memory-read producers require the same explicit no-alias and safe-read proof
+  at each clone site
+
+non-cheap value with registered materialization:
+  keep one chosen layout on the value and insert ensure_layout at the use site
+  examples: deinterleaved=4 -> contiguous before dense store
+
+layout-transparent chain:
+  assign the whole equivalence class to the non-contiguous consumer request when
+  that avoids materialization
+  examples: broadcast -> addf -> S=32 group_reduce
+
+control-flow join:
+  all incoming values must be materialized to one layout before yield/branch
+  examples: scf.if yielding group_slots, scf.for loop-carried group_slots
+
+private function boundary:
+  specialize or materialize at call/callee-entry before vmi-to-vpto
+
+no clone/materialization/specialization plan:
+  emit a diagnostic naming the requesting op and both layouts
+```
+
+The cost model may choose between legal rows only when the observable contract
+is identical.  For example, S=16 `block_elems=1` and `block_elems=8` are both
+valid reduce inputs, but `block_elems=8` is selected only when a producer plan
+such as strided `group_load` naturally creates 32B row fragments or when cost
+proves it cheaper without breaking another consumer such as `truncf`.
+
 ## 6. Layout Assignment Algorithm
 
 `vmi-layout-assignment` is module-level.  It must see function/call/control-flow
