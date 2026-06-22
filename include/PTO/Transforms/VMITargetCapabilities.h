@@ -42,6 +42,8 @@ enum class VMIElementPurpose {
 enum class VMIReductionKind {
   AddI,
   AddF,
+  GroupAddI,
+  GroupAddF,
   MaxF,
   MinF,
 };
@@ -229,11 +231,26 @@ public:
           "currently supports only 32-bit integer elements because narrow "
           "vcadd widens its result");
     case VMIReductionKind::AddF:
-      if (elementType.isF32())
+      if (elementType.isF16() || elementType.isF32())
         return VMICapabilityResult::supported();
       return VMICapabilityResult::missingCapability(
-          "currently supports only f32 elements; f16 requires an explicit "
-          "accumulator precision and rounding contract");
+          "currently supports only f16/f32 elements for floating-point "
+          "reduction");
+    case VMIReductionKind::GroupAddI: {
+      auto intType = dyn_cast<IntegerType>(elementType);
+      if (intType && intType.getWidth() == 32)
+        return VMICapabilityResult::supported();
+      return VMICapabilityResult::missingCapability(
+          "grouped integer add reduction supports only i32 accumulator "
+          "elements because narrow integer reductions widen their result; "
+          "cast i8/i16 storage before grouped reduction");
+    }
+    case VMIReductionKind::GroupAddF:
+      if (elementType.isF16() || elementType.isF32())
+        return VMICapabilityResult::supported();
+      return VMICapabilityResult::missingCapability(
+          "grouped floating-point add reduction supports f16/f32 accumulator "
+          "elements");
     case VMIReductionKind::MaxF:
     case VMIReductionKind::MinF:
       if (elementType.isF16() || elementType.isF32())

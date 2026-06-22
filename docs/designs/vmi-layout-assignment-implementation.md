@@ -98,7 +98,7 @@ pto-validate-vmi-layout-ir:
   fail before `vmi-to-vpto`.  It also checks the first semantic local-recipe
   families, non-contiguous `pto.vmi.store`/`pto.vmi.tile_write`, block8
   `pto.vmi.group_load`, `pto.vmi.group_slot_load`, group_slots
-  `pto.vmi.group_store`, group_slots `pto.vmi.group_reduce_addf`,
+  `pto.vmi.group_store`, group_slots `pto.vmi.group_reduce_add{f|i}`,
   explicit-slots `pto.vmi.group_broadcast`, `pto.vmi.truncf`,
   `pto.vmi.extf`, and `pto.vmi.bitcast`, at the layout gate.
 
@@ -294,7 +294,7 @@ Local-decision table for the current implementation:
 op                         local decision inputs
 group_load                 result layout, num_groups, row_stride, source type
 group_slot_load            result group_slots layout and source_group_stride
-group_reduce_addf          source/mask/result layouts, num_groups, reassoc
+group_reduce_add{f|i}      source/mask/result layouts, num_groups, typed reduce semantics
 group_broadcast            source/result layouts and num_groups
 truncf                     source/result layouts and element widths
 ensure_layout              always carries source/result layouts instead of recipe
@@ -329,8 +329,8 @@ error.
 Examples of forbidden recovery in `vmi-to-vpto`:
 
 ```text
-group_reduce_addf cannot walk to a load/group_load producer to choose S=16
-  parity versus block8.
+group_reduce_add{f|i} cannot walk to a load/group_load producer to choose
+  two-vlane parity versus block8.
 group_store cannot inspect the group_reduce producer; it consumes only the
   assigned source layout and explicit stride.
 group_broadcast cannot inspect sibling users to decide whether to rematerialize.
@@ -354,18 +354,47 @@ create_group_mask
 
 extf
 truncf
+extsi
+extui
+trunci
 addf
+addi
 mulf
 select
 broadcast
 
 group_reduce_addf
+group_reduce_addi
 group_broadcast
 group_store
 
 ensure_layout                 // internal
 ensure_mask_layout            // internal
 ensure_mask_granularity       // internal
+```
+
+Type policy before lowering:
+
+```text
+storage / memory boundary:
+  f8-like, i8, f16, i16, f32, i32 may appear as load/store element types when
+  the target memory instruction supports the physical width.
+
+cast boundary:
+  f8-like may appear as extf/truncf source or destination.
+  i8 may appear as extsi/extui/trunci source or destination. Signedness is an
+  op semantic, not a VMI type spelling.
+  Current VPTO lowering supports 32-bit integer narrowing to unsigned i8
+  storage, matching the available VCVTII s32/u32 -> u8 forms; signed i8
+  narrowing needs a separate target recipe.
+
+compute / accumulator:
+  floating compute baseline: f16/f32, with reassoc required for reductions
+  that lower through pair-wise VPTO reductions.
+  integer compute baseline: i32 for grouped reduction; i8/i16 storage must
+  first cast to i32 because integer reduction instructions widen narrow inputs.
+  f8/i8 are not baseline accumulator/compute types. Supporting direct 8-bit
+  compute requires a target capability entry and a separate recipe family.
 ```
 
 Important semantic split:
@@ -462,13 +491,20 @@ group_slots group_store semantic recipes:
   slots=8 unit-stride vsts
   slots=1 aligned lane-0 vsts per group
 
-group_slots group_reduce_addf semantic recipes:
-  S=8 vcgadd
-  S=16 deinterleaved=2 vcgadd+vadd
-  S=32 deinterleaved=4 vcgadd+vadd tree
-  S>=physical_chunk_lanes contiguous slots=1 vcadd/vadd/vsel row-local
-  reduction, with one physical result part per group.  For f32 this covers
-  S=64, S=128, S=256, ...
+group_slots group_reduce_add{f|i} semantic recipes:
+  define E = sizeof(T), VLaneElems = 32B / E, L = 256B / E, S = N / G.
+  T is the accumulator/reduce element type after any required storage cast.
+  f8 storage reduces through f32; i8 storage reduces through an explicit
+  signed/unsigned integer cast to an accumulator type such as i32.  In the
+  baseline contract, f8/i8 are cast-boundary storage types rather than
+  accumulator/compute types.
+  S=VLaneElems contiguous vcgadd
+  S=2*VLaneElems deinterleaved=2 vcgadd+vadd
+  S=4*VLaneElems deinterleaved=4 vcgadd+vadd tree
+  S>=L && S%L==0 contiguous slots=1 vcadd/vadd/vsel row-local reduction,
+  with one physical result part per group. For 32-bit element types this covers
+  S=64, S=128, S=256, ...; for 16-bit element types this covers S=128, S=256,
+  ...
 
 explicit-slots group_broadcast semantic recipes:
   slots=8/slots=1 vselr materialization to contiguous or supported
@@ -480,6 +516,14 @@ extf/truncf semantic recipes:
   deinterleaved=2 f32 -> contiguous f16
   deinterleaved=4 f32 -> contiguous f8-like
   group_slots(G, slots=1) f32 -> f16
+
+extsi/extui/trunci semantic recipes:
+  contiguous i8 -> deinterleaved=2 i16 through VCVTII.{s,u}82{s,u}16 #part
+  contiguous i8 -> deinterleaved=4 i32 through VCVTII.{s,u}82{s,u}32 #pp
+  deinterleaved=2 i16 -> contiguous i8 through VCVTII.*162*8 #part
+  deinterleaved=4 i32 -> contiguous ui8 through VCVTII.*322u8 #pp
+  packed group_slots integer width-changing cast is unsupported until a
+  slot-wise cast recipe is defined.
 
 bitcast semantic recipes:
   per-part vbitcast for contiguous/deinterleaved layouts when source/result
@@ -651,13 +695,15 @@ buildCastRequests:
   exists
 
 buildGroupReduceRequests:
-  derive S = logical_lanes / num_groups
-  S=8  -> contiguous source, group_slots(G,8) result
-  S=16 -> deinterleaved=2/block_elems=1 or block_elems=8 source,
-          group_slots(G,8) result
-  S=32 -> deinterleaved=4/block_elems=1 or block_elems=8 source,
-          group_slots(G,8) result
-  S=64 -> contiguous source, group_slots(G,1) result
+  derive E = sizeof(accumulator type), VLaneElems = 32B / E,
+  L = 256B / E, and S = logical_lanes / num_groups
+  S=VLaneElems -> contiguous source, group_slots(G,8) result
+  S=2*VLaneElems -> deinterleaved=2/block_elems=1 or block_elems=8 source,
+                    group_slots(G,8) result
+  S=4*VLaneElems -> deinterleaved=4/block_elems=1 or block_elems=8 source,
+                    group_slots(G,8) result
+  S>=L && S%L==0 -> contiguous source, group_slots(G,1) result
+  8-bit storage must be cast to an accumulator type before this request builder
   other S -> diagnostic unless an explicit fallback recipe is enabled
 
 buildGroupMemoryRequests:
@@ -866,10 +912,10 @@ vmi-to-vpto contract:
 
 ```text
 case family                     builder / owner             assignment artifact
-3.4 S=8 reduce                  buildGroupReduceRequests    s8_reduce_contiguous recipe
-3.5 S=16 reduce                 buildGroupReduceRequests    s16_reduce_parity/block8 recipe
-3.6 S=32 reduce                 buildGroupReduceRequests    s32_reduce_dintlv4/block8 recipe
-3.7 S=64 reduce                 buildGroupReduceRequests    s64_reduce_row_local recipe
+3.4 32-bit S=8 reduce           buildGroupReduceRequests    one_vlane contiguous recipe
+3.5 32-bit S=16 reduce          buildGroupReduceRequests    two_vlane parity/block8 recipe
+3.6 32-bit S=32 reduce          buildGroupReduceRequests    four_vlane dintlv4/block8 recipe
+3.7 32-bit S=64 reduce          buildGroupReduceRequests    full_chunk row_local recipe
 3.11.1 S=64 active-row tail     buildMaskRequests           active-row store/reduce masks
 3.19.1 S=16 block_elems choice  buildGroupReduceRequests    explicit block_elems layout
 3.38 multi-tile S=32 reduce     buildGroupReduceRequests    multiple group_slots chunks
@@ -1065,34 +1111,34 @@ group_load, recipe=group_load_contiguous_chunks:
   emits one vlds per physical group chunk using row_stride address arithmetic
   covers the currently implemented full-chunk row-local group_load path
 
-group_reduce_addf, recipe=s8_reduce_contiguous:
-  consumes contiguous f32 with group size 8
+group_reduce_add{f|i}, recipe=one_vlane_reduce_contiguous:
+  consumes contiguous accumulator type T with group size VLaneElems(T)
   produces group_slots(G, slots=8)
   emits one vcgadd
 
-group_reduce_addf, recipe=s16_reduce_parity:
+group_reduce_add{f|i}, recipe=two_vlane_reduce_deinterleaved:
   consumes deinterleaved=2, block_elems=1
   produces group_slots(G, slots=8)
   emits two vcgadd operations and one vadd
 
-group_reduce_addf, recipe=s16_reduce_block8:
+group_reduce_add{f|i}, recipe=two_vlane_reduce_block8:
   consumes deinterleaved=2, block_elems=8
   produces group_slots(G, slots=8)
   emits two vcgadd operations and one vadd
 
-group_reduce_addf, recipe=s32_reduce_dintlv4:
+group_reduce_add{f|i}, recipe=four_vlane_reduce_dintlv4:
   consumes deinterleaved=4, block_elems=1
   produces group_slots(G, slots=8)
   emits four vcgadd operations and a vadd tree
 
-group_reduce_addf, recipe=s32_reduce_block8_stride:
+group_reduce_add{f|i}, recipe=four_vlane_reduce_block8_stride:
   consumes deinterleaved=4, block_elems=8
   produces group_slots(G, slots=8)
   emits four vcgadd operations and a vadd tree
 
-group_reduce_addf, recipe=full_chunk_reduce_row_local:
-  consumes contiguous f32 with group size that is a multiple of one physical
-  chunk
+group_reduce_add{f|i}, recipe=full_chunk_reduce_row_local:
+  consumes contiguous accumulator type T with group size that is a multiple of
+  one physical chunk L(T)
   produces group_slots(G, slots=1)
   target lowering emits per-row vcgadd plus vcadd; the current prototype uses
   the existing row-local VCADD/VADD/VSEL sequence while preserving the same
@@ -1150,6 +1196,9 @@ group_reduce_addf:
   #pto.vmi.layout<num_groups = G, slots = 1> and has focused
   layout-assignment/vmi-to-vpto lit coverage; the explicit slots=1 generic
   VCADD row-local path is registered and selected locally.
+  group_reduce_addi is implemented for i32 accumulator values.  i8/i16 storage
+  must be widened explicitly before grouped reduction because narrow integer
+  reduction instructions widen their result.
 
 group_broadcast:
   explicit slots=8/1 source layouts select
@@ -1199,18 +1248,69 @@ group_store:
   design target unless a strided packed-lane store recipe is made explicit.
 ```
 
+Current implementation contract for type-generic grouped reduction:
+
+```text
+ODS/verifiers:
+  pto.vmi.group_reduce_addi is the integer counterpart to group_reduce_addf.
+  group_reduce_addi accepts i32 accumulator element types; i8/i16 direct
+  grouped reduction is rejected with a diagnostic that points users to
+  extsi/extui.
+  extsi/extui/trunci carry integer signedness across storage/accumulator
+  boundaries without overloading add semantics.
+
+Layout assignment:
+  compute VLaneElems and L from the accumulator/reduce element type:
+    VLaneElems = 32B / sizeof(accumulator T)
+    L          = 256B / sizeof(accumulator T)
+  use the same S formula for f16/f32/i32 once the typed reduce op and target
+  capability say the type is legal.
+  route f8 storage through extf to f32 before group_reduce_addf.
+  route i8/i16 storage through extsi/extui to i32 before group_reduce_addi.
+  route integer narrowing to i8 through trunci; direct i8 compute remains
+  illegal unless the target capability registry exposes an explicit recipe.
+  diagnose direct f8/i8 compute use with a message that points at the offending
+  op and suggests inserting the explicit cast when the op is meant to consume
+  storage data.
+
+Local recipe registry:
+  replace f32-shaped recipe keys with width-parametric recipe classes:
+    one_vlane_reduce
+    two_vlane_reduce_deinterleaved
+    four_vlane_reduce_deinterleaved
+    full_chunk_row_local_reduce
+  key legality on accumulator byte width, source/mask layout, result
+  group_slots layout, num_groups, and target instruction capability.
+
+VMI-to-VPTO:
+  lower group_reduce_addi through the same VCGADD/VADD skeleton used for
+  floating-point where the target supports the integer accumulator type.
+  materialize integer casts explicitly before reduction; direct i8 group reduce
+  and direct i16 group reduce must not silently become a widening reduction in
+  this pass.
+  keep VPTO lowering local: it consumes assigned layouts and registered local
+  recipes, but does not invent a new global layout plan.
+
+Tests:
+  cover f16 direct and i16-storage-to-i32 grouped reductions.
+  add i32 S=8/S=16/S=32/S=64 group-reduce cases.
+  add f8 storage -> extf -> f32 group_reduce_addf cases.
+  add i8/i16 storage -> extsi/extui -> i32 group_reduce_addi cases.
+  add invalid direct f8/i8/i16 grouped-reduce diagnostics.
+```
+
 Examples:
 
 ```text
-group_reduce_addf, recipe=s16_reduce_parity:
+group_reduce_add{f|i}, recipe=two_vlane_reduce_deinterleaved:
   consume deinterleaved=2, block_elems=1
   emit two VCGADDs and one VADD
 
-group_reduce_addf, recipe=s16_reduce_block8:
+group_reduce_add{f|i}, recipe=two_vlane_reduce_block8:
   consume deinterleaved=2, block_elems=8
   emit two VCGADDs and one VADD
 
-group_reduce_addf, recipe=s32_reduce_dintlv4:
+group_reduce_add{f|i}, recipe=four_vlane_reduce_dintlv4:
   consume deinterleaved=4
   emit four VCGADDs and reduction tree
 
