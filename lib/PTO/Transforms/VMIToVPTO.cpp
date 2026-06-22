@@ -18,6 +18,7 @@
 #include "PTO/IR/PTOTypeUtils.h"
 #include "PTO/IR/VMIUtils.h"
 #include "PTO/Transforms/Passes.h"
+#include "PTO/Transforms/VMILocalRecipeRegistry.h"
 #include "PTO/Transforms/VMITargetCapabilities.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -1200,24 +1201,9 @@ checkSupportedGroupLoadShape(const VMITargetCapabilityRegistry &capabilities,
 
   if (resultLayout.isDeinterleaved() && resultLayout.getBlockElems() == 8 &&
       resultType.getElementType().isF32()) {
-    if ((*groupSize != 16 || resultLayout.getFactor() != 2) &&
-        (*groupSize != 32 || resultLayout.getFactor() != 4))
-      return fail("block8 strided group_load requires S=16/factor=2 or "
-                  "S=32/factor=4");
-    if (!isa<PtrType>(op.getSource().getType()))
-      return fail("block8 strided group_load requires !pto.ptr source");
-    if (op.getNumGroupsAttr().getInt() % 8 != 0)
-      return fail("block8 strided group_load requires num_groups multiple "
-                  "of 8");
-    std::optional<int64_t> rowStride = getConstantIndexValue(op.getRowStride());
-    if (!rowStride || *rowStride <= 0 || *rowStride % 8 != 0)
-      return fail("block8 strided group_load requires constant positive "
-                  "row_stride divisible by 8 f32 elements");
-    std::string fullChunkReason;
-    if (failed(checkFullDataPhysicalChunks(resultType, &fullChunkReason)))
-      return fail(Twine("block8 strided group_load requires full physical "
-                        "result chunks; ") +
-                  fullChunkReason);
+    VMILocalRecipeRegistry recipes;
+    if (failed(recipes.getGroupLoadRecipe(capabilities, op, reason)))
+      return failure();
     return success();
   }
 
@@ -1227,55 +1213,10 @@ checkSupportedGroupLoadShape(const VMITargetCapabilityRegistry &capabilities,
 LogicalResult checkSupportedGroupSlotLoadShape(
     const VMITargetCapabilityRegistry &capabilities, VMIGroupSlotLoadOp op,
     std::string *reason) {
-  auto fail = [&](const Twine &message) -> LogicalResult {
-    if (reason)
-      *reason = message.str();
+  VMILocalRecipeRegistry recipes;
+  if (failed(recipes.getGroupSlotLoadRecipe(capabilities, op, reason)))
     return failure();
-  };
-
-  auto resultType = cast<VMIVRegType>(op.getResult().getType());
-  VMILayoutAttr layout = resultType.getLayoutAttr();
-  if (!layout || !layout.isGroupSlots() ||
-      layout.getNumGroups() != op.getNumGroupsAttr().getInt() ||
-      layout.getSlots() <= 0)
-    return fail("requires explicit group_slots result layout matching "
-                "num_groups");
-
-  if (layout.getSlots() != 8 && layout.getSlots() != 1)
-    return fail("supports only slots=8 or slots=1 group_slot_load layouts");
-
-  if (!capabilities.supportsDirectMemory(op.getSource().getType(), "source")
-           .isSupported())
-    return fail("requires supported direct memory source");
-  if (!isa<PtrType>(op.getSource().getType()))
-    return fail("requires !pto.ptr source for vsldb lowering");
-  if (layout.getSlots() == 8) {
-    std::optional<int64_t> stride =
-        getConstantIndexValue(op.getSourceGroupStride());
-    if (!stride || *stride != 1)
-      return fail("slots=8 group_slot_load requires constant unit "
-                  "source_group_stride");
-    return success();
-  }
-  if (layout.getSlots() == 1) {
-    unsigned elementBits =
-        pto::getPTOStorageElemBitWidth(resultType.getElementType());
-    if (elementBits == 0 || 256 % elementBits != 0)
-      return fail("slots=1 group_slot_load requires an 8/16/32-bit element "
-                  "type");
-    int64_t alignedStrideElems = 256 / elementBits;
-    std::optional<int64_t> stride =
-        getConstantIndexValue(op.getSourceGroupStride());
-    if (!stride || *stride <= 0 || *stride % alignedStrideElems != 0)
-      return fail(Twine("slots=1 group_slot_load currently lowers as one "
-                        "lane-0 vsldb per group and requires constant "
-                        "positive source_group_stride divisible by ") +
-                  Twine(alignedStrideElems) +
-                  " elements for 32B load alignment; packed or unaligned "
-                  "scalar load lowering is not implemented");
-    return success();
-  }
-  llvm_unreachable("unsupported group_slot_load slots should be rejected");
+  return success();
 }
 
 LogicalResult
@@ -1301,46 +1242,10 @@ checkSupportedGroupStoreShape(const VMITargetCapabilityRegistry &capabilities,
     if (!accessPlan.targetCapability.isSupported())
       return fail(accessPlan.targetCapability.reason);
 
-    if (failed(checkSupportedMaskableVReg(capabilities, valueType, reason)))
+    VMILocalRecipeRegistry recipes;
+    if (failed(recipes.getGroupSlotsStoreRecipe(capabilities, op, reason)))
       return failure();
-
-    FailureOr<int64_t> arity = getVMIPhysicalArity(valueType);
-    if (failed(arity))
-      return fail("requires computable physical arity");
-    if (layout.getSlots() == 1) {
-      if (*arity != numGroups)
-        return fail("slots=1 group_store requires one physical part per "
-                    "group");
-      unsigned elementBits =
-          pto::getPTOStorageElemBitWidth(valueType.getElementType());
-      if (elementBits == 0 || 256 % elementBits != 0)
-        return fail("slots=1 group_store requires an 8/16/32-bit element "
-                    "type");
-      int64_t alignedStrideElems = 256 / elementBits;
-      std::optional<int64_t> rowStride =
-          getConstantIndexValue(op.getRowStride());
-      if (!rowStride || *rowStride <= 0 || *rowStride % alignedStrideElems != 0)
-        return fail(Twine("slots=1 group_store currently lowers as one "
-                          "lane-0 vsts per group and requires constant "
-                          "positive row_stride divisible by ") +
-                    Twine(alignedStrideElems) +
-                    " elements for 32B store alignment; packed or unaligned "
-                    "contiguous store lowering is not implemented");
-      return success();
-    }
-    if (layout.getSlots() == 8) {
-      std::optional<int64_t> rowStride =
-          getConstantIndexValue(op.getRowStride());
-      if (!rowStride || *rowStride != 1)
-        return fail("slots=8 group_store currently requires constant unit "
-                    "row_stride");
-      if (*arity != ceilDivNonNegative(numGroups, 8))
-        return fail("slots=8 group_store arity must equal ceil(num_groups / "
-                    "8)");
-      return success();
-    }
-    return fail("group_slots group_store currently supports only slots=1 or "
-                "unit-stride slots=8");
+    return success();
   }
 
   FailureOr<int64_t> groupSize = getGroupSizeFromNumGroups(
@@ -3309,6 +3214,13 @@ struct OneToNVMIEnsureLayoutOpPattern
                   OneToNPatternRewriter &rewriter) const override {
     auto sourceType = cast<VMIVRegType>(op.getSource().getType());
     auto resultType = cast<VMIVRegType>(op.getResult().getType());
+    VMILocalRecipeRegistry recipes;
+    std::string recipeReason;
+    if (failed(recipes.getDataLayoutMaterializationRecipe(
+            sourceType, resultType, &recipeReason)))
+      return rewriter.notifyMatchFailure(
+          op, Twine("ensure_layout has no registered materialization recipe: ") +
+                  recipeReason);
     VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
     VMILayoutAttr resultLayout = resultType.getLayoutAttr();
     if (!sourceLayout || !resultLayout)
@@ -3336,6 +3248,14 @@ struct OneToNVMIEnsureMaskLayoutOpPattern
                   OneToNPatternRewriter &rewriter) const override {
     auto sourceType = cast<VMIMaskType>(op.getSource().getType());
     auto resultType = cast<VMIMaskType>(op.getResult().getType());
+    VMILocalRecipeRegistry recipes;
+    std::string recipeReason;
+    if (failed(recipes.getMaskLayoutMaterializationRecipe(
+            sourceType, resultType, &recipeReason)))
+      return rewriter.notifyMatchFailure(
+          op,
+          Twine("ensure_mask_layout has no registered materialization recipe: ") +
+              recipeReason);
     if (sourceType.getGranularity() != resultType.getGranularity())
       return rewriter.notifyMatchFailure(
           op, "mask layout helper cannot also change granularity");
@@ -3367,6 +3287,14 @@ struct OneToNVMIEnsureMaskGranularityOpPattern
                   OneToNPatternRewriter &rewriter) const override {
     auto sourceType = cast<VMIMaskType>(op.getSource().getType());
     auto resultType = cast<VMIMaskType>(op.getResult().getType());
+    VMILocalRecipeRegistry recipes;
+    std::string recipeReason;
+    if (failed(recipes.getMaskGranularityMaterializationRecipe(
+            sourceType, resultType, &recipeReason)))
+      return rewriter.notifyMatchFailure(
+          op, Twine("ensure_mask_granularity has no registered materialization "
+                    "recipe: ") +
+                  recipeReason);
     if (sourceType.getLayout() != resultType.getLayout())
       return rewriter.notifyMatchFailure(
           op, "mask granularity helper cannot also change layout");
@@ -4549,7 +4477,6 @@ struct OneToNVMIStoreOpPattern : OneToNOpConversionPattern<VMIStoreOp> {
           op, "store requires known physical lanes per part");
     bool fullPhysicalChunks =
         succeeded(checkFullDataPhysicalChunks(valueVMIType, nullptr));
-
     FailureOr<Value> destination =
         getSingleValue(op, adaptor.getDestination(),
                        "store destination must convert to one value", rewriter);
@@ -4560,9 +4487,12 @@ struct OneToNVMIStoreOpPattern : OneToNOpConversionPattern<VMIStoreOp> {
       return failure();
 
     ValueRange valueParts = adaptor.getValue();
-    VMILayoutAttr valueLayout = valueVMIType.getLayoutAttr();
-    if (fullPhysicalChunks && valueLayout && valueLayout.isDeinterleaved() &&
-        valueLayout.getFactor() == 2) {
+    VMILocalRecipeRegistry localRecipes;
+    FailureOr<VMIContiguousStoreRecipe> storeRecipe =
+        localRecipes.getContiguousStoreRecipe(valueVMIType);
+    if (succeeded(storeRecipe) &&
+        storeRecipe->kind ==
+            VMIContiguousStoreRecipeKind::Deinterleaved2Vstsx2) {
       std::optional<std::string> dist =
           getX2MemoryDistToken(valueVMIType.getElementType(), "INTLV");
       if (dist && !valueParts.empty() && valueParts.size() % 2 == 0) {
@@ -5007,7 +4937,6 @@ struct OneToNVMITileWriteOpPattern : OneToNOpConversionPattern<VMITileWriteOp> {
           op, "tile_write requires known physical lanes per part");
     bool fullPhysicalChunks =
         succeeded(checkFullDataPhysicalChunks(valueVMIType, nullptr));
-
     FailureOr<Value> destination = getSingleValue(
         op, adaptor.getDestination(),
         "tile_write destination must convert to one value", rewriter);
@@ -5016,9 +4945,12 @@ struct OneToNVMITileWriteOpPattern : OneToNOpConversionPattern<VMITileWriteOp> {
 
     ValueRange valueParts = adaptor.getValue();
     Value zero = rewriter.create<arith::ConstantIndexOp>(op.getLoc(), 0);
-    VMILayoutAttr valueLayout = valueVMIType.getLayoutAttr();
-    if (fullPhysicalChunks && valueLayout && valueLayout.isDeinterleaved() &&
-        valueLayout.getFactor() == 2) {
+    VMILocalRecipeRegistry localRecipes;
+    FailureOr<VMIContiguousStoreRecipe> storeRecipe =
+        localRecipes.getContiguousStoreRecipe(valueVMIType);
+    if (succeeded(storeRecipe) &&
+        storeRecipe->kind ==
+            VMIContiguousStoreRecipeKind::Deinterleaved2Vstsx2) {
       std::optional<std::string> dist =
           getX2MemoryDistToken(valueVMIType.getElementType(), "INTLV");
       if (dist && !valueParts.empty() && valueParts.size() % 2 == 0) {
@@ -6862,145 +6794,26 @@ LogicalResult verifyNoResidualVMIIR(ModuleOp module) {
   return failure(result.wasInterrupted());
 }
 
-LogicalResult checkSupportedExtFShape(VMIExtFOp op) {
-  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
-  auto resultType = cast<VMIVRegType>(op.getResult().getType());
-  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
-  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
-  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
-  if (!sourceLayout || !resultLayout || failed(sourceArity) ||
-      failed(resultArity) || !sourceLayout.isContiguous() ||
-      !resultLayout.isDeinterleaved() || !resultType.getElementType().isF32())
+LogicalResult checkSupportedExtFShape(VMIExtFOp op,
+                                      std::string *reason = nullptr) {
+  VMILocalRecipeRegistry recipes;
+  if (failed(recipes.getExtFRecipe(op, reason)))
     return failure();
-
-  unsigned sourceBits =
-      pto::getPTOStorageElemBitWidth(sourceType.getElementType());
-  if (sourceBits == 16 && resultLayout.getFactor() == 2 &&
-      *resultArity == 2 * *sourceArity)
-    return success();
-  if (sourceBits == 8 && resultLayout.getFactor() == 4 &&
-      *resultArity == 4 * *sourceArity)
-    return success();
-  return failure();
+  return success();
 }
 
 LogicalResult checkSupportedTruncFShape(VMITruncFOp op,
                                         std::string *reason = nullptr) {
-  auto fail = [&](const Twine &message) -> LogicalResult {
-    if (reason)
-      *reason = message.str();
+  VMILocalRecipeRegistry recipes;
+  if (failed(recipes.getTruncFRecipe(op, reason)))
     return failure();
-  };
-
-  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
-  auto resultType = cast<VMIVRegType>(op.getResult().getType());
-  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
-  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
-  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
-  if (!sourceLayout || !resultLayout || failed(sourceArity) ||
-      failed(resultArity))
-    return fail("requires assigned source/result layouts and computable "
-                "physical arity");
-
-  unsigned resultBits =
-      pto::getPTOStorageElemBitWidth(resultType.getElementType());
-
-  if (sourceLayout.isGroupSlots() || resultLayout.isGroupSlots()) {
-    if (!sourceLayout.isGroupSlots() || !resultLayout.isGroupSlots() ||
-        sourceLayout.getNumGroups() != resultLayout.getNumGroups() ||
-        sourceLayout.getSlots() != 1 || resultLayout.getSlots() != 1 ||
-        !sourceType.getElementType().isF32() || resultBits != 16 ||
-        *sourceArity != *resultArity)
-      return fail("group-slot truncf requires matching "
-                  "group_slots(num_groups=G, slots=1) source/result layouts, "
-                  "f32 source, f16 result, and matching physical arity");
-
-    return success();
-  }
-
-  if (!sourceLayout.isDeinterleaved() || !resultLayout.isContiguous() ||
-      !sourceType.getElementType().isF32() || *resultArity != 1)
-    return fail("requires f32 deinterleaved source and contiguous result");
-
-  if (sourceLayout.getFactor() == 2 && *sourceArity == 2 && resultBits == 16)
-    return success();
-  if (sourceLayout.getFactor() == 4 && *sourceArity == 4 && resultBits == 8)
-    return success();
-  return fail("unsupported deinterleaved truncf factor, arity, or result "
-              "element width");
-}
-
-FailureOr<SmallVector<int64_t>>
-getPhysicalLogicalBitFootprint(VMIVRegType type) {
-  unsigned elementBits = pto::getPTOStorageElemBitWidth(type.getElementType());
-  if (elementBits == 0)
-    return failure();
-
-  FailureOr<int64_t> factor = getDataLayoutFactor(type);
-  FailureOr<int64_t> lanesPerPart = getDataLanesPerPart(type.getElementType());
-  if (failed(factor) || failed(lanesPerPart))
-    return failure();
-
-  SmallVector<int64_t> bits;
-  for (int64_t part = 0; part < *factor; ++part) {
-    FailureOr<int64_t> chunks = getDataChunksInPart(type, part);
-    if (failed(chunks))
-      return failure();
-    for (int64_t chunk = 0; chunk < *chunks; ++chunk) {
-      int64_t activeLanes = 0;
-      for (int64_t lane = 0; lane < *lanesPerPart; ++lane) {
-        FailureOr<bool> padding = isPaddingLane(type, part, chunk, lane);
-        if (failed(padding))
-          return failure();
-        if (!*padding)
-          ++activeLanes;
-      }
-      bits.push_back(activeLanes * static_cast<int64_t>(elementBits));
-    }
-  }
-  return bits;
+  return success();
 }
 
 LogicalResult checkSupportedBitcastShape(VMIBitcastOp op, std::string *reason) {
-  auto fail = [&](const Twine &message) -> LogicalResult {
-    if (reason)
-      *reason = message.str();
+  VMILocalRecipeRegistry recipes;
+  if (failed(recipes.getBitcastRecipe(op, reason)))
     return failure();
-  };
-
-  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
-  auto resultType = cast<VMIVRegType>(op.getResult().getType());
-  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
-  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
-  if (!sourceLayout || !resultLayout)
-    return fail("requires assigned source and result layouts");
-  if (sourceLayout != resultLayout)
-    return fail("requires matching source and result layouts");
-
-  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
-  if (failed(sourceArity) || failed(resultArity))
-    return fail("requires computable source and result physical arity");
-  if (*sourceArity != *resultArity)
-    return fail("requires source and result to have the same physical arity");
-
-  FailureOr<SmallVector<int64_t>> sourceBits =
-      getPhysicalLogicalBitFootprint(sourceType);
-  FailureOr<SmallVector<int64_t>> resultBits =
-      getPhysicalLogicalBitFootprint(resultType);
-  if (failed(sourceBits) || failed(resultBits))
-    return fail("requires computable physical logical bit footprints");
-  if (sourceBits->size() != resultBits->size())
-    return fail("requires source and result physical footprint counts to "
-                "match");
-  for (auto [source, result] : llvm::zip_equal(*sourceBits, *resultBits)) {
-    if (source != result)
-      return fail("requires matching logical bit footprint in every physical "
-                  "chunk");
-  }
-
   return success();
 }
 
@@ -7315,6 +7128,10 @@ LogicalResult checkSupportedGroupReduceAddFShape(
   if (!sourceLayout || !resultLayout || !maskLayout)
     return fail("requires assigned source, mask, and result layouts");
 
+  VMILocalRecipeRegistry recipes;
+  if (succeeded(recipes.getGroupReduceAddFRecipe(capabilities, op, nullptr)))
+    return success();
+
   FailureOr<int64_t> groupSize = getGroupSizeFromNumGroups(
       sourceType, op.getNumGroupsAttr().getInt(), reason);
   if (failed(groupSize))
@@ -7381,6 +7198,9 @@ LogicalResult checkSupportedGroupBroadcastShape(
   VMILayoutAttr resultLayout = resultType.getLayoutAttr();
   if (!sourceLayout || !resultLayout)
     return fail("requires assigned source/result layouts");
+  VMILocalRecipeRegistry recipes;
+  if (succeeded(recipes.getGroupBroadcastRecipe(capabilities, op, nullptr)))
+    return success();
   if (!sourceLayout.isGroupSlots() ||
       sourceLayout.getNumGroups() != op.getNumGroupsAttr().getInt())
     return fail("requires matching num_groups source layout");
@@ -8045,7 +7865,8 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     }
 
     if (auto extf = dyn_cast<VMIExtFOp>(op)) {
-      if (succeeded(checkSupportedExtFShape(extf)))
+      std::string reason;
+      if (succeeded(checkSupportedExtFShape(extf, &reason)))
         return WalkResult::advance();
 
       extf.emitError()
@@ -8053,7 +7874,8 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
           << "pto.vmi.extf supports contiguous 16-bit float-like or fp8-like "
              "physical source chunks to f32 deinterleaved=2/4 results; "
              "partial/tail is allowed only when source padding maps to result "
-             "padding";
+             "padding ("
+          << reason << ")";
       return WalkResult::interrupt();
     }
 

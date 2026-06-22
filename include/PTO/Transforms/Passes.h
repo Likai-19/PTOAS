@@ -114,6 +114,10 @@ LogicalResult validateVMILayoutAssignedIR(ModuleOp module,
 std::unique_ptr<Pass> createPTOValidateVMIIRPass();
 std::unique_ptr<Pass> createPTOValidateVMILayoutIRPass();
 std::unique_ptr<Pass> createVMILayoutAssignmentPass();
+std::unique_ptr<Pass> createVMILayoutFoldConsumersPass();
+std::unique_ptr<Pass> createVMILayoutRematerializePass();
+std::unique_ptr<Pass> createVMILayoutSinkMaterializationPass();
+std::unique_ptr<Pass> createVMILegalizeArithSelectPass();
 std::unique_ptr<Pass> createVMIToVPTOPass();
 std::unique_ptr<Pass> createExpandTileOpPass();
 std::unique_ptr<Pass> createExpandTileOpPass(const ExpandTileOpOptions &options);

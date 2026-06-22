@@ -125,8 +125,17 @@ pipeline:
 ```text
 pto-validate-vmi-ir
 vmi-layout-assignment
+canonicalize/cse
+vmi-layout-fold-consumers
+canonicalize/cse
+vmi-layout-rematerialize
+canonicalize/cse
+vmi-layout-sink-materialization
+canonicalize/cse
+vmi-legalize-arith-select
 pto-validate-vmi-layout-ir
 vmi-to-vpto
+canonicalize/cse
 ```
 
 `--enable-vmi` requires `--pto-backend=vpto` or `pto.backend = "vpto"` because the pipeline produces physical VPTO
@@ -145,6 +154,8 @@ vmi_ptoas_cli_pipeline.pto:
   --pto-backend=vpto + --enable-vmi lowers the VMI pipeline
   pto.backend = "vpto" also selects the VPTO-compatible path
   explicit --pto-backend=emitc with --enable-vmi is rejected
+  f16->f32 store lowers through the fold-consumers path, proving the driver
+  uses the optimized pipeline rather than only the hard skeleton
 
 vmi_ptoas_backend_required_invalid.pto:
   default emitc backend with --enable-vmi and no pto.backend = "vpto" is rejected
@@ -155,8 +166,9 @@ vmi_ptoas_public_abi_invalid.pto / vmi_ptoas_public_result_abi_invalid.pto:
 
 ## MLIR Framework Usage
 
-三个核心 pass 不应该用同一种 MLIR 机制硬套。这里先定义实现框架选择，避免后续把 layout
-求解、结构化控制流改写和 1:N physicalization 混在一个 pattern pass 里。
+三个 correctness stage 和若干 layout optimization pass 不应该用同一种 MLIR 机制硬套。
+这里先定义实现框架选择，避免后续把 layout 求解、优化重写、结构化控制流改写和 1:N
+physicalization 混在一个 pattern pass 里。
 
 当前实现框架按下面的职责切开：
 
@@ -168,6 +180,14 @@ vmi-layout-assignment:
   module-level per-SSA-value constraint solver。先收集等价类、producer natural layout 和 consumer request，
   再把结果写回 VMI type/helper op。它可以使用 IRRewriter 改 IR，但不以 TypeConverter 为主模型。
 
+vmi-layout-fold-consumers / vmi-layout-rematerialize / vmi-layout-sink-materialization:
+  legal-to-legal VMI optimization passes。它们只消费 layout-assigned VMI IR，并继续产出
+  layout-assigned VMI IR；所有新选择必须体现在 current op、type 或 helper IR 中。
+
+vmi-legalize-arith-select:
+  canonicalize 之后的 hygiene pass。它把 scalar-condition arith.select with VMI result
+  恢复成 VMI pipeline 可控的结构化控制流形态。
+
 vmi-to-vpto:
   MLIR OneToNTypeConversion。每个 layout-assigned VMI value 按统一 physical ordering 展开成多个
   VPTO value，并依靠 OneToN structural patterns 重写函数、return、region result、block argument 和
@@ -178,7 +198,7 @@ vmi-to-vpto:
 写成 `pto.vmi.ensure_*`，physicalization 后不允许残留 `pto.vmi.*`、`!pto.vmi.*` 或
 `unrealized_conversion_cast`。不能把 layout 决策藏在 pass-private side table 里让后续 pass 猜。
 
-源码级实现应该进一步拆成五个独立层次：
+源码级实现应该进一步拆成六个独立层次：
 
 ```text
 IR layer:
@@ -200,6 +220,15 @@ Layout solving layer:
 
   负责从 producer/consumer/control-flow/call 关系解出每个 logical value 的 layout，
   然后把结果写回 type 或 ensure_* helper。
+
+Layout optimization layer:
+  lib/PTO/Transforms/VMILayoutFoldConsumers.cpp
+  lib/PTO/Transforms/VMILayoutRematerialize.cpp
+  lib/PTO/Transforms/VMILayoutSinkMaterialization.cpp
+  lib/PTO/Transforms/VMILegalizeArithSelect.cpp
+
+  负责在 layout-assigned VMI IR 内做 legal-to-legal 改写。它可以让公共 canonicalize/cse
+  协助清理和合并 IR，但不能把决策藏到 side table 里。
 
 Physicalization layer:
   lib/PTO/Transforms/VMIToVPTO.cpp
@@ -265,6 +294,8 @@ pass                         input                         output
 ---------------------------  ----------------------------  ----------------------------
 pto-validate-vmi-ir          surface VMI IR                same IR, or hard failure
 vmi-layout-assignment        surface/layout-partial VMI    layout-assigned VMI IR
+layout optimization passes   layout-assigned VMI IR        layout-assigned VMI IR
+vmi-legalize-arith-select    layout-assigned VMI IR        layout-assigned VMI IR
 pto-validate-vmi-layout-ir   layout-assigned VMI IR        same IR, or hard failure
 vmi-to-vpto                  layout-assigned VMI IR        physical VPTO IR
 final residual verifier      physical VPTO candidate       no pto.vmi.*, no !pto.vmi.*
@@ -313,6 +344,26 @@ lib/PTO/Transforms/VMILayoutAssignment.cpp
     rewrite while collecting constraints
     hide chosen layout in a pass-private side table
     infer external VMI ABI
+
+lib/PTO/Transforms/VMILayoutFoldConsumers.cpp
+lib/PTO/Transforms/VMILayoutRematerialize.cpp
+lib/PTO/Transforms/VMILayoutSinkMaterialization.cpp
+lib/PTO/Transforms/VMILegalizeArithSelect.cpp
+  pass:
+    VMILayoutFoldConsumersPass
+    VMILayoutRematerializePass
+    VMILayoutSinkMaterializationPass
+    VMILegalizeArithSelectPass
+  role:
+    legal-to-legal layout-assigned VMI optimization and hygiene
+  MLIR API:
+    Operation::walk for local discovery
+    OpBuilder/RewriterBase for explicit IR rewrites
+    canonicalize/cse between passes for cleanup and deduplication
+  must not:
+    introduce physical VPTO register types
+    require vmi-to-vpto to inspect producers, users, or CFG
+    preserve optimization decisions outside IR
 
 lib/PTO/Transforms/VMIToVPTO.cpp
   pass:
@@ -369,6 +420,15 @@ source file                                pass                         primary 
 lib/PTO/Transforms/PTOValidateVMIIR.cpp    pto-validate-vmi-ir          Operation::walk + recursive type/attr scan
 lib/PTO/Transforms/PTOValidateVMIIR.cpp    pto-validate-vmi-layout-ir   Operation::walk + recursive type/attr scan
 lib/PTO/Transforms/VMILayoutAssignment.cpp vmi-layout-assignment        module-level union-find solver + IRRewriter
+lib/PTO/Transforms/VMILayoutFoldConsumers.cpp
+                                          vmi-layout-fold-consumers     Pattern-free local IR rewrite
+lib/PTO/Transforms/VMILayoutRematerialize.cpp
+                                          vmi-layout-rematerialize      Pattern-free local IR rewrite
+lib/PTO/Transforms/VMILayoutSinkMaterialization.cpp
+                                          vmi-layout-sink-materialization
+                                                                       Pattern-free local IR rewrite
+lib/PTO/Transforms/VMILegalizeArithSelect.cpp
+                                          vmi-legalize-arith-select     Operation::walk + OpBuilder rewrite
 lib/PTO/Transforms/VMIToVPTO.cpp           vmi-to-vpto                  OneToNTypeConverter + OneToNOpConversionPattern
 ```
 
@@ -1108,14 +1168,24 @@ vmi-to-vpto:
 raw VMI producer
   -> pto-validate-vmi-ir
   -> vmi-layout-assignment
+  -> canonicalize/cse
+  -> vmi-layout-fold-consumers
+  -> canonicalize/cse
+  -> vmi-layout-rematerialize
+  -> canonicalize/cse
+  -> vmi-layout-sink-materialization
+  -> canonicalize/cse
+  -> vmi-legalize-arith-select
   -> pto-validate-vmi-layout-ir
   -> vmi-to-vpto
+  -> canonicalize/cse
   -> final residual verifier
 ```
 
-The `ptoas --enable-vmi` driver entry uses exactly this sequence before the existing VPTO backend pipeline. The
-test-opt entry remains useful for isolated pass debugging, while the `ptoas` flag proves the same sequence is wired
-through the user-facing compiler driver.
+The `ptoas --enable-vmi` driver entry uses this sequence before the existing VPTO backend pipeline.
+The test-opt entry remains useful for isolated pass debugging, while the `ptoas` flag proves the same sequence is
+wired through the user-facing compiler driver.  The optimization passes are legal-to-legal VMI rewrites; removing one
+may affect quality or reject fewer/fewer optimized forms, but it must not make `vmi-to-vpto` recover hidden context.
 
 各阶段之间只通过 IR 传递状态，不通过 pass-private side table 传递语义。也就是说：
 
@@ -2415,11 +2485,14 @@ truncf f32 -> fp8-like:
 bitcast:
   source and result layouts must match
   source/result total logical bits must match
-  current implementation supports identical physical arity when every source/result
-  physical chunk carries the same number of logical bits. This covers full chunks
-  and partial/tail chunks such as 65xf32 -> 130xi16, where the second physical
-  chunk carries 32 logical bits on both sides. Partial/tail bitcast remains
-  unsupported if source padding bits would become result logical bits.
+  current implementation supports contiguous/deinterleaved layouts with identical
+  physical arity when every source/result physical chunk carries the same number
+  of logical bits. This covers full chunks and partial/tail chunks such as
+  65xf32 -> 130xi16, where the second physical chunk carries 32 logical bits on
+  both sides, and uneven deinterleaved tails such as 129xf32 -> 129xi32.
+  Partial/tail bitcast remains unsupported if source padding bits would become
+  result logical bits. group_slots bitcast is unsupported until a slot-wise
+  bitcast contract is defined.
 
 load/tile_read:
   result layout chosen by consumers unless memory plan has a cheaper registered sink/source
@@ -3141,10 +3214,12 @@ pto.vmi.truncf, direct path:
 pto.vmi.bitcast:
   for each physical part:
     emit pto.vbitcast(source_part) -> result_part_type
-  source/result layouts must match, physical arity must match, and every
-  corresponding physical chunk must carry the same number of logical bits.
-  Padding bits may map only to result padding bits; any shape where source
-  padding would become result logical data remains unsupported.
+  source/result layouts must match and must be contiguous/deinterleaved,
+  physical arity must match, and every corresponding physical chunk must carry
+  the same number of logical bits. Padding bits may map only to result padding
+  bits; any shape where source padding would become result logical data remains
+  unsupported. group_slots bitcast is rejected before vmi-to-vpto until it has
+  a slot-wise contract.
 
 pto.vmi.channel_split / pto.vmi.channel_merge:
   support 2-way and 4-way channel transforms for contiguous per-channel values
@@ -3474,8 +3549,8 @@ Unsupported diagnostics:
     or f32 deinterleaved=4 source parts to one contiguous fp8-like result chunk
 
   unsupported pto.vmi.bitcast shape:
-    VMI-UNSUPPORTED: pto.vmi.bitcast requires matching source/result layouts with identical physical arity and matching
-    per-chunk logical bit footprints (...)
+    VMI-UNSUPPORTED: pto.vmi.bitcast requires matching non-group_slots source/result layouts with identical physical
+    arity and matching per-chunk logical bit footprints (...)
 
   unsupported pto.vmi.channel_split / pto.vmi.channel_merge channel count:
     VMI-UNSUPPORTED: pto.vmi.channel_split supports only 2 or 4 channels
@@ -4343,7 +4418,8 @@ use VMI-UNSUPPORTED in preflight:
     partial/tail memory access
     pred-only constant mask without concrete b8/b16/b32 granularity
     shuffle that requires vselr index-vector materialization
-    bitcast across partial physical chunks
+    bitcast with mismatched per-chunk logical bit footprints or group_slots
+    bitcast without a slot-wise contract
 
 use VMI-RESIDUAL-OP:
   conversion framework finished but VMI op/type/helper/cast remains.

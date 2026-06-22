@@ -18,13 +18,8 @@ module {
         {num_groups = 8, reassoc}
         : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred>
         -> !pto.vmi.vreg<64xf32>
-    // CHECK: {{VMI-UNSUPPORTED}}: pto.vmi.store operand #0 has type
-    // CHECK-SAME: #pto.vmi.layout<num_groups = 8, slots = 8>
-    // CHECK-SAME: requires
-    // CHECK-SAME: #pto.vmi.layout<contiguous>
-    // CHECK-SAME: pto.vmi.ensure_layout cannot materialize this conversion
-    // CHECK: failed helper conversion
-    // CHECK-SAME: unsupported source/result layout pair
+    // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.store operand #0 has type !pto.vmi.vreg<64xf32, #pto.vmi.layout<num_groups = 8, slots = 8>> but requires !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>; pto.vmi.ensure_layout has no registered materialization recipe: unsupported source/result layout pair
+    // CHECK: failed helper conversion '!pto.vmi.vreg<64xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>' -> '!pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>' (unsupported source/result layout pair)
     pto.vmi.store %sum, %dst[%off]
         : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
     return
