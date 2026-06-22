@@ -46,18 +46,14 @@ module {
 // ASSIGN: %[[X:.*]] = pto.vmi.load
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
 // ASSIGN: %[[SUM:.*]] = pto.vmi.group_reduce_addf %[[X]]
-// ASSIGN-SAME: vmi.selected_plan = "s16_reduce_block8"
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // ASSIGN: %[[B_MUL:.*]] = pto.vmi.group_broadcast %[[SUM]]
-// ASSIGN-SAME: vmi.selected_plan = "group_broadcast_slots8_vselr"
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
 // ASSIGN: %[[Y:.*]] = pto.vmi.mulf %[[X]], %[[B_MUL]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
 // ASSIGN: %[[YSUM:.*]] = pto.vmi.group_reduce_addf %[[Y]]
-// ASSIGN-SAME: vmi.selected_plan = "s16_reduce_block8"
 // ASSIGN: pto.vmi.group_store %[[YSUM]]
 // ASSIGN: %[[B_CAST:.*]] = pto.vmi.group_broadcast %[[SUM]]
-// ASSIGN-SAME: vmi.selected_plan = "group_broadcast_slots8_vselr"
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
 // ASSIGN: %[[B_CAST_SPLIT:.*]] = pto.vmi.ensure_layout %[[B_CAST]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>

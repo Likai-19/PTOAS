@@ -217,7 +217,7 @@ S=64 row-local result       -> slots=1
 ```text
 1. op name and explicit op attrs
 2. converted operand/result types with layout
-3. selected plan attrs written by layout assignment
+3. helper/materialization ops written by layout assignment
 4. inserted helper ops
 5. target capability registry
 ```
@@ -251,73 +251,62 @@ or explicit helper:
   pto.vmi.ensure_mask_granularity
 ```
 
-Every context-sensitive op must also have a selected plan if layout alone does
-not uniquely identify the lowering:
+`vmi-to-vpto` is allowed to choose a deterministic recipe from local
+information on the current op:
 
 ```text
-vmi.selected_plan = "dense_load_norm"
-vmi.selected_plan = "load_dintlv2"
-vmi.selected_plan = "load_dintlv4"
-vmi.selected_plan = "group_load_contiguous_chunks"
-vmi.selected_plan = "s16_group_load_block8_unit_stride"
-vmi.selected_plan = "s16_group_load_block8_stride"
-vmi.selected_plan = "s32_group_load_block8_stride"
-vmi.selected_plan = "s8_reduce_contiguous"
-vmi.selected_plan = "s16_reduce_parity"
-vmi.selected_plan = "s16_reduce_block8"
-vmi.selected_plan = "s32_reduce_dintlv4"
-vmi.selected_plan = "s32_reduce_block8_stride"
-vmi.selected_plan = "s64_reduce_row_local"
-vmi.selected_plan = "group_slot_load_slots8_unit_stride"
-vmi.selected_plan = "group_slot_load_slots1_row_local"
-vmi.selected_plan = "group_broadcast_slots8_vselr"
-vmi.selected_plan = "group_broadcast_slots1_vselr"
-vmi.selected_plan = "group_slot_cast_slots1_f32_to_f16"
+current op name
+current op attrs
+operand/result types and layouts
+current op operand values such as stride and offset
+target capability and pass options
 ```
 
-The spelling above is illustrative; implementation may use an enum attr.  The
-invariant is not illustrative: if a lowering decision is not uniquely implied
-by op + assigned operand/result layouts + explicit attrs, assignment must write
-a selected plan.
+This is not context inference.  What remains forbidden is walking to producers,
+users, sibling users, branch/loop bodies, callees/callers, or nearby memory/MTE
+ops to recover a lowering decision or a memory-safety proof.
 
-### 4.1 Selected Plan Contract
+If a decision cannot be made from that local information, layout assignment
+must rewrite the IR until the decision is explicit in attrs, operand/result
+layouts, helper ops, cloned producers, or diagnostics.  `vmi-to-vpto` must not
+consume a separate string recipe attr.
 
-`selected_plan` is not an optimization hint.  It is the serialized answer to a
-question that would otherwise require `vmi-to-vpto` to inspect producer,
-consumer, control-flow, memory, or mask context.
+### 4.1 Local Recipe Contract
 
-Required plans in the current implementation:
+The lowering recipe is derived from op + assigned operand/result layouts +
+explicit attrs/operands.  If two legal recipes cannot be distinguished from
+that local information, the IR is missing a semantic carrier and must be
+extended before the recipe is implemented.
+
+Locally deterministic decisions in the current implementation:
 
 ```text
 group_load:
-  required for registered result layouts.  The plan fixes source_group_stride
-  handling and whether the result is contiguous chunks, S=16 block8, or S=32
-  block8. Unsupported shapes diagnose through the capability check instead of
-  inventing a plan.
+  result layout, num_groups, row_stride, source type, and target capability
+  decide contiguous chunks versus S=16/S=32 block8 vsldb lowering.  Unit-stride
+  vldsx2/BDINTLV can be a local peephole for the same block8 layout.
 
 group_slot_load:
-  required for explicit slots=8 or slots=1 layouts.  The plan fixes packed
-  scalar load versus row-local lane-0 load.  A single source op may be
-  rematerialized into two different planned ops.
+  result group_slots layout and source_group_stride decide packed slots=8
+  versus row-local slots=1 vsldb lowering.  A single source op may still be
+  rematerialized into two ops when different users require different result
+  layouts; each clone is then locally deterministic.
 
 group_reduce_addf:
-  required for registered S=8/S=16/S=32/S=64 shapes.  The plan fixes parity
-  versus block8, packed slots=8 versus row-local slots=1, and multi-chunk
-  arity. Unsupported group sizes diagnose as unsupported capability, not as
-  missing selected_plan.
+  source/mask layout, result group_slots layout, num_groups, element type, and
+  reassoc decide S=8 contiguous vcgadd, S=16/S=32 deinterleaved vcgadd trees,
+  and S=64 row-local vcadd/vsel lowering.
 
 group_broadcast:
-  required for explicit slots=8 or slots=1 sources.  The plan fixes source
-  interpretation and the vselr index recipe for the requested dense result
-  layout. Legacy bare group_slots are tolerated only as compatibility input and
-  must not be emitted by layout assignment.
+  source group_slots layout, result dense layout, num_groups, and element type
+  decide vdup/vselr materialization.
 
 truncf:
-  required for group_slots slots=1 f32->f16, where the cast is a slot-preserving
-  group-slot cast rather than an ordinary dense VCVT path.
+  source/result group_slots layouts and element widths decide the slots=1
+  f32->f16 slot-preserving vcvt path.
 ```
 
-Layout-only or attr-only decisions in the current implementation:
+Other layout-only or attr-only decisions in the current implementation:
 
 ```text
 load:
@@ -327,8 +316,9 @@ load:
 
 group_store:
   source group_slots layout and explicit output stride decide packed slots=8
-  versus row-local slots=1 store legality.  If another legal store recipe is
-  introduced, assignment must attach a selected plan before vmi-to-vpto uses it.
+  versus row-local slots=1 store legality.  If another legal store recipe
+  needs more information, assignment must make that information explicit in the
+  op or helper IR before vmi-to-vpto uses it.
 
 masked_load:
   explicit passthrough, mask layout, full physical read, shaped safe-tail memref,
@@ -341,14 +331,14 @@ masked_store/select/elementwise:
 
 extf/truncf:
   dense width-changing paths are layout-determined today.  Any future
-  commute-through-group-broadcast or alternative VCVT recipe must become a
-  selected plan first.
+  commute-through-group-broadcast or alternative VCVT recipe must have an
+  explicit IR carrier first.
 ```
 
-Forbidden plan recovery:
+Forbidden non-local recipe recovery:
 
 ```text
-No pattern may synthesize one of the required plans by:
+No pattern may synthesize a recipe or memory proof by:
   - walking from group_reduce to the load/group_load producer
   - walking from store/broadcast/truncf to the group_reduce producer
   - scanning sibling users of a group_slots value
@@ -356,9 +346,9 @@ No pattern may synthesize one of the required plans by:
   - inspecting private callee bodies while lowering a call
 ```
 
-If a required plan is missing, `vmi-to-vpto` emits
+If the current op lacks enough local information, `vmi-to-vpto` emits
 `VMI-LAYOUT-CONTRACT` at the current op and prints the op name, logical type,
-assigned layouts, and the missing plan class.
+assigned layouts, and the missing decision class.
 
 ## 5. Plan Registry
 
@@ -547,7 +537,7 @@ group_broadcast:
 
 group_store:
   requests source group_slots(num_groups, slots=K)
-  selected plan also records output stride legality
+  explicit output stride attrs/operands decide store legality
 
 dense elementwise add/mul/fma/min/max/select:
   requests all dense data operands and results use one dense layout
@@ -720,7 +710,7 @@ Recommended solving order:
 7. Rematerialize cheap producers instead of materializing when cheaper.
 8. Specialize internal function signatures.
 9. Emit diagnostics for unsatisfied hard constraints.
-10. Rewrite VMI types and selected plan attrs.
+10. Rewrite VMI types and insert explicit helper/rematerialized ops.
 ```
 
 Tie-breaking must be deterministic.  Suggested priority:
@@ -787,10 +777,10 @@ For each op, the pattern:
 
 ```text
 1. reads operand/result layouts
-2. reads selected_plan if required
+2. reads current op attrs and operand values
 3. asks TypeConverter for ordered physical values
-4. emits the registered VPTO recipe
-5. fails if the selected plan is missing or target capability is absent
+4. emits the locally implied VPTO recipe
+5. fails if target capability or required local proof is absent
 ```
 
 The pattern must not:
@@ -825,12 +815,12 @@ diagnostic embellishment:
 
 Anything else is a layout-assignment responsibility.  In particular, an
 unsupported producer/consumer combination must be rejected before assignment
-writes a selected plan.  Section 3.44 is the model for supported partial S=32
+emits layout-assigned IR.  Section 3.44 is the model for supported partial S=32
 grouped masks: assignment emits explicit contiguous and deinterleaved mask
 values, and `vmi-to-vpto` lowers the deinterleaved mask op itself through
 contiguous grouped-mask materialization followed by predicate deinterleave.  It
 does not walk from `group_reduce_addf` to the mask producer to choose or reject
-the plan.  Dynamic `active_elems_per_group` follows the same rule: the
+the recipe.  Dynamic `active_elems_per_group` follows the same rule: the
 `create_group_mask` op lowers its own SSA scalar with vci/vshrs/vshls/vsub/vcmps
 for contiguous chunks before any predicate deinterleave.
 
@@ -852,8 +842,8 @@ group_slots(G,K):
   slot_block0, slot_block1, ...
 ```
 
-Two physical bundle entries may alias the same VPTO SSA value when the selected
-plan proves they have the same contents, such as group_broadcast feeding both
+Two physical bundle entries may alias the same VPTO SSA value when the local
+recipe proves they have the same contents, such as group_broadcast feeding both
 parts of a `deinterleaved=2` broadcast result.  Arity still follows the layout;
 aliasing is not a different layout.
 
@@ -866,7 +856,7 @@ Diagnostics are part of the design.  They must name:
 2. source logical type
 3. assigned source layout
 4. requested layout
-5. missing plan or disabled fallback
+5. missing local proof or disabled fallback
 6. suggested rewrite when available
 ```
 
@@ -894,8 +884,8 @@ public VMI function boundary:
 The design is complete only when:
 
 ```text
-1. every case in vmi-layout-lowering-cases.md maps to registered plans
-2. every selected plan can be emitted without looking at producer/user context
+1. every case in vmi-layout-lowering-cases.md maps to a local recipe
+2. every local recipe can be emitted without looking at producer/user context
 3. every unsupported case has a precise capability diagnostic
 4. every control-flow/function boundary either specializes layout or diagnoses
 5. every mask has explicit data layout and predicate granularity

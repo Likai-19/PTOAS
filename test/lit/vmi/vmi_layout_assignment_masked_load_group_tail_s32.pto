@@ -43,7 +43,6 @@ module {
 // ASSIGN: pto.vmi.create_group_mask
 // ASSIGN-SAME: !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
 // ASSIGN: pto.vmi.group_reduce_addf
-// ASSIGN-SAME: vmi.selected_plan = "s32_reduce_block8_stride"
 // LOWER: pto.pdintlv_b32
 // LOWER: pto.pdintlv_b32
 // LOWER: pto.pdintlv_b32

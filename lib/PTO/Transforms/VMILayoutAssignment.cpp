@@ -65,8 +65,6 @@ struct MaskUseRequest {
   std::string granularity;
 };
 
-static constexpr const char *kVMISelectedPlanAttrName = "vmi.selected_plan";
-
 static unsigned getElementBitWidth(Type type) {
   if (isa<IndexType>(type))
     return 64;
@@ -1572,143 +1570,6 @@ struct LayoutSolver {
     return success();
   }
 
-  std::optional<StringRef> getGroupReduceSelectedPlan(VMIGroupReduceAddFOp op) {
-    auto sourceType = dyn_cast<VMIVRegType>(op.getSource().getType());
-    if (!sourceType)
-      return std::nullopt;
-    VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
-    if (!sourceLayout)
-      return std::nullopt;
-
-    int64_t numGroups = op.getNumGroupsAttr().getInt();
-    if (numGroups <= 0 || sourceType.getElementCount() % numGroups != 0)
-      return std::nullopt;
-    int64_t groupSize = sourceType.getElementCount() / numGroups;
-
-    if (sourceLayout.isContiguous()) {
-      if (groupSize == 8)
-        return StringRef("s8_reduce_contiguous");
-      if (groupSize == 64)
-        return StringRef("s64_reduce_row_local");
-      return std::nullopt;
-    }
-
-    if (!sourceLayout.isDeinterleaved())
-      return std::nullopt;
-
-    if (groupSize == 16 && sourceLayout.getFactor() == 2) {
-      if (sourceLayout.getBlockElems() == 1)
-        return StringRef("s16_reduce_parity");
-      if (sourceLayout.getBlockElems() == 8)
-        return StringRef("s16_reduce_block8");
-    }
-
-    if (groupSize == 32 && sourceLayout.getFactor() == 4) {
-      if (sourceLayout.getBlockElems() == 1)
-        return StringRef("s32_reduce_dintlv4");
-      if (sourceLayout.getBlockElems() == 8)
-        return StringRef("s32_reduce_block8_stride");
-    }
-
-    return std::nullopt;
-  }
-
-  std::optional<StringRef> getGroupSlotLoadSelectedPlan(VMIGroupSlotLoadOp op) {
-    auto resultType = dyn_cast<VMIVRegType>(op.getResult().getType());
-    if (!resultType)
-      return std::nullopt;
-    VMILayoutAttr layout = resultType.getLayoutAttr();
-    if (!layout || !layout.isGroupSlots() ||
-        layout.getNumGroups() != op.getNumGroupsAttr().getInt())
-      return std::nullopt;
-    if (layout.getSlots() == 8)
-      return StringRef("group_slot_load_slots8_unit_stride");
-    if (layout.getSlots() == 1)
-      return StringRef("group_slot_load_slots1_row_local");
-    return std::nullopt;
-  }
-
-  std::optional<StringRef> getGroupLoadSelectedPlan(VMIGroupLoadOp op) {
-    auto resultType = dyn_cast<VMIVRegType>(op.getResult().getType());
-    if (!resultType)
-      return std::nullopt;
-    VMILayoutAttr layout = resultType.getLayoutAttr();
-    if (!layout)
-      return std::nullopt;
-    if (layout.isContiguous())
-      return StringRef("group_load_contiguous_chunks");
-    if (!layout.isDeinterleaved() || layout.getBlockElems() != 8)
-      return std::nullopt;
-
-    int64_t numGroups = op.getNumGroupsAttr().getInt();
-    if (numGroups <= 0 || resultType.getElementCount() % numGroups != 0)
-      return std::nullopt;
-    int64_t groupSize = resultType.getElementCount() / numGroups;
-    if (groupSize == 16 && layout.getFactor() == 2)
-      return StringRef("s16_group_load_block8_stride");
-    if (groupSize == 32 && layout.getFactor() == 4)
-      return StringRef("s32_group_load_block8_stride");
-    return std::nullopt;
-  }
-
-  std::optional<StringRef>
-  getGroupBroadcastSelectedPlan(VMIGroupBroadcastOp op) {
-    auto sourceType = dyn_cast<VMIVRegType>(op.getSource().getType());
-    auto resultType = dyn_cast<VMIVRegType>(op.getResult().getType());
-    if (!sourceType || !resultType)
-      return std::nullopt;
-    VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
-    VMILayoutAttr resultLayout = resultType.getLayoutAttr();
-    if (!sourceLayout || !resultLayout || !sourceLayout.isGroupSlots() ||
-        sourceLayout.getNumGroups() != op.getNumGroupsAttr().getInt() ||
-        resultLayout.isGroupSlots())
-      return std::nullopt;
-    if (sourceLayout.getSlots() == 8)
-      return StringRef("group_broadcast_slots8_vselr");
-    if (sourceLayout.getSlots() == 1)
-      return StringRef("group_broadcast_slots1_vselr");
-    return std::nullopt;
-  }
-
-  std::optional<StringRef> getTruncFSelectedPlan(VMITruncFOp op) {
-    auto sourceType = dyn_cast<VMIVRegType>(op.getSource().getType());
-    auto resultType = dyn_cast<VMIVRegType>(op.getResult().getType());
-    if (!sourceType || !resultType)
-      return std::nullopt;
-
-    VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
-    VMILayoutAttr resultLayout = resultType.getLayoutAttr();
-    if (!sourceLayout || !resultLayout || sourceLayout != resultLayout ||
-        !sourceLayout.isGroupSlots() || sourceLayout.getSlots() != 1)
-      return std::nullopt;
-
-    unsigned sourceBits = getElementBitWidth(sourceType.getElementType());
-    unsigned resultBits = getElementBitWidth(resultType.getElementType());
-    if (sourceBits == 32 && resultBits == 16)
-      return StringRef("group_slot_cast_slots1_f32_to_f16");
-    return std::nullopt;
-  }
-
-  void attachSelectedPlanAttrs() {
-    Builder builder(ctx);
-    module.walk([&](Operation *op) {
-      std::optional<StringRef> plan;
-      if (auto reduce = dyn_cast<VMIGroupReduceAddFOp>(op))
-        plan = getGroupReduceSelectedPlan(reduce);
-      else if (auto load = dyn_cast<VMIGroupLoadOp>(op))
-        plan = getGroupLoadSelectedPlan(load);
-      else if (auto load = dyn_cast<VMIGroupSlotLoadOp>(op))
-        plan = getGroupSlotLoadSelectedPlan(load);
-      else if (auto broadcast = dyn_cast<VMIGroupBroadcastOp>(op))
-        plan = getGroupBroadcastSelectedPlan(broadcast);
-      else if (auto truncf = dyn_cast<VMITruncFOp>(op))
-        plan = getTruncFSelectedPlan(truncf);
-
-      if (plan)
-        op->setAttr(kVMISelectedPlanAttrName, builder.getStringAttr(*plan));
-    });
-  }
-
   void rewriteFunctionType() {
     module.walk([&](func::FuncOp func) {
       if (func.empty())
@@ -1755,7 +1616,6 @@ struct LayoutSolver {
     rewriteDataTypes();
     if (failed(insertDataUseMaterializations()))
       return failure();
-    attachSelectedPlanAttrs();
     if (failed(inferMaskRequests()))
       return failure();
     rewriteMaskTypes();
