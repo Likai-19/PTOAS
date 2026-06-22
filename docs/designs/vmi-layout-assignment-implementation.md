@@ -11,38 +11,147 @@
 Recommended pass pipeline:
 
 ```text
-pto-validate-vmi-surface
-  -> vmi-layout-assignment
-  -> pto-validate-vmi-layout
+pto-validate-vmi-ir
+  -> vmi-layout-assignment                  // hard legalization baseline
+  -> canonicalize/cse
+  -> vmi-layout-fold-consumers              // optional optimization
+  -> canonicalize/cse
+  -> vmi-layout-rematerialize               // optional optimization
+  -> canonicalize/cse
+  -> vmi-layout-sink-materialization        // optional optimization
+  -> canonicalize/cse
+  -> vmi-legalize-arith-select
+  -> pto-validate-vmi-layout-ir
   -> vmi-to-vpto
   -> canonicalize/cse
   -> existing VPTO lowering/codegen
 ```
 
+Only `vmi-layout-assignment` is required for the first legal implementation.
+The optimization passes may be introduced one by one.  Their contract is that
+they consume legal layout-assigned VMI IR and produce legal layout-assigned VMI
+IR; they never move a hidden decision into `vmi-to-vpto`.
+
 Pass responsibilities:
 
 ```text
-pto-validate-vmi-surface:
+pto-validate-vmi-ir:
   verify surface VMI has no physical VPTO layout dependency
   reject public/external VMI ABI unless explicitly enabled
 
 vmi-layout-assignment:
-  solve value layouts
-  choose selected lowering plans
+  solve hard value layout constraints
+  choose explicit layouts and local recipe carriers visible in IR
   insert ensure/rematerialization helpers
   make internal function boundary layouts explicit
   rewrite VMI types with layout attrs
 
-pto-validate-vmi-layout:
+canonicalize/cse:
+  remove dead helpers and merge identical cloned producers where MLIR legality
+  permits
+
+vmi-layout-fold-consumers:
+  fold use-site materialization into consumers that can directly consume the
+  source layout while preserving the same logical effect
+  example: ensure_layout(deinterleaved=2 -> contiguous) feeding store may become
+  a store of deinterleaved=2 when the store has a local vstsx2 INTLV recipe
+  current implementation: pto.vmi.store, pto.vmi.tile_write, and the value
+  operand of pto.vmi.masked_store when the existing mask arity matches, fed by
+  ensure_layout from deinterleaved=2/4, block_elems=1 to contiguous.  factor=2
+  uses the store's vstsx2 INTLV recipe; factor=4 is still store-local, but it
+  materializes through physical interleave before vsts.
+
+vmi-layout-rematerialize:
+  replace explicit ensure_* helpers with cloned cheap layout-polymorphic
+  producers when the clone directly creates the requested result type
+  current implementation: splat pto.vmi.constant, pto.vmi.broadcast,
+  pto.vmi.iota, pto.vmi.create_mask, pto.vmi.create_group_mask, and
+  pto.vmi.constant_mask
+  not included in the first implementation: load, group_load, masked_load,
+  group_slot_load, and group_broadcast; those require separate memory,
+  execution-count, or source-layout proof before they can be rematerialized
+
+vmi-layout-sink-materialization:
+  move ensure_layout across pure layout-transparent elementwise chains when the
+  rewritten IR reduces materialization cost and keeps every op locally legal
+  current implementation: sink two identical operand ensure_layout helpers
+  across binary add/sub/mul/div/min/max/and/or/xor/shl/shru VMI ops, or one
+  source ensure_layout across unary neg/abs/sqrt/exp/ln/relu/not VMI ops,
+  producing one result ensure_layout.  It also sinks matching
+  ensure_mask_layout or ensure_mask_granularity helpers across
+  mask_and/mask_or/mask_xor/mask_not, producing one result mask helper.  It
+  does not sink through select, fma, cast, load, store, reduce,
+  group_broadcast, or control-flow ops
+
+vmi-legalize-arith-select:
+  restore scalar-condition arith.select with VMI result type back to scf.if
+  after canonicalize; canonicalize may fold simple scf.if into arith.select,
+  but VMI values must not cross non-VMI semantic ops before vmi-to-vpto
+
+pto-validate-vmi-layout-ir:
   verify every VMI data/mask value has layout
   verify every VMI value has an assigned layout and every non-local lowering
   choice has been serialized explicitly
-  verify helper ops have registered materialization plans
+  verify helper ops have registered materialization recipes.  Current
+  implementation checks `ensure_layout`, `ensure_mask_layout`, and
+  `ensure_mask_granularity` at the layout gate, so unsupported helper recipes
+  fail before `vmi-to-vpto`.  It also checks the first semantic local-recipe
+  families, non-contiguous `pto.vmi.store`/`pto.vmi.tile_write`, block8
+  `pto.vmi.group_load`, `pto.vmi.group_slot_load`, group_slots
+  `pto.vmi.group_store`, group_slots `pto.vmi.group_reduce_addf`,
+  explicit-slots `pto.vmi.group_broadcast`, `pto.vmi.truncf`,
+  `pto.vmi.extf`, and `pto.vmi.bitcast`, at the layout gate.
 
 vmi-to-vpto:
   use OneToN type conversion
-  lower only from explicit layout/plan information
+  lower only from current-op attrs/operands, operand/result layouts, and helper
+  ops
   emit VPTO or precise unsupported diagnostic
+```
+
+### 1.1 Hard Constraints Versus Optimizations
+
+Hard legalization answers "can this program be lowered correctly?"  It is
+allowed to be conservative:
+
+```text
+%w = pto.vmi.extf %a                 // natural layout deinterleaved=2
+%t1 = pto.vmi.mulf %w, %k1           // layout-transparent, stays deinterleaved=2
+%t1_c = pto.vmi.ensure_layout %t1    // hard store contract wants contiguous
+pto.vmi.store %t1_c, %OUT1
+%w_c = pto.vmi.ensure_layout %w
+pto.vmi.store %w_c, %OUT2
+```
+
+This is a correct legal shape.  The contiguous action is explicit at each store
+use, and `vmi-to-vpto` lowers the helper with register materialization such as
+`vintlv` before ordinary `vsts`.
+
+Optimization answers "can the same external effect be cheaper?"  A fold pass
+may rewrite the two store uses to consume the deinterleaved values directly:
+
+```text
+pto.vmi.store %t1, %OUT1   // value type still says deinterleaved=2
+pto.vmi.store %w,  %OUT2
+```
+
+This optimized shape is legal only because `pto.vmi.store` has enough local
+information to lower a `deinterleaved=2` f32 value to row-major memory, for
+example with `vstsx2 INTLV_B32`.  The optimization does not require
+`vmi-to-vpto` to inspect `%w`'s producer or the sibling store.
+
+The split gives later passes room to improve layout choices:
+
+```text
+hard pass:
+  guarantee legality with explicit ensure_* helpers
+
+optimization passes:
+  remove, fold, clone, or sink helpers when the optimized IR is still locally
+  deterministic
+
+vmi-to-vpto:
+  physicalize exactly the IR it sees, with no global planning
 ```
 
 ## 2. Files To Add Or Update
@@ -56,10 +165,10 @@ include/PTO/IR/VMIAttrs.td
 lib/PTO/IR/VMI.cpp
 
 include/PTO/Transforms/Passes.td
-lib/PTO/Transforms/ValidateVMI.cpp
+lib/PTO/Transforms/PTOValidateVMIIR.cpp
 lib/PTO/Transforms/VMILayoutAssignment.cpp
 lib/PTO/Transforms/VMIToVPTO.cpp
-lib/PTO/Transforms/VMILayoutPlanRegistry.cpp
+lib/PTO/Transforms/VMILocalRecipeRegistry.cpp
 
 test/lit/vmi/vmi_layout_assignment_*.pto
 test/lit/vmi/vmi_to_vpto_*.pto
@@ -115,7 +224,7 @@ contiguous:
 deinterleaved:
   F > 1
   B > 0
-  direct full-chunk plans require N % (F * B) == 0
+  direct full-chunk recipes require N % (F * B) == 0
 
 group_slots:
   G > 0
@@ -188,9 +297,9 @@ group_slot_load            result group_slots layout and source_group_stride
 group_reduce_addf          source/mask/result layouts, num_groups, reassoc
 group_broadcast            source/result layouts and num_groups
 truncf                     source/result layouts and element widths
-ensure_layout              always carries source/result layouts instead of plan
-ensure_mask_layout         always carries source/result layouts instead of plan
-ensure_mask_granularity    always carries source/result granularities instead of plan
+ensure_layout              always carries source/result layouts instead of recipe
+ensure_mask_layout         always carries source/result layouts instead of recipe
+ensure_mask_granularity    always carries source/result granularities instead of recipe
 ```
 
 Layout/attr-only decisions today:
@@ -212,8 +321,9 @@ vmi-to-vpto emits VMI-LAYOUT-CONTRACT for missing local proof.
 If a layout/attr-only op later gains a second legal recipe that cannot be
 distinguished from current-op information, that recipe must be represented by a
 new attr, helper op, or rematerialized op before vmi-to-vpto can emit it.
-Unsupported shapes that have no registered plan still diagnose through their
-specific capability check rather than failing with a generic missing-plan error.
+Unsupported shapes that have no registered recipe still diagnose through their
+specific capability check rather than failing with a generic missing-recipe
+error.
 ```
 
 Examples of forbidden recovery in `vmi-to-vpto`:
@@ -273,29 +383,31 @@ group_slot_load:
   loads one scalar per group and produces group_slots
 ```
 
-## 5. Plan Registry
+## 5. Local Recipe Registry
 
-Create one registry object shared by assignment and lowering.
+Create one target-aware local recipe registry shared by assignment and lowering.
+It is not serialized as a separate recipe-selection attribute.  It answers local legality
+questions from op kind, explicit attrs/operands, layouts, and target capability.
 
 ```c++
-class VMILayoutPlanRegistry {
+class VMILocalRecipeRegistry {
 public:
-  SmallVector<ProducerPlan> getProducerPlans(Operation *op);
-  SmallVector<ConsumerPlan> getConsumerPlans(OpOperand &use);
-  SmallVector<TransferPlan> getTransferPlans(Operation *op);
-  FailureOr<MaterializationPlan> getMaterializationPlan(Type valueType,
-                                                        VMILayoutKey from,
-                                                        VMILayoutKey to);
+  SmallVector<ProducerRecipe> getProducerRecipes(Operation *op);
+  SmallVector<ConsumerRecipe> getConsumerRecipes(OpOperand &use);
+  SmallVector<TransferRecipe> getTransferRecipes(Operation *op);
+  FailureOr<MaterializationRecipe>
+  getMaterializationRecipe(Type valueType, VMILayoutKey from,
+                           VMILayoutKey to);
   bool isCheaplyRematerializable(Operation *op);
-  bool hasTargetCapability(PlanID plan) const;
+  bool hasTargetCapability(RecipeID recipe) const;
 };
 ```
 
-Plan record:
+Recipe record:
 
 ```c++
-struct VMILayoutPlan {
-  PlanID id;
+struct VMILayoutRecipe {
+  RecipeID id;
   SmallVector<VMILayoutKey> operandLayouts;
   SmallVector<VMILayoutKey> resultLayouts;
   int64_t cost;
@@ -315,6 +427,69 @@ enablePublicVMIABI
 diagnosticVerbosity
 ```
 
+Assignment and optimization passes may query the registry to decide which IR
+shape to produce.  `vmi-to-vpto` may query the same registry to verify the
+current op is locally lowerable.  If the same op, attrs, operands, and
+operand/result layouts could map to two different physical recipes with
+different observable preconditions, the IR is under-specified; add an explicit
+attr, operand, helper op, or distinct VMI semantic op before implementing that
+recipe.
+
+Current implementation status: `VMILocalRecipeRegistry` exists and currently
+owns nine local recipe families:
+
+```text
+contiguous store/tile_write consumer recipes:
+  contiguous vsts
+  deinterleaved=2 vstsx2 INTLV
+  deinterleaved=4 materialize-then-vsts
+
+helper materialization recipes:
+  data/mask layout identity
+  data/mask contiguous <-> deinterleaved=2/4 when source/result physical
+  arity matches and the physical part shape can be materialized
+  mask granularity identity or b8/b16/b32 predicate cast
+
+group_slot_load semantic recipes:
+  slots=8 unit-stride vsldb
+  slots=1 aligned lane-0 vsldb per group
+
+block8 group_load semantic recipes:
+  S=16 deinterleaved=2, block_elems=8 vsldb per row fragment
+  S=32 deinterleaved=4, block_elems=8 vsldb per row fragment
+
+group_slots group_store semantic recipes:
+  slots=8 unit-stride vsts
+  slots=1 aligned lane-0 vsts per group
+
+group_slots group_reduce_addf semantic recipes:
+  S=8 vcgadd
+  S=16 deinterleaved=2 vcgadd+vadd
+  S=32 deinterleaved=4 vcgadd+vadd tree
+  S=64 contiguous slots=1 vcadd/vadd/vsel row-local reduction
+
+explicit-slots group_broadcast semantic recipes:
+  slots=8/slots=1 vselr materialization to contiguous or supported
+  deinterleaved result layouts
+
+extf/truncf semantic recipes:
+  contiguous f16/bf16 -> deinterleaved=2 f32
+  contiguous f8-like -> deinterleaved=4 f32
+  deinterleaved=2 f32 -> contiguous f16
+  deinterleaved=4 f32 -> contiguous f8-like
+  group_slots(G, slots=1) f32 -> f16
+
+bitcast semantic recipes:
+  per-part vbitcast for contiguous/deinterleaved layouts when source/result
+  layouts match, physical arity matches, and every physical chunk carries the
+  same logical bit footprint; this does not require each deinterleaved part to
+  contain the same number of chunks. group_slots bitcast is unsupported until a
+  slot-wise bitcast contract is defined.
+```
+
+`vmi-layout-fold-consumers`, `pto-validate-vmi-layout-ir`, and `vmi-to-vpto`
+query this registry for the decisions implemented above.
+
 ## 6. Layout Assignment Data Model
 
 ### 6.1 Solver State
@@ -331,14 +506,14 @@ struct ValueLayoutState {
 struct UseRequest {
   OpOperand *operand;
   VMILayoutKey requestedLayout;
-  PlanID requestingPlan;
+  RecipeID requestingRecipe;
   bool hard;
 };
 
-struct OpPlanState {
+struct OpRecipeState {
   Operation *op;
-  SmallVector<VMILayoutPlan> candidates;
-  std::optional<PlanID> chosen;
+  SmallVector<VMILayoutRecipe> candidates;
+  std::optional<RecipeID> chosen;
 };
 ```
 
@@ -350,7 +525,7 @@ Walk the module and collect:
 1. every VMI value
 2. every VMI block argument
 3. every VMI function argument/result
-4. every VMI op with candidate plans
+4. every VMI op with candidate local recipes
 5. every branch/yield/call/return edge carrying VMI
 ```
 
@@ -455,11 +630,11 @@ compact S=12 logical S=16:
 ### 6.3.1 Request Builders
 
 Implement request generation as small per-op builders.  The builders produce
-candidate plans and use-site requests; they do not rewrite IR.
+candidate recipes and use-site requests; they do not rewrite IR.
 
 ```text
 buildStoreRequests:
-  ordinary store -> dense contiguous request unless a layout-aware store plan is
+  ordinary store -> dense contiguous request unless a layout-aware store recipe is
   selected
   group_store -> group_slots(G,K) request plus stride/alignment capability
   checks
@@ -469,8 +644,8 @@ buildCastRequests:
   extf f8->f32  -> source contiguous, result deinterleaved=4
   truncf f32->f16 -> source deinterleaved=2/block_elems=1, result contiguous
   truncf f32->f8  -> source deinterleaved=4/block_elems=1, result contiguous
-  group_slots slots=1 f32->f16 -> slot-preserving plan
-  group_slots slots=8 width-changing cast -> diagnostic unless a packed plan
+  group_slots slots=1 f32->f16 -> slot-preserving recipe
+  group_slots slots=8 width-changing cast -> diagnostic unless a packed recipe
   exists
 
 buildGroupReduceRequests:
@@ -481,11 +656,11 @@ buildGroupReduceRequests:
   S=32 -> deinterleaved=4/block_elems=1 or block_elems=8 source,
           group_slots(G,8) result
   S=64 -> contiguous source, group_slots(G,1) result
-  other S -> diagnostic unless an explicit fallback plan is enabled
+  other S -> diagnostic unless an explicit fallback recipe is enabled
 
 buildGroupMemoryRequests:
-  group_load S=16/S=32 with aligned constant stride -> block_elems=8 plan
-  group_load row-local full chunks -> contiguous plan
+  group_load S=16/S=32 with aligned constant stride -> block_elems=8 recipe
+  group_load row-local full chunks -> contiguous recipe
   group_slot_load unit stride -> group_slots(G,8)
   group_slot_load aligned row-local stride -> group_slots(G,1)
   unsupported dynamic/unaligned grouped memory -> diagnostic
@@ -513,7 +688,7 @@ buildFunctionBoundaryRequests:
   private/internal function argument/result layouts are specialized or
   materialized with callee-entry/return-site helpers
   public/external VMI arguments/results diagnose unless enablePublicVMIABI has
-  a real ABI plan
+  a real ABI recipe
 ```
 
 Request builders must record the requesting op.  Diagnostics and inserted
@@ -534,7 +709,7 @@ cheap rematerializable producers:
   create_group_mask
   group_broadcast
   group_slot_load when the same address/no-alias/proof conditions as load hold
-  and the selected memory plan is legal at the clone site
+  and the memory recipe is legal at the clone site
 
 layout-transparent producers:
   add/sub/mul/fma/min/max/neg/abs
@@ -543,10 +718,10 @@ layout-transparent producers:
   integer bitwise and shift ops
 
 fixed-layout producers:
-  extf/truncf physical conversion plans
-  group_load block-fragment plans
+  extf/truncf physical conversion recipes
+  group_load block-fragment recipes
   group_reduce result group_slots
-  masked_load when the physical memory-safety proof fixes a full-read plan
+  masked_load when the physical memory-safety proof fixes a full-read recipe
 ```
 
 Conflict policy:
@@ -568,17 +743,17 @@ This is the rule that keeps case 3.32 legal: a plain `load` can be assigned to
 `deinterleaved=4, block_elems=1` for both `truncf f32->f8` and S=32
 `group_reduce`.  It also keeps case 3.19.2 diagnostic: a strided `group_load`
 that selected `block_elems=8` is fixed unless a block8-to-parity
-materialization or rematerialized memory plan is registered.
+materialization or rematerialized memory recipe is registered.
 
 ### 6.4 Solving And Rewriting
 
 Algorithm:
 
 ```text
-1. Pick candidate plan sets for every op.
+1. Pick candidate recipe sets for every op.
 2. Propagate hard constraints through SCCs.
 3. Resolve transfer-equivalent dense values.
-4. Choose multi-plan ops by cost:
+4. Choose multi-recipe ops by cost:
    - S=16 parity vs block8
    - load memory-fused vs load+materialize
    - group_slot_load slots=8 vs slots=1
@@ -596,7 +771,7 @@ Rewrite invariants:
 No VMI data/mask value after assignment has a null layout.
 Any non-local choice is represented by op attrs, operand/result layouts, a
 helper op, a clone, or an explicit diagnostic.
-Every ensure_* helper has a registered materialization plan.
+Every ensure_* helper has a registered materialization recipe.
 Every function/call signature carrying VMI is specialized or diagnosed.
 ```
 
@@ -689,12 +864,12 @@ vmi-to-vpto contract:
 
 ```text
 case family                     builder / owner             assignment artifact
-3.4 S=8 reduce                  buildGroupReduceRequests    s8_reduce_contiguous plan
-3.5 S=16 reduce                 buildGroupReduceRequests    s16_reduce_parity/block8 plan
-3.6 S=32 reduce                 buildGroupReduceRequests    s32_reduce_dintlv4/block8 plan
-3.7 S=64 reduce                 buildGroupReduceRequests    s64_reduce_row_local plan
+3.4 S=8 reduce                  buildGroupReduceRequests    s8_reduce_contiguous recipe
+3.5 S=16 reduce                 buildGroupReduceRequests    s16_reduce_parity/block8 recipe
+3.6 S=32 reduce                 buildGroupReduceRequests    s32_reduce_dintlv4/block8 recipe
+3.7 S=64 reduce                 buildGroupReduceRequests    s64_reduce_row_local recipe
 3.11.1 S=64 active-row tail     buildMaskRequests           active-row store/reduce masks
-3.19.1 S=16 block_elems choice  buildGroupReduceRequests    selected block_elems reduce plan
+3.19.1 S=16 block_elems choice  buildGroupReduceRequests    explicit block_elems layout
 3.38 multi-tile S=32 reduce     buildGroupReduceRequests    multiple group_slots chunks
 3.26 grouped tail               buildMaskRequests           split grouped masks
 3.44, 3.45 grouped S=32 masks   buildMaskRequests           explicit deinterleaved mask values
@@ -708,12 +883,12 @@ vmi-to-vpto contract:
 
 ```text
 case family                     builder / owner             assignment artifact
-3.15.1 S=16 row stride 16       buildGroupMemoryRequests    block_elems=8 group_load plan
+3.15.1 S=16 row stride 16       buildGroupMemoryRequests    block_elems=8 group_load recipe
 3.15.2 S=16 row stride > 16     buildGroupMemoryRequests    strided block_elems=8 plan
 3.16.1 group_slot_load slots=8  buildGroupMemoryRequests    unit-stride packed slots plan
 3.16.2 group_slot_load slots=1  buildGroupMemoryRequests    row-local aligned slots plan
 3.27 strided group_load         buildGroupMemoryRequests    positive block_elems=8 plan
-3.28 slots=1 non-unit load      buildGroupMemoryRequests    row-local group_slot_load plan
+3.28 slots=1 non-unit load      buildGroupMemoryRequests    row-local group_slot_load recipe
 3.37 slots=1 strided store      buildStoreRequests          group_store stride/alignment proof
 3.39 strided load fanout        conflict resolver           preserving layout or materialization
 
@@ -762,17 +937,17 @@ vmi-to-vpto contract:
 
 ```text
 diagnostic family               builder / owner             required failure
-3.7.4 slots=1 unit-stride store buildStoreRequests          no aligned row-local store plan
+3.7.4 slots=1 unit-stride store buildStoreRequests          no aligned row-local store recipe
 3.9 dense store of group slots  buildStoreRequests          use group_store/group_broadcast
 3.11.2 S=32 unsafe tail         buildMaskRequests           missing full_tile_readable/gather
-3.13 slots=8 width cast         buildCastRequests           no packed slot cast plan
-3.14 unsupported group size     buildGroupReduceRequests    no registered reduce plan
+3.13 slots=8 width cast         buildCastRequests           no packed slot cast recipe
+3.14 unsupported group size     buildGroupReduceRequests    no registered reduce recipe
 3.15.3 compact S=12            buildGroupMemoryRequests    no compact gather plan
-3.16.1 slots=8 non-unit load    buildGroupMemoryRequests    no packed strided slot load plan
+3.16.1 slots=8 non-unit load    buildGroupMemoryRequests    no packed strided slot load recipe
 3.16.2 slots=1 bad stride       buildGroupMemoryRequests    no dynamic/unaligned row-local plan
 3.19.2 invalid block_elems use  conflict resolver           no preserving materialization
 3.25.2 public/external ABI      buildFunctionBoundary       no stable public VMI ABI
-3.27 unaligned group_load       buildGroupMemoryRequests    no gather/block fallback plan
+3.27 unaligned group_load       buildGroupMemoryRequests    no gather/block fallback recipe
 3.30 masked_load unsafe tail    buildMaskRequests           no padding/gather fallback
 
 vmi-to-vpto contract:
@@ -970,7 +1145,7 @@ group_reduce_addf:
   VCGADDs plus a PAT_VL8 VADD tree per packed result block.
   S=64 row-local assignment uses #pto.vmi.layout<num_groups = G, slots = 1>
   and has focused layout-assignment/vmi-to-vpto lit coverage; the explicit
-  slots=1 generic VCADD row-local path is selected locally.
+  slots=1 generic VCADD row-local path is registered and selected locally.
 
 group_broadcast:
   explicit slots=8/1 source layouts select
@@ -991,8 +1166,10 @@ group_load:
   contiguous full-chunk path is selected from a contiguous result layout.
   S=16/S=32 block-aligned strided loads are selected from
   #pto.vmi.layout<deinterleaved = 2/4, block_elems = 8>, and lower to one
-  vsldb per 32B row fragment and physical chunk. The dedicated S=16 unit-stride
-  vldsx2/BDINTLV recipe remains a local peephole target.
+  vsldb per 32B row fragment and physical chunk.  The explicit block8 recipe
+  is registered and checked by pto-validate-vmi-layout-ir before vmi-to-vpto.
+  The dedicated S=16 unit-stride vldsx2/BDINTLV recipe remains a local
+  peephole target.
   S=16/S=32 group_load with a non-constant, non-positive, or non-8-f32-aligned
   row_stride is rejected by vmi-layout-assignment because the stable gather
   fallback is not implemented.
@@ -1010,12 +1187,12 @@ group_store:
   multiple of the 32B store alignment in destination elements: 8 for f32,
   16 for f16, and 32 for f8. Unit-stride f32 output is rejected because only
   the first row-local store is 32B-aligned; later `group_off + r` stores are
-  4B apart. A future pack-to-slots=8 or unaligned-store plan is required before
+  4B apart. A future pack-to-slots=8 or unaligned-store recipe is required before
   contiguous `%c1` slots=1 group_store can be accepted.
   Packed group_slots(G, slots=8) group_store is implemented only when
   num_groups is a multiple of 8 and row_stride is constant 1; it emits one
   PAT_VL8 store per packed slot block. Non-unit packed group stores remain a
-  design target unless a strided packed-lane store plan is selected explicitly.
+  design target unless a strided packed-lane store recipe is made explicit.
 ```
 
 Examples:
@@ -1065,7 +1242,7 @@ After assignment:
 Every VMI value has layout.
 Every VMI mask has layout and granularity plan.
 Every lowering choice is locally deterministic or explicit in attrs/layouts.
-Every ensure_* helper has a materialization plan.
+Every ensure_* helper has a materialization recipe.
 Every control-flow edge has matching VMI layouts.
 ```
 
@@ -1143,8 +1320,8 @@ VMI-LAYOUT-CONTRACT:
   pto.vmi.truncf requires
   #pto.vmi.layout<deinterleaved = 2, block_elems = 1>, but the source value is
   fixed to #pto.vmi.layout<deinterleaved = 2, block_elems = 8> by the selected
-  strided group_load plan. Register a rematerialization or preserving
-  materialization plan, or avoid consuming this block-loaded value with truncf.
+  strided group_load recipe. Register a rematerialization or preserving
+  materialization recipe, or avoid consuming this block-loaded value with truncf.
 ```
 
 ## 11. Test And Simulator Acceptance
@@ -1212,13 +1389,13 @@ the case catalog.
 Current broad runtime sweep:
 
 ```text
-WORK_SPACE=$PWD/.tmp/vmi-runtime-batch-selected-plan-gate CASE_PREFIX='vmi/' JOBS=4 \
+WORK_SPACE=$PWD/.tmp/vmi-runtime-batch-layout-gate CASE_PREFIX='vmi/' JOBS=4 \
   test/vpto/scripts/run_host_vpto_validation_parallel.sh
 
 PASS=43 FAIL=0
-summary: .tmp/vmi-runtime-batch-selected-plan-gate/parallel-summary.tsv
+summary: .tmp/vmi-runtime-batch-layout-gate/parallel-summary.tsv
 log scan: rg -n "RV_|alignment|\[ERROR\]|\[error\]|ERROR" \
-  .tmp/vmi-runtime-batch-selected-plan-gate.log
+  .tmp/vmi-runtime-batch-layout-gate.log
 result: no matches
 ```
 
@@ -1298,7 +1475,7 @@ repository evidence:
   all 43 runtime case directories contain kernel.pto, launch.cpp, main.cpp,
   golden.py, and compare.py
   latest broad VMI runtime sweep passed: PASS=43 FAIL=0
-  latest full VMI lit sweep passed: 314/314
+  latest full VMI lit sweep passed: 340/340
 ```
 
 Current checked-in coverage for 3.3 dense f8->f32->compute->f8:
@@ -1656,6 +1833,65 @@ runtime SIM:
   test/vpto/cases/vmi/widen-f16-to-f32-store-reduce
 ```
 
+Current checked-in lit coverage for the first `vmi-layout-fold-consumers`
+optimization is:
+
+```text
+test/lit/vmi/vmi_layout_fold_consumers_store.pto
+test/lit/vmi/vmi_layout_fold_consumers_masked_store.pto
+test/lit/vmi/vmi_layout_fold_consumers_deint4.pto
+```
+
+Current checked-in lit coverage for the first `vmi-layout-rematerialize`
+optimization is:
+
+```text
+test/lit/vmi/vmi_layout_rematerialize_data.pto
+test/lit/vmi/vmi_layout_rematerialize_mask.pto
+```
+
+Current checked-in lit coverage for the first
+`vmi-layout-sink-materialization` optimization is:
+
+```text
+test/lit/vmi/vmi_layout_sink_materialization_binary.pto
+test/lit/vmi/vmi_layout_sink_materialization_mask.pto
+```
+
+Current checked-in lit coverage for canonicalized VMI control-flow restoration is:
+
+```text
+test/lit/vmi/vmi_legalize_arith_select.pto
+test/lit/vmi/vmi_ptoas_cli_control_flow.pto
+```
+
+Current checked-in lit coverage for the first semantic local-recipe layout gate
+is:
+
+```text
+test/lit/vmi/vmi_layout_gate_group_slot_load_recipe_invalid.pto
+test/lit/vmi/vmi_layout_gate_group_load_recipe_invalid.pto
+test/lit/vmi/vmi_layout_gate_group_store_recipe_invalid.pto
+test/lit/vmi/vmi_layout_gate_group_slots_unsupported_slots_invalid.pto
+test/lit/vmi/vmi_layout_gate_store_recipe_invalid.pto
+test/lit/vmi/vmi_layout_gate_helper_materialization_shape_invalid.pto
+test/lit/vmi/vmi_layout_gate_group_reduce_recipe_invalid.pto
+test/lit/vmi/vmi_layout_gate_group_reduce_slots1_recipe_invalid.pto
+test/lit/vmi/vmi_layout_gate_group_broadcast_recipe_invalid.pto
+test/lit/vmi/vmi_layout_gate_truncf_recipe_invalid.pto
+test/lit/vmi/vmi_layout_gate_extf_recipe_invalid.pto
+test/lit/vmi/vmi_layout_gate_bitcast_recipe_invalid.pto
+test/lit/vmi/vmi_layout_gate_bitcast_group_slots_invalid.pto
+```
+
+Current checked-in direct `vmi-to-vpto` preflight coverage for bitcast local
+recipes is:
+
+```text
+test/lit/vmi/vmi_to_vpto_bitcast_footprint_invalid.pto
+test/lit/vmi/vmi_to_vpto_bitcast_group_slots_invalid.pto
+```
+
 Current checked-in coverage for 3.32 f32 feeding f8 store and S=32 reduce:
 
 ```text
@@ -1710,7 +1946,7 @@ Diagnostic-only cases:
 3.16.1 group_slot_load slots=8 non-unit stride
 3.16.2 group_slot_load slots=1 dynamic or unaligned stride
 3.27 S=32 source_group_stride not divisible by 8 f32 elements
-3.19.2 block_elems=8 value consumed by truncf without materialization plan
+3.19.2 block_elems=8 value consumed by truncf without materialization recipe
 3.25.2 public/external VMI boundary
 3.30 unsafe masked_load tail without stable masked/gather fallback
 ```
@@ -1729,11 +1965,17 @@ entries:
 
 ```text
 lit:
+  test/lit/vmi/vmi_layout_gate_helper_recipe_invalid.pto
+  test/lit/vmi/vmi_layout_gate_helper_materialization_shape_invalid.pto
   test/lit/vmi/vmi_layout_assignment_group_reduce_s32_tail_no_full_tile_invalid.pto
   test/lit/vmi/vmi_layout_assignment_group_load_s16_compact_stride12_invalid.pto
   test/lit/vmi/vmi_to_vpto_group_slot_load_nonunit_slots8_invalid.pto
+  test/lit/vmi/vmi_layout_assignment_group_slot_load_slots1_dynamic_stride_invalid.pto
+  test/lit/vmi/vmi_layout_assignment_group_slot_load_slots1_unaligned_stride_invalid.pto
   test/lit/vmi/vmi_layout_assignment_group_load_block8_truncf_invalid.pto
   test/lit/vmi/vmi_layout_assignment_group_store_slots1_unit_stride_invalid.pto
+  test/lit/vmi/vmi_layout_assignment_group_load_s16_unaligned_stride_invalid.pto
+  test/lit/vmi/vmi_layout_assignment_group_load_s32_unaligned_stride_invalid.pto
   test/lit/vmi/vmi_ptoas_public_abi_invalid.pto
   test/lit/vmi/vmi_ptoas_public_result_abi_invalid.pto
   test/lit/vmi/vmi_layout_assignment_external_call_invalid.pto
@@ -1795,7 +2037,7 @@ group_store
 ```text
 3.8 cast commute through group_broadcast
 3.18 dense/group-reduce multi-consumer
-3.19 block_elems plan selection
+3.19 block_elems recipe selection
 3.23 group_broadcast multi-consumer
 3.32 f32 feeding f8 store and S=32 reduce
 3.33 S=16/S=32 reduce multi-consumer rematerialization
@@ -1847,7 +2089,7 @@ Current evidence for the case-catalog objective:
 3. every runtime case directory contains kernel.pto, launch.cpp, main.cpp,
    golden.py, and compare.py
 4. the latest broad VMI runtime sweep passed: PASS=43 FAIL=0
-5. the latest full VMI lit sweep passed: 314/314
+5. the latest full VMI lit sweep passed: 340/340
 6. every unsupported endpoint listed in section 11.3 has a diagnostic lit test
 7. vmi-to-vpto decisions are represented by current-op attrs/operands,
    assigned layouts, helper ops, rematerialization, or diagnostics

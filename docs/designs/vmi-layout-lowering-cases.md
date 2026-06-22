@@ -83,7 +83,7 @@ G % K == 0
 K must fit in the physical vreg element count
 ```
 
-`K` is selected by the producer/consumer plan. It is not always 8. For
+`K` is selected by the producer/consumer local recipe. It is not always 8. For
 `VCGADD`-packed results, `K = 8` matches the eight 32B block results written to
 the low lanes of one destination vreg. For row-local reductions where each
 logical group already occupies one full 256B vreg, `K = 1` keeps each group's
@@ -99,9 +99,9 @@ physical slot block slot_block(g), lane slot_lane(g)
 All other lanes are undefined for ordinary VMI consumers. They may only be read
 by group-aware ops that define how to interpret group slots.
 
-## 2. Plan Selection Rules
+## 2. Recipe Selection Rules
 
-VMI cast ops must not hard-code one physical `vcvt` plan as their semantic
+VMI cast ops must not hard-code one physical `vcvt` recipe as their semantic
 layout rule.
 
 ```text
@@ -112,7 +112,7 @@ dense cast:
 group-slot cast:
   source/result are both group_slots(G,K).
   lowering preserves slot_block(g) and slot_lane(g). Width-changing casts are
-  legal only when a slot-preserving VPTO plan is registered, or when the cast
+  legal only when a slot-preserving VPTO recipe is registered, or when the cast
   can be commuted through a later group-aware consumer such as group_broadcast.
 ```
 
@@ -171,7 +171,7 @@ the immediately following complete endpoints.
 3.16 group_slot_load layout contract                     complete
 3.17 group_broadcast feeding deinterleaved consumer      complete
 3.18 one value with dense and group-reduce consumers     complete/materialization
-3.19 S=16 reduce block_elems plan selection              complete/diagnostic
+3.19 S=16 reduce block_elems recipe selection            complete/diagnostic
 3.20 group_slots control-flow join                       complete
 3.21 S=32 tail with full-tile-readable source            complete
 3.22 scf.for loop-carried layout                         complete
@@ -198,6 +198,7 @@ the immediately following complete endpoints.
 3.43 internal function argument boundary materialization complete
 3.44 masked_load grouped tail feeding S=32 reduce        complete
 3.45 dynamic S=32 create_group_mask                      complete
+3.46 extf value and derived elemwise value both stored   complete/optimization
 ```
 
 ### 3.1 `f16 -> f32 -> store`
@@ -2561,7 +2562,7 @@ VMI-LAYOUT-CONTRACT:
   use site.
 ```
 
-### 3.19 S=16 Reduce `block_elems` Plan Selection
+### 3.19 S=16 Reduce `block_elems` Recipe Selection
 
 S=16 f32 group reduction has two legal dense input layouts:
 
@@ -5349,3 +5350,120 @@ The runtime case passes `active_cols` as a kernel scalar argument and casts it
 to `index` inside `pto.vecscope`.  This keeps scalar materialization outside
 `vmi-to-vpto`; the lowering pass only consumes the current
 `create_group_mask` operand.
+
+### 3.46 `extf` Value And Derived Elementwise Value Both Stored
+
+This case fixes where contiguous materialization belongs when one widened value
+is used directly by a store and also by a layout-transparent elementwise chain
+that is stored.
+
+VMI input:
+
+```text
+%a = pto.vmi.load %in[%off]
+  : memref<128xf16> -> !pto.vmi.vreg<128xf16>
+%k = pto.vmi.broadcast %k1
+  : f32 -> !pto.vmi.vreg<128xf32>
+
+%w = pto.vmi.extf %a
+  : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
+%t1 = pto.vmi.mulf %w, %k
+  : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
+    -> !pto.vmi.vreg<128xf32>
+
+pto.vmi.store %t1, %out1[%off]
+pto.vmi.store %w,  %out2[%off]
+```
+
+Hard-legalized assigned layouts:
+
+```text
+%a:
+  !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
+
+%w, %k, %t1:
+  !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+
+%t1_c = pto.vmi.ensure_layout %t1:
+  #pto.vmi.layout<deinterleaved = 2> -> #pto.vmi.layout<contiguous>
+pto.vmi.store %t1_c, %out1[%off]
+
+%w_c = pto.vmi.ensure_layout %w:
+  #pto.vmi.layout<deinterleaved = 2> -> #pto.vmi.layout<contiguous>
+pto.vmi.store %w_c, %out2[%off]
+```
+
+Baseline VPTO lowering result:
+
+```text
+%a0 = pto.vlds %in[%off] {dist = "NORM"}
+  : !pto.ptr<f16, ub>, index -> !pto.vreg<128xf16>
+
+%w_p0 = pto.vcvt %a0, PAT_ALL_B16 {part = "EVEN"}
+  : !pto.vreg<128xf16>, !pto.mask<b16> -> !pto.vreg<64xf32>
+%w_p1 = pto.vcvt %a0, PAT_ALL_B16 {part = "ODD"}
+  : !pto.vreg<128xf16>, !pto.mask<b16> -> !pto.vreg<64xf32>
+
+%k_p0 = pto.vdup %k1, PAT_ALL_B32 : f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+%k_p1 = pto.vdup %k1, PAT_ALL_B32 : f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+
+%t1_p0 = pto.vmul %w_p0, %k_p0, PAT_ALL_B32 : !pto.vreg<64xf32>
+%t1_p1 = pto.vmul %w_p1, %k_p1, PAT_ALL_B32 : !pto.vreg<64xf32>
+
+// ensure_layout for the first store.
+%t1_0, %t1_1 = pto.vintlv %t1_p0, %t1_p1
+  : !pto.vreg<64xf32>, !pto.vreg<64xf32>
+    -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
+pto.vsts %t1_0, %out1[%off], %all_b32 {dist = "NORM_B32"}
+pto.vsts %t1_1, %out1[%off_plus_64], %all_b32 {dist = "NORM_B32"}
+
+// ensure_layout for the second store.
+%w_0, %w_1 = pto.vintlv %w_p0, %w_p1
+  : !pto.vreg<64xf32>, !pto.vreg<64xf32>
+    -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
+pto.vsts %w_0, %out2[%off], %all_b32 {dist = "NORM_B32"}
+pto.vsts %w_1, %out2[%off_plus_64], %all_b32 {dist = "NORM_B32"}
+```
+
+Memory result:
+
+```text
+for i = 0..127:
+  out1[off + i] = f32(in[off + i]) * k1
+  out2[off + i] = f32(in[off + i])
+```
+
+Optimization pass result:
+
+```text
+// vmi-layout-fold-consumers may remove both ensure_layout ops if the target
+// supports a store recipe that consumes deinterleaved=2 and writes contiguous
+// row-major memory.
+pto.vmi.store %t1, %out1[%off]
+pto.vmi.store %w,  %out2[%off]
+```
+
+Optimized VPTO lowering result:
+
+```text
+pto.vstsx2 %t1_p0, %t1_p1, %out1[%off], "INTLV_B32", PAT_ALL_B32
+  : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.ptr<f32, ub>, index,
+    !pto.mask<b32>
+
+pto.vstsx2 %w_p0, %w_p1, %out2[%off], "INTLV_B32", PAT_ALL_B32
+  : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.ptr<f32, ub>, index,
+    !pto.mask<b32>
+```
+
+Required assignment and optimization rule:
+
+```text
+Hard legalization may always preserve `%w` and `%t1` in deinterleaved=2 and
+insert use-site ensure_layout before ordinary stores.  This is correct because
+the layout change is explicit at the store use.
+
+Consumer folding is optional.  It may remove the ensure_layout only when the
+store itself can locally prove the same contiguous memory effect from the
+source layout.  vmi-to-vpto must not scan the `%w` producer or both store users
+to decide this.
+```
