@@ -459,15 +459,30 @@ buildGroupMemoryRequests:
   group_slot_load aligned row-local stride -> group_slots(G,1)
   unsupported dynamic/unaligned grouped memory -> diagnostic
 
+buildElementwiseRequests:
+  dense add/mul/fma/min/max/select -> all dense operands/results share one
+  dense layout
+  group-slot add/mul/select -> all operands/results share one group_slots(G,K)
+  dense/group_slots mixing -> diagnostic unless an explicit group_broadcast or
+  group_store boundary exists
+
 buildMaskRequests:
   mask layout follows each consuming data layout
   predicate granularity follows each consuming element type
   create_mask/create_group_mask may be cloned for incompatible mask layout or
   granularity requests
+  masked_store requests source layout, mask layout, and store predicate
+  granularity explicitly
 
 buildControlFlowRequests:
   region yields, branch operands, loop iter_args, call operands, and returns
   create equality requests on the carried VMI layout variable
+
+buildFunctionBoundaryRequests:
+  private/internal function argument/result layouts are specialized or
+  materialized with callee-entry/return-site helpers
+  public/external VMI arguments/results diagnose unless enablePublicVMIABI has
+  a real ABI plan
 ```
 
 Request builders must record the requesting op.  Diagnostics and inserted
