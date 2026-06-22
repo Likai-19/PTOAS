@@ -236,6 +236,13 @@ struct LayoutSolver {
     return VMILayoutAttr::getGroupSlots(ctx, numGroups);
   }
 
+  std::optional<int64_t> getVLaneElems(Type elementType) {
+    FailureOr<int64_t> lanesPerPart = getDataLanesPerPart(elementType);
+    if (failed(lanesPerPart) || *lanesPerPart % 8 != 0)
+      return std::nullopt;
+    return *lanesPerPart / 8;
+  }
+
   VMILayoutAttr getPreferredGroupSlotsLayout(VMIVRegType type,
                                              int64_t numGroups) {
     if (VMILayoutAttr existing = type.getLayoutAttr())
@@ -243,11 +250,10 @@ struct LayoutSolver {
         return existing;
     if (numGroups > 0 && type.getElementCount() % numGroups == 0) {
       int64_t groupSize = type.getElementCount() / numGroups;
-      if (groupSize == 8)
-        return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/8);
-      if (groupSize == 16)
-        return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/8);
-      if (groupSize == 32)
+      std::optional<int64_t> vlaneElems = getVLaneElems(type.getElementType());
+      if (vlaneElems && (groupSize == *vlaneElems ||
+                         groupSize == 2 * *vlaneElems ||
+                         groupSize == 4 * *vlaneElems))
         return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/8);
       FailureOr<int64_t> lanesPerPart =
           getDataLanesPerPart(type.getElementType());
@@ -264,9 +270,10 @@ struct LayoutSolver {
       return existing;
     if (numGroups > 0 && type.getElementCount() % numGroups == 0) {
       int64_t groupSize = type.getElementCount() / numGroups;
-      if (groupSize == 16)
+      std::optional<int64_t> vlaneElems = getVLaneElems(type.getElementType());
+      if (vlaneElems && groupSize == 2 * *vlaneElems)
         return VMILayoutAttr::getDeinterleaved(ctx, 2, /*blockElems=*/8);
-      if (groupSize == 32)
+      if (vlaneElems && groupSize == 4 * *vlaneElems)
         return VMILayoutAttr::getDeinterleaved(ctx, 4, /*blockElems=*/8);
     }
     return getContiguousLayout();
@@ -279,7 +286,9 @@ struct LayoutSolver {
         return existing;
     if (numGroups > 0 && type.getElementCount() % numGroups == 0) {
       int64_t groupSize = type.getElementCount() / numGroups;
-      if (groupSize == 64)
+      FailureOr<int64_t> lanesPerPart =
+          getDataLanesPerPart(type.getElementType());
+      if (succeeded(lanesPerPart) && groupSize == *lanesPerPart)
         return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/1);
     }
     return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/8);
@@ -349,7 +358,8 @@ struct LayoutSolver {
     if (solved && solved.isGroupSlots() && solved.getNumGroups() == numGroups &&
         solved.getSlots() > 0)
       return solved;
-    if (value.getDefiningOp<VMIGroupReduceAddFOp>())
+    if (value.getDefiningOp<VMIGroupReduceAddFOp>() ||
+        value.getDefiningOp<VMIGroupReduceAddIOp>())
       return getPreferredGroupSlotsLayout(type, numGroups);
     if (value.getDefiningOp<VMIGroupSlotLoadOp>())
       return getPreferredGroupSlotLoadLayout(type, numGroups);
@@ -387,9 +397,10 @@ struct LayoutSolver {
       if (!resultType)
         continue;
       unsigned resultBits = getElementBitWidth(resultType.getElementType());
-      if (groupSize == 16 && resultBits == 16)
+      std::optional<int64_t> vlaneElems = getVLaneElems(sourceType.getElementType());
+      if (vlaneElems && groupSize == 2 * *vlaneElems && resultBits == 16)
         return true;
-      if (groupSize == 32 && resultBits == 8)
+      if (vlaneElems && groupSize == 4 * *vlaneElems && resultBits == 8)
         return true;
     }
     return false;
@@ -810,12 +821,16 @@ struct LayoutSolver {
         if (solvedSourceLayout && numGroups > 0 &&
             sourceType.getElementCount() % numGroups == 0) {
           int64_t groupSize = sourceType.getElementCount() / numGroups;
-          if (groupSize == 16 && solvedSourceLayout.isDeinterleaved() &&
+          std::optional<int64_t> vlaneElems =
+              getVLaneElems(sourceType.getElementType());
+          if (vlaneElems && groupSize == 2 * *vlaneElems &&
+              solvedSourceLayout.isDeinterleaved() &&
               solvedSourceLayout.getFactor() == 2 &&
               (solvedSourceLayout.getBlockElems() == 1 ||
                solvedSourceLayout.getBlockElems() == 8))
             sourceLayout = solvedSourceLayout;
-          if (groupSize == 32 && solvedSourceLayout.isDeinterleaved() &&
+          if (vlaneElems && groupSize == 4 * *vlaneElems &&
+              solvedSourceLayout.isDeinterleaved() &&
               solvedSourceLayout.getFactor() == 4 &&
               (solvedSourceLayout.getBlockElems() == 1 ||
                solvedSourceLayout.getBlockElems() == 8))
@@ -825,13 +840,54 @@ struct LayoutSolver {
           int64_t groupSize = sourceType.getElementCount() / numGroups;
           if (hasCompatibleTruncFUseForGroupReduce(reduce.getSource(),
                                                    groupSize)) {
-            if (groupSize == 16)
+            std::optional<int64_t> vlaneElems =
+                getVLaneElems(sourceType.getElementType());
+            if (vlaneElems && groupSize == 2 * *vlaneElems)
               sourceLayout =
                   VMILayoutAttr::getDeinterleaved(ctx, 2, /*blockElems=*/1);
-            if (groupSize == 32)
+            if (vlaneElems && groupSize == 4 * *vlaneElems)
               sourceLayout =
                   VMILayoutAttr::getDeinterleaved(ctx, 4, /*blockElems=*/1);
           }
+        }
+        requestDataUse(reduce.getSourceMutable(), sourceLayout);
+        if (failed(requestMaskUse(
+                reduce.getMaskMutable(), sourceLayout,
+                getMaskGranularityForElement(sourceType.getElementType()), op)))
+          return WalkResult::interrupt();
+        if (failed(setNaturalLayout(
+                reduce.getResult(),
+                getPreferredGroupSlotsLayout(
+                    resultType, reduce.getNumGroupsAttr().getInt()),
+                op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto reduce = dyn_cast<VMIGroupReduceAddIOp>(op)) {
+        auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
+        auto resultType = cast<VMIVRegType>(reduce.getResult().getType());
+        VMILayoutAttr sourceLayout = getPreferredGroupReduceSourceLayout(
+            sourceType, reduce.getNumGroupsAttr().getInt());
+        VMILayoutAttr solvedSourceLayout =
+            getExplicitDataLayout(reduce.getSource());
+        int64_t numGroups = reduce.getNumGroupsAttr().getInt();
+        if (solvedSourceLayout && numGroups > 0 &&
+            sourceType.getElementCount() % numGroups == 0) {
+          int64_t groupSize = sourceType.getElementCount() / numGroups;
+          std::optional<int64_t> vlaneElems =
+              getVLaneElems(sourceType.getElementType());
+          if (vlaneElems && groupSize == 2 * *vlaneElems &&
+              solvedSourceLayout.isDeinterleaved() &&
+              solvedSourceLayout.getFactor() == 2 &&
+              (solvedSourceLayout.getBlockElems() == 1 ||
+               solvedSourceLayout.getBlockElems() == 8))
+            sourceLayout = solvedSourceLayout;
+          if (vlaneElems && groupSize == 4 * *vlaneElems &&
+              solvedSourceLayout.isDeinterleaved() &&
+              solvedSourceLayout.getFactor() == 4 &&
+              (solvedSourceLayout.getBlockElems() == 1 ||
+               solvedSourceLayout.getBlockElems() == 8))
+            sourceLayout = solvedSourceLayout;
         }
         requestDataUse(reduce.getSourceMutable(), sourceLayout);
         if (failed(requestMaskUse(
@@ -873,6 +929,46 @@ struct LayoutSolver {
         }
         return WalkResult::advance();
       }
+      if (auto extsi = dyn_cast<VMIExtSIOp>(op)) {
+        auto sourceType = cast<VMIVRegType>(extsi.getSource().getType());
+        auto resultType = cast<VMIVRegType>(extsi.getResult().getType());
+        unsigned sourceBits = getElementBitWidth(sourceType.getElementType());
+        unsigned resultBits = getElementBitWidth(resultType.getElementType());
+        if (sourceBits == 16 && resultBits == 32) {
+          requestDataUse(extsi.getSourceMutable(), getContiguousLayout());
+          if (failed(setNaturalLayout(extsi.getResult(),
+                                      VMILayoutAttr::getDeinterleaved(ctx, 2),
+                                      op)))
+            return WalkResult::interrupt();
+        } else if (sourceBits == 8 && resultBits == 32) {
+          requestDataUse(extsi.getSourceMutable(), getContiguousLayout());
+          if (failed(setNaturalLayout(extsi.getResult(),
+                                      VMILayoutAttr::getDeinterleaved(ctx, 4),
+                                      op)))
+            return WalkResult::interrupt();
+        }
+        return WalkResult::advance();
+      }
+      if (auto extui = dyn_cast<VMIExtUIOp>(op)) {
+        auto sourceType = cast<VMIVRegType>(extui.getSource().getType());
+        auto resultType = cast<VMIVRegType>(extui.getResult().getType());
+        unsigned sourceBits = getElementBitWidth(sourceType.getElementType());
+        unsigned resultBits = getElementBitWidth(resultType.getElementType());
+        if (sourceBits == 16 && resultBits == 32) {
+          requestDataUse(extui.getSourceMutable(), getContiguousLayout());
+          if (failed(setNaturalLayout(extui.getResult(),
+                                      VMILayoutAttr::getDeinterleaved(ctx, 2),
+                                      op)))
+            return WalkResult::interrupt();
+        } else if (sourceBits == 8 && resultBits == 32) {
+          requestDataUse(extui.getSourceMutable(), getContiguousLayout());
+          if (failed(setNaturalLayout(extui.getResult(),
+                                      VMILayoutAttr::getDeinterleaved(ctx, 4),
+                                      op)))
+            return WalkResult::interrupt();
+        }
+        return WalkResult::advance();
+      }
       if (auto truncf = dyn_cast<VMITruncFOp>(op)) {
         auto sourceType = cast<VMIVRegType>(truncf.getSource().getType());
         auto resultType = cast<VMIVRegType>(truncf.getResult().getType());
@@ -893,6 +989,30 @@ struct LayoutSolver {
           requestDataUse(truncf.getSourceMutable(),
                          VMILayoutAttr::getDeinterleaved(ctx, 4));
         if (failed(setNaturalLayout(truncf.getResult(), getContiguousLayout(),
+                                    op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto trunci = dyn_cast<VMITruncIOp>(op)) {
+        auto sourceType = cast<VMIVRegType>(trunci.getSource().getType());
+        auto resultType = cast<VMIVRegType>(trunci.getResult().getType());
+        unsigned sourceBits = getElementBitWidth(sourceType.getElementType());
+        unsigned resultBits = getElementBitWidth(resultType.getElementType());
+        VMILayoutAttr sourceLayout = getDataLayout(trunci.getSource());
+        if (sourceBits == 32 && resultBits == 16 && sourceLayout &&
+            sourceLayout.isGroupSlots() && sourceLayout.getSlots() == 1) {
+          requestDataUse(trunci.getSourceMutable(), sourceLayout);
+          if (failed(setNaturalLayout(trunci.getResult(), sourceLayout, op)))
+            return WalkResult::interrupt();
+          return WalkResult::advance();
+        }
+        if (sourceBits == 32 && resultBits == 16)
+          requestDataUse(trunci.getSourceMutable(),
+                         VMILayoutAttr::getDeinterleaved(ctx, 2));
+        else if (sourceBits == 32 && resultBits == 8)
+          requestDataUse(trunci.getSourceMutable(),
+                         VMILayoutAttr::getDeinterleaved(ctx, 4));
+        if (failed(setNaturalLayout(trunci.getResult(), getContiguousLayout(),
                                     op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -1456,6 +1576,14 @@ struct LayoutSolver {
         return WalkResult::advance();
       }
       if (auto reduce = dyn_cast<VMIGroupReduceAddFOp>(op)) {
+        auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
+        if (failed(requestMaskUse(
+                reduce.getMaskMutable(), sourceType.getLayoutAttr(),
+                getMaskGranularityForElement(sourceType.getElementType()), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto reduce = dyn_cast<VMIGroupReduceAddIOp>(op)) {
         auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
         if (failed(requestMaskUse(
                 reduce.getMaskMutable(), sourceType.getLayoutAttr(),

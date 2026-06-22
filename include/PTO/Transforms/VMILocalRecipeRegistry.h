@@ -85,14 +85,15 @@ struct VMIGroupSlotsStoreRecipe {
 };
 
 enum class VMIGroupReduceAddFRecipeKind {
-  S8Vcgadd,
-  S16Deinterleaved2VcgaddVadd,
-  S32Deinterleaved4VcgaddTree,
+  OneVLaneVcgadd,
+  TwoVLaneDeinterleaved2VcgaddVadd,
+  FourVLaneDeinterleaved4VcgaddTree,
   ContiguousVcaddRows,
 };
 
 struct VMIGroupReduceAddFRecipe {
-  VMIGroupReduceAddFRecipeKind kind = VMIGroupReduceAddFRecipeKind::S8Vcgadd;
+  VMIGroupReduceAddFRecipeKind kind =
+      VMIGroupReduceAddFRecipeKind::OneVLaneVcgadd;
 };
 
 enum class VMIGroupBroadcastRecipeKind {
@@ -123,6 +124,27 @@ enum class VMIExtFRecipeKind {
 struct VMIExtFRecipe {
   VMIExtFRecipeKind kind =
       VMIExtFRecipeKind::ContiguousF16ToDeinterleaved2F32;
+};
+
+enum class VMITruncIRecipeKind {
+  Deinterleaved2I32ToContiguousI16,
+  Deinterleaved4I32ToContiguousI8,
+  GroupSlots1I32ToI16,
+};
+
+struct VMITruncIRecipe {
+  VMITruncIRecipeKind kind =
+      VMITruncIRecipeKind::Deinterleaved2I32ToContiguousI16;
+};
+
+enum class VMIExtIRecipeKind {
+  ContiguousI16ToDeinterleaved2I32,
+  ContiguousI8ToDeinterleaved4I32,
+};
+
+struct VMIExtIRecipe {
+  VMIExtIRecipeKind kind =
+      VMIExtIRecipeKind::ContiguousI16ToDeinterleaved2I32;
 };
 
 enum class VMIBitcastRecipeKind {
@@ -178,6 +200,11 @@ public:
                            VMIGroupReduceAddFOp op,
                            std::string *reason = nullptr) const;
 
+  FailureOr<VMIGroupReduceAddFRecipe>
+  getGroupReduceAddIRecipe(const VMITargetCapabilityRegistry &capabilities,
+                           VMIGroupReduceAddIOp op,
+                           std::string *reason = nullptr) const;
+
   FailureOr<VMIGroupBroadcastRecipe>
   getGroupBroadcastRecipe(const VMITargetCapabilityRegistry &capabilities,
                           VMIGroupBroadcastOp op,
@@ -188,6 +215,15 @@ public:
 
   FailureOr<VMIExtFRecipe>
   getExtFRecipe(VMIExtFOp op, std::string *reason = nullptr) const;
+
+  FailureOr<VMIExtIRecipe>
+  getExtSIRecipe(VMIExtSIOp op, std::string *reason = nullptr) const;
+
+  FailureOr<VMIExtIRecipe>
+  getExtUIRecipe(VMIExtUIOp op, std::string *reason = nullptr) const;
+
+  FailureOr<VMITruncIRecipe>
+  getTruncIRecipe(VMITruncIOp op, std::string *reason = nullptr) const;
 
   FailureOr<VMIBitcastRecipe>
   getBitcastRecipe(VMIBitcastOp op, std::string *reason = nullptr) const;

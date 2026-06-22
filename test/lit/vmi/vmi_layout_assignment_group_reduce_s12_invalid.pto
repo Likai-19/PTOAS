@@ -16,7 +16,7 @@ module {
       %off: index) {
     %c1 = arith.constant 1 : index
     // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.group_reduce_addf has no registered group_slots local recipe
-    // CHECK-SAME: stable group_reduce_addf slots=8 recipes support group size 8, 16, or 32
+    // CHECK-SAME: stable group_reduce_add slots=8 recipes support group sizes VLaneElems, 2*VLaneElems, or 4*VLaneElems
     %sum = pto.vmi.group_reduce_addf %source, %mask
         {num_groups = 8, reassoc}
         : !pto.vmi.vreg<96xf32>, !pto.vmi.mask<96xpred>
