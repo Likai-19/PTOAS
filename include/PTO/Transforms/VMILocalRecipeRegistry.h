@@ -88,7 +88,7 @@ enum class VMIGroupReduceAddFRecipeKind {
   S8Vcgadd,
   S16Deinterleaved2VcgaddVadd,
   S32Deinterleaved4VcgaddTree,
-  S64ContiguousVcaddRows,
+  ContiguousVcaddRows,
 };
 
 struct VMIGroupReduceAddFRecipe {

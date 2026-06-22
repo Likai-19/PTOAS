@@ -249,7 +249,10 @@ struct LayoutSolver {
         return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/8);
       if (groupSize == 32)
         return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/8);
-      if (groupSize == 64)
+      FailureOr<int64_t> lanesPerPart =
+          getDataLanesPerPart(type.getElementType());
+      if (succeeded(lanesPerPart) && groupSize >= *lanesPerPart &&
+          groupSize % *lanesPerPart == 0)
         return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/1);
     }
     return getGroupSlotsLayout(numGroups);
