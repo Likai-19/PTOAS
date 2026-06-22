@@ -467,6 +467,17 @@ group_store:
   requests source group_slots(num_groups, slots=K)
   selected plan also records output stride legality
 
+dense elementwise add/mul/fma/min/max/select:
+  requests all dense data operands and results use one dense layout
+  mask operands request the same data layout and the consumer element
+  granularity
+
+group-slot elementwise add/mul/select:
+  requests all group-slot operands and results use the same
+  group_slots(num_groups, slots=K)
+  rejects mixing dense and group_slots without explicit group_broadcast or
+  group_store
+
 group_slot_load:
   requests result group_slots(num_groups, slots=8) for packed unit-stride slots
   requests result group_slots(num_groups, slots=1) for row-local aligned slots
@@ -480,9 +491,20 @@ masked_load:
   requests mask layout matching the result
   requires explicit passthrough; padding is not synthesized
 
+masked_store:
+  requests dense source layout selected by the store plan
+  requests mask layout matching the source layout and store element granularity
+  does not choose memory safety for an earlier load
+
 create_mask/create_group_mask:
   produces whichever mask layout each consumer requests
   may be cloned per incompatible mask layout or granularity
+
+scf.if/scf.for/call/return:
+  requests equality across carried VMI values, yielded values, call operands,
+  callee arguments, and function results
+  private/internal functions may specialize or materialize at boundaries
+  public/external VMI boundaries are diagnostics until an ABI is defined
 ```
 
 Important negative requests:
