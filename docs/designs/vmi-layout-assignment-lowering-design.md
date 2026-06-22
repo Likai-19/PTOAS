@@ -127,8 +127,10 @@ items are not missing layout semantics:
 
 ```text
 dynamic active_elems_per_group runtime source:
-  create_group_mask layout lowering is defined and has lit coverage; runtime
-  SIM still needs a supported scalar source/ABI for vector kernels.
+  create_group_mask layout lowering is defined and has both lit and SIM
+  coverage. The supported runtime source is a kernel scalar argument cast to
+  index inside vecscope; vmi-to-vpto does not recover this value from GM/UB
+  scalar loads or surrounding context.
 
 private vector function runtime:
   assignment/lowering semantics are defined; full ptoas runtime depends on

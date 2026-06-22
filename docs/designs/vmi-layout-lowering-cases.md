@@ -197,7 +197,7 @@ the immediately following complete endpoints.
 3.42 group_slots scf.for loop-carried accumulator        complete
 3.43 internal function argument boundary materialization complete/design
 3.44 masked_load grouped tail feeding S=32 reduce        complete
-3.45 dynamic S=32 create_group_mask                      complete/lit
+3.45 dynamic S=32 create_group_mask                      complete
 ```
 
 ### 3.1 `f16 -> f32 -> store`
@@ -5305,15 +5305,14 @@ tree used by section 3.44:
 %mask_p1, %mask_p3 = pto.pdintlv_b32 %rm01_hi, %rm23_hi
 ```
 
-The current lit coverage validates the IR lowering:
+Current coverage validates both IR lowering and runtime behavior:
 
 ```text
 test/lit/vmi/vmi_layout_assignment_create_group_mask_s32_dynamic.pto
+test/vpto/cases/vmi/dynamic-create-group-mask-s32-reduce-store
 ```
 
-Runtime SIM coverage is intentionally not listed yet.  A direct runtime case
-needs a supported way to feed a dynamic scalar `active_cols` into a vector
-kernel.  Experiments with GM `pto.ldg` and UB `pto.load_scalar` either crashed
-the Bisheng vector backend or produced an invalid scalar LSU address in the
-SIM.  That is an ABI/source-materialization gap, not a `create_group_mask`
-layout-lowering gap.
+The runtime case passes `active_cols` as a kernel scalar argument and casts it
+to `index` inside `pto.vecscope`.  This keeps scalar materialization outside
+`vmi-to-vpto`; the lowering pass only consumes the current
+`create_group_mask` operand.
