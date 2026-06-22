@@ -2079,7 +2079,9 @@ computeConstantMaskMaterialization(VMIConstantMaskOp op, std::string *reason) {
 }
 
 FailureOr<SmallVector<ConstantMaskChunkMaterialization>>
-computeGroupMaskMaterialization(VMICreateGroupMaskOp op, std::string *reason) {
+computeGroupMaskMaterializationForType(VMICreateGroupMaskOp op,
+                                       VMIMaskType resultVMIType,
+                                       std::string *reason) {
   auto fail = [&](const Twine &message)
       -> FailureOr<SmallVector<ConstantMaskChunkMaterialization>> {
     if (reason)
@@ -2095,7 +2097,6 @@ computeGroupMaskMaterialization(VMICreateGroupMaskOp op, std::string *reason) {
   if (!activeAttr)
     return fail("active_elems_per_group must be an integer constant");
 
-  auto resultVMIType = cast<VMIMaskType>(op.getResult().getType());
   VMILayoutAttr layout = resultVMIType.getLayoutAttr();
   if (!layout ||
       !VMIMaskType::isConcreteGranularity(resultVMIType.getGranularity()))
@@ -2151,6 +2152,12 @@ computeGroupMaskMaterialization(VMICreateGroupMaskOp op, std::string *reason) {
   }
 
   return materializations;
+}
+
+FailureOr<SmallVector<ConstantMaskChunkMaterialization>>
+computeGroupMaskMaterialization(VMICreateGroupMaskOp op, std::string *reason) {
+  return computeGroupMaskMaterializationForType(
+      op, cast<VMIMaskType>(op.getResult().getType()), reason);
 }
 
 std::optional<int64_t> getPrefixActiveLaneCount(ArrayRef<int8_t> activeLanes) {
@@ -3781,6 +3788,54 @@ struct OneToNVMICreateGroupMaskOpPattern
   matchAndRewrite(VMICreateGroupMaskOp op, OpAdaptor adaptor,
                   OneToNPatternRewriter &rewriter) const override {
     TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    auto resultVMIType = cast<VMIMaskType>(op.getResult().getType());
+    VMILayoutAttr resultLayout = resultVMIType.getLayoutAttr();
+    if (resultLayout && resultLayout.isDeinterleaved() &&
+        resultLayout.getFactor() == 4 && resultLayout.getBlockElems() == 8) {
+      VMILayoutAttr contiguousLayout =
+          VMILayoutAttr::getContiguous(op.getContext());
+      auto contiguousType =
+          VMIMaskType::get(op.getContext(), resultVMIType.getElementCount(),
+                           resultVMIType.getGranularity(), contiguousLayout);
+      std::string contiguousReason;
+      FailureOr<SmallVector<ConstantMaskChunkMaterialization>>
+          contiguousMaterializations = computeGroupMaskMaterializationForType(
+              op, contiguousType, &contiguousReason);
+      if (failed(contiguousMaterializations))
+        return rewriter.notifyMatchFailure(
+            op, Twine("create_group_mask ") + contiguousReason);
+
+      SmallVector<Value> contiguousParts;
+      contiguousParts.reserve(contiguousMaterializations->size());
+      for (const ConstantMaskChunkMaterialization &materialization :
+           *contiguousMaterializations) {
+        if (contiguousParts.size() >= resultTypes.size())
+          return rewriter.notifyMatchFailure(
+              op, "create_group_mask produced too many contiguous masks");
+        auto maskType = dyn_cast<MaskType>(resultTypes[contiguousParts.size()]);
+        if (!maskType)
+          return rewriter.notifyMatchFailure(
+              op, "create_group_mask result must be mask");
+        FailureOr<Value> mask = materializeConstantMaskChunk(
+            op.getLoc(), maskType, materialization.activeLanes, rewriter);
+        if (failed(mask))
+          return rewriter.notifyMatchFailure(
+              op, "failed to materialize create_group_mask contiguous chunk");
+        contiguousParts.push_back(*mask);
+      }
+
+      if (contiguousParts.size() != resultTypes.size())
+        return rewriter.notifyMatchFailure(
+            op, "create_group_mask contiguous physical result count mismatch");
+      FailureOr<SmallVector<Value>> results = materializeMaskLayoutConversion(
+          op, contiguousParts, resultTypes, contiguousLayout, resultLayout,
+          rewriter);
+      if (failed(results))
+        return failure();
+      rewriter.replaceOp(op, *results, adaptor.getResultMapping());
+      return success();
+    }
+
     std::string reason;
     FailureOr<SmallVector<ConstantMaskChunkMaterialization>> materializations =
         computeGroupMaskMaterialization(op, &reason);

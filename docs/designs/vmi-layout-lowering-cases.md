@@ -196,7 +196,7 @@ the immediately following complete endpoints.
 3.41 non-rematerializable value with incompatible users  complete/materialization
 3.42 group_slots scf.for loop-carried accumulator        complete
 3.43 internal function argument boundary materialization complete/design
-3.44 masked_load grouped tail feeding S=32 reduce        complete/design
+3.44 masked_load grouped tail feeding S=32 reduce        complete
 ```
 
 ### 3.1 `f16 -> f32 -> store`
@@ -5167,25 +5167,7 @@ Assigned layouts:
   !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
-Current implementation result:
-
-```text
-VMI-UNSUPPORTED: pto.vmi.group_reduce_addf s32 block8 lowering does not yet
-support partial create_group_mask active_elems_per_group during layout
-assignment
-```
-
-This must remain a layout-assignment diagnostic until the S=32 block8
-grouped-mask lowering is proven against runtime SIM.  Assignment must not write
-`vmi.selected_plan = "s32_reduce_block8_stride"` for this case and leave
-`vmi-to-vpto` to discover the partial mask by walking the mask defining op.  A
-`masked_load` can be lowered contiguously and then materialized to
-`deinterleaved = 4, block_elems = 8`, but the grouped reduce still needs a
-physically correct `create_group_mask` for `active_elems_per_group = 25`.
-Allowing the current S=32 block8 path to proceed would not preserve the logical
-memory result below.
-
-Intended VPTO lowering shape after the grouped-mask issue is fixed:
+Lowering:
 
 ```text
 %all_b32 = pto.pge_b32 "PAT_ALL"
@@ -5209,15 +5191,16 @@ Intended VPTO lowering shape after the grouped-mask issue is fixed:
 %x_p0, %x_p2 = pto.vdintlv %x01_lo, %x23_lo
 %x_p1, %x_p3 = pto.vdintlv %x01_hi, %x23_hi
 
-// Correct deinterleaved grouped mask for active columns 0..24:
-//   part 0 covers columns 0..7 for every row:  all active
-//   part 1 covers columns 8..15 for every row: all active
-//   part 2 covers columns 16..23 for every row: all active
-//   part 3 covers columns 24..31 for every row: one active lane per row
-%mask_p0 = pto.pset_b32 "PAT_ALL"
-%mask_p1 = pto.pset_b32 "PAT_ALL"
-%mask_p2 = pto.pset_b32 "PAT_ALL"
-%mask_p3 = materialize one lane per 8-lane row block
+// The reduce-side grouped mask is not built by guessing the final sparse
+// predicate image.  It is first materialized as the same contiguous grouped
+// mask used by masked_load, then converted to the reduce layout with predicate
+// deinterleave.  This keeps predicate reordering identical to the data
+// reordering above.
+%rm0, %rm1, %rm2, %rm3 = materialize contiguous create_group_mask(c25, S=32)
+%rm01_lo, %rm01_hi = pto.pdintlv_b32 %rm0, %rm1
+%rm23_lo, %rm23_hi = pto.pdintlv_b32 %rm2, %rm3
+%mask_p0, %mask_p2 = pto.pdintlv_b32 %rm01_lo, %rm23_lo
+%mask_p1, %mask_p3 = pto.pdintlv_b32 %rm01_hi, %rm23_hi
 
 %s0 = pto.vcgadd %x_p0, %mask_p0 : !pto.vreg<64xf32>
 %s1 = pto.vcgadd %x_p1, %mask_p1 : !pto.vreg<64xf32>
@@ -5244,12 +5227,21 @@ Required assignment rule:
 ```text
 `masked_load` and `group_reduce` must share the same grouped mask layout.  The
 passthrough value defines inactive loaded lanes, while the reduce mask defines
-participation.  Assignment may select a deinterleaved S=32 load plan only when
-the rounded physical reads are memory-safe; otherwise it must diagnose or use a
-future stable gather fallback.
+participation.  Assignment materializes two explicit mask values when needed:
+one contiguous value for `masked_load`, and one deinterleaved value for
+`group_reduce_addf`.  `vmi-to-vpto` lowers the deinterleaved
+`create_group_mask` by materializing the contiguous grouped predicate chunks
+and then applying `pdintlv_b32` in the same tree shape as the data
+`vdintlv`.  It does not walk from `group_reduce_addf` to the mask producer to
+choose or reject the selected plan.
 
-Current implementation additionally diagnoses the S=32 block8 partial grouped
-mask itself.  This is deliberate: the case is not implemented until the
-deinterleaved grouped-mask materialization and `vcgadd` interpretation are
-validated end to end by SIM.
+Assignment may select a deinterleaved S=32 load plan only when the rounded
+physical reads are memory-safe; otherwise it must diagnose or use a future
+stable gather fallback.
+
+Runtime coverage:
+
+```text
+test/vpto/cases/vmi/masked-load-group-tail-s32-reduce-store
+```
 ```

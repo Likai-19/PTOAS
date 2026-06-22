@@ -832,28 +832,6 @@ struct LayoutSolver {
                   VMILayoutAttr::getDeinterleaved(ctx, 4, /*blockElems=*/1);
           }
         }
-        if (sourceLayout && sourceLayout.isDeinterleaved() &&
-            sourceLayout.getFactor() == 4 &&
-            sourceLayout.getBlockElems() == 8 && numGroups > 0 &&
-            sourceType.getElementCount() % numGroups == 0) {
-          int64_t groupSize = sourceType.getElementCount() / numGroups;
-          if (groupSize == 32) {
-            if (auto groupMask =
-                    reduce.getMask().getDefiningOp<VMICreateGroupMaskOp>()) {
-              std::optional<int64_t> activeElems =
-                  getConstantIndexValue(groupMask.getActiveElemsPerGroup());
-              if (activeElems && *activeElems >= 0 &&
-                  *activeElems < groupSize) {
-                reduce.emitError()
-                    << kVMIDiagUnsupportedPrefix
-                    << "pto.vmi.group_reduce_addf s32 block8 lowering does "
-                       "not yet support partial create_group_mask "
-                       "active_elems_per_group during layout assignment";
-                return WalkResult::interrupt();
-              }
-            }
-          }
-        }
         requestDataUse(reduce.getSourceMutable(), sourceLayout);
         if (failed(requestMaskUse(
                 reduce.getMaskMutable(), sourceLayout,
