@@ -16,7 +16,9 @@ def VMILayoutAttr : PTO_Attr<"VMILayout", "vmi.layout"> {
   let summary = "VMI logical vector register layout";
   let parameters = (ins
     StringRefParameter<"layout kind">:$kind,
-    "int64_t":$factor
+    "int64_t":$factor,
+    "int64_t":$blockElems,
+    "int64_t":$slots
   );
   let hasCustomAssemblyFormat = 1;
   let genVerifyDecl = 1;
@@ -24,9 +26,11 @@ def VMILayoutAttr : PTO_Attr<"VMILayout", "vmi.layout"> {
   let extraClassDeclaration = [{
     static VMILayoutAttr getContiguous(::mlir::MLIRContext *context);
     static VMILayoutAttr getDeinterleaved(::mlir::MLIRContext *context,
-                                          int64_t factor);
+                                          int64_t factor,
+                                          int64_t blockElems = 1);
     static VMILayoutAttr getGroupSlots(::mlir::MLIRContext *context,
-                                       int64_t numGroups);
+                                       int64_t numGroups,
+                                       int64_t slots = 0);
 
     bool isContiguous() const { return getKind() == "contiguous"; }
     bool isDeinterleaved() const { return getKind() == "deinterleaved"; }

@@ -16,6 +16,7 @@ module {
       %mask_b16: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>,
       %mask_b32: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>) {
     %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
     %f32 = arith.constant 1.000000e+00 : f32
     %f16 = arith.constant 1.000000e+00 : f16
     %active = arith.constant 64 : index
@@ -40,6 +41,10 @@ module {
     %trunc = pto.vmi.truncf %ext : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
 
     %loaded = pto.vmi.load %ptr[%c0] : !pto.ptr<f32> -> !pto.vmi.vreg<128xf32>
+    %slot_loaded = pto.vmi.group_slot_load %ptr[%c0], %c1 {num_groups = 8}
+        : !pto.ptr<f32> -> !pto.vmi.vreg<128xf32>
+    pto.vmi.group_store %slot_loaded, %ptr[%c0], %c1 {num_groups = 8}
+        : !pto.vmi.vreg<128xf32>, !pto.ptr<f32>
     pto.vmi.store %loaded, %ptr[%c0] : !pto.vmi.vreg<128xf32>, !pto.ptr<f32>
     %tile_read = pto.vmi.tile_read %tile : memref<128xf32> -> !pto.vmi.vreg<128xf32>
     pto.vmi.tile_write %tile_read, %tile : !pto.vmi.vreg<128xf32>, memref<128xf32>
@@ -94,6 +99,8 @@ module {
 // CHECK: pto.vmi.extf
 // CHECK: pto.vmi.truncf
 // CHECK: pto.vmi.load
+// CHECK: pto.vmi.group_slot_load
+// CHECK: pto.vmi.group_store
 // CHECK: pto.vmi.store
 // CHECK: pto.vmi.tile_read
 // CHECK: pto.vmi.tile_write
