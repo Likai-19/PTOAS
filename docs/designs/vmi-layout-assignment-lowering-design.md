@@ -552,9 +552,12 @@ diagnostic embellishment:
 
 Anything else is a layout-assignment responsibility.  In particular, an
 unsupported producer/consumer combination must be rejected before assignment
-writes a selected plan.  Section 3.44 is the model: partial S=32 grouped masks
-are diagnosed in `vmi-layout-assignment`, not by `vmi-to-vpto` walking from
-`group_reduce_addf` to the mask producer.
+writes a selected plan.  Section 3.44 is the model for supported partial S=32
+grouped masks: assignment emits explicit contiguous and deinterleaved mask
+values, and `vmi-to-vpto` lowers the deinterleaved mask op itself through
+contiguous grouped-mask materialization followed by predicate deinterleave.  It
+does not walk from `group_reduce_addf` to the mask producer to choose or reject
+the plan.
 
 ## 9. Physical Value Ordering
 
