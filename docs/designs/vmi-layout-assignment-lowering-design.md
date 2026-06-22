@@ -280,6 +280,86 @@ invariant is not illustrative: if a lowering decision is not uniquely implied
 by op + assigned operand/result layouts + explicit attrs, assignment must write
 a selected plan.
 
+### 4.1 Selected Plan Contract
+
+`selected_plan` is not an optimization hint.  It is the serialized answer to a
+question that would otherwise require `vmi-to-vpto` to inspect producer,
+consumer, control-flow, memory, or mask context.
+
+Required plans in the current implementation:
+
+```text
+group_load:
+  required for registered result layouts.  The plan fixes source_group_stride
+  handling and whether the result is contiguous chunks, S=16 block8, or S=32
+  block8. Unsupported shapes diagnose through the capability check instead of
+  inventing a plan.
+
+group_slot_load:
+  required for explicit slots=8 or slots=1 layouts.  The plan fixes packed
+  scalar load versus row-local lane-0 load.  A single source op may be
+  rematerialized into two different planned ops.
+
+group_reduce_addf:
+  required for registered S=8/S=16/S=32/S=64 shapes.  The plan fixes parity
+  versus block8, packed slots=8 versus row-local slots=1, and multi-chunk
+  arity. Unsupported group sizes diagnose as unsupported capability, not as
+  missing selected_plan.
+
+group_broadcast:
+  required for explicit slots=8 or slots=1 sources.  The plan fixes source
+  interpretation and the vselr index recipe for the requested dense result
+  layout. Legacy bare group_slots are tolerated only as compatibility input and
+  must not be emitted by layout assignment.
+
+truncf:
+  required for group_slots slots=1 f32->f16, where the cast is a slot-preserving
+  group-slot cast rather than an ordinary dense VCVT path.
+```
+
+Layout-only or attr-only decisions in the current implementation:
+
+```text
+load:
+  result layout plus explicit memory attrs decide the lowering.  full_read_elems
+  is the memory-safety proof; vmi-to-vpto may not recover that proof from MTE or
+  caller context.
+
+group_store:
+  source group_slots layout and explicit output stride decide packed slots=8
+  versus row-local slots=1 store legality.  If another legal store recipe is
+  introduced, assignment must attach a selected plan before vmi-to-vpto uses it.
+
+masked_load:
+  explicit passthrough, mask layout, full physical read, shaped safe-tail memref,
+  or an explicit diagnostic decide legality.  A future stable gather fallback
+  must be selected by assignment before vmi-to-vpto lowers it.
+
+masked_store/select/elementwise:
+  operand/result layouts and explicit mask granularity decide the lowering.
+  They remain transfer ops unless a future case introduces competing recipes.
+
+extf/truncf:
+  dense width-changing paths are layout-determined today.  Any future
+  commute-through-group-broadcast or alternative VCVT recipe must become a
+  selected plan first.
+```
+
+Forbidden plan recovery:
+
+```text
+No pattern may synthesize one of the required plans by:
+  - walking from group_reduce to the load/group_load producer
+  - walking from store/broadcast/truncf to the group_reduce producer
+  - scanning sibling users of a group_slots value
+  - inspecting branch bodies or loop bodies from a control-flow boundary
+  - inspecting private callee bodies while lowering a call
+```
+
+If a required plan is missing, `vmi-to-vpto` emits
+`VMI-LAYOUT-CONTRACT` at the current op and prints the op name, logical type,
+assigned layouts, and the missing plan class.
+
 ## 5. Plan Registry
 
 The compiler owns a target-aware plan registry.  Layout assignment queries this
