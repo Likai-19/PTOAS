@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: not ptoas --pto-arch=a5 --pto-backend=vpto --enable-vmi --emit-vpto %s -o - 2>&1 | FileCheck %s
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --enable-vmi --emit-vpto %s -o - | FileCheck %s
 
 module attributes {pto.target_arch = "a5"} {
   module attributes {pto.backend = "vpto", pto.kernel_kind = #pto.kernel_kind<vector>} {
@@ -31,5 +31,14 @@ module attributes {pto.target_arch = "a5"} {
   }
 }
 
-// CHECK: cannot infer resultless pto.vecscope because VPTO vector-scope data cannot have external users
-// CHECK-SAME: escaping value type is '!pto.vreg<64xf32>'
+// CHECK-NOT: func.func private @callee
+// CHECK-LABEL: func.func @caller
+// CHECK: pto.vecscope
+// CHECK: pto.vdup
+// CHECK: pto.vadd
+// CHECK: pto.vsts
+// CHECK: pto.vsts
+// CHECK-NOT: func.call @callee
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

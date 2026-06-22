@@ -1068,13 +1068,13 @@ the case catalog.
 Current broad runtime sweep:
 
 ```text
-WORK_SPACE=$PWD/.tmp/vmi-runtime-batch-dynamic-scalar CASE_PREFIX='vmi/' JOBS=4 \
+WORK_SPACE=$PWD/.tmp/vmi-runtime-batch-private-calls CASE_PREFIX='vmi/' JOBS=4 \
   test/vpto/scripts/run_host_vpto_validation_parallel.sh
 
-PASS=41 FAIL=0
-summary: .tmp/vmi-runtime-batch-dynamic-scalar/parallel-summary.tsv
+PASS=43 FAIL=0
+summary: .tmp/vmi-runtime-batch-private-calls/parallel-summary.tsv
 log scan: rg -n "RV_|alignment|\[ERROR\]|\[error\]|ERROR" \
-  .tmp/vmi-runtime-batch-dynamic-scalar.log
+  .tmp/vmi-runtime-batch-private-calls.log
 result: no matches
 ```
 
@@ -1125,7 +1125,7 @@ Aggregate catalog headings are covered through their endpoint subcases:
   3.16.2 row-local slots=1 positive plus dynamic/unaligned diagnostics
 
 3.25 function boundary layout specialization:
-  3.25.1 private/internal boundary lit coverage, runtime backend gap
+  3.25.1 private/internal boundary lit and runtime coverage
   3.25.2 public/external boundary diagnostics
 ```
 
@@ -1137,14 +1137,10 @@ SIM-backed positive endpoints:
   3.6.1, 3.6.2, 3.6.3, 3.7.1, 3.7.2, 3.7.3,
   3.8, 3.10, 3.11.1, 3.12, 3.15.1, 3.15.2,
   3.16.1 positive, 3.16.2 positive, 3.17, 3.18,
-  3.19.1, 3.20, 3.21, 3.22, 3.23, 3.24, 3.26,
+  3.19.1, 3.20, 3.21, 3.22, 3.23, 3.24, 3.25.1, 3.26,
   3.27 positive, 3.28 positive, 3.29, 3.31, 3.32,
   3.33, 3.34, 3.35, 3.36, 3.37, 3.38, 3.39,
-  3.40, 3.41, 3.42, 3.44, 3.45
-
-lit-backed positive endpoints with runtime gap:
-  3.25.1 private/internal function boundary
-  3.43 internal function argument boundary materialization
+  3.40, 3.41, 3.42, 3.43, 3.44, 3.45
 
 diagnostic endpoints:
   3.7.4, 3.9, 3.11.2, 3.13, 3.14, 3.15.3,
@@ -1155,10 +1151,10 @@ diagnostic endpoints:
 
 repository evidence:
   all concrete lit/runtime paths listed below exist
-  all 41 runtime case directories contain kernel.pto, launch.cpp, main.cpp,
+  all 43 runtime case directories contain kernel.pto, launch.cpp, main.cpp,
   golden.py, and compare.py
-  latest broad VMI runtime sweep passed: PASS=41 FAIL=0
-  latest full VMI lit sweep passed: 312/312
+  latest broad VMI runtime sweep passed: PASS=43 FAIL=0
+  latest full VMI lit sweep passed: 313/313
 ```
 
 Current checked-in coverage for 3.3 dense f8->f32->compute->f8:
@@ -1354,16 +1350,37 @@ runtime SIM:
   test/vpto/cases/vmi/group-slots-scf-for-store
 ```
 
-Current checked-in lit coverage for 3.43 internal function argument boundary
+Current checked-in coverage for 3.25.1 private function result boundary:
+
+```text
+lit:
+  test/lit/vmi/vmi_ptoas_private_call_inline.pto
+
+runtime SIM:
+  test/vpto/cases/vmi/private-call-inline-store
+
+implementation note:
+  after vmi-to-vpto physicalizes the private helper, ptoas inlines private
+  single-block helpers whose signatures contain !pto.vreg or !pto.mask. This
+  happens before VPTO vecscope/backend emission, so physical vector values do
+  not escape through a function return.
+```
+
+Current checked-in coverage for 3.43 internal function argument boundary
 materialization:
 
 ```text
 lit:
   test/lit/vmi/vmi_layout_assignment_call_argument_boundary.pto
+  test/lit/vmi/vmi_ptoas_call_boundary_vecscope.pto
 
 runtime SIM:
-  blocked by the current private vector callee backend path; see known
-  implementation gaps below
+  test/vpto/cases/vmi/private-call-argument-boundary-store
+
+implementation note:
+  private physical helper inlining also covers void helper calls with physical
+  VMI arguments, so the backend no longer sees a physical VPTO vector function
+  ABI for this internal boundary.
 ```
 
 Current checked-in coverage for packed group-slot RHS elementwise continuations
@@ -1550,7 +1567,6 @@ Diagnostic-only cases:
 3.16.2 group_slot_load slots=1 dynamic or unaligned stride
 3.27 S=32 source_group_stride not divisible by 8 f32 elements
 3.19.2 block_elems=8 value consumed by truncf without materialization plan
-3.25.1 full ptoas emission for private VMI callees that return VPTO vector values
 3.25.2 public/external VMI boundary
 3.30 unsafe masked_load tail without stable masked/gather fallback
 ```
@@ -1578,7 +1594,6 @@ lit:
   test/lit/vmi/vmi_ptoas_public_result_abi_invalid.pto
   test/lit/vmi/vmi_layout_assignment_external_call_invalid.pto
   test/lit/vmi/vmi_layout_assignment_external_decl_invalid.pto
-  test/lit/vmi/vmi_ptoas_call_boundary_vecscope_invalid.pto
   test/lit/vmi/vmi_to_vpto_masked_load_nonfull_invalid.pto
   test/lit/vmi/vmi_to_vpto_stable_gather_masked_load_todo_invalid.pto
 ```
@@ -1587,25 +1602,11 @@ Known implementation gaps before all catalog cases can become runtime SIM
 coverage:
 
 ```text
-remaining function runtime coverage:
-  3.25.1 internal function boundary specialization has layout-assignment and
-  vmi-to-vpto lit coverage, but full ptoas emission still fails after
-  physicalization because today's inferred pto.vecscope is resultless and VPTO
-  vector-scope values cannot escape through a function return. Runtime coverage
-  requires either a resultful vecscope/VPTO vector ABI or an explicit inlining
-  policy before vecscope inference.
-
-  3.43 internal function argument boundary materialization has
-  layout-assignment and vmi-to-vpto lit coverage. Full ptoas emission for a
-  private void vector callee currently reaches the Bisheng device backend and
-  fails on the physicalized callee with:
-
-    fatal error: error in backend: Do not know how to split the result of this operator!
-
-  Runtime coverage requires either inlining private vector callees before the
-  device backend path or adding backend support for the physical VPTO vector
-  function ABI. This is a runtime/backend gap, not a license for `vmi-to-vpto`
-  to infer layouts from caller/callee context.
+private physical function ABI:
+  3.25.1 and 3.43 runtime coverage is closed for private/internal single-block
+  helpers by inlining private physical VMI helpers after vmi-to-vpto and before
+  VPTO vecscope/backend emission. Public/external VMI boundaries are still
+  rejected until a stable VMI ABI is defined.
 
 memory-proof runtime coverage:
   3.21 S=32 full-tile-readable tail is covered by a runtime case that uses

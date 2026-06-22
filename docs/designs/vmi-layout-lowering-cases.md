@@ -177,7 +177,7 @@ the immediately following complete endpoints.
 3.22 scf.for loop-carried layout                         complete
 3.23 group_broadcast with multiple dense consumers       complete
 3.24 mask with elementwise/select/store                  complete
-3.25 function boundary layout specialization             complete/design
+3.25 function boundary layout specialization             complete
 3.26 S=16 grouped tail through broadcast/reduce/store    complete
 3.27 S=32 group_load with stride greater than group size complete
 3.28 group_slot_load slots=1 aligned non-unit stride     complete
@@ -195,7 +195,7 @@ the immediately following complete endpoints.
 3.40 scalar broadcast feeding dense and grouped users    complete/materialization
 3.41 non-rematerializable value with incompatible users  complete/materialization
 3.42 group_slots scf.for loop-carried accumulator        complete
-3.43 internal function argument boundary materialization complete/design
+3.43 internal function argument boundary materialization complete
 3.44 masked_load grouped tail feeding S=32 reduce        complete
 3.45 dynamic S=32 create_group_mask                      complete
 ```
@@ -3269,6 +3269,22 @@ for r = 0..7:
   out[off + r] = reduce(row_r[0..31])
 ```
 
+Runtime closure:
+
+```text
+lit:
+  test/lit/vmi/vmi_ptoas_private_call_inline.pto
+
+runtime SIM:
+  test/vpto/cases/vmi/private-call-inline-store
+
+ptoas pipeline:
+  vmi-layout-assignment makes the private result layout explicit
+  vmi-to-vpto physicalizes the private helper result into !pto.vreg values
+  ptoas then inlines private physical VMI helpers before VPTO vecscope/backend
+  emission, so physical vector values do not escape through a function return
+```
+
 #### 3.25.2 Public Or External VMI Boundary
 
 VMI input:
@@ -5123,6 +5139,23 @@ Future optimization may specialize private VMI function signatures directly to
 `deinterleaved = 4, block_elems = 8` when all call sites agree.  That
 optimization must still be expressed in the assigned VMI function type before
 `vmi-to-vpto` runs.
+```
+
+Runtime closure:
+
+```text
+lit:
+  test/lit/vmi/vmi_layout_assignment_call_argument_boundary.pto
+  test/lit/vmi/vmi_ptoas_call_boundary_vecscope.pto
+
+runtime SIM:
+  test/vpto/cases/vmi/private-call-argument-boundary-store
+
+ptoas pipeline:
+  vmi-layout-assignment inserts explicit callee-entry materialization
+  vmi-to-vpto physicalizes the call operands and callee body
+  ptoas then inlines the private physical helper before VPTO vecscope/backend
+  emission, so the backend never needs a physical VPTO vector function ABI
 ```
 
 ### 3.44 `masked_load` Grouped Tail Feeding S=32 Reduce
