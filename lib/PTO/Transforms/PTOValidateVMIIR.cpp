@@ -36,6 +36,8 @@ using namespace mlir::pto;
 
 namespace {
 
+static constexpr const char *kVMISelectedPlanAttrName = "vmi.selected_plan";
+
 bool isVMIType(Type type) { return isa<VMIVRegType, VMIMaskType>(type); }
 
 bool isPhysicalVPTOType(Type type) {
@@ -157,6 +159,133 @@ LogicalResult emitInvariant(Operation *op, llvm::raw_ostream *diagOS,
   (void)diag;
   mirrorDiagnostic(diagOS, Twine(kVMIDiagPassInvariantPrefix) + message);
   return failure();
+}
+
+LogicalResult emitLayoutContract(Operation *op, llvm::raw_ostream *diagOS,
+                                 Twine message) {
+  InFlightDiagnostic diag =
+      op->emitError() << kVMIDiagLayoutContractPrefix << message;
+  (void)diag;
+  mirrorDiagnostic(diagOS, Twine(kVMIDiagLayoutContractPrefix) + message);
+  return failure();
+}
+
+std::optional<int64_t> getGroupSize(VMIVRegType type, int64_t numGroups) {
+  if (!type || numGroups <= 0 || type.getElementCount() % numGroups != 0)
+    return std::nullopt;
+  return type.getElementCount() / numGroups;
+}
+
+bool hasRegisteredGroupReducePlan(VMIGroupReduceAddFOp op) {
+  auto sourceType = dyn_cast<VMIVRegType>(op.getSource().getType());
+  if (!sourceType)
+    return false;
+  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+  if (!sourceLayout)
+    return false;
+
+  std::optional<int64_t> groupSize =
+      getGroupSize(sourceType, op.getNumGroupsAttr().getInt());
+  if (!groupSize)
+    return false;
+
+  if (sourceLayout.isContiguous())
+    return *groupSize == 8 || *groupSize == 64;
+
+  if (!sourceLayout.isDeinterleaved())
+    return false;
+  if (*groupSize == 16 && sourceLayout.getFactor() == 2)
+    return sourceLayout.getBlockElems() == 1 ||
+           sourceLayout.getBlockElems() == 8;
+  if (*groupSize == 32 && sourceLayout.getFactor() == 4)
+    return sourceLayout.getBlockElems() == 1 ||
+           sourceLayout.getBlockElems() == 8;
+  return false;
+}
+
+bool hasRegisteredGroupLoadPlan(VMIGroupLoadOp op) {
+  auto resultType = dyn_cast<VMIVRegType>(op.getResult().getType());
+  if (!resultType)
+    return false;
+  VMILayoutAttr layout = resultType.getLayoutAttr();
+  if (!layout)
+    return false;
+  if (layout.isContiguous())
+    return true;
+  if (!layout.isDeinterleaved() || layout.getBlockElems() != 8)
+    return false;
+
+  std::optional<int64_t> groupSize =
+      getGroupSize(resultType, op.getNumGroupsAttr().getInt());
+  if (!groupSize)
+    return false;
+  return (*groupSize == 16 && layout.getFactor() == 2) ||
+         (*groupSize == 32 && layout.getFactor() == 4);
+}
+
+bool hasRegisteredGroupSlotLoadPlan(VMIGroupSlotLoadOp op) {
+  auto resultType = dyn_cast<VMIVRegType>(op.getResult().getType());
+  if (!resultType)
+    return false;
+  VMILayoutAttr layout = resultType.getLayoutAttr();
+  return layout && layout.isGroupSlots() &&
+         layout.getNumGroups() == op.getNumGroupsAttr().getInt() &&
+         (layout.getSlots() == 8 || layout.getSlots() == 1);
+}
+
+bool hasRegisteredGroupBroadcastPlan(VMIGroupBroadcastOp op) {
+  auto sourceType = dyn_cast<VMIVRegType>(op.getSource().getType());
+  auto resultType = dyn_cast<VMIVRegType>(op.getResult().getType());
+  if (!sourceType || !resultType)
+    return false;
+  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  return sourceLayout && resultLayout && sourceLayout.isGroupSlots() &&
+         sourceLayout.getNumGroups() == op.getNumGroupsAttr().getInt() &&
+         !resultLayout.isGroupSlots() &&
+         (sourceLayout.getSlots() == 8 || sourceLayout.getSlots() == 1);
+}
+
+bool hasRegisteredGroupSlotTruncFPlan(Operation *op) {
+  auto truncf = dyn_cast<VMITruncFOp>(op);
+  if (!truncf)
+    return false;
+
+  auto sourceType = dyn_cast<VMIVRegType>(truncf.getSource().getType());
+  auto resultType = dyn_cast<VMIVRegType>(truncf.getResult().getType());
+  if (!sourceType || !resultType)
+    return false;
+
+  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  return sourceLayout && resultLayout && sourceLayout.isGroupSlots() &&
+         resultLayout.isGroupSlots() && sourceLayout.getSlots() == 1 &&
+         resultLayout.getSlots() == 1 && sourceType.getElementType().isF32() &&
+         resultType.getElementType().isF16();
+}
+
+bool requiresSelectedPlan(Operation *op) {
+  if (auto groupLoad = dyn_cast<VMIGroupLoadOp>(op))
+    return hasRegisteredGroupLoadPlan(groupLoad);
+  if (auto groupSlotLoad = dyn_cast<VMIGroupSlotLoadOp>(op))
+    return hasRegisteredGroupSlotLoadPlan(groupSlotLoad);
+  if (auto reduce = dyn_cast<VMIGroupReduceAddFOp>(op))
+    return hasRegisteredGroupReducePlan(reduce);
+  if (auto broadcast = dyn_cast<VMIGroupBroadcastOp>(op))
+    return hasRegisteredGroupBroadcastPlan(broadcast);
+  return hasRegisteredGroupSlotTruncFPlan(op);
+}
+
+LogicalResult verifySelectedPlanContract(Operation *op,
+                                         llvm::raw_ostream *diagOS) {
+  if (!requiresSelectedPlan(op))
+    return success();
+  if (op->getAttrOfType<StringAttr>(kVMISelectedPlanAttrName))
+    return success();
+  return emitLayoutContract(
+      op, diagOS,
+      Twine(op->getName().getStringRef()) +
+          " requires vmi.selected_plan selected by vmi-layout-assignment");
 }
 
 LogicalResult verifyBoundaryType(Operation *owner, Type type,
@@ -377,6 +506,9 @@ LogicalResult verifyLayoutAssignedOperation(Operation *op,
 
   if (!hasVMIOrPhysicalType(op))
     return success();
+
+  if (failed(verifySelectedPlanContract(op, diagOS)))
+    return failure();
 
   if (isVMIHelperOp(op)) {
     if (isVMILayoutHelperOp(op))
