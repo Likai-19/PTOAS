@@ -758,8 +758,11 @@ Current audit result:
 
 ```text
 3.44 partial S=32 create_group_mask:
-  decision moved to vmi-layout-assignment.  vmi-to-vpto no longer walks from
-  group_reduce_addf to the mask defining op to reject the plan.
+  assignment writes explicit contiguous and deinterleaved mask values.  When
+  lowering the deinterleaved create_group_mask itself, vmi-to-vpto first
+  materializes contiguous grouped predicate chunks and then applies predicate
+  pdintlv in the same tree shape as the data vdintlv.  It still does not walk
+  from group_reduce_addf to the mask defining op to choose or reject the plan.
 
 masked_load:
   direct lowering is load + vsel.  It does not inspect the mask producer to
@@ -870,13 +873,13 @@ the case catalog.
 Current broad runtime sweep:
 
 ```text
-WORK_SPACE=$PWD/.tmp/vmi-runtime-batch-39 CASE_PREFIX='vmi/' JOBS=4 \
+WORK_SPACE=$PWD/.tmp/vmi-runtime-batch-40 CASE_PREFIX='vmi/' JOBS=4 \
   test/vpto/scripts/run_host_vpto_validation_parallel.sh
 
-PASS=39 FAIL=0
-summary: .tmp/vmi-runtime-batch-39/parallel-summary.tsv
+PASS=40 FAIL=0
+summary: .tmp/vmi-runtime-batch-40/parallel-summary.tsv
 log scan: rg -n "RV_|alignment|\[ERROR\]|\[error\]|ERROR" \
-  .tmp/vmi-runtime-batch-39.log
+  .tmp/vmi-runtime-batch-40.log
 result: no matches
 ```
 
@@ -1052,6 +1055,17 @@ runtime SIM:
   test/vpto/cases/vmi/group-reduce-s32-tail-full-tile-store
   This case has `ptoas.flags` with `--enable-vmi`, because the partial pointer
   load must run through layout assignment before VPTO/LLVM emission.
+```
+
+Current checked-in coverage for 3.44 masked_load grouped tail feeding S=32
+reduce:
+
+```text
+lit:
+  test/lit/vmi/vmi_layout_assignment_masked_load_group_tail_s32.pto
+
+runtime SIM:
+  test/vpto/cases/vmi/masked-load-group-tail-s32-reduce-store
 ```
 
 Current checked-in runtime coverage for 3.12 control-flow join before S=32
@@ -1297,7 +1311,6 @@ Diagnostic-only cases:
 3.25.1 full ptoas emission for private VMI callees that return VPTO vector values
 3.25.2 public/external VMI boundary
 3.30 unsafe masked_load tail without stable masked/gather fallback
-3.44 masked_load grouped tail with S=32 partial create_group_mask
 ```
 
 Current checked-in diagnostic coverage for 3.9/3.13/3.14:
@@ -1326,7 +1339,6 @@ lit:
   test/lit/vmi/vmi_ptoas_call_boundary_vecscope_invalid.pto
   test/lit/vmi/vmi_to_vpto_masked_load_nonfull_invalid.pto
   test/lit/vmi/vmi_to_vpto_stable_gather_masked_load_todo_invalid.pto
-  test/lit/vmi/vmi_layout_assignment_masked_load_group_tail_s32.pto
 ```
 
 Known implementation gaps before all catalog cases can become runtime SIM
@@ -1338,16 +1350,6 @@ dynamic grouped masks:
   active_elems_per_group. Dynamic active_elems_per_group is not implemented
   yet. Do not replace grouped masks with prefix create_mask; that would change
   the semantics.
-
-S=32 partial grouped masks:
-  3.44 `masked_load` grouped tail with `active_elems_per_group < 32` is
-  diagnostic-only for the current S=32 block8 reduce path, and the diagnostic
-  is emitted by `vmi-layout-assignment` before a selected plan is written.  A
-  runtime probe of the previously allowed lowering did not preserve the logical
-  25-lane row sum.  A second probe with `active_elems_per_group = 25` produced
-  row 0 `golden=-3.6290324` but `output=-3.6592741`, and the row-wise error
-  grew monotonically.  This combination must stay unsupported until the
-  deinterleaved grouped-mask materialization is fixed and validated by SIM.
 
 remaining function runtime coverage:
   3.25.1 internal function boundary specialization has layout-assignment and
