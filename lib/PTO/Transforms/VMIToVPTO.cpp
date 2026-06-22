@@ -5725,10 +5725,17 @@ struct OneToNVMIGroupReduceAddFOpPattern
                                               &lanesPerPart, &groupCount,
                                               &chunksPerGroup, rewriter)))
       return failure();
+    VMILayoutAttr resultLayout = resultVMIType.getLayoutAttr();
+    bool rowLocalSlots1Result =
+        resultLayout && resultLayout.isGroupSlots() &&
+        resultLayout.getNumGroups() == groupCount &&
+        resultLayout.getSlots() == 1;
+    int64_t expectedResultParts =
+        rowLocalSlots1Result ? groupCount : groupCount * chunksPerGroup;
     if (sourceParts.size() != maskParts.size() ||
         static_cast<int64_t>(sourceParts.size()) !=
             groupCount * chunksPerGroup ||
-        resultTypes.size() != sourceParts.size())
+        static_cast<int64_t>(resultTypes.size()) != expectedResultParts)
       return rewriter.notifyMatchFailure(
           op, "group_reduce_addf requires matching source/mask/result arity");
 
@@ -5782,7 +5789,7 @@ struct OneToNVMIGroupReduceAddFOpPattern
                            .getResult();
       }
 
-      int64_t destChunk = group * chunksPerGroup;
+      int64_t destChunk = rowLocalSlots1Result ? group : group * chunksPerGroup;
       results[destChunk] =
           rewriter
               .create<VselOp>(op.getLoc(), resultType, *accumulator,
@@ -5857,6 +5864,18 @@ struct OneToNVMIGroupBroadcastOpPattern
         resultLayout.isDeinterleaved() && resultLayout.getBlockElems() > 1 &&
         *groupSize < lanesPerPart)
       selectionGroupSize = resultLayout.getBlockElems();
+    auto resolveLargeGroupSource = [&](int64_t group, int64_t chunksPerGroup,
+                                       int64_t &sourceChunk,
+                                       int64_t &baseGroupSlot) {
+      int64_t slots = sourceLayout.getSlots();
+      if (slots > 0) {
+        sourceChunk = group / slots;
+        baseGroupSlot = group % slots;
+        return;
+      }
+      sourceChunk = group * chunksPerGroup;
+      baseGroupSlot = 0;
+    };
 
     SmallVector<Value> results;
     results.resize(resultTypes.size());
@@ -5871,7 +5890,8 @@ struct OneToNVMIGroupBroadcastOpPattern
         if (*groupSize >= lanesPerPart) {
           int64_t chunksPerGroup = *groupSize / lanesPerPart;
           int64_t group = flatIndex / chunksPerGroup;
-          sourceChunk = group * chunksPerGroup;
+          resolveLargeGroupSource(group, chunksPerGroup, sourceChunk,
+                                  baseGroupSlot);
         } else {
           VMILayoutAttr sourceLayout = sourceVMIType.getLayoutAttr();
           int64_t slots = sourceLayout.getSlots();
@@ -5953,7 +5973,8 @@ struct OneToNVMIGroupBroadcastOpPattern
                 return rewriter.notifyMatchFailure(
                     op, "group_broadcast result chunk crosses logical groups");
               int64_t chunksPerGroup = *groupSize / lanesPerPart;
-              sourceChunk = firstGroup * chunksPerGroup;
+              resolveLargeGroupSource(firstGroup, chunksPerGroup, sourceChunk,
+                                      baseGroupSlot);
               found = true;
               break;
             }
@@ -5968,12 +5989,26 @@ struct OneToNVMIGroupBroadcastOpPattern
             sourceChunk >= static_cast<int64_t>(sourceParts.size()))
           return rewriter.notifyMatchFailure(
               op, "group_broadcast source chunk is out of range");
-        results[flatIndex] =
-            rewriter
-                .create<VdupOp>(op.getLoc(), resultType,
-                                sourceParts[sourceChunk], *allMask,
-                                rewriter.getStringAttr("LOWEST"))
-                .getResult();
+        if (sourceLayout.getSlots() > 1) {
+          FailureOr<Value> groupSlotIndex = createGroupSlotIndexVector(
+              op.getLoc(), indexType, selectionGroupSize, baseGroupSlot,
+              rewriter);
+          if (failed(groupSlotIndex))
+            return rewriter.notifyMatchFailure(
+                op, "failed to create group_broadcast group-slot index vector");
+          results[flatIndex] =
+              rewriter
+                  .create<VselrOp>(op.getLoc(), resultType,
+                                   sourceParts[sourceChunk], *groupSlotIndex)
+                  .getResult();
+        } else {
+          results[flatIndex] =
+              rewriter
+                  .create<VdupOp>(op.getLoc(), resultType,
+                                  sourceParts[sourceChunk], *allMask,
+                                  rewriter.getStringAttr("LOWEST"))
+                  .getResult();
+        }
       } else {
         bool blockFragmentSmallGroup = resultLayout &&
                                        resultLayout.isDeinterleaved() &&

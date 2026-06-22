@@ -719,21 +719,25 @@ VMILocalRecipeRegistry::getGroupReduceAddFRecipe(
     return fail("requires matching non-empty source/mask physical arity");
 
   if (resultLayout.getSlots() == 1) {
-    if (*groupSize != 64)
+    FailureOr<int64_t> lanesPerPart =
+        getDataLanesPerPart(sourceType.getElementType());
+    if (failed(lanesPerPart) || *groupSize < *lanesPerPart ||
+        *groupSize % *lanesPerPart != 0)
       return fail("stable group_reduce_addf slots=1 recipes support group "
-                  "size 64");
+                  "sizes that are multiples of one physical chunk");
     if (!sourceLayout.isContiguous() || !maskLayout.isContiguous())
-      return fail("s64 group_reduce_addf requires contiguous source/mask "
+      return fail("slots=1 group_reduce_addf requires contiguous source/mask "
                   "layouts");
-    if (*resultArity != *sourceArity)
-      return fail("s64 group_reduce_addf requires source/result physical "
-                  "arity to match");
+    if (*resultArity != numGroups)
+      return fail("slots=1 group_reduce_addf requires one physical result "
+                  "part per group");
     std::string sourceFullReason;
     if (failed(checkFullDataPhysicalChunks(sourceType, &sourceFullReason)))
-      return fail(Twine("s64 group_reduce_addf requires full source chunks; ") +
+      return fail(Twine("slots=1 group_reduce_addf requires full source "
+                        "chunks; ") +
                   sourceFullReason);
     return VMIGroupReduceAddFRecipe{
-        VMIGroupReduceAddFRecipeKind::S64ContiguousVcaddRows};
+        VMIGroupReduceAddFRecipeKind::ContiguousVcaddRows};
   }
 
   if (*groupSize == 8) {
