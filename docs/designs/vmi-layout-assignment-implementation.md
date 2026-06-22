@@ -937,6 +937,39 @@ Aggregate catalog headings are covered through their endpoint subcases:
   3.25.2 public/external boundary diagnostics
 ```
 
+Current coverage audit result:
+
+```text
+SIM-backed positive endpoints:
+  3.1, 3.2, 3.3, 3.4, 3.5.1, 3.5.2, 3.5.3,
+  3.6.1, 3.6.2, 3.6.3, 3.7.1, 3.7.2, 3.7.3,
+  3.8, 3.10, 3.11.1, 3.12, 3.15.1, 3.15.2,
+  3.16.1 positive, 3.16.2 positive, 3.17, 3.18,
+  3.19.1, 3.20, 3.21, 3.22, 3.23, 3.24, 3.26,
+  3.27 positive, 3.28 positive, 3.29, 3.31, 3.32,
+  3.33, 3.34, 3.35, 3.36, 3.37, 3.38, 3.39,
+  3.40, 3.41, 3.42, 3.44
+
+lit-backed positive endpoints with runtime gap:
+  3.25.1 private/internal function boundary
+  3.43 internal function argument boundary materialization
+  3.45 dynamic S=32 create_group_mask
+
+diagnostic endpoints:
+  3.7.4, 3.9, 3.11.2, 3.13, 3.14, 3.15.3,
+  3.16.1 non-unit slots=8 source stride,
+  3.16.2 dynamic/unaligned slots=1 source stride,
+  3.19.2, 3.25.2, 3.27 unaligned source_group_stride,
+  3.30 unsafe masked_load tail
+
+repository evidence:
+  all concrete lit/runtime paths listed below exist
+  all 40 runtime case directories contain kernel.pto, launch.cpp, main.cpp,
+  golden.py, and compare.py
+  latest broad VMI runtime sweep passed: PASS=40 FAIL=0
+  latest full VMI lit sweep passed: 312/312
+```
+
 Current checked-in coverage for 3.3 dense f8->f32->compute->f8:
 
 ```text
