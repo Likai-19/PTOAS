@@ -30,6 +30,7 @@
 #include "mlir/IR/Types.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
+#include "mlir/Transforms/InliningUtils.h"
 #include "mlir/Parser/Parser.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
@@ -121,6 +122,27 @@ static bool isKnownZeroOrUnitExtent(int64_t value);
 static bool isByteIntegerType(Type ty);
 static LogicalResult verifyTileBufCommon(Operation *op, Type ty, StringRef name,
                                          bool allowLowPrecision = false);
+
+namespace {
+struct PTOInlinerInterface : public DialectInlinerInterface {
+  using DialectInlinerInterface::DialectInlinerInterface;
+
+  bool isLegalToInline(Operation *call, Operation *callable,
+                       bool wouldBeCloned) const final {
+    return true;
+  }
+
+  bool isLegalToInline(Region *dest, Region *src, bool wouldBeCloned,
+                       IRMapping &valueMapping) const final {
+    return true;
+  }
+
+  bool isLegalToInline(Operation *op, Region *dest, bool wouldBeCloned,
+                       IRMapping &valueMapping) const final {
+    return true;
+  }
+};
+} // namespace
 static LogicalResult verifyTileBufSameElemType(Operation *op, Type lhs, Type rhs,
                                                StringRef lhsName,
                                                StringRef rhsName);
@@ -2815,6 +2837,8 @@ void PTODialect::initialize() {
 #define GET_ATTRDEF_LIST
 #include "PTO/IR/PTOAttrs.cpp.inc"
       >();
+
+  addInterfaces<PTOInlinerInterface>();
 }
 
 

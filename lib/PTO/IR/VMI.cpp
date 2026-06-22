@@ -1,10 +1,12 @@
 // Copyright (c) 2026 Huawei Technologies Co., Ltd.
-// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
-// CANN Open Software License Agreement Version 2.0 (the "License").
-// Please refer to the License for details. You may not use this file except in compliance with the License.
-// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
-// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
-// See LICENSE in the root of the software repository for the full text of the License.
+// This program is free software, you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). Please refer to the License for details. You may not use
+// this file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON
+// AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+// FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+// for the full text of the License.
 
 //===- VMI.cpp - PTO VMI type and attribute support -----------------------===//
 //===----------------------------------------------------------------------===//
@@ -36,8 +38,7 @@ static std::string formatVMIVRegType(int64_t elementCount, Type elementType,
 }
 
 static std::string formatVMIMaskType(int64_t elementCount,
-                                     StringRef granularity,
-                                     Attribute layout) {
+                                     StringRef granularity, Attribute layout) {
   std::string result;
   llvm::raw_string_ostream os(result);
   os << "!pto.vmi.mask<" << elementCount << "x" << granularity;
@@ -146,6 +147,13 @@ static FailureOr<int64_t> getLayoutFactor(Type type) {
   return (*layout).isDeinterleaved() ? (*layout).getFactor() : 1;
 }
 
+static FailureOr<int64_t> getLayoutBlockElems(Type type) {
+  FailureOr<VMILayoutAttr> layout = getAssignedVMILayout(type);
+  if (failed(layout))
+    return failure();
+  return (*layout).isDeinterleaved() ? (*layout).getBlockElems() : 1;
+}
+
 static FailureOr<int64_t> getPhysicalLanesPerPart(Type type) {
   if (auto vregType = dyn_cast<VMIVRegType>(type))
     return getDataLanesPerPart(vregType.getElementType());
@@ -172,26 +180,29 @@ static bool isLayoutAssigned(VMIMaskType type) {
   return static_cast<bool>(type.getLayoutAttr());
 }
 
-static LogicalResult verifyAllSameVRegShapeAndLayout(Operation *op,
-                                                     ArrayRef<VMIVRegType> types,
-                                                     bool requireSameElement) {
+static LogicalResult
+verifyAllSameVRegShapeAndLayout(Operation *op, ArrayRef<VMIVRegType> types,
+                                bool requireSameElement) {
   if (types.empty())
     return success();
 
   VMIVRegType first = types.front();
-  bool anyLayout = llvm::any_of(types, [](VMIVRegType type) {
-    return isLayoutAssigned(type);
-  });
+  bool anyLayout = llvm::any_of(
+      types, [](VMIVRegType type) { return isLayoutAssigned(type); });
 
   for (VMIVRegType type : types) {
     if (type.getElementCount() != first.getElementCount())
-      return op->emitOpError("requires all VMI data values to have the same logical lane count");
+      return op->emitOpError(
+          "requires all VMI data values to have the same logical lane count");
     if (requireSameElement && type.getElementType() != first.getElementType())
-      return op->emitOpError("requires all VMI data values to have the same element type");
+      return op->emitOpError(
+          "requires all VMI data values to have the same element type");
     if (anyLayout && !isLayoutAssigned(type))
-      return op->emitOpError("requires either all or no VMI data values to carry layout");
+      return op->emitOpError(
+          "requires either all or no VMI data values to carry layout");
     if (anyLayout && type.getLayout() != first.getLayout())
-      return op->emitOpError("requires all layout-assigned VMI data values to have the same layout");
+      return op->emitOpError("requires all layout-assigned VMI data values to "
+                             "have the same layout");
   }
   return success();
 }
@@ -203,8 +214,7 @@ static LogicalResult verifyElementwiseVRegOp(Operation *op, VMIVRegType lhs,
                                          /*requireSameElement=*/true);
 }
 
-static LogicalResult verifyFloatUnaryVRegOp(Operation *op,
-                                            VMIVRegType source,
+static LogicalResult verifyFloatUnaryVRegOp(Operation *op, VMIVRegType source,
                                             VMIVRegType result) {
   if (!isVMIFloatLikeType(source.getElementType()))
     return op->emitOpError("requires floating-point-like VMI element type");
@@ -221,15 +231,15 @@ static LogicalResult verifyFloatTernaryVRegOp(Operation *op, VMIVRegType lhs,
                                          /*requireSameElement=*/true);
 }
 
-static LogicalResult verifyAllSameMaskShapeLayoutAndGranularity(
-    Operation *op, ArrayRef<VMIMaskType> types) {
+static LogicalResult
+verifyAllSameMaskShapeLayoutAndGranularity(Operation *op,
+                                           ArrayRef<VMIMaskType> types) {
   if (types.empty())
     return success();
 
   VMIMaskType first = types.front();
-  bool anyLayout = llvm::any_of(types, [](VMIMaskType type) {
-    return isLayoutAssigned(type);
-  });
+  bool anyLayout = llvm::any_of(
+      types, [](VMIMaskType type) { return isLayoutAssigned(type); });
 
   for (VMIMaskType type : types) {
     if (type.getElementCount() != first.getElementCount())
@@ -252,11 +262,13 @@ static LogicalResult verifyAllSameMaskShapeLayoutAndGranularity(
 static LogicalResult verifyMaskMatchesData(Operation *op, VMIMaskType maskType,
                                            VMIVRegType dataType) {
   if (maskType.getElementCount() != dataType.getElementCount())
-    return op->emitOpError("requires mask logical lane count to match data lane count");
+    return op->emitOpError(
+        "requires mask logical lane count to match data lane count");
 
   if (isLayoutAssigned(maskType) || isLayoutAssigned(dataType)) {
     if (!isLayoutAssigned(maskType) || !isLayoutAssigned(dataType))
-      return op->emitOpError("requires either both mask and data to carry layout or neither to carry layout");
+      return op->emitOpError("requires either both mask and data to carry "
+                             "layout or neither to carry layout");
     if (maskType.getLayout() != dataType.getLayout())
       return op->emitOpError("requires mask layout to match data layout");
   }
@@ -268,7 +280,8 @@ static LogicalResult verifyMaskMatchesData(Operation *op, VMIMaskType maskType,
   int64_t maskBitWidth = getMaskGranularityBitWidth(maskType.getGranularity());
   if (elementBitWidth != 0 && maskBitWidth != 0 &&
       elementBitWidth != static_cast<unsigned>(maskBitWidth))
-    return op->emitOpError("requires mask granularity to match data element width");
+    return op->emitOpError(
+        "requires mask granularity to match data element width");
 
   return success();
 }
@@ -288,9 +301,8 @@ static LogicalResult verifyMemoryElementMatches(Operation *op, Type memoryType,
   if (!memoryElementType)
     return success();
   if (memoryElementType != dataType.getElementType())
-    return op->emitOpError()
-           << "requires memory " << role
-           << " element type to match VMI data element type";
+    return op->emitOpError() << "requires memory " << role
+                             << " element type to match VMI data element type";
   return success();
 }
 
@@ -309,24 +321,26 @@ static LogicalResult verifyPhysicalParts(Operation *op, Type vmiType,
                                          TypeRange physicalTypes) {
   FailureOr<int64_t> expectedArity = getVMIPhysicalArity(vmiType);
   if (failed(expectedArity))
-    return op->emitOpError("requires a layout-assigned VMI type with computable physical arity");
+    return op->emitOpError(
+        "requires a layout-assigned VMI type with computable physical arity");
   if (static_cast<int64_t>(physicalTypes.size()) != *expectedArity)
-    return op->emitOpError()
-           << "requires " << *expectedArity << " physical parts, got "
-           << physicalTypes.size();
+    return op->emitOpError() << "requires " << *expectedArity
+                             << " physical parts, got " << physicalTypes.size();
 
   if (auto vregType = dyn_cast<VMIVRegType>(vmiType)) {
     FailureOr<int64_t> lanesPerPart =
         getDataLanesPerPart(vregType.getElementType());
     if (failed(lanesPerPart))
-      return op->emitOpError("requires data element type with known physical lane count");
+      return op->emitOpError(
+          "requires data element type with known physical lane count");
     for (Type physicalType : physicalTypes) {
       auto partType = dyn_cast<VRegType>(physicalType);
       if (!partType)
         return op->emitOpError("requires physical data parts to be !pto.vreg");
       if (partType.getElementCount() != *lanesPerPart ||
           partType.getElementType() != vregType.getElementType())
-        return op->emitOpError("requires physical data part type to match VMI lane-map helper");
+        return op->emitOpError(
+            "requires physical data part type to match VMI lane-map helper");
     }
     return success();
   }
@@ -335,45 +349,86 @@ static LogicalResult verifyPhysicalParts(Operation *op, Type vmiType,
   if (!maskType)
     return op->emitOpError("requires VMI data or mask type");
   if (maskType.isPred())
-    return op->emitOpError("requires layout-assigned mask with concrete granularity");
+    return op->emitOpError(
+        "requires layout-assigned mask with concrete granularity");
 
   for (Type physicalType : physicalTypes) {
     auto partType = dyn_cast<MaskType>(physicalType);
     if (!partType)
       return op->emitOpError("requires physical mask parts to be !pto.mask");
     if (partType.getGranularity() != maskType.getGranularity())
-      return op->emitOpError("requires physical mask part granularity to match VMI mask");
+      return op->emitOpError(
+          "requires physical mask part granularity to match VMI mask");
   }
   return success();
 }
 
-static int64_t getLogicalLanesInPart(int64_t elementCount, int64_t factor,
-                                     int64_t part) {
-  if (part < 0 || part >= factor || part >= elementCount)
-    return 0;
-  return ((elementCount - 1 - part) / factor) + 1;
+static std::optional<int64_t>
+mapDenseLogicalLaneToPartIndex(int64_t elementCount, int64_t factor,
+                               int64_t blockElems, int64_t logicalLane,
+                               int64_t &part) {
+  if (logicalLane < 0 || logicalLane >= elementCount || factor <= 0 ||
+      blockElems <= 0)
+    return std::nullopt;
+  int64_t block = logicalLane / blockElems;
+  int64_t inBlockLane = logicalLane % blockElems;
+  part = block % factor;
+  int64_t partBlock = block / factor;
+  return partBlock * blockElems + inBlockLane;
+}
+
+static std::optional<int64_t>
+mapDensePartIndexToLogicalLane(int64_t elementCount, int64_t factor,
+                               int64_t blockElems, int64_t part,
+                               int64_t indexInPart) {
+  if (part < 0 || part >= factor || indexInPart < 0 || factor <= 0 ||
+      blockElems <= 0)
+    return std::nullopt;
+  int64_t partBlock = indexInPart / blockElems;
+  int64_t inBlockLane = indexInPart % blockElems;
+  int64_t logicalBlock = partBlock * factor + part;
+  int64_t logicalLane = logicalBlock * blockElems + inBlockLane;
+  if (logicalLane >= elementCount)
+    return std::nullopt;
+  return logicalLane;
+}
+
+static int64_t getDenseLogicalLanesInPart(int64_t elementCount, int64_t factor,
+                                          int64_t blockElems, int64_t part) {
+  int64_t maxIndex = -1;
+  for (int64_t lane = 0; lane < elementCount; ++lane) {
+    int64_t lanePart = 0;
+    std::optional<int64_t> index = mapDenseLogicalLaneToPartIndex(
+        elementCount, factor, blockElems, lane, lanePart);
+    if (index && lanePart == part)
+      maxIndex = std::max(maxIndex, *index);
+  }
+  return maxIndex + 1;
 }
 
 } // namespace
 
 VMILayoutAttr VMILayoutAttr::getContiguous(MLIRContext *context) {
-  return VMILayoutAttr::get(context, "contiguous", 1);
+  return VMILayoutAttr::get(context, "contiguous", 1, 1, 0);
 }
 
 VMILayoutAttr VMILayoutAttr::getDeinterleaved(MLIRContext *context,
-                                              int64_t factor) {
-  return VMILayoutAttr::get(context, "deinterleaved", factor);
+                                              int64_t factor,
+                                              int64_t blockElems) {
+  return VMILayoutAttr::get(context, "deinterleaved", factor, blockElems, 0);
 }
 
 VMILayoutAttr VMILayoutAttr::getGroupSlots(MLIRContext *context,
-                                           int64_t numGroups) {
-  return VMILayoutAttr::get(context, "num_groups", numGroups);
+                                           int64_t numGroups, int64_t slots) {
+  return VMILayoutAttr::get(context, "num_groups", numGroups, 1, slots);
 }
 
 Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
   SMLoc loc = parser.getCurrentLocation();
   StringRef kind;
   int64_t factor = 1;
+  int64_t blockElems = 1;
+  int64_t slots = 0;
 
   if (failed(parser.parseLess()) || failed(parser.parseKeyword(&kind)))
     return {};
@@ -383,9 +438,28 @@ Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
   } else if (kind == "deinterleaved") {
     if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor)))
       return {};
+    if (succeeded(parser.parseOptionalComma())) {
+      StringRef field;
+      if (failed(parser.parseKeyword(&field)) || field != "block_elems" ||
+          failed(parser.parseEqual()) ||
+          failed(parser.parseInteger(blockElems))) {
+        parser.emitError(parser.getCurrentLocation(),
+                         "expected 'block_elems = <integer>'");
+        return {};
+      }
+    }
   } else if (kind == "num_groups") {
     if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor)))
       return {};
+    if (succeeded(parser.parseOptionalComma())) {
+      StringRef field;
+      if (failed(parser.parseKeyword(&field)) || field != "slots" ||
+          failed(parser.parseEqual()) || failed(parser.parseInteger(slots))) {
+        parser.emitError(parser.getCurrentLocation(),
+                         "expected 'slots = <integer>'");
+        return {};
+      }
+    }
   } else {
     parser.emitError(parser.getCurrentLocation(),
                      "expected VMI layout kind 'contiguous' or "
@@ -397,39 +471,62 @@ Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
     return {};
 
   return parser.getChecked<VMILayoutAttr>(loc, parser.getContext(), kind,
-                                          factor);
+                                          factor, blockElems, slots);
 }
 
 void VMILayoutAttr::print(AsmPrinter &printer) const {
   printer << "<" << getKind();
-  if (isDeinterleaved() || isGroupSlots())
+  if (isDeinterleaved()) {
     printer << " = " << getFactor();
+    if (getBlockElems() != 1)
+      printer << ", block_elems = " << getBlockElems();
+  } else if (isGroupSlots()) {
+    printer << " = " << getFactor();
+    if (getSlots() != 0)
+      printer << ", slots = " << getSlots();
+  }
   printer << ">";
 }
 
 LogicalResult
 VMILayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
-                      StringRef kind, int64_t factor) {
+                      StringRef kind, int64_t factor, int64_t blockElems,
+                      int64_t slots) {
   if (kind == "contiguous") {
-    if (factor != 1)
+    if (factor != 1 || blockElems != 1 || slots != 0)
       return emitError()
-             << "#pto.vmi.layout<contiguous> requires factor to be 1";
+             << "#pto.vmi.layout<contiguous> requires factor, block_elems, "
+                "and slots to be their defaults";
     return success();
   }
 
   if (kind == "deinterleaved") {
     if (factor != 2 && factor != 4)
-      return emitError()
-             << "#pto.vmi.layout<deinterleaved = " << factor
-             << "> expected factor to be 2 or 4";
+      return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
+                         << "> expected factor to be 2 or 4";
+    if (blockElems <= 0)
+      return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
+                         << ", block_elems = " << blockElems
+                         << "> requires block_elems to be positive";
+    if (slots != 0)
+      return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
+                         << "> requires slots to be omitted";
     return success();
   }
 
   if (kind == "num_groups") {
     if (factor <= 0)
+      return emitError() << "#pto.vmi.layout<num_groups = " << factor
+                         << "> requires num_groups to be positive";
+    if (blockElems != 1)
+      return emitError() << "#pto.vmi.layout<num_groups = " << factor
+                         << "> requires block_elems to be 1";
+    if (slots < 0 || (slots != 0 && factor % slots != 0))
       return emitError()
              << "#pto.vmi.layout<num_groups = " << factor
-             << "> requires num_groups to be positive";
+             << ", slots = " << slots
+             << "> requires slots to be positive and divide num_groups when "
+                "specified";
     return success();
   }
 
@@ -451,8 +548,8 @@ Type VMIVRegType::parse(AsmParser &parser) {
       failed(parser.parseGreater()))
     return {};
 
-  return parser.getChecked<VMIVRegType>(loc, parser.getContext(),
-                                        shape.front(), elementType, layout);
+  return parser.getChecked<VMIVRegType>(loc, parser.getContext(), shape.front(),
+                                        elementType, layout);
 }
 
 void VMIVRegType::print(AsmPrinter &printer) const {
@@ -467,25 +564,25 @@ LogicalResult VMIVRegType::verify(function_ref<InFlightDiagnostic()> emitError,
                                   int64_t elementCount, Type elementType,
                                   Attribute layout) {
   if (elementCount <= 0)
-    return emitError() << "'" << formatVMIVRegType(elementCount, elementType,
-                                                  layout)
+    return emitError() << "'"
+                       << formatVMIVRegType(elementCount, elementType, layout)
                        << "' expected a positive element count";
 
   if (!isSupportedVMIElementType(elementType))
-    return emitError() << "'" << formatVMIVRegType(elementCount, elementType,
-                                                  layout)
+    return emitError() << "'"
+                       << formatVMIVRegType(elementCount, elementType, layout)
                        << "' expected an integer, index, floating-point, or "
                           "PTO low-precision element type";
 
   if (layout && !mlir::isa<VMILayoutAttr>(layout))
-    return emitError() << "'" << formatVMIVRegType(elementCount, elementType,
-                                                  layout)
+    return emitError() << "'"
+                       << formatVMIVRegType(elementCount, elementType, layout)
                        << "' expected layout to be #pto.vmi.layout";
   if (auto layoutAttr = llvm::dyn_cast_or_null<VMILayoutAttr>(layout)) {
     if (layoutAttr.isGroupSlots() &&
         elementCount % layoutAttr.getNumGroups() != 0)
-      return emitError() << "'" << formatVMIVRegType(elementCount, elementType,
-                                                    layout)
+      return emitError() << "'"
+                         << formatVMIVRegType(elementCount, elementType, layout)
                          << "' expected num_groups layout to evenly divide "
                             "the VMI logical lane count";
   }
@@ -515,8 +612,8 @@ Type VMIMaskType::parse(AsmParser &parser) {
       failed(parser.parseGreater()))
     return {};
 
-  return parser.getChecked<VMIMaskType>(loc, parser.getContext(),
-                                        shape.front(), granularity, layout);
+  return parser.getChecked<VMIMaskType>(loc, parser.getContext(), shape.front(),
+                                        granularity, layout);
 }
 
 void VMIMaskType::print(AsmPrinter &printer) const {
@@ -530,35 +627,35 @@ LogicalResult VMIMaskType::verify(function_ref<InFlightDiagnostic()> emitError,
                                   int64_t elementCount, StringRef granularity,
                                   Attribute layout) {
   if (elementCount <= 0)
-    return emitError() << "'" << formatVMIMaskType(elementCount, granularity,
-                                                  layout)
+    return emitError() << "'"
+                       << formatVMIMaskType(elementCount, granularity, layout)
                        << "' expected a positive element count";
 
   if (!isSupportedGranularity(granularity))
-    return emitError() << "'" << formatVMIMaskType(elementCount, granularity,
-                                                  layout)
+    return emitError() << "'"
+                       << formatVMIMaskType(elementCount, granularity, layout)
                        << "' expected granularity to be one of pred, b8, b16, "
                           "b32";
 
   if (layout && !mlir::isa<VMILayoutAttr>(layout))
-    return emitError() << "'" << formatVMIMaskType(elementCount, granularity,
-                                                  layout)
+    return emitError() << "'"
+                       << formatVMIMaskType(elementCount, granularity, layout)
                        << "' expected layout to be #pto.vmi.layout";
   if (auto layoutAttr = llvm::dyn_cast_or_null<VMILayoutAttr>(layout)) {
     if (layoutAttr.isGroupSlots())
-      return emitError() << "'" << formatVMIMaskType(elementCount, granularity,
-                                                    layout)
+      return emitError() << "'"
+                         << formatVMIMaskType(elementCount, granularity, layout)
                          << "' mask type must not carry num_groups layout";
   }
 
   if (granularity == "pred" && layout)
-    return emitError() << "'" << formatVMIMaskType(elementCount, granularity,
-                                                  layout)
+    return emitError() << "'"
+                       << formatVMIMaskType(elementCount, granularity, layout)
                        << "' pred mask must not carry layout";
 
   if (granularity != "pred" && !layout)
-    return emitError() << "'" << formatVMIMaskType(elementCount, granularity,
-                                                  layout)
+    return emitError() << "'"
+                       << formatVMIMaskType(elementCount, granularity, layout)
                        << "' concrete mask granularity requires layout";
 
   return success();
@@ -570,9 +667,11 @@ LogicalResult VMIConstantOp::verify() {
   if (!denseAttr)
     return emitOpError("requires dense elements constant attribute");
   if (denseAttr.getElementType() != resultType.getElementType())
-    return emitOpError("requires dense constant element type to match result element type");
+    return emitOpError(
+        "requires dense constant element type to match result element type");
   if (denseAttr.getNumElements() != resultType.getElementCount())
-    return emitOpError("requires dense constant element count to match result logical lane count");
+    return emitOpError("requires dense constant element count to match result "
+                       "logical lane count");
   return success();
 }
 
@@ -616,6 +715,22 @@ LogicalResult VMICreateMaskOp::verify() {
   return success();
 }
 
+LogicalResult VMICreateGroupMaskOp::verify() {
+  auto resultType = cast<VMIMaskType>(getResult().getType());
+  int64_t numGroups = getNumGroupsAttr().getInt();
+  int64_t groupSize = getGroupSizeAttr().getInt();
+  if (numGroups <= 0)
+    return emitOpError("requires positive num_groups");
+  if (groupSize <= 0)
+    return emitOpError("requires positive group_size");
+  if (resultType.getElementCount() != numGroups * groupSize)
+    return emitOpError("requires result lane count to equal num_groups * "
+                       "group_size");
+  if (!resultType.isPred() && !isLayoutAssigned(resultType))
+    return emitOpError("requires concrete mask result to carry layout");
+  return success();
+}
+
 LogicalResult VMIConstantMaskOp::verify() {
   auto resultType = cast<VMIMaskType>(getResult().getType());
   auto denseAttr = dyn_cast<DenseElementsAttr>(getValue());
@@ -624,7 +739,8 @@ LogicalResult VMIConstantMaskOp::verify() {
   if (!denseAttr.getElementType().isInteger(1))
     return emitOpError("requires dense mask constant element type to be i1");
   if (denseAttr.getNumElements() != resultType.getElementCount())
-    return emitOpError("requires dense mask constant element count to match result logical lane count");
+    return emitOpError("requires dense mask constant element count to match "
+                       "result logical lane count");
   return success();
 }
 
@@ -655,8 +771,8 @@ LogicalResult VMIMaskXOrOp::verify() {
 LogicalResult VMIMaskNotOp::verify() {
   auto sourceType = cast<VMIMaskType>(getSource().getType());
   auto resultType = cast<VMIMaskType>(getResult().getType());
-  return verifyAllSameMaskShapeLayoutAndGranularity(
-      getOperation(), {sourceType, resultType});
+  return verifyAllSameMaskShapeLayoutAndGranularity(getOperation(),
+                                                    {sourceType, resultType});
 }
 
 LogicalResult VMIAddFOp::verify() {
@@ -847,7 +963,8 @@ LogicalResult VMINotOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIIntegerLikeType(sourceType.getElementType()))
     return emitOpError("requires integer-like VMI element type");
-  return verifyAllSameVRegShapeAndLayout(getOperation(), {sourceType, resultType},
+  return verifyAllSameVRegShapeAndLayout(getOperation(),
+                                         {sourceType, resultType},
                                          /*requireSameElement=*/true);
 }
 
@@ -880,9 +997,9 @@ LogicalResult VMISelectOp::verify() {
   auto trueType = cast<VMIVRegType>(getTrueValue().getType());
   auto falseType = cast<VMIVRegType>(getFalseValue().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
-  if (failed(verifyAllSameVRegShapeAndLayout(
-          getOperation(), {trueType, falseType, resultType},
-          /*requireSameElement=*/true)))
+  if (failed(verifyAllSameVRegShapeAndLayout(getOperation(),
+                                             {trueType, falseType, resultType},
+                                             /*requireSameElement=*/true)))
     return failure();
   return verifyMaskMatchesData(getOperation(), maskType, resultType);
 }
@@ -903,9 +1020,9 @@ LogicalResult VMICompressOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto maskType = cast<VMIMaskType>(getMask().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
-  if (failed(verifyAllSameVRegShapeAndLayout(
-          getOperation(), {sourceType, resultType},
-          /*requireSameElement=*/true)))
+  if (failed(verifyAllSameVRegShapeAndLayout(getOperation(),
+                                             {sourceType, resultType},
+                                             /*requireSameElement=*/true)))
     return failure();
   return verifyMaskMatchesData(getOperation(), maskType, sourceType);
 }
@@ -970,14 +1087,14 @@ LogicalResult VMIReduceAddFOp::verify() {
   return verifyMaskMatchesData(getOperation(), maskType, sourceType);
 }
 
-template <typename OpTy>
-LogicalResult verifyReduceMinMaxFOp(OpTy op) {
+template <typename OpTy> LogicalResult verifyReduceMinMaxFOp(OpTy op) {
   auto sourceType = cast<VMIVRegType>(op.getSource().getType());
   auto initType = cast<VMIVRegType>(op.getInit().getType());
   auto maskType = cast<VMIMaskType>(op.getMask().getType());
   auto resultType = cast<VMIVRegType>(op.getResult().getType());
   if (!isVMIFloatLikeType(sourceType.getElementType()))
-    return op.emitOpError("requires floating-point-like VMI source element type");
+    return op.emitOpError(
+        "requires floating-point-like VMI source element type");
   if (sourceType.getElementType() != initType.getElementType() ||
       sourceType.getElementType() != resultType.getElementType())
     return op.emitOpError(
@@ -991,13 +1108,9 @@ LogicalResult verifyReduceMinMaxFOp(OpTy op) {
   return verifyMaskMatchesData(op.getOperation(), maskType, sourceType);
 }
 
-LogicalResult VMIReduceMaxFOp::verify() {
-  return verifyReduceMinMaxFOp(*this);
-}
+LogicalResult VMIReduceMaxFOp::verify() { return verifyReduceMinMaxFOp(*this); }
 
-LogicalResult VMIReduceMinFOp::verify() {
-  return verifyReduceMinMaxFOp(*this);
-}
+LogicalResult VMIReduceMinFOp::verify() { return verifyReduceMinMaxFOp(*this); }
 
 LogicalResult VMIGroupReduceAddFOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
@@ -1015,17 +1128,25 @@ LogicalResult VMIGroupReduceAddFOp::verify() {
   if (sourceType.getElementType() != resultType.getElementType())
     return emitOpError("requires source and result element types to match");
   if (auto sourceLayout = sourceType.getLayoutAttr()) {
-    if (!sourceLayout.isContiguous())
+    bool supportedSourceLayout =
+        sourceLayout.isContiguous() ||
+        (sourceLayout.isDeinterleaved() && sourceLayout.getFactor() == 2 &&
+         (sourceLayout.getBlockElems() == 1 ||
+          sourceLayout.getBlockElems() == 8)) ||
+        (sourceLayout.isDeinterleaved() && sourceLayout.getFactor() == 4 &&
+         (sourceLayout.getBlockElems() == 1 ||
+          sourceLayout.getBlockElems() == 8));
+    if (!supportedSourceLayout)
       return emitOpError(
-          "requires layout-assigned source to use contiguous layout");
+          "requires layout-assigned source to use contiguous layout or "
+          "deinterleaved=2/4 layout with block_elems=1 or block_elems=8");
   }
   if (auto resultLayout = resultType.getLayoutAttr()) {
     if (!resultLayout.isGroupSlots() ||
         resultLayout.getNumGroups() != getNumGroupsAttr().getInt())
-      return emitOpError()
-             << "requires layout-assigned result to use "
-                "#pto.vmi.layout<num_groups = "
-             << getNumGroupsAttr().getInt() << ">";
+      return emitOpError() << "requires layout-assigned result to use "
+                              "#pto.vmi.layout<num_groups = "
+                           << getNumGroupsAttr().getInt() << ">";
   }
   if (failed(verifyMaskMatchesData(getOperation(), maskType, sourceType)))
     return failure();
@@ -1044,10 +1165,9 @@ LogicalResult VMIGroupBroadcastOp::verify() {
   if (auto sourceLayout = sourceType.getLayoutAttr()) {
     if (!sourceLayout.isGroupSlots() ||
         sourceLayout.getNumGroups() != getNumGroupsAttr().getInt())
-      return emitOpError()
-             << "requires layout-assigned source to use "
-                "#pto.vmi.layout<num_groups = "
-             << getNumGroupsAttr().getInt() << ">";
+      return emitOpError() << "requires layout-assigned source to use "
+                              "#pto.vmi.layout<num_groups = "
+                           << getNumGroupsAttr().getInt() << ">";
   }
   if (auto resultLayout = resultType.getLayoutAttr()) {
     if (resultLayout.isGroupSlots())
@@ -1062,13 +1182,16 @@ LogicalResult VMIExtFOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (sourceType.getElementCount() != resultType.getElementCount())
-    return emitOpError("requires source and result logical lane counts to match");
+    return emitOpError(
+        "requires source and result logical lane counts to match");
   if (!isVMIFloatLikeType(sourceType.getElementType()) ||
       !isVMIFloatLikeType(resultType.getElementType()))
-    return emitOpError("requires floating-point-like source and result element types");
+    return emitOpError(
+        "requires floating-point-like source and result element types");
   if (getVMIElementBitWidth(sourceType.getElementType()) >=
       getVMIElementBitWidth(resultType.getElementType()))
-    return emitOpError("requires result element type to be wider than source element type");
+    return emitOpError(
+        "requires result element type to be wider than source element type");
   return success();
 }
 
@@ -1076,13 +1199,16 @@ LogicalResult VMITruncFOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (sourceType.getElementCount() != resultType.getElementCount())
-    return emitOpError("requires source and result logical lane counts to match");
+    return emitOpError(
+        "requires source and result logical lane counts to match");
   if (!isVMIFloatLikeType(sourceType.getElementType()) ||
       !isVMIFloatLikeType(resultType.getElementType()))
-    return emitOpError("requires floating-point-like source and result element types");
+    return emitOpError(
+        "requires floating-point-like source and result element types");
   if (getVMIElementBitWidth(sourceType.getElementType()) <=
       getVMIElementBitWidth(resultType.getElementType()))
-    return emitOpError("requires result element type to be narrower than source element type");
+    return emitOpError(
+        "requires result element type to be narrower than source element type");
   return success();
 }
 
@@ -1114,6 +1240,10 @@ LogicalResult VMIBitcastOp::verify() {
 }
 
 LogicalResult VMILoadOp::verify() {
+  if (auto fullReadElems = getFullReadElemsAttr()) {
+    if (fullReadElems.getInt() <= 0)
+      return emitOpError("requires full_read_elems to be positive");
+  }
   return verifyMemoryElementMatches(getOperation(), getSource().getType(),
                                     cast<VMIVRegType>(getResult().getType()),
                                     "source");
@@ -1140,6 +1270,28 @@ void VMIGroupLoadOp::getEffects(
   effects.emplace_back(MemoryEffects::Read::get(), &getSourceMutable());
 }
 
+LogicalResult VMIGroupSlotLoadOp::verify() {
+  auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
+                                        resultType, "source")))
+    return failure();
+  if (auto resultLayout = resultType.getLayoutAttr()) {
+    if (!resultLayout.isGroupSlots() ||
+        resultLayout.getNumGroups() != getNumGroupsAttr().getInt())
+      return emitOpError() << "requires layout-assigned result to use "
+                              "#pto.vmi.layout<num_groups = "
+                           << getNumGroupsAttr().getInt() << ">";
+  }
+  return verifyNumGroups(getOperation(), resultType,
+                         getNumGroupsAttr().getInt());
+}
+
+void VMIGroupSlotLoadOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getSourceMutable());
+}
+
 LogicalResult VMIMaskedLoadOp::verify() {
   auto maskType = cast<VMIMaskType>(getMask().getType());
   auto passthruType = cast<VMIVRegType>(getPassthru().getType());
@@ -1147,9 +1299,9 @@ LogicalResult VMIMaskedLoadOp::verify() {
   if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
                                         resultType, "source")))
     return failure();
-  if (failed(verifyAllSameVRegShapeAndLayout(
-          getOperation(), {passthruType, resultType},
-          /*requireSameElement=*/true)))
+  if (failed(verifyAllSameVRegShapeAndLayout(getOperation(),
+                                             {passthruType, resultType},
+                                             /*requireSameElement=*/true)))
     return failure();
   return verifyMaskMatchesData(getOperation(), maskType, resultType);
 }
@@ -1178,9 +1330,9 @@ LogicalResult VMIGatherOp::verify() {
           getOperation(), {indicesType, passthruType, resultType},
           /*requireSameElement=*/false)))
     return failure();
-  if (failed(verifyAllSameVRegShapeAndLayout(
-          getOperation(), {passthruType, resultType},
-          /*requireSameElement=*/true)))
+  if (failed(verifyAllSameVRegShapeAndLayout(getOperation(),
+                                             {passthruType, resultType},
+                                             /*requireSameElement=*/true)))
     return failure();
   return verifyMaskMatchesData(getOperation(), maskType, resultType);
 }
@@ -1198,9 +1350,9 @@ LogicalResult VMIExpandLoadOp::verify() {
   if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
                                         resultType, "source")))
     return failure();
-  if (failed(verifyAllSameVRegShapeAndLayout(
-          getOperation(), {passthruType, resultType},
-          /*requireSameElement=*/true)))
+  if (failed(verifyAllSameVRegShapeAndLayout(getOperation(),
+                                             {passthruType, resultType},
+                                             /*requireSameElement=*/true)))
     return failure();
   return verifyMaskMatchesData(getOperation(), maskType, resultType);
 }
@@ -1212,8 +1364,7 @@ void VMIExpandLoadOp::getEffects(
 }
 
 LogicalResult VMIStoreOp::verify() {
-  return verifyMemoryElementMatches(getOperation(),
-                                    getDestination().getType(),
+  return verifyMemoryElementMatches(getOperation(), getDestination().getType(),
                                     cast<VMIVRegType>(getValue().getType()),
                                     "destination");
 }
@@ -1244,8 +1395,8 @@ LogicalResult VMIMaskedStoreOp::verify() {
   auto valueType = cast<VMIVRegType>(getValue().getType());
   auto maskType = cast<VMIMaskType>(getMask().getType());
   if (failed(verifyMemoryElementMatches(getOperation(),
-                                        getDestination().getType(),
-                                        valueType, "destination")))
+                                        getDestination().getType(), valueType,
+                                        "destination")))
     return failure();
   return verifyMaskMatchesData(getOperation(), maskType, valueType);
 }
@@ -1261,8 +1412,8 @@ LogicalResult VMIScatterOp::verify() {
   auto indicesType = cast<VMIVRegType>(getIndices().getType());
   auto maskType = cast<VMIMaskType>(getMask().getType());
   if (failed(verifyMemoryElementMatches(getOperation(),
-                                        getDestination().getType(),
-                                        valueType, "destination")))
+                                        getDestination().getType(), valueType,
+                                        "destination")))
     return failure();
 
   auto indexElementType = dyn_cast<IntegerType>(indicesType.getElementType());
@@ -1270,9 +1421,9 @@ LogicalResult VMIScatterOp::verify() {
       indexElementType.isSigned())
     return emitOpError("requires signless or unsigned 32-bit integer indices");
 
-  if (failed(verifyAllSameVRegShapeAndLayout(
-          getOperation(), {valueType, indicesType},
-          /*requireSameElement=*/false)))
+  if (failed(verifyAllSameVRegShapeAndLayout(getOperation(),
+                                             {valueType, indicesType},
+                                             /*requireSameElement=*/false)))
     return failure();
   return verifyMaskMatchesData(getOperation(), maskType, valueType);
 }
@@ -1296,8 +1447,7 @@ void VMITileReadOp::getEffects(
 }
 
 LogicalResult VMITileWriteOp::verify() {
-  return verifyMemoryElementMatches(getOperation(),
-                                    getDestination().getType(),
+  return verifyMemoryElementMatches(getOperation(), getDestination().getType(),
                                     cast<VMIVRegType>(getValue().getType()),
                                     "destination");
 }
@@ -1312,16 +1462,20 @@ LogicalResult VMIShuffleOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (sourceType.getElementType() != resultType.getElementType())
-    return emitOpError("requires result element type to match source element type");
+    return emitOpError(
+        "requires result element type to match source element type");
   if (static_cast<int64_t>(getIndices().size()) != resultType.getElementCount())
-    return emitOpError("requires shuffle index count to match result logical lane count");
+    return emitOpError(
+        "requires shuffle index count to match result logical lane count");
   for (int64_t index : getIndices()) {
     if (index < 0 || index >= sourceType.getElementCount())
-      return emitOpError("requires every shuffle index to select an existing source logical lane");
+      return emitOpError("requires every shuffle index to select an existing "
+                         "source logical lane");
   }
   if (isLayoutAssigned(sourceType) || isLayoutAssigned(resultType)) {
     if (!isLayoutAssigned(sourceType) || !isLayoutAssigned(resultType))
-      return emitOpError("requires either both source and result to carry layout or neither to carry layout");
+      return emitOpError("requires either both source and result to carry "
+                         "layout or neither to carry layout");
   }
   return success();
 }
@@ -1332,26 +1486,32 @@ LogicalResult VMIChannelSplitOp::verify() {
     return emitOpError("requires at least two channel results");
   auto firstResultType = cast<VMIVRegType>(getResults().front().getType());
   if (sourceType.getElementCount() !=
-      static_cast<int64_t>(getResults().size()) * firstResultType.getElementCount())
-    return emitOpError("requires source lane count to equal result count times per-channel lane count");
+      static_cast<int64_t>(getResults().size()) *
+          firstResultType.getElementCount())
+    return emitOpError("requires source lane count to equal result count times "
+                       "per-channel lane count");
   for (Value result : getResults()) {
     auto resultType = cast<VMIVRegType>(result.getType());
     if (resultType.getElementCount() != firstResultType.getElementCount() ||
         resultType.getElementType() != sourceType.getElementType())
-      return emitOpError("requires every channel result to have equal lane count and source element type");
+      return emitOpError("requires every channel result to have equal lane "
+                         "count and source element type");
   }
   bool anyLayout = isLayoutAssigned(sourceType);
   for (Value result : getResults())
     anyLayout |= isLayoutAssigned(cast<VMIVRegType>(result.getType()));
   if (anyLayout) {
     if (!isLayoutAssigned(sourceType))
-      return emitOpError("requires layout-assigned channel_split source when any channel result has layout");
+      return emitOpError("requires layout-assigned channel_split source when "
+                         "any channel result has layout");
     for (Value result : getResults()) {
       auto resultType = cast<VMIVRegType>(result.getType());
       if (!isLayoutAssigned(resultType))
-        return emitOpError("requires every channel_split result to carry layout when source has layout");
+        return emitOpError("requires every channel_split result to carry "
+                           "layout when source has layout");
       if (!cast<VMILayoutAttr>(resultType.getLayout()).isContiguous())
-        return emitOpError("requires layout-assigned channel_split results to be contiguous");
+        return emitOpError(
+            "requires layout-assigned channel_split results to be contiguous");
     }
     int64_t channels = getResults().size();
     if (channels == 2 || channels == 4) {
@@ -1359,7 +1519,8 @@ LogicalResult VMIChannelSplitOp::verify() {
       auto expectedLayout =
           VMILayoutAttr::getDeinterleaved(getContext(), channels);
       if (!sourceLayout.isContiguous() && sourceLayout != expectedLayout)
-        return emitOpError("requires layout-assigned channel_split source to be contiguous or deinterleaved by result count");
+        return emitOpError("requires layout-assigned channel_split source to "
+                           "be contiguous or deinterleaved by result count");
     }
   }
   return success();
@@ -1374,24 +1535,29 @@ LogicalResult VMIChannelMergeOp::verify() {
     auto inputType = cast<VMIVRegType>(input.getType());
     if (inputType.getElementCount() != firstInputType.getElementCount() ||
         inputType.getElementType() != firstInputType.getElementType())
-      return emitOpError("requires all channel inputs to have the same lane count and element type");
+      return emitOpError("requires all channel inputs to have the same lane "
+                         "count and element type");
   }
-  if (resultType.getElementCount() !=
-          static_cast<int64_t>(getInputs().size()) * firstInputType.getElementCount() ||
+  if (resultType.getElementCount() != static_cast<int64_t>(getInputs().size()) *
+                                          firstInputType.getElementCount() ||
       resultType.getElementType() != firstInputType.getElementType())
-    return emitOpError("requires result lane count and element type to match merged channels");
+    return emitOpError(
+        "requires result lane count and element type to match merged channels");
   bool anyLayout = isLayoutAssigned(resultType);
   for (Value input : getInputs())
     anyLayout |= isLayoutAssigned(cast<VMIVRegType>(input.getType()));
   if (anyLayout) {
     if (!isLayoutAssigned(resultType))
-      return emitOpError("requires layout-assigned channel_merge result when any channel input has layout");
+      return emitOpError("requires layout-assigned channel_merge result when "
+                         "any channel input has layout");
     for (Value input : getInputs()) {
       auto inputType = cast<VMIVRegType>(input.getType());
       if (!isLayoutAssigned(inputType))
-        return emitOpError("requires every channel_merge input to carry layout when result has layout");
+        return emitOpError("requires every channel_merge input to carry layout "
+                           "when result has layout");
       if (!cast<VMILayoutAttr>(inputType.getLayout()).isContiguous())
-        return emitOpError("requires layout-assigned channel_merge inputs to be contiguous");
+        return emitOpError(
+            "requires layout-assigned channel_merge inputs to be contiguous");
     }
     int64_t channels = getInputs().size();
     if (channels == 2 || channels == 4) {
@@ -1399,7 +1565,8 @@ LogicalResult VMIChannelMergeOp::verify() {
       auto expectedLayout =
           VMILayoutAttr::getDeinterleaved(getContext(), channels);
       if (!resultLayout.isContiguous() && resultLayout != expectedLayout)
-        return emitOpError("requires layout-assigned channel_merge result to be contiguous or deinterleaved by input count");
+        return emitOpError("requires layout-assigned channel_merge result to "
+                           "be contiguous or deinterleaved by input count");
     }
   }
   return success();
@@ -1410,7 +1577,8 @@ LogicalResult VMIEnsureLayoutOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (sourceType.getElementCount() != resultType.getElementCount() ||
       sourceType.getElementType() != resultType.getElementType())
-    return emitOpError("requires source and result to preserve VMI data shape and element type");
+    return emitOpError("requires source and result to preserve VMI data shape "
+                       "and element type");
   if (!isLayoutAssigned(sourceType) || !isLayoutAssigned(resultType))
     return emitOpError("requires source and result to be layout-assigned");
   return success();
@@ -1421,7 +1589,8 @@ LogicalResult VMIEnsureMaskLayoutOp::verify() {
   auto resultType = cast<VMIMaskType>(getResult().getType());
   if (sourceType.getElementCount() != resultType.getElementCount() ||
       sourceType.getGranularity() != resultType.getGranularity())
-    return emitOpError("requires source and result to preserve VMI mask shape and granularity");
+    return emitOpError("requires source and result to preserve VMI mask shape "
+                       "and granularity");
   if (!isLayoutAssigned(sourceType) || !isLayoutAssigned(resultType))
     return emitOpError("requires source and result to be layout-assigned");
   return success();
@@ -1431,13 +1600,15 @@ LogicalResult VMIEnsureMaskGranularityOp::verify() {
   auto sourceType = cast<VMIMaskType>(getSource().getType());
   auto resultType = cast<VMIMaskType>(getResult().getType());
   if (sourceType.getElementCount() != resultType.getElementCount())
-    return emitOpError("requires source and result to preserve VMI mask lane count");
+    return emitOpError(
+        "requires source and result to preserve VMI mask lane count");
   if (!isLayoutAssigned(sourceType) || !isLayoutAssigned(resultType))
     return emitOpError("requires source and result to be layout-assigned");
   if (sourceType.getLayout() != resultType.getLayout())
     return emitOpError("requires source and result mask layouts to match");
   if (sourceType.isPred() || resultType.isPred())
-    return emitOpError("requires concrete source and result mask granularities");
+    return emitOpError(
+        "requires concrete source and result mask granularities");
   return success();
 }
 
@@ -1473,14 +1644,22 @@ FailureOr<int64_t> mlir::pto::getMaskLanesPerPart(StringRef granularity) {
 
 FailureOr<int64_t> mlir::pto::getVMIPhysicalArity(Type type) {
   FailureOr<int64_t> elementCount = getVMIElementCount(type);
-  FailureOr<int64_t> factor = getLayoutFactor(type);
   FailureOr<int64_t> lanesPerPart = getPhysicalLanesPerPart(type);
-  if (failed(elementCount) || failed(factor) || failed(lanesPerPart))
+  FailureOr<VMILayoutAttr> layout = getAssignedVMILayout(type);
+  if (failed(elementCount) || failed(lanesPerPart) || failed(layout))
     return failure();
 
+  if ((*layout).isGroupSlots() && (*layout).getSlots() > 0)
+    return divideCeilNonNegative((*layout).getNumGroups(),
+                                 (*layout).getSlots());
+
+  int64_t factor = (*layout).isDeinterleaved() ? (*layout).getFactor() : 1;
+  int64_t blockElems =
+      (*layout).isDeinterleaved() ? (*layout).getBlockElems() : 1;
   int64_t arity = 0;
-  for (int64_t part = 0; part < *factor; ++part) {
-    int64_t lanesInPart = getLogicalLanesInPart(*elementCount, *factor, part);
+  for (int64_t part = 0; part < factor; ++part) {
+    int64_t lanesInPart =
+        getDenseLogicalLanesInPart(*elementCount, factor, blockElems, part);
     arity += divideCeilNonNegative(lanesInPart, *lanesPerPart);
   }
   return arity;
@@ -1490,16 +1669,21 @@ FailureOr<VMIPhysicalLane>
 mlir::pto::mapLogicalLaneToPhysical(Type type, int64_t logicalLane) {
   FailureOr<int64_t> elementCount = getVMIElementCount(type);
   FailureOr<int64_t> factor = getLayoutFactor(type);
+  FailureOr<int64_t> blockElems = getLayoutBlockElems(type);
   FailureOr<int64_t> lanesPerPart = getPhysicalLanesPerPart(type);
-  if (failed(elementCount) || failed(factor) || failed(lanesPerPart))
+  if (failed(elementCount) || failed(factor) || failed(blockElems) ||
+      failed(lanesPerPart))
     return failure();
   if (logicalLane < 0 || logicalLane >= *elementCount)
     return failure();
 
-  int64_t part = logicalLane % *factor;
-  int64_t indexInPart = logicalLane / *factor;
-  return VMIPhysicalLane{part, indexInPart / *lanesPerPart,
-                         indexInPart % *lanesPerPart};
+  int64_t part = 0;
+  std::optional<int64_t> indexInPart = mapDenseLogicalLaneToPartIndex(
+      *elementCount, *factor, *blockElems, logicalLane, part);
+  if (!indexInPart)
+    return failure();
+  return VMIPhysicalLane{part, *indexInPart / *lanesPerPart,
+                         *indexInPart % *lanesPerPart};
 }
 
 FailureOr<int64_t> mlir::pto::mapPhysicalLaneToLogical(Type type, int64_t part,
@@ -1507,32 +1691,38 @@ FailureOr<int64_t> mlir::pto::mapPhysicalLaneToLogical(Type type, int64_t part,
                                                        int64_t lane) {
   FailureOr<int64_t> elementCount = getVMIElementCount(type);
   FailureOr<int64_t> factor = getLayoutFactor(type);
+  FailureOr<int64_t> blockElems = getLayoutBlockElems(type);
   FailureOr<int64_t> lanesPerPart = getPhysicalLanesPerPart(type);
-  if (failed(elementCount) || failed(factor) || failed(lanesPerPart))
+  if (failed(elementCount) || failed(factor) || failed(blockElems) ||
+      failed(lanesPerPart))
     return failure();
   if (part < 0 || part >= *factor || chunk < 0 || lane < 0 ||
       lane >= *lanesPerPart)
     return failure();
 
   int64_t indexInPart = chunk * *lanesPerPart + lane;
-  int64_t logicalLane = indexInPart * *factor + part;
-  if (logicalLane >= *elementCount)
+  std::optional<int64_t> logicalLane = mapDensePartIndexToLogicalLane(
+      *elementCount, *factor, *blockElems, part, indexInPart);
+  if (!logicalLane)
     return failure();
-  return logicalLane;
+  return *logicalLane;
 }
 
-FailureOr<bool> mlir::pto::isPaddingLane(Type type, int64_t part,
-                                         int64_t chunk, int64_t lane) {
+FailureOr<bool> mlir::pto::isPaddingLane(Type type, int64_t part, int64_t chunk,
+                                         int64_t lane) {
   FailureOr<int64_t> elementCount = getVMIElementCount(type);
   FailureOr<int64_t> factor = getLayoutFactor(type);
+  FailureOr<int64_t> blockElems = getLayoutBlockElems(type);
   FailureOr<int64_t> lanesPerPart = getPhysicalLanesPerPart(type);
-  if (failed(elementCount) || failed(factor) || failed(lanesPerPart))
+  if (failed(elementCount) || failed(factor) || failed(blockElems) ||
+      failed(lanesPerPart))
     return failure();
   if (part < 0 || part >= *factor || chunk < 0 || lane < 0 ||
       lane >= *lanesPerPart)
     return failure();
 
-  int64_t lanesInPart = getLogicalLanesInPart(*elementCount, *factor, part);
+  int64_t lanesInPart =
+      getDenseLogicalLanesInPart(*elementCount, *factor, *blockElems, part);
   int64_t indexInPart = chunk * *lanesPerPart + lane;
   return indexInPart >= lanesInPart;
 }
