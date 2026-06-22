@@ -35,7 +35,8 @@ vmi-layout-assignment:
 
 pto-validate-vmi-layout:
   verify every VMI data/mask value has layout
-  verify every context-sensitive op has selected_plan
+  verify every VMI value has an assigned layout and every non-local lowering
+  choice has been serialized explicitly
   verify helper ops have registered materialization plans
 
 vmi-to-vpto:
@@ -160,51 +161,33 @@ Layout-assigned:
 Surface VMI types are legal before assignment.  Layout-assigned VMI types are
 required after assignment.
 
-### 3.3 Selected Plan Attribute
+### 3.3 Explicit Recipe Carriers
 
-Every context-sensitive op gets a selected plan attr after assignment.  The
-initial implementation may use a stable string attr:
+Lowering decisions are carried by the current op and its types, not by a
+separate recipe string.  The allowed carriers are:
 
 ```text
-vmi.selected_plan = "s16_reduce_parity"
+op attrs and operands
+operand/result VMI layouts
+mask granularity and mask layouts
+helper ops such as ensure_layout / ensure_mask_layout
+cloned or rematerialized producers
+diagnostics for unsupported shapes
 ```
 
-Once the plan registry syntax is stable, this can become a dedicated plan attr:
+If assignment made a non-local choice by inspecting producers, users, sibling
+users, control flow, callees, or memory context, it must rewrite the IR so that
+the final choice is visible through those carriers before `vmi-to-vpto`.
+
+Local-decision table for the current implementation:
 
 ```text
-vmi.selected_plan = #pto.vmi.plan<s16_reduce_parity>
-vmi.selected_plan = #pto.vmi.plan<dense_load_norm>
-vmi.selected_plan = #pto.vmi.plan<s16_reduce_block8>
-vmi.selected_plan = #pto.vmi.plan<s32_reduce_dintlv4>
-vmi.selected_plan = #pto.vmi.plan<s32_reduce_block8_stride>
-vmi.selected_plan = #pto.vmi.plan<s64_reduce_row_local>
-vmi.selected_plan = #pto.vmi.plan<load_dintlv2>
-vmi.selected_plan = #pto.vmi.plan<load_dintlv4>
-vmi.selected_plan = #pto.vmi.plan<group_load_contiguous_chunks>
-vmi.selected_plan = #pto.vmi.plan<s16_group_load_block8_unit_stride>
-vmi.selected_plan = #pto.vmi.plan<s16_group_load_block8_stride>
-vmi.selected_plan = #pto.vmi.plan<s32_group_load_block8_stride>
-vmi.selected_plan = #pto.vmi.plan<group_slot_load_slots8_unit_stride>
-vmi.selected_plan = #pto.vmi.plan<group_slot_load_slots1_row_local>
-vmi.selected_plan = #pto.vmi.plan<group_broadcast_slots8_vselr>
-vmi.selected_plan = #pto.vmi.plan<group_broadcast_slots1_vselr>
-vmi.selected_plan = #pto.vmi.plan<group_slot_cast_slots1_f32_to_f16>
-vmi.selected_plan = #pto.vmi.plan<safe_full_read_dintlv4>
-```
-
-Ops that are uniquely determined by layout may omit this attr, but the rule
-should be conservative.  If future maintainers could reasonably ask "why this
-lowering?", assignment should write a plan.
-
-Required-plan table for the current implementation:
-
-```text
-op                         required when
-group_load                 result layout matches a registered group_load plan
-group_slot_load            explicit group_slots slots=8 or slots=1 result
-group_reduce_addf          source/result layouts match a registered reduce plan
-group_broadcast            explicit slots=8 or slots=1 source and dense result
-truncf                     group_slots slots=1 f32->f16 slot-preserving cast
+op                         local decision inputs
+group_load                 result layout, num_groups, row_stride, source type
+group_slot_load            result group_slots layout and source_group_stride
+group_reduce_addf          source/mask/result layouts, num_groups, reassoc
+group_broadcast            source/result layouts and num_groups
+truncf                     source/result layouts and element widths
 ensure_layout              always carries source/result layouts instead of plan
 ensure_mask_layout         always carries source/result layouts instead of plan
 ensure_mask_granularity    always carries source/result granularities instead of plan
@@ -223,12 +206,12 @@ dense extf/truncf          source/result layouts and element widths
 Implementation rule:
 
 ```text
-vmi-layout-assignment attaches the required plan before type conversion.
-validate-assigned-vmi rejects a required-plan op that lacks vmi.selected_plan.
-vmi-to-vpto verifies the plan against the already assigned layouts and emits
-VMI-LAYOUT-CONTRACT instead of selecting a fallback from producer/user context.
-If a layout/attr-only op later gains a second legal recipe, that recipe must be
-promoted into the required-plan table before vmi-to-vpto can emit it.
+validate-assigned-vmi validates assigned layouts, mask granularity, boundaries,
+and helper placement.
+vmi-to-vpto emits VMI-LAYOUT-CONTRACT for missing local proof.
+If a layout/attr-only op later gains a second legal recipe that cannot be
+distinguished from current-op information, that recipe must be represented by a
+new attr, helper op, or rematerialized op before vmi-to-vpto can emit it.
 Unsupported shapes that have no registered plan still diagnose through their
 specific capability check rather than failing with a generic missing-plan error.
 ```
@@ -316,7 +299,6 @@ struct VMILayoutPlan {
   SmallVector<VMILayoutKey> operandLayouts;
   SmallVector<VMILayoutKey> resultLayouts;
   int64_t cost;
-  bool requiresSelectedPlanAttr;
   bool requiresFullTileReadable;
   bool mayReadInactivePhysicalLanes;
   DiagnosticBuilder (*explainFailure)(...);
@@ -605,15 +587,15 @@ Algorithm:
    - otherwise insert ensure_layout at use
    - otherwise diagnose
 6. Rewrite VMI result/block/function types with chosen layouts.
-7. Attach selected_plan attrs where required.
-8. Insert helper ops with source/result layout attrs.
+7. Insert helper ops with source/result layout attrs.
 ```
 
 Rewrite invariants:
 
 ```text
 No VMI data/mask value after assignment has a null layout.
-No context-sensitive VMI op after assignment lacks selected_plan.
+Any non-local choice is represented by op attrs, operand/result layouts, a
+helper op, a clone, or an explicit diagnostic.
 Every ensure_* helper has a registered materialization plan.
 Every function/call signature carrying VMI is specialized or diagnosed.
 ```
@@ -626,14 +608,9 @@ Assignment rewrites the IR so that later lowering has no hidden choices.
 type rewrite:
   every VMI data/mask result and block argument receives a layout attr
 
-selected_plan rewrite:
-  context-sensitive ops receive vmi.selected_plan
-  examples: group_reduce_addf, group_load, group_slot_load, group_broadcast,
-  group_slot cast, full-read masked_load plans
-
 clone rewrite:
   cheap producers are cloned before their divergent use sites
-  each clone receives its own layout and selected_plan
+  each clone receives its own layout and attrs
 
 ensure rewrite:
   non-cheap values use pto.vmi.ensure_layout or ensure_mask_layout at the use
@@ -655,7 +632,7 @@ function rewrite:
 Canonical assigned IR shape for a conflicting load:
 
 ```text
-%x = pto.vmi.load ... {vmi.selected_plan = "load_dintlv4"}
+%x = pto.vmi.load ...
   : ... -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
 
 %x_dense = pto.vmi.ensure_layout %x
@@ -668,10 +645,10 @@ pto.vmi.store %x_dense, ...
 Canonical assigned IR shape for a cloned cheap producer:
 
 ```text
-%x_s16 = pto.vmi.load ... {vmi.selected_plan = "load_dintlv2"}
+%x_s16 = pto.vmi.load ...
   : ... -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
 
-%x_s32 = pto.vmi.load ... {vmi.selected_plan = "load_dintlv4"}
+%x_s32 = pto.vmi.load ...
   : ... -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
 ```
 
@@ -679,12 +656,10 @@ Canonical assigned IR shape for `group_broadcast` multi-use:
 
 ```text
 %b0 = pto.vmi.group_broadcast %slots
-  {vmi.selected_plan = "group_broadcast_slots8_vselr"}
   : !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
  -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
 
 %b1 = pto.vmi.group_broadcast %slots
-  {vmi.selected_plan = "group_broadcast_slots8_vselr"}
   : !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
  -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>
 ```
@@ -725,10 +700,10 @@ case family                     builder / owner             assignment artifact
 3.44, 3.45 grouped S=32 masks   buildMaskRequests           explicit deinterleaved mask values
 
 vmi-to-vpto contract:
-  lower each reduce from source layout, result group_slots layout, and
-  selected_plan.  It must not walk to the load/group_load producer to decide
-  parity versus block8, row-local versus packed slots, or static versus dynamic
-  mask generation.
+  lower each reduce from the current op's attrs, source/mask layout, result
+  group_slots layout.  It must not walk to the load/group_load producer to
+  decide parity versus block8, row-local versus packed slots, or static versus
+  dynamic mask generation.
 ```
 
 ```text
@@ -743,10 +718,10 @@ case family                     builder / owner             assignment artifact
 3.39 strided load fanout        conflict resolver           preserving layout or materialization
 
 vmi-to-vpto contract:
-  consume only explicit memory stride/alignment attrs, selected_plan, and
-  layouts.  It must not infer safe read/write placement from neighboring
+  consume only explicit memory stride/alignment attrs, current op operands,
+  and layouts.  It must not infer safe read/write placement from neighboring
   compute ops.  Unsupported dynamic, unaligned, or compact-row gather shapes
-  stay diagnostics until a gather plan is registered.
+  stay diagnostics until a gather recipe is explicit in the current op.
 ```
 
 ```text
@@ -757,7 +732,7 @@ case family                     builder / owner             assignment artifact
 3.18 dense + reduce users       conflict resolver           clone/rematerialize/ensure_layout
 3.23 broadcast multi-user       conflict resolver           cloned group_broadcast
 3.33 S=16 + S=32 users          conflict resolver           cloned load or materialization
-3.34 S=64 slots=1 cast          buildCastRequests           group_slot_cast selected plan
+3.34 S=64 slots=1 cast          buildCastRequests           group_slot_cast layout
 3.35 slots fanout               buildElementwiseRequests    same group_slots layout on users
 3.36 scalar slots=8/slots=1     conflict resolver           cloned group_slot_load/broadcast
 3.40 scalar dense + grouped     conflict resolver           cloned broadcast
@@ -862,112 +837,111 @@ Each pattern uses:
 
 ```text
 op
+op attrs and operand values
 operand/result layouts
-selected_plan
 adaptor physical values
 ```
 
 Each pattern rejects:
 
 ```text
-missing selected_plan for context-sensitive op
-layout not matching selected_plan
+missing current-op proof for an otherwise unsafe memory recipe
 missing target capability
 unexpected group_slots dense consumer
 ```
 
-Target selected-plan matrix:
+Target local recipe matrix:
 
 ```text
-load, selected_plan=dense_load_norm:
+load, recipe=dense_load_norm:
   result layout contiguous
   emits pto.vlds / pto.vsts NORM paths
   covers dense store users and S=64 row-local reduce input
 
-load, selected_plan=load_dintlv2:
+load, recipe=load_dintlv2:
   result layout deinterleaved=2, block_elems=1
   emits vldsx2 DINTLV_B32 or normal load + vdintlv materialization
   covers f32->f16, S=16 parity reduce, f16->f32 widened values
 
-load, selected_plan=load_dintlv4:
+load, recipe=load_dintlv4:
   result layout deinterleaved=4, block_elems=1
   emits two vldsx2 DINTLV_B32 plus vdintlv
   covers f32->f8, S=32 dintlv4 reduce
 
-group_load, selected_plan=s16_group_load_block8_unit_stride:
+group_load, recipe=s16_group_load_block8_unit_stride:
   result layout deinterleaved=2, block_elems=8
   emits vldsx2/BDINTLV for 8 rows of 16xf32
   covers compact logical S=16 when source_group_stride == 16
 
-group_load, selected_plan=s16_group_load_block8_stride:
+group_load, recipe=s16_group_load_block8_stride:
   result layout deinterleaved=2, block_elems=8
   emits two vsldb strided 32B block loads
   requires source_group_stride % 8 == 0
 
-group_load, selected_plan=s32_group_load_block8_stride:
+group_load, recipe=s32_group_load_block8_stride:
   result layout deinterleaved=4, block_elems=8
   emits four vsldb strided 32B block loads
   requires source_group_stride % 8 == 0
 
-group_load, selected_plan=group_load_contiguous_chunks:
+group_load, recipe=group_load_contiguous_chunks:
   result layout contiguous
   emits one vlds per physical group chunk using row_stride address arithmetic
   covers the currently implemented full-chunk row-local group_load path
 
-group_reduce_addf, selected_plan=s8_reduce_contiguous:
+group_reduce_addf, recipe=s8_reduce_contiguous:
   consumes contiguous f32 with group size 8
   produces group_slots(G, slots=8)
   emits one vcgadd
 
-group_reduce_addf, selected_plan=s16_reduce_parity:
+group_reduce_addf, recipe=s16_reduce_parity:
   consumes deinterleaved=2, block_elems=1
   produces group_slots(G, slots=8)
   emits two vcgadd operations and one vadd
 
-group_reduce_addf, selected_plan=s16_reduce_block8:
+group_reduce_addf, recipe=s16_reduce_block8:
   consumes deinterleaved=2, block_elems=8
   produces group_slots(G, slots=8)
   emits two vcgadd operations and one vadd
 
-group_reduce_addf, selected_plan=s32_reduce_dintlv4:
+group_reduce_addf, recipe=s32_reduce_dintlv4:
   consumes deinterleaved=4, block_elems=1
   produces group_slots(G, slots=8)
   emits four vcgadd operations and a vadd tree
 
-group_reduce_addf, selected_plan=s32_reduce_block8_stride:
+group_reduce_addf, recipe=s32_reduce_block8_stride:
   consumes deinterleaved=4, block_elems=8
   produces group_slots(G, slots=8)
   emits four vcgadd operations and a vadd tree
 
-group_reduce_addf, selected_plan=s64_reduce_row_local:
+group_reduce_addf, recipe=s64_reduce_row_local:
   consumes contiguous f32 with group size 64
   produces group_slots(G, slots=1)
   target lowering emits per-row vcgadd plus vcadd; the current prototype uses
   the existing row-local VCADD/VADD/VSEL sequence while preserving the same
   group_slots(G, slots=1) value contract
 
-group_slot_load, selected_plan=group_slot_load_slots8_unit_stride:
+group_slot_load, recipe=group_slot_load_slots8_unit_stride:
   result group_slots(G, slots=8)
   requires source_group_stride == 1
   emits one packed vsldb load
 
-group_slot_load, selected_plan=group_slot_load_slots1_row_local:
+group_slot_load, recipe=group_slot_load_slots1_row_local:
   result group_slots(G, slots=1)
   supports aligned non-unit source_group_stride
   requires constant positive source_group_stride divisible by 256 / elementBits
   emits one lane-0 vsldb per group
 
-group_broadcast, selected_plan=group_broadcast_slots8_vselr:
+group_broadcast, recipe=group_broadcast_slots8_vselr:
   source group_slots(G, slots=8)
   result dense layout selected per use
   emits vselr using assigned result layout
 
-group_broadcast, selected_plan=group_broadcast_slots1_vselr:
+group_broadcast, recipe=group_broadcast_slots1_vselr:
   source group_slots(G, slots=1)
   result dense layout selected per use
   emits vdup/vselr row-local materialization
 
-truncf, selected_plan=group_slot_cast_slots1_f32_to_f16:
+truncf, recipe=group_slot_cast_slots1_f32_to_f16:
   source/result group_slots(G, slots=1)
   emits one lane-0 vcvt per group slot block
   rejects packed slots=8 unless another plan is registered
@@ -980,36 +954,29 @@ Current staged implementation status:
 
 ```text
 group_slot_load:
-  vmi-to-vpto requires vmi.selected_plan and checks it against
-  #pto.vmi.layout<num_groups = G, slots = 8/1>.
+  vmi-to-vpto lowers from #pto.vmi.layout<num_groups = G, slots = 8/1>
+  and source_group_stride.
 
 group_reduce_addf:
-  explicit slots=8 VCGADD lowering requires
-  vmi.selected_plan = "s8_reduce_contiguous". Legacy bare num_groups and
-  generic VCADD lowering still need the plan-registry migration.
+  explicit slots=8 VCGADD lowering is selected from contiguous source/mask
+  layout, slots=8 result layout, num_groups, and reassoc.
   S=16 block8 assignment emits source/mask
   #pto.vmi.layout<deinterleaved = 2, block_elems = 8>, result
-  #pto.vmi.layout<num_groups = G, slots = 8>, and
-  vmi.selected_plan = "s16_reduce_block8"; vmi-to-vpto checks that plan and
-  lowers through two VCGADDs plus a PAT_VL8 VADD per packed result block.
+  #pto.vmi.layout<num_groups = G, slots = 8>; vmi-to-vpto lowers through two
+  VCGADDs plus a PAT_VL8 VADD per packed result block.
   S=32 block8 assignment emits source/mask
   #pto.vmi.layout<deinterleaved = 4, block_elems = 8>, result
-  #pto.vmi.layout<num_groups = G, slots = 8>, and
-  vmi.selected_plan = "s32_reduce_block8_stride"; vmi-to-vpto checks that
-  plan and lowers through four VCGADDs plus a PAT_VL8 VADD tree per packed
-  result block.
-  S=64 row-local assignment now emits
-  vmi.selected_plan = "s64_reduce_row_local" and has focused
-  layout-assignment/vmi-to-vpto lit coverage; the explicit slots=1 generic
-  VCADD row-local path also requires and checks that selected_plan. Other
-  legacy bare num_groups generic VCADD paths still need the plan-registry
-  migration.
+  #pto.vmi.layout<num_groups = G, slots = 8>; vmi-to-vpto lowers through four
+  VCGADDs plus a PAT_VL8 VADD tree per packed result block.
+  S=64 row-local assignment uses #pto.vmi.layout<num_groups = G, slots = 1>
+  and has focused layout-assignment/vmi-to-vpto lit coverage; the explicit
+  slots=1 generic VCADD row-local path is selected locally.
 
 group_broadcast:
-  explicit slots=8/1 source layouts require
-  vmi.selected_plan = "group_broadcast_slots8_vselr" or
-  "group_broadcast_slots1_vselr". Deinterleaved block-fragment results use
-  the result layout block_elems as the local vselr selection group, so
+  explicit slots=8/1 source layouts select
+  packed or row-local VSELR recipes locally. Deinterleaved block-fragment
+  results use the result layout block_elems as the local vselr selection group,
+  so
   `deinterleaved = 4, block_elems = 8` broadcasts one group slot across each
   32B row fragment. VSELR index vectors are materialized per physical result
   chunk.  For small-group results, layout assignment has already fixed the
@@ -1018,27 +985,23 @@ group_broadcast:
   `sourceChunk = firstGroup / slots`, and
   `baseGroupSlot = firstGroup % slots`.  The generated index vector selects
   `baseGroupSlot .. baseGroupSlot + groupsPerResultChunk - 1`; it must not be
-  reused across result chunks. Legacy bare num_groups still needs the
-  plan-registry migration.
+  reused across result chunks.
 
 group_load:
-  contiguous full-chunk path emits and checks
-  vmi.selected_plan = "group_load_contiguous_chunks". S=16/S=32
-  block-aligned strided loads emit and check
-  vmi.selected_plan = "s16_group_load_block8_stride" or
-  "s32_group_load_block8_stride", assign
+  contiguous full-chunk path is selected from a contiguous result layout.
+  S=16/S=32 block-aligned strided loads are selected from
   #pto.vmi.layout<deinterleaved = 2/4, block_elems = 8>, and lower to one
   vsldb per 32B row fragment and physical chunk. The dedicated S=16 unit-stride
-  vldsx2/BDINTLV plan remains a design target. S=16/S=32 group_load with a
-  non-constant, non-positive, or non-8-f32-aligned row_stride is rejected by
-  vmi-layout-assignment because the stable gather fallback is not implemented.
+  vldsx2/BDINTLV recipe remains a local peephole target.
+  S=16/S=32 group_load with a non-constant, non-positive, or non-8-f32-aligned
+  row_stride is rejected by vmi-layout-assignment because the stable gather
+  fallback is not implemented.
 
 truncf group-slot cast:
-  layout assignment and vmi-to-vpto support and check
-  vmi.selected_plan = "group_slot_cast_slots1_f32_to_f16" for
-  group_slots(G, slots=1) f32 -> f16. The reduce->truncf->group_store
-  slots=1 flow has focused lit coverage and no longer relies on vmi-to-vpto
-  inspecting the truncf producer.
+  layout assignment and vmi-to-vpto support group_slots(G, slots=1)
+  f32 -> f16 from source/result layouts and element widths. The reduce->truncf
+  -> group_store slots=1 flow has focused lit coverage and no longer relies on
+  vmi-to-vpto inspecting the truncf producer.
 
 group_store:
   row-local group_slots(G, slots=1) lowering is implemented as one lane-0
@@ -1058,15 +1021,15 @@ group_store:
 Examples:
 
 ```text
-group_reduce_addf, selected_plan=s16_reduce_parity:
+group_reduce_addf, recipe=s16_reduce_parity:
   consume deinterleaved=2, block_elems=1
   emit two VCGADDs and one VADD
 
-group_reduce_addf, selected_plan=s16_reduce_block8:
+group_reduce_addf, recipe=s16_reduce_block8:
   consume deinterleaved=2, block_elems=8
   emit two VCGADDs and one VADD
 
-group_reduce_addf, selected_plan=s32_reduce_dintlv4:
+group_reduce_addf, recipe=s32_reduce_dintlv4:
   consume deinterleaved=4
   emit four VCGADDs and reduction tree
 
@@ -1101,8 +1064,7 @@ After assignment:
 ```text
 Every VMI value has layout.
 Every VMI mask has layout and granularity plan.
-Every context-sensitive op has selected_plan.
-Every selected_plan matches operand/result layouts.
+Every lowering choice is locally deterministic or explicit in attrs/layouts.
 Every ensure_* helper has a materialization plan.
 Every control-flow edge has matching VMI layouts.
 ```
@@ -1121,8 +1083,8 @@ allowed:
   diagnostic
 
 not allowed:
-  walking from a consumer to a producer to decide a selected_plan
-  walking from a consumer to a mask producer to decide whether a plan is legal
+  walking from a consumer to a producer to decide a recipe
+  walking from a consumer to a mask producer to decide whether a recipe is legal
   inspecting users to choose a result layout or materialization
   recovering full_tile_readable from surrounding MTE/caller context
 ```
@@ -1222,7 +1184,8 @@ Each positive layout-assignment test must check:
 ```text
 assigned data layouts
 assigned mask layouts
-selected_plan attrs
+assigned op attrs
+direct vmi-to-vpto local lowering
 inserted ensure_layout/rematerialized producers
 control-flow/function signature specialization
 ```
@@ -1766,7 +1729,6 @@ entries:
 
 ```text
 lit:
-  test/lit/vmi/vmi_layout_gate_missing_selected_plan_invalid.pto
   test/lit/vmi/vmi_layout_assignment_group_reduce_s32_tail_no_full_tile_invalid.pto
   test/lit/vmi/vmi_layout_assignment_group_load_s16_compact_stride12_invalid.pto
   test/lit/vmi/vmi_to_vpto_group_slot_load_nonunit_slots8_invalid.pto
@@ -1805,7 +1767,6 @@ memory-proof runtime coverage:
 layout attrs
 vmi.vreg/vmi.mask types
 surface op definitions
-selected_plan attr
 surface/layout validators
 ```
 
@@ -1888,10 +1849,9 @@ Current evidence for the case-catalog objective:
 4. the latest broad VMI runtime sweep passed: PASS=43 FAIL=0
 5. the latest full VMI lit sweep passed: 314/314
 6. every unsupported endpoint listed in section 11.3 has a diagnostic lit test
-7. vmi-to-vpto context-sensitive decisions are represented by assigned layouts,
-   selected_plan, helper ops, rematerialization, or diagnostics
-8. missing selected_plan on registered context-sensitive shapes is a hard
-   validation failure
+7. vmi-to-vpto decisions are represented by current-op attrs/operands,
+   assigned layouts, helper ops, rematerialization, or diagnostics
+8. no separate recipe string attr is emitted or consumed
 9. release docs remain untouched; this is still a design/implementation plan
    under docs/designs
 ```

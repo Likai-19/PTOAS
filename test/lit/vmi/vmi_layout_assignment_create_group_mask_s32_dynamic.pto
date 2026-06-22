@@ -42,7 +42,6 @@ module {
 // ASSIGN: %[[MASK1:.*]] = pto.vmi.create_group_mask %[[ACTIVE]]
 // ASSIGN-SAME: !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
 // ASSIGN: pto.vmi.group_reduce_addf
-// ASSIGN-SAME: vmi.selected_plan = "s32_reduce_block8_stride"
 
 // LOWER-LABEL: func.func @vmi_layout_assignment_create_group_mask_s32_dynamic(
 // LOWER: arith.index_cast
