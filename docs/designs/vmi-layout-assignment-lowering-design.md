@@ -8,8 +8,20 @@
 
 ```text
 VMI surface IR
-  -> vmi-layout-assignment
-  -> layout-assigned VMI IR
+  -> pto-validate-vmi-ir
+  -> vmi-layout-assignment          // hard legalization baseline
+  -> canonicalize/cse
+  -> vmi-layout-fold-consumers      // optional optimization
+  -> canonicalize/cse
+  -> vmi-layout-rematerialize       // optional optimization
+  -> canonicalize/cse
+  -> vmi-layout-sink-materialization // optional optimization
+  -> canonicalize/cse
+  -> optional later layout optimization passes
+  -> canonicalize/cse
+  -> vmi-legalize-arith-select
+  -> pto-validate-vmi-layout-ir
+  -> layout-assigned and optimized VMI IR
   -> vmi-to-vpto
   -> VPTO IR
 ```
@@ -20,14 +32,58 @@ VMI surface IR
 vmi-to-vpto 不允许通过上下文猜 lowering。
 
 任何需要 producer/consumer/control-flow/memory/mask 上下文才能决定的事，
-必须在 vmi-layout-assignment 阶段变成显式 IR 信息：
+必须在 vmi-layout-assignment 或后续 VMI layout optimization 阶段变成显式 IR：
 
 1. vmi.vreg/vmi.mask 的 layout
-2. op 的 selected lowering plan
-3. use-site ensure_layout / ensure_mask_layout
-4. rematerialized producer
+2. current-op attrs/operands that make the local recipe deterministic
+3. use-site ensure_layout / ensure_mask_layout / ensure_mask_granularity
+4. rematerialized or cloned producer
 5. target capability diagnostic
 ```
+
+## 0. Hard Legalization And Optimization Boundary
+
+Layout assignment is a stage, not necessarily one monolithic pass.  The design
+separates correctness from optimization:
+
+```text
+hard legalization:
+  produces legal layout-assigned VMI IR for all supported semantics
+  inserts conservative ensure_* helpers at incompatible uses
+  may choose a simple canonical layout even when a fused consumer recipe exists
+  must diagnose unsupported semantics before vmi-to-vpto has to guess
+
+layout optimization:
+  rewrites already legal VMI IR into cheaper but equivalent VMI IR
+  may fold ensure_layout into a layout-aware consumer
+  may clone/rematerialize cheap producers for different use-site layouts
+  may sink or hoist layout materialization through pure elementwise chains
+  may specialize private VMI function signatures
+```
+
+The driver currently runs MLIR's normal `canonicalize` and `cse` between these
+VMI-specific passes.  They are allowed to clean up trivially unused helpers,
+merge identical rematerialized producers, and expose simpler use-def shapes.
+They are not a source of hidden lowering information; after every optimization,
+the IR must still carry enough local information for `vmi-to-vpto`.
+
+The baseline hard pass may emit:
+
+```text
+%x_c = pto.vmi.ensure_layout %x : deinterleaved=2 -> contiguous
+pto.vmi.store %x_c
+```
+
+A later optimization may replace that use with:
+
+```text
+pto.vmi.store %x : deinterleaved=2
+```
+
+only if the store op itself has a local deterministic recipe for preserving the
+same row-major memory effect, such as a layout-aware `vstsx2 INTLV` lowering.
+Both forms are semantically complete.  The second form is an optimization, not
+a hard requirement for correctness.
 
 ## 1. Source Case Coverage
 
@@ -55,7 +111,7 @@ layout conflict:
   one scalar broadcast rematerialized for dense and grouped users
   one non-rematerializable value materialized with use-site ensure_layout
   one scalar group-slot source rematerialized as slots=8 and slots=1
-  S=16 block_elems=1/8 plan selection
+  S=16 block_elems=1/8 recipe selection
   dense consumer of group_slots diagnostic
   packed group-slot width-changing cast diagnostic
   S=64 slots=1 group-slot width-changing cast
@@ -122,7 +178,7 @@ memory legality:
 ```
 
 No extra layout kind should be added unless a new case proves that the existing
-layouts and plans cannot express the logical behavior.  The remaining open
+layouts and recipes cannot express the logical behavior.  The remaining open
 items are not missing layout semantics:
 
 ```text
@@ -203,14 +259,14 @@ slot_lane(g)  = g % K
 All non-slot lanes are undefined and may only be read by group-aware operations.
 Ordinary dense `add/mul/store/truncf` cannot consume `group_slots`.
 
-`K` is selected by the lowering plan:
+`K` is selected by the producer/consumer local recipe:
 
 ```text
 S=8/16/32 packed VCG result -> slots=8
 S=64 row-local result       -> slots=1
 ```
 
-## 3. Lowering Context Must Become Assignment Output
+## 3. Lowering Context Must Become Explicit IR Output
 
 `vmi-to-vpto` may inspect only:
 
@@ -233,7 +289,7 @@ It must not:
 6. specialize function signatures during vmi-to-vpto
 ```
 
-Any of those decisions belongs to `vmi-layout-assignment`.
+Any of those decisions belongs to the layout stage before `vmi-to-vpto`.
 
 ## 4. Explicit Assignment Products
 
@@ -323,7 +379,7 @@ group_store:
 masked_load:
   explicit passthrough, mask layout, full physical read, shaped safe-tail memref,
   or an explicit diagnostic decide legality.  A future stable gather fallback
-  must be selected by assignment before vmi-to-vpto lowers it.
+  must be made explicit by assignment before vmi-to-vpto lowers it.
 
 masked_store/select/elementwise:
   operand/result layouts and explicit mask granularity decide the lowering.
@@ -350,40 +406,48 @@ If the current op lacks enough local information, `vmi-to-vpto` emits
 `VMI-LAYOUT-CONTRACT` at the current op and prints the op name, logical type,
 assigned layouts, and the missing decision class.
 
-## 5. Plan Registry
+## 5. Local Recipe Registry
 
-The compiler owns a target-aware plan registry.  Layout assignment queries this
-registry; vmi-to-vpto verifies and consumes the chosen plan.
+The compiler owns a target-aware local recipe registry.  Layout assignment and
+layout optimization query this registry to decide which explicit IR shape to
+produce.  `vmi-to-vpto` queries the same registry only to verify and lower the
+current op from local information.
 
-### 5.1 Plan Kinds
+The registry is not serialized as a separate recipe-selection attribute.  If
+two legal physical recipes cannot be distinguished by the current op's name,
+attrs, operands, operand/result layouts, helper ops, and target options, the
+VMI IR is missing a carrier.  Add an explicit attr, operand, helper op, or
+semantic op before implementing that recipe.
+
+### 5.1 Recipe Kinds
 
 ```text
-ProducerPlan:
+ProducerRecipe:
   op can produce result layout L
   example: load -> deinterleaved=4 using DINTLV_B32 + vdintlv
 
-ConsumerPlan:
+ConsumerRecipe:
   op can consume operand layout L
   example: group_reduce S=32 consumes deinterleaved=4
 
-TransferPlan:
+TransferRecipe:
   op ties operand/result layouts
   example: addf requires same dense layout for operands/result
 
-MaterializationPlan:
+MaterializationRecipe:
   layout A -> layout B without changing logical value
   example: deinterleaved=4 -> contiguous by vintlv tree
 
-RematerializationPlan:
+RematerializationRecipe:
   cheap producer can be cloned for a use-site layout
   example: broadcast/create_mask/group_broadcast
 
-DiagnosticPlan:
+DiagnosticRecipe:
   known unsupported semantic/capability boundary
   example: compact S=12 requires gather materialization
 ```
 
-### 5.2 Dense Plans From Cases
+### 5.2 Dense Recipes From Cases
 
 ```text
 f16 -> f32:
@@ -413,7 +477,7 @@ load:
   layouts, such as S=16 deinterleaved=2 and S=32 deinterleaved=4
 ```
 
-### 5.3 Group Plans From Cases
+### 5.3 Group Recipes From Cases
 
 ```text
 group_reduce f32 S=8:
@@ -449,11 +513,11 @@ group_store:
 group_slot_cast f32 -> f16:
   slots=1 row-local source/result is legal with
   group_slot_cast_slots1_f32_to_f16
-  slots=8 packed source is illegal unless a packed slot-preserving plan is
+  slots=8 packed source is illegal unless a packed slot-preserving recipe is
   registered
 ```
 
-### 5.4 Tail And Memory Safety Plans
+### 5.4 Tail And Memory Safety Recipes
 
 Mask semantics and memory legality are separate:
 
@@ -504,7 +568,7 @@ new catalog case or a proof that it is equivalent to one listed here.
 dense store:
   requests dense contiguous source
   if source is deinterleaved, assignment must insert ensure_layout or select a
-  store plan such as vstsx2 that consumes the assigned layout explicitly
+  store recipe such as vstsx2 that consumes the assigned layout explicitly
 
 truncf f32 -> f16:
   requests source deinterleaved=2, block_elems=1
@@ -556,7 +620,7 @@ group_slot_load:
 
 group_load:
   requests result deinterleaved=2/4, block_elems=8 for S=16/S=32 block
-  fragment plans, or contiguous for row-local full-chunk plans
+  fragment recipes, or contiguous for row-local full-chunk recipes
 
 masked_load:
   requests result layout from its consumers
@@ -564,7 +628,7 @@ masked_load:
   requires explicit passthrough; padding is not synthesized
 
 masked_store:
-  requests dense source layout selected by the store plan
+  requests dense source layout selected by the store recipe
   requests mask layout matching the source layout and store element granularity
   does not choose memory safety for an earlier load
 
@@ -584,9 +648,9 @@ Important negative requests:
 ```text
 ordinary dense add/mul/store/truncf cannot request group_slots
 packed group_slots(slots=8) cannot request width-changing cast unless a packed
-slot-preserving cast plan is registered
+slot-preserving cast recipe is registered
 slots=1 group_store cannot request unit-stride row-major output until a pack or
-unaligned-store plan exists
+unaligned-store recipe exists
 ```
 
 ### 5.6 Conflict Resolution Matrix
@@ -617,13 +681,13 @@ control-flow join:
 private function boundary:
   specialize or materialize at call/callee-entry before vmi-to-vpto
 
-no clone/materialization/specialization plan:
+no clone/materialization/specialization recipe:
   emit a diagnostic naming the requesting op and both layouts
 ```
 
 The cost model may choose between legal rows only when the observable contract
 is identical.  For example, S=16 `block_elems=1` and `block_elems=8` are both
-valid reduce inputs, but `block_elems=8` is selected only when a producer plan
+valid reduce inputs, but `block_elems=8` is selected only when a producer recipe
 such as strided `group_load` naturally creates 32B row fragments or when cost
 proves it cheaper without breaking another consumer such as `truncf`.
 
@@ -648,7 +712,7 @@ Create a use-site request for:
 ```text
 1. every operand use that requires a specific layout
 2. every control-flow yield/branch/call/return edge
-3. every memory operation that requires a memory legality plan
+3. every memory operation that requires a memory legality recipe
 ```
 
 ### 6.2 Constraints
@@ -657,14 +721,14 @@ Hard constraints:
 
 ```text
 group_slots cannot feed ordinary dense consumers
-direct group-slot width-changing cast requires a slot-preserving plan
+direct group-slot width-changing cast requires a slot-preserving recipe
 public/external VMI function boundary requires a stable ABI or diagnostic
 S=32 fast tail load requires full_tile_readable or gather fallback
 ```
 
-`slots = 1` row-local cast may satisfy the slot-preserving plan requirement.
+`slots = 1` row-local cast may satisfy the slot-preserving recipe requirement.
 Packed `slots = 8` f32->f16 remains a diagnostic unless a separate packed cast
-or unpack/materialization plan is registered.
+or unpack/materialization recipe is registered.
 
 Equivalence constraints:
 
@@ -686,11 +750,11 @@ S=16 group_reduce:
 
 one dense value feeding S=16 and S=32 group_reduce:
   rematerialize a cheap producer per consumer layout, or insert an explicit
-  materialization plan; the final lowering pass must not pick one layout after
+  materialization recipe; the final lowering pass must not pick one layout after
   seeing both users
 
 load/group_load:
-  choose memory plan and result layout together
+  choose memory recipe and result layout together
 
 group_broadcast:
   rematerialize per dense consumer layout
@@ -702,10 +766,10 @@ Recommended solving order:
 
 ```text
 1. Build function/control-flow SCCs.
-2. Collect candidate plans for every op.
+2. Collect candidate recipes for every op.
 3. Propagate hard required layouts from consumers.
 4. Propagate producer natural layouts where they are unique.
-5. Resolve multi-plan ops by cost.
+5. Resolve multi-recipe ops by cost.
 6. Insert use-site materialization where a value has multiple incompatible uses.
 7. Rematerialize cheap producers instead of materializing when cheaper.
 8. Specialize internal function signatures.
@@ -716,10 +780,10 @@ Recommended solving order:
 Tie-breaking must be deterministic.  Suggested priority:
 
 ```text
-1. Avoid unsupported plans.
+1. Avoid unsupported recipes.
 2. Prefer rematerializing cheap producers over register materialization.
 3. Prefer layouts accepted by all consumers without conversion.
-4. Prefer memory-fused layout plans over load + register rearrange.
+4. Prefer memory-fused layout recipes over load + register rearrange.
 5. Prefer fewer VPTO instructions.
 6. Prefer contiguous only when cost ties and no consumer requests a special layout.
 ```
@@ -806,7 +870,7 @@ current VMI op body/attrs:
 
 helper materialization chain:
   allowed only to strip ensure_mask_layout / ensure_mask_granularity for
-  static predicate analysis that does not choose a different layout or plan
+  static predicate analysis that does not choose a different layout or recipe
 
 diagnostic embellishment:
   allowed only to improve an already-failed capability message, such as naming

@@ -12,6 +12,8 @@
 #include "PTO/IR/PTO.h"
 #include "PTO/IR/VMIUtils.h"
 #include "PTO/Transforms/Passes.h"
+#include "PTO/Transforms/VMILocalRecipeRegistry.h"
+#include "PTO/Transforms/VMITargetCapabilities.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -156,6 +158,49 @@ LogicalResult emitInvariant(Operation *op, llvm::raw_ostream *diagOS,
       op->emitError() << kVMIDiagPassInvariantPrefix << message;
   (void)diag;
   mirrorDiagnostic(diagOS, Twine(kVMIDiagPassInvariantPrefix) + message);
+  return failure();
+}
+
+LogicalResult emitLayoutContract(Operation *op, llvm::raw_ostream *diagOS,
+                                 Twine message) {
+  InFlightDiagnostic diag =
+      op->emitError() << kVMIDiagLayoutContractPrefix << message;
+  (void)diag;
+  mirrorDiagnostic(diagOS, Twine(kVMIDiagLayoutContractPrefix) + message);
+  return failure();
+}
+
+LogicalResult emitHelperMaterializationContract(Operation *helper,
+                                                Type sourceType,
+                                                Type resultType,
+                                                StringRef helperName,
+                                                StringRef reason,
+                                                llvm::raw_ostream *diagOS) {
+  auto emitFallback = [&]() {
+    return emitLayoutContract(
+        helper, diagOS,
+        Twine(helperName) + " has no registered materialization recipe: " +
+            reason);
+  };
+
+  if (helper->getNumResults() != 1 || !helper->getResult(0).hasOneUse())
+    return emitFallback();
+
+  OpOperand &use = *helper->getResult(0).use_begin();
+  Operation *requester = use.getOwner();
+  std::string message;
+  llvm::raw_string_ostream os(message);
+  os << requester->getName() << " operand #" << use.getOperandNumber()
+     << " has type " << sourceType << " but requires " << resultType << "; "
+     << helperName << " has no registered materialization recipe: " << reason;
+  os.flush();
+
+  InFlightDiagnostic diag =
+      requester->emitError() << kVMIDiagLayoutContractPrefix << message;
+  diag.attachNote(helper->getLoc())
+      << "failed helper conversion " << sourceType << " -> " << resultType
+      << " (" << reason << ")";
+  mirrorDiagnostic(diagOS, Twine(kVMIDiagLayoutContractPrefix) + message);
   return failure();
 }
 
@@ -350,6 +395,12 @@ LogicalResult verifyLayoutAssignedOperationTypes(Operation *op,
   return success();
 }
 
+LogicalResult verifyLayoutHelperRecipe(Operation *op,
+                                       llvm::raw_ostream *diagOS);
+
+LogicalResult verifyLayoutSemanticRecipe(Operation *op,
+                                         llvm::raw_ostream *diagOS);
+
 LogicalResult verifyOperationBoundary(Operation *op,
                                       llvm::raw_ostream *diagOS) {
   if (failed(verifyOperationTypes(op, diagOS)))
@@ -380,17 +431,207 @@ LogicalResult verifyLayoutAssignedOperation(Operation *op,
 
   if (isVMIHelperOp(op)) {
     if (isVMILayoutHelperOp(op))
-      return success();
+      return verifyLayoutHelperRecipe(op, diagOS);
     return emitInvariant(
         op, diagOS,
         "VMI pack/unpack helper appears before VMI-to-VPTO physicalization");
   }
 
-  if (isVMISemanticOp(op) || isStructuralOp(op))
+  if (isVMISemanticOp(op))
+    return verifyLayoutSemanticRecipe(op, diagOS);
+  if (isStructuralOp(op))
     return success();
 
   return emitInvariant(op, diagOS,
                        "VMI typed value is used by a non-VMI semantic op");
+}
+
+LogicalResult verifyLayoutHelperRecipe(Operation *op,
+                                       llvm::raw_ostream *diagOS) {
+  VMILocalRecipeRegistry recipes;
+
+  if (auto ensure = dyn_cast<VMIEnsureLayoutOp>(op)) {
+    auto sourceType = cast<VMIVRegType>(ensure.getSource().getType());
+    auto resultType = cast<VMIVRegType>(ensure.getResult().getType());
+    std::string reason;
+    if (failed(recipes.getDataLayoutMaterializationRecipe(sourceType,
+                                                          resultType,
+                                                          &reason)))
+      return emitHelperMaterializationContract(
+          op, sourceType, resultType, "pto.vmi.ensure_layout", reason, diagOS);
+    return success();
+  }
+
+  if (auto ensure = dyn_cast<VMIEnsureMaskLayoutOp>(op)) {
+    auto sourceType = cast<VMIMaskType>(ensure.getSource().getType());
+    auto resultType = cast<VMIMaskType>(ensure.getResult().getType());
+    std::string reason;
+    if (failed(recipes.getMaskLayoutMaterializationRecipe(sourceType,
+                                                          resultType,
+                                                          &reason)))
+      return emitHelperMaterializationContract(
+          op, sourceType, resultType, "pto.vmi.ensure_mask_layout", reason,
+          diagOS);
+    return success();
+  }
+
+  if (auto ensure = dyn_cast<VMIEnsureMaskGranularityOp>(op)) {
+    auto sourceType = cast<VMIMaskType>(ensure.getSource().getType());
+    auto resultType = cast<VMIMaskType>(ensure.getResult().getType());
+    std::string reason;
+    if (failed(recipes.getMaskGranularityMaterializationRecipe(
+            sourceType, resultType, &reason)))
+      return emitLayoutContract(
+          op, diagOS,
+          Twine("pto.vmi.ensure_mask_granularity has no registered "
+                "materialization recipe: ") +
+              reason);
+    return success();
+  }
+
+  return success();
+}
+
+LogicalResult verifyLayoutSemanticRecipe(Operation *op,
+                                         llvm::raw_ostream *diagOS) {
+  VMILocalRecipeRegistry recipes;
+  VMITargetCapabilityRegistry capabilities;
+
+  if (auto store = dyn_cast<VMIStoreOp>(op)) {
+    auto valueType = cast<VMIVRegType>(store.getValue().getType());
+    VMILayoutAttr layout = valueType.getLayoutAttr();
+    if (!layout || layout.isContiguous())
+      return success();
+
+    std::string reason;
+    if (failed(recipes.getContiguousStoreRecipe(valueType, &reason)))
+      return emitLayoutContract(
+          op, diagOS,
+          Twine("pto.vmi.store has no registered contiguous-memory local "
+                "recipe: ") +
+              reason);
+    return success();
+  }
+
+  if (auto tileWrite = dyn_cast<VMITileWriteOp>(op)) {
+    auto valueType = cast<VMIVRegType>(tileWrite.getValue().getType());
+    VMILayoutAttr layout = valueType.getLayoutAttr();
+    if (!layout || layout.isContiguous())
+      return success();
+
+    std::string reason;
+    if (failed(recipes.getContiguousStoreRecipe(valueType, &reason)))
+      return emitLayoutContract(
+          op, diagOS,
+          Twine("pto.vmi.tile_write has no registered contiguous-memory local "
+                "recipe: ") +
+              reason);
+    return success();
+  }
+
+  if (auto load = dyn_cast<VMIGroupLoadOp>(op)) {
+    auto resultType = cast<VMIVRegType>(load.getResult().getType());
+    VMILayoutAttr layout = resultType.getLayoutAttr();
+    if (!layout || !layout.isDeinterleaved() || layout.getBlockElems() != 8 ||
+        !resultType.getElementType().isF32())
+      return success();
+
+    std::string reason;
+    if (failed(recipes.getGroupLoadRecipe(capabilities, load, &reason)))
+      return emitLayoutContract(
+          op, diagOS,
+          Twine("pto.vmi.group_load has no registered block8 local recipe: ") +
+              reason);
+    return success();
+  }
+
+  if (auto load = dyn_cast<VMIGroupSlotLoadOp>(op)) {
+    std::string reason;
+    if (failed(recipes.getGroupSlotLoadRecipe(capabilities, load, &reason)))
+      return emitLayoutContract(
+          op, diagOS,
+          Twine("pto.vmi.group_slot_load has no registered local recipe: ") +
+              reason);
+    return success();
+  }
+
+  if (auto store = dyn_cast<VMIGroupStoreOp>(op)) {
+    auto valueType = cast<VMIVRegType>(store.getValue().getType());
+    VMILayoutAttr layout = valueType.getLayoutAttr();
+    if (!layout || !layout.isGroupSlots())
+      return success();
+
+    std::string reason;
+    if (failed(recipes.getGroupSlotsStoreRecipe(capabilities, store, &reason)))
+      return emitLayoutContract(
+          op, diagOS,
+          Twine("pto.vmi.group_store has no registered group_slots local "
+                "recipe: ") +
+              reason);
+    return success();
+  }
+
+  if (auto reduce = dyn_cast<VMIGroupReduceAddFOp>(op)) {
+    auto resultType = cast<VMIVRegType>(reduce.getResult().getType());
+    VMILayoutAttr layout = resultType.getLayoutAttr();
+    if (!layout || !layout.isGroupSlots())
+      return success();
+
+    std::string reason;
+    if (failed(recipes.getGroupReduceAddFRecipe(capabilities, reduce,
+                                                &reason)))
+      return emitLayoutContract(
+          op, diagOS,
+          Twine("pto.vmi.group_reduce_addf has no registered group_slots "
+                "local recipe: ") +
+              reason);
+    return success();
+  }
+
+  if (auto broadcast = dyn_cast<VMIGroupBroadcastOp>(op)) {
+    auto sourceType = cast<VMIVRegType>(broadcast.getSource().getType());
+    VMILayoutAttr layout = sourceType.getLayoutAttr();
+    if (!layout || !layout.isGroupSlots() || layout.getSlots() <= 0)
+      return success();
+
+    std::string reason;
+    if (failed(recipes.getGroupBroadcastRecipe(capabilities, broadcast,
+                                               &reason)))
+      return emitLayoutContract(
+          op, diagOS,
+          Twine("pto.vmi.group_broadcast has no registered local recipe: ") +
+              reason);
+    return success();
+  }
+
+  if (auto truncf = dyn_cast<VMITruncFOp>(op)) {
+    std::string reason;
+    if (failed(recipes.getTruncFRecipe(truncf, &reason)))
+      return emitLayoutContract(
+          op, diagOS,
+          Twine("pto.vmi.truncf has no registered local recipe: ") + reason);
+    return success();
+  }
+
+  if (auto extf = dyn_cast<VMIExtFOp>(op)) {
+    std::string reason;
+    if (failed(recipes.getExtFRecipe(extf, &reason)))
+      return emitLayoutContract(
+          op, diagOS,
+          Twine("pto.vmi.extf has no registered local recipe: ") + reason);
+    return success();
+  }
+
+  if (auto bitcast = dyn_cast<VMIBitcastOp>(op)) {
+    std::string reason;
+    if (failed(recipes.getBitcastRecipe(bitcast, &reason)))
+      return emitLayoutContract(
+          op, diagOS,
+          Twine("pto.vmi.bitcast has no registered local recipe: ") + reason);
+    return success();
+  }
+
+  return success();
 }
 
 struct PTOValidateVMIIRPass

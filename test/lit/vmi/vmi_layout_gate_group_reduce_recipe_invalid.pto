@@ -6,23 +6,20 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: not pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto 2>&1 | FileCheck %s
+// RUN: not pto-test-opt %s -pto-validate-vmi-layout-ir 2>&1 | FileCheck %s
 
 module {
-  func.func @vmi_layout_assignment_group_reduce_s12_invalid(
-      %source: !pto.vmi.vreg<96xf32>,
-      %mask: !pto.vmi.mask<96xpred>,
-      %dst: !pto.ptr<f32, ub>,
-      %off: index) {
-    %c1 = arith.constant 1 : index
+  func.func @vmi_layout_gate_group_reduce_recipe_invalid(
+      %source: !pto.vmi.vreg<96xf32, #pto.vmi.layout<contiguous>>,
+      %mask: !pto.vmi.mask<96xb32, #pto.vmi.layout<contiguous>>) {
     // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.group_reduce_addf has no registered group_slots local recipe
     // CHECK-SAME: stable group_reduce_addf slots=8 recipes support group size 8, 16, or 32
-    %sum = pto.vmi.group_reduce_addf %source, %mask
+    // CHECK: note: see current operation: %{{.*}} = "pto.vmi.group_reduce_addf"
+    %out = pto.vmi.group_reduce_addf %source, %mask
         {num_groups = 8, reassoc}
-        : !pto.vmi.vreg<96xf32>, !pto.vmi.mask<96xpred>
-        -> !pto.vmi.vreg<96xf32>
-    pto.vmi.group_store %sum, %dst[%off], %c1 {num_groups = 8}
-        : !pto.vmi.vreg<96xf32>, !pto.ptr<f32, ub>
+        : !pto.vmi.vreg<96xf32, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.mask<96xb32, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<96xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
     return
   }
 }

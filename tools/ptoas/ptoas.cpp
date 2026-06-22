@@ -2925,8 +2925,22 @@ static LogicalResult runVMISemanticPipeline(OwningOpRef<ModuleOp> &module) {
   pm.enableVerifier();
   pm.addPass(pto::createPTOValidateVMIIRPass());
   pm.addPass(pto::createVMILayoutAssignmentPass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
+  pm.addPass(pto::createVMILayoutFoldConsumersPass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
+  pm.addPass(pto::createVMILayoutRematerializePass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
+  pm.addPass(pto::createVMILayoutSinkMaterializationPass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
+  pm.addPass(pto::createVMILegalizeArithSelectPass());
   pm.addPass(pto::createPTOValidateVMILayoutIRPass());
   pm.addPass(pto::createVMIToVPTOPass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
   if (failed(applyConfiguredPassManagerCLOptions(pm,
                                                  "VMI-to-VPTO pipeline")))
     return failure();
