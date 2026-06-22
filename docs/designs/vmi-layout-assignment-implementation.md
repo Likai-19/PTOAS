@@ -763,6 +763,9 @@ Current audit result:
   materializes contiguous grouped predicate chunks and then applies predicate
   pdintlv in the same tree shape as the data vdintlv.  It still does not walk
   from group_reduce_addf to the mask defining op to choose or reject the plan.
+  The dynamic active_elems_per_group form is also op-local: vmi-to-vpto lowers
+  contiguous chunks with vci/vshrs/vshls/vsub/vcmps, then uses the same
+  predicate pdintlv tree for S=32 deinterleaved masks.
 
 masked_load:
   direct lowering is load + vsel.  It does not inspect the mask producer to
@@ -904,7 +907,7 @@ layout/rematerialization:
 
 mask/tail:
   3.11.1, 3.15.1, 3.15.2, 3.21, 3.24, 3.26, 3.29,
-  3.30, 3.44
+  3.30, 3.44, 3.45
 
 strided/group-slot memory:
   3.27, 3.28, 3.37, 3.39
@@ -1063,6 +1066,7 @@ reduce:
 ```text
 lit:
   test/lit/vmi/vmi_layout_assignment_masked_load_group_tail_s32.pto
+  test/lit/vmi/vmi_layout_assignment_create_group_mask_s32_dynamic.pto
 
 runtime SIM:
   test/vpto/cases/vmi/masked-load-group-tail-s32-reduce-store
@@ -1345,11 +1349,14 @@ Known implementation gaps before all catalog cases can become runtime SIM
 coverage:
 
 ```text
-dynamic grouped masks:
-  pto.vmi.create_group_mask exists and supports constant
-  active_elems_per_group. Dynamic active_elems_per_group is not implemented
-  yet. Do not replace grouped masks with prefix create_mask; that would change
-  the semantics.
+dynamic grouped mask runtime source:
+  vmi-to-vpto supports dynamic active_elems_per_group for contiguous b32
+  grouped masks and S=32 deinterleaved=4/block_elems=8 masks. Full runtime SIM
+  coverage still needs a supported scalar source for active_elems_per_group in
+  vector kernels. Direct GM pto.ldg crashed the Bisheng vector backend in this
+  test shape, and UB pto.load_scalar reached an invalid scalar LSU address in
+  the SIM. Do not replace grouped masks with prefix create_mask; that would
+  change the semantics.
 
 remaining function runtime coverage:
   3.25.1 internal function boundary specialization has layout-assignment and
