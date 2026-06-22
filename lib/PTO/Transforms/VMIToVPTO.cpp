@@ -424,6 +424,11 @@ Value createI32Constant(Location loc, int64_t value,
   return rewriter.create<arith::ConstantIntOp>(loc, value, 32);
 }
 
+Value createI16Constant(Location loc, int64_t value,
+                        PatternRewriter &rewriter) {
+  return rewriter.create<arith::ConstantIntOp>(loc, value, 16);
+}
+
 FailureOr<Value> createPrefixMaskForActiveLanes(Location loc, MaskType maskType,
                                                 int64_t activeLanes,
                                                 PatternRewriter &rewriter) {
@@ -475,6 +480,17 @@ Value createPartitionActiveLanes(Location loc, Value activeLanesI32,
         loc, biased, createI32Constant(loc, bias, rewriter));
   return rewriter.create<arith::DivUIOp>(
       loc, biased, createI32Constant(loc, factor, rewriter));
+}
+
+std::optional<int64_t> getPowerOfTwoLog2(int64_t value) {
+  if (value <= 0 || (value & (value - 1)) != 0)
+    return std::nullopt;
+  int64_t log2 = 0;
+  while (value > 1) {
+    value >>= 1;
+    ++log2;
+  }
+  return log2;
 }
 
 std::optional<std::string> getPrefixPattern(int64_t activeLanes,
@@ -2160,6 +2176,96 @@ computeGroupMaskMaterialization(VMICreateGroupMaskOp op, std::string *reason) {
       op, cast<VMIMaskType>(op.getResult().getType()), reason);
 }
 
+FailureOr<SmallVector<Value>> materializeDynamicContiguousGroupMask(
+    VMICreateGroupMaskOp op, Value activeElemsPerGroup,
+    VMIMaskType contiguousVMIType, TypeRange resultTypes,
+    PatternRewriter &rewriter) {
+  auto fail = [&](const Twine &message) -> FailureOr<SmallVector<Value>> {
+    (void)rewriter.notifyMatchFailure(op, message);
+    return failure();
+  };
+
+  VMILayoutAttr layout = contiguousVMIType.getLayoutAttr();
+  if (!layout || !layout.isContiguous())
+    return fail("dynamic create_group_mask requires contiguous seed layout");
+  if (contiguousVMIType.getGranularity() != "b32")
+    return fail("dynamic create_group_mask currently requires b32 "
+                "granularity");
+
+  int64_t numGroups = op.getNumGroupsAttr().getInt();
+  int64_t groupSize = op.getGroupSizeAttr().getInt();
+  if (numGroups <= 0 || groupSize <= 0 ||
+      contiguousVMIType.getElementCount() != numGroups * groupSize)
+    return fail("dynamic create_group_mask requires result lane count to "
+                "match num_groups * group_size");
+
+  FailureOr<int64_t> lanesPerPart =
+      getMaskLanesPerPart(contiguousVMIType.getGranularity());
+  FailureOr<int64_t> arity = getVMIPhysicalArity(contiguousVMIType);
+  if (failed(lanesPerPart) || failed(arity) || *arity < 1)
+    return fail("dynamic create_group_mask requires computable physical "
+                "mask chunks");
+  if (static_cast<int64_t>(resultTypes.size()) != *arity)
+    return fail("dynamic create_group_mask physical result count mismatch");
+  if (groupSize > *lanesPerPart || (*lanesPerPart % groupSize) != 0)
+    return fail("dynamic create_group_mask currently requires group_size to "
+                "divide one physical b32 predicate chunk");
+
+  std::optional<int64_t> shift = getPowerOfTwoLog2(groupSize);
+  if (!shift)
+    return fail("dynamic create_group_mask currently requires power-of-two "
+                "group_size");
+
+  Location loc = op.getLoc();
+  MLIRContext *ctx = rewriter.getContext();
+  Type i32 = rewriter.getI32Type();
+  auto indexVectorType = VRegType::get(ctx, *lanesPerPart, i32);
+  Value activeI32 =
+      clampDynamicActiveLanes(loc, activeElemsPerGroup, groupSize, rewriter);
+
+  SmallVector<Value> results;
+  results.reserve(resultTypes.size());
+  for (Type resultType : resultTypes) {
+    auto maskType = dyn_cast<MaskType>(resultType);
+    if (!maskType || !maskType.isB32())
+      return fail("dynamic create_group_mask result must be b32 mask");
+
+    FailureOr<Value> allMask = createAllTrueMask(loc, maskType, rewriter);
+    if (failed(allMask))
+      return fail("failed to create dynamic create_group_mask all mask");
+
+    Value zero = createI32Constant(loc, 0, rewriter);
+    Value lane =
+        rewriter.create<VciOp>(loc, indexVectorType, zero, StringAttr{})
+            .getResult();
+
+    Value col = lane;
+    if (groupSize != *lanesPerPart) {
+      Value shiftScalar = createI16Constant(loc, *shift, rewriter);
+      Value group = rewriter
+                        .create<VshrsOp>(loc, indexVectorType, lane,
+                                         shiftScalar, *allMask)
+                        .getResult();
+      Value groupBase = rewriter
+                            .create<VshlsOp>(loc, indexVectorType, group,
+                                             shiftScalar, *allMask)
+                            .getResult();
+      col = rewriter
+                .create<VsubOp>(loc, indexVectorType, lane, groupBase,
+                                *allMask)
+                .getResult();
+    }
+
+    results.push_back(rewriter
+                          .create<VcmpsOp>(loc, maskType, col, activeI32,
+                                           *allMask,
+                                           rewriter.getStringAttr("lt"))
+                          .getResult());
+  }
+
+  return results;
+}
+
 std::optional<int64_t> getPrefixActiveLaneCount(ArrayRef<int8_t> activeLanes) {
   bool seenInactive = false;
   int64_t activeCount = 0;
@@ -3797,31 +3903,50 @@ struct OneToNVMICreateGroupMaskOpPattern
       auto contiguousType =
           VMIMaskType::get(op.getContext(), resultVMIType.getElementCount(),
                            resultVMIType.getGranularity(), contiguousLayout);
-      std::string contiguousReason;
-      FailureOr<SmallVector<ConstantMaskChunkMaterialization>>
-          contiguousMaterializations = computeGroupMaskMaterializationForType(
-              op, contiguousType, &contiguousReason);
-      if (failed(contiguousMaterializations))
-        return rewriter.notifyMatchFailure(
-            op, Twine("create_group_mask ") + contiguousReason);
-
       SmallVector<Value> contiguousParts;
-      contiguousParts.reserve(contiguousMaterializations->size());
-      for (const ConstantMaskChunkMaterialization &materialization :
-           *contiguousMaterializations) {
-        if (contiguousParts.size() >= resultTypes.size())
+      auto activeConstant =
+          op.getActiveElemsPerGroup().getDefiningOp<arith::ConstantOp>();
+      if (activeConstant) {
+        std::string contiguousReason;
+        FailureOr<SmallVector<ConstantMaskChunkMaterialization>>
+            contiguousMaterializations = computeGroupMaskMaterializationForType(
+                op, contiguousType, &contiguousReason);
+        if (failed(contiguousMaterializations))
           return rewriter.notifyMatchFailure(
-              op, "create_group_mask produced too many contiguous masks");
-        auto maskType = dyn_cast<MaskType>(resultTypes[contiguousParts.size()]);
-        if (!maskType)
-          return rewriter.notifyMatchFailure(
-              op, "create_group_mask result must be mask");
-        FailureOr<Value> mask = materializeConstantMaskChunk(
-            op.getLoc(), maskType, materialization.activeLanes, rewriter);
-        if (failed(mask))
-          return rewriter.notifyMatchFailure(
-              op, "failed to materialize create_group_mask contiguous chunk");
-        contiguousParts.push_back(*mask);
+              op, Twine("create_group_mask ") + contiguousReason);
+
+        contiguousParts.reserve(contiguousMaterializations->size());
+        for (const ConstantMaskChunkMaterialization &materialization :
+             *contiguousMaterializations) {
+          if (contiguousParts.size() >= resultTypes.size())
+            return rewriter.notifyMatchFailure(
+                op, "create_group_mask produced too many contiguous masks");
+          auto maskType =
+              dyn_cast<MaskType>(resultTypes[contiguousParts.size()]);
+          if (!maskType)
+            return rewriter.notifyMatchFailure(
+                op, "create_group_mask result must be mask");
+          FailureOr<Value> mask = materializeConstantMaskChunk(
+              op.getLoc(), maskType, materialization.activeLanes, rewriter);
+          if (failed(mask))
+            return rewriter.notifyMatchFailure(
+                op, "failed to materialize create_group_mask contiguous chunk");
+          contiguousParts.push_back(*mask);
+        }
+      } else {
+        FailureOr<Value> active = getSingleValue(
+            op, adaptor.getActiveElemsPerGroup(),
+            "create_group_mask active_elems_per_group must convert to one "
+            "value",
+            rewriter);
+        if (failed(active))
+          return failure();
+        FailureOr<SmallVector<Value>> dynamicParts =
+            materializeDynamicContiguousGroupMask(op, *active, contiguousType,
+                                                  resultTypes, rewriter);
+        if (failed(dynamicParts))
+          return failure();
+        contiguousParts = std::move(*dynamicParts);
       }
 
       if (contiguousParts.size() != resultTypes.size())
@@ -3830,6 +3955,24 @@ struct OneToNVMICreateGroupMaskOpPattern
       FailureOr<SmallVector<Value>> results = materializeMaskLayoutConversion(
           op, contiguousParts, resultTypes, contiguousLayout, resultLayout,
           rewriter);
+      if (failed(results))
+        return failure();
+      rewriter.replaceOp(op, *results, adaptor.getResultMapping());
+      return success();
+    }
+
+    auto activeConstant =
+        op.getActiveElemsPerGroup().getDefiningOp<arith::ConstantOp>();
+    if (!activeConstant && resultLayout && resultLayout.isContiguous()) {
+      FailureOr<Value> active = getSingleValue(
+          op, adaptor.getActiveElemsPerGroup(),
+          "create_group_mask active_elems_per_group must convert to one value",
+          rewriter);
+      if (failed(active))
+        return failure();
+      FailureOr<SmallVector<Value>> results =
+          materializeDynamicContiguousGroupMask(op, *active, resultVMIType,
+                                                resultTypes, rewriter);
       if (failed(results))
         return failure();
       rewriter.replaceOp(op, *results, adaptor.getResultMapping());
