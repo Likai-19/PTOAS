@@ -557,7 +557,9 @@ grouped masks: assignment emits explicit contiguous and deinterleaved mask
 values, and `vmi-to-vpto` lowers the deinterleaved mask op itself through
 contiguous grouped-mask materialization followed by predicate deinterleave.  It
 does not walk from `group_reduce_addf` to the mask producer to choose or reject
-the plan.
+the plan.  Dynamic `active_elems_per_group` follows the same rule: the
+`create_group_mask` op lowers its own SSA scalar with vci/vshrs/vshls/vsub/vcmps
+for contiguous chunks before any predicate deinterleave.
 
 ## 9. Physical Value Ordering
 
