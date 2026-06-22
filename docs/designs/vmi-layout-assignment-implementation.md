@@ -466,7 +466,9 @@ group_slots group_reduce_addf semantic recipes:
   S=8 vcgadd
   S=16 deinterleaved=2 vcgadd+vadd
   S=32 deinterleaved=4 vcgadd+vadd tree
-  S=64 contiguous slots=1 vcadd/vadd/vsel row-local reduction
+  S>=physical_chunk_lanes contiguous slots=1 vcadd/vadd/vsel row-local
+  reduction, with one physical result part per group.  For f32 this covers
+  S=64, S=128, S=256, ...
 
 explicit-slots group_broadcast semantic recipes:
   slots=8/slots=1 vselr materialization to contiguous or supported
@@ -1031,7 +1033,7 @@ Target local recipe matrix:
 load, recipe=dense_load_norm:
   result layout contiguous
   emits pto.vlds / pto.vsts NORM paths
-  covers dense store users and S=64 row-local reduce input
+  covers dense store users and full-chunk row-local reduce input
 
 load, recipe=load_dintlv2:
   result layout deinterleaved=2, block_elems=1
@@ -1088,8 +1090,9 @@ group_reduce_addf, recipe=s32_reduce_block8_stride:
   produces group_slots(G, slots=8)
   emits four vcgadd operations and a vadd tree
 
-group_reduce_addf, recipe=s64_reduce_row_local:
-  consumes contiguous f32 with group size 64
+group_reduce_addf, recipe=full_chunk_reduce_row_local:
+  consumes contiguous f32 with group size that is a multiple of one physical
+  chunk
   produces group_slots(G, slots=1)
   target lowering emits per-row vcgadd plus vcadd; the current prototype uses
   the existing row-local VCADD/VADD/VSEL sequence while preserving the same
@@ -1143,9 +1146,10 @@ group_reduce_addf:
   #pto.vmi.layout<deinterleaved = 4, block_elems = 8>, result
   #pto.vmi.layout<num_groups = G, slots = 8>; vmi-to-vpto lowers through four
   VCGADDs plus a PAT_VL8 VADD tree per packed result block.
-  S=64 row-local assignment uses #pto.vmi.layout<num_groups = G, slots = 1>
-  and has focused layout-assignment/vmi-to-vpto lit coverage; the explicit
-  slots=1 generic VCADD row-local path is registered and selected locally.
+  Full-chunk row-local assignment, including S=64 and S=256 f32 cases, uses
+  #pto.vmi.layout<num_groups = G, slots = 1> and has focused
+  layout-assignment/vmi-to-vpto lit coverage; the explicit slots=1 generic
+  VCADD row-local path is registered and selected locally.
 
 group_broadcast:
   explicit slots=8/1 source layouts select
@@ -2089,7 +2093,7 @@ Current evidence for the case-catalog objective:
 3. every runtime case directory contains kernel.pto, launch.cpp, main.cpp,
    golden.py, and compare.py
 4. the latest broad VMI runtime sweep passed: PASS=43 FAIL=0
-5. the latest full VMI lit sweep passed: 340/340
+5. the latest full VMI lit sweep passed: 342/342
 6. every unsupported endpoint listed in section 11.3 has a diagnostic lit test
 7. vmi-to-vpto decisions are represented by current-op attrs/operands,
    assigned layouts, helper ops, rematerialization, or diagnostics

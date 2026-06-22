@@ -3111,7 +3111,9 @@ pto.vmi.group_broadcast:
     result may be contiguous with full physical chunks
     result may also be deinterleaved when S is large enough that every physical
     result chunk stays inside one logical group, for example N=512, G=2, S=256,
-    L=64, deinterleaved=4
+    L=64, deinterleaved=4.  If the source is
+    #pto.vmi.layout<num_groups = G, slots = 1>, the source physical part is
+    selected by group id rather than by source chunk id.
     derived group size S must divide or be a multiple of L for canonical
     group-slot addressing
     if result is contiguous and S < L, each physical chunk contains multiple group

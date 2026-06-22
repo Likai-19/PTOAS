@@ -498,6 +498,13 @@ group_reduce f32 S=64:
   input contiguous
   result group_slots(G, slots=1)
 
+group_reduce f32 S=128/S=256/...:
+  input contiguous
+  result group_slots(G, slots=1)
+  lowering reduces each full physical chunk with vcadd, accumulates all chunks
+  in the same logical group with lane0 vadd, and writes one physical result
+  part per group
+
 group_slot_load:
   result group_slots(G, slots=8) for packed slots
   result group_slots(G, slots=1) for row-local slots
