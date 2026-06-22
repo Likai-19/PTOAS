@@ -50,8 +50,6 @@ using namespace mlir::pto;
 
 namespace {
 
-static constexpr const char *kVMISelectedPlanAttrName = "vmi.selected_plan";
-
 bool isVMIType(Type type) { return isa<VMIVRegType, VMIMaskType>(type); }
 
 bool containsVMIType(Type type) {
@@ -1187,21 +1185,12 @@ checkSupportedGroupLoadShape(const VMITargetCapabilityRegistry &capabilities,
   VMILayoutAttr resultLayout = resultType.getLayoutAttr();
   if (!resultLayout)
     return fail("requires assigned result layout");
-  auto selectedPlan = op->getAttrOfType<StringAttr>(kVMISelectedPlanAttrName);
-  if (!selectedPlan)
-    return fail("requires vmi.selected_plan selected by "
-                "vmi-layout-assignment");
   FailureOr<int64_t> groupSize = getGroupSizeFromNumGroups(
       resultType, op.getNumGroupsAttr().getInt(), reason);
   if (failed(groupSize))
     return failure();
 
   if (resultLayout.isContiguous()) {
-    StringRef expectedPlan = "group_load_contiguous_chunks";
-    if (selectedPlan.getValue() != expectedPlan)
-      return fail(Twine("vmi.selected_plan '") + selectedPlan.getValue() +
-                  "' does not match result layout; expected '" + expectedPlan +
-                  "'");
     if (failed(checkSupportedLoadShape(capabilities, resultType, op.getSource(),
                                        op.getSource().getType(), std::nullopt,
                                        std::nullopt, reason)))
@@ -1211,18 +1200,10 @@ checkSupportedGroupLoadShape(const VMITargetCapabilityRegistry &capabilities,
 
   if (resultLayout.isDeinterleaved() && resultLayout.getBlockElems() == 8 &&
       resultType.getElementType().isF32()) {
-    StringRef expectedPlan;
-    if (*groupSize == 16 && resultLayout.getFactor() == 2)
-      expectedPlan = "s16_group_load_block8_stride";
-    else if (*groupSize == 32 && resultLayout.getFactor() == 4)
-      expectedPlan = "s32_group_load_block8_stride";
-    else
+    if ((*groupSize != 16 || resultLayout.getFactor() != 2) &&
+        (*groupSize != 32 || resultLayout.getFactor() != 4))
       return fail("block8 strided group_load requires S=16/factor=2 or "
                   "S=32/factor=4");
-    if (selectedPlan.getValue() != expectedPlan)
-      return fail(Twine("vmi.selected_plan '") + selectedPlan.getValue() +
-                  "' does not match result layout; expected '" + expectedPlan +
-                  "'");
     if (!isa<PtrType>(op.getSource().getType()))
       return fail("block8 strided group_load requires !pto.ptr source");
     if (op.getNumGroupsAttr().getInt() % 8 != 0)
@@ -1260,23 +1241,8 @@ LogicalResult checkSupportedGroupSlotLoadShape(
     return fail("requires explicit group_slots result layout matching "
                 "num_groups");
 
-  auto selectedPlan = op->getAttrOfType<StringAttr>(kVMISelectedPlanAttrName);
-  if (!selectedPlan)
-    return fail("requires vmi.selected_plan selected by "
-                "vmi-layout-assignment");
-
-  StringRef expectedPlan;
-  if (layout.getSlots() == 8)
-    expectedPlan = "group_slot_load_slots8_unit_stride";
-  else if (layout.getSlots() == 1)
-    expectedPlan = "group_slot_load_slots1_row_local";
-  else
+  if (layout.getSlots() != 8 && layout.getSlots() != 1)
     return fail("supports only slots=8 or slots=1 group_slot_load layouts");
-
-  if (selectedPlan.getValue() != expectedPlan)
-    return fail(Twine("vmi.selected_plan '") + selectedPlan.getValue() +
-                "' does not match result layout; expected '" + expectedPlan +
-                "'");
 
   if (!capabilities.supportsDirectMemory(op.getSource().getType(), "source")
            .isSupported())
@@ -2646,18 +2612,6 @@ LogicalResult checkS16Block8GroupReduceShape(VMIGroupReduceAddFOp op,
     return fail("s16 block8 group_reduce_addf requires two source/mask "
                 "parts per result part");
 
-  auto selectedPlan = op->getAttrOfType<StringAttr>(kVMISelectedPlanAttrName);
-  if (!selectedPlan)
-    return fail("requires vmi.selected_plan selected by "
-                "vmi-layout-assignment");
-  StringRef expectedPlan = sourceLayout.getBlockElems() == 1
-                               ? "s16_reduce_parity"
-                               : "s16_reduce_block8";
-  if (selectedPlan.getValue() != expectedPlan)
-    return fail(Twine("vmi.selected_plan '") + selectedPlan.getValue() +
-                "' does not match source/result layouts; expected '" +
-                expectedPlan + "'");
-
   return success();
 }
 
@@ -2711,17 +2665,6 @@ LogicalResult checkS32Block8GroupReduceShape(VMIGroupReduceAddFOp op,
     return fail("s32 block8 group_reduce_addf requires four source/mask "
                 "parts per result part");
 
-  auto selectedPlan = op->getAttrOfType<StringAttr>(kVMISelectedPlanAttrName);
-  if (!selectedPlan)
-    return fail("requires vmi.selected_plan selected by "
-                "vmi-layout-assignment");
-  StringRef expectedPlan = sourceLayout.getBlockElems() == 1
-                               ? "s32_reduce_dintlv4"
-                               : "s32_reduce_block8_stride";
-  if (selectedPlan.getValue() != expectedPlan)
-    return fail(Twine("vmi.selected_plan '") + selectedPlan.getValue() +
-                "' does not match source/result layouts; expected '" +
-                expectedPlan + "'");
   return success();
 }
 
@@ -6974,15 +6917,6 @@ LogicalResult checkSupportedTruncFShape(VMITruncFOp op,
                   "group_slots(num_groups=G, slots=1) source/result layouts, "
                   "f32 source, f16 result, and matching physical arity");
 
-    auto selectedPlan = op->getAttrOfType<StringAttr>(kVMISelectedPlanAttrName);
-    if (!selectedPlan)
-      return fail("requires vmi.selected_plan selected by "
-                  "vmi-layout-assignment");
-    StringRef expectedPlan = "group_slot_cast_slots1_f32_to_f16";
-    if (selectedPlan.getValue() != expectedPlan)
-      return fail(Twine("vmi.selected_plan '") + selectedPlan.getValue() +
-                  "' does not match source/result layouts; expected '" +
-                  expectedPlan + "'");
     return success();
   }
 
@@ -7411,41 +7345,17 @@ LogicalResult checkSupportedGroupReduceAddFShape(
   if (*sourceArity != *resultArity || *sourceArity != *maskArity)
     return fail("requires source/result/mask physical arity to match");
   if (succeeded(checkVcgaddGroupReduceShape(sourceType, maskType, resultType,
-                                            *groupSize, nullptr))) {
-    if (resultLayout.getSlots() > 0) {
-      auto selectedPlan =
-          op->getAttrOfType<StringAttr>(kVMISelectedPlanAttrName);
-      if (!selectedPlan)
-        return fail("requires vmi.selected_plan selected by "
-                    "vmi-layout-assignment");
-      StringRef expectedPlan = "s8_reduce_contiguous";
-      if (selectedPlan.getValue() != expectedPlan)
-        return fail(Twine("vmi.selected_plan '") + selectedPlan.getValue() +
-                    "' does not match result layout; expected '" +
-                    expectedPlan + "'");
-    }
+                                            *groupSize, nullptr)))
     return success();
-  }
   if (failed(checkSupportedGroupChunkShape(sourceType, *groupSize, reason)))
     return failure();
   if (resultLayout.getSlots() <= 0)
     return success();
 
-  auto selectedPlan = op->getAttrOfType<StringAttr>(kVMISelectedPlanAttrName);
-  if (!selectedPlan)
-    return fail("requires vmi.selected_plan selected by "
-                "vmi-layout-assignment");
-  StringRef expectedPlan;
-  if (sourceLayout.isContiguous() && *groupSize == 64 &&
-      resultLayout.getSlots() == 1)
-    expectedPlan = "s64_reduce_row_local";
-  else
-    return fail("explicit group_slots group_reduce_addf chunk path has no "
-                "registered selected_plan for the assigned layouts");
-  if (selectedPlan.getValue() != expectedPlan)
-    return fail(Twine("vmi.selected_plan '") + selectedPlan.getValue() +
-                "' does not match result layout; expected '" + expectedPlan +
-                "'");
+  if (!sourceLayout.isContiguous() || *groupSize != 64 ||
+      resultLayout.getSlots() != 1)
+    return fail("explicit group_slots group_reduce_addf chunk path requires "
+                "contiguous group size 64 source and slots=1 result layout");
   return success();
 }
 
@@ -7477,26 +7387,10 @@ LogicalResult checkSupportedGroupBroadcastShape(
   if (resultLayout.isGroupSlots())
     return fail("requires dense result layout");
 
-  if (sourceLayout.getSlots() > 0) {
-    auto selectedPlan = op->getAttrOfType<StringAttr>(kVMISelectedPlanAttrName);
-    if (!selectedPlan)
-      return fail("requires vmi.selected_plan selected by "
-                  "vmi-layout-assignment");
-
-    StringRef expectedPlan;
-    if (sourceLayout.getSlots() == 8)
-      expectedPlan = "group_broadcast_slots8_vselr";
-    else if (sourceLayout.getSlots() == 1)
-      expectedPlan = "group_broadcast_slots1_vselr";
-    else
-      return fail("supports only slots=8 or slots=1 group_broadcast source "
-                  "layouts");
-
-    if (selectedPlan.getValue() != expectedPlan)
-      return fail(Twine("vmi.selected_plan '") + selectedPlan.getValue() +
-                  "' does not match source layout; expected '" + expectedPlan +
-                  "'");
-  }
+  if (sourceLayout.getSlots() > 0 && sourceLayout.getSlots() != 8 &&
+      sourceLayout.getSlots() != 1)
+    return fail("supports only slots=8 or slots=1 group_broadcast source "
+                "layouts");
 
   std::string fullChunkReason;
   if (failed(checkFullDataPhysicalChunks(sourceType, &fullChunkReason)))
@@ -8174,7 +8068,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
              "to one contiguous f16 result chunk or f32 deinterleaved=4 "
              "source parts to one contiguous fp8-like result chunk, or f32 "
              "group_slots(num_groups=G, slots=1) to f16 "
-             "group_slots(num_groups=G, slots=1) with selected_plan ("
+             "group_slots(num_groups=G, slots=1) ("
           << reason << ")";
       return WalkResult::interrupt();
     }

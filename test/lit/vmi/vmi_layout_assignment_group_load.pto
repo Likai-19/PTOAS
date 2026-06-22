@@ -22,6 +22,5 @@ module {
 // CHECK-LABEL: func.func @vmi_layout_assignment_group_load(
 // CHECK-SAME: -> !pto.vmi.vreg<512xf32, #pto.vmi.layout<contiguous>>
 // CHECK: %[[OUT:.*]] = pto.vmi.group_load
-// CHECK-SAME: vmi.selected_plan = "group_load_contiguous_chunks"
 // CHECK-SAME: -> !pto.vmi.vreg<512xf32, #pto.vmi.layout<contiguous>>
 // CHECK: return %[[OUT]]

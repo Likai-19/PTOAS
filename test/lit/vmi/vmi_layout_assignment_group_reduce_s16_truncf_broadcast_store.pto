@@ -35,10 +35,8 @@ module {
 // ASSIGN: %[[MASK:.*]] = pto.vmi.ensure_mask_layout %arg1
 // ASSIGN-SAME: -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
 // ASSIGN: %[[SUM32:.*]] = pto.vmi.group_reduce_addf %[[SOURCE]], %[[MASK]]
-// ASSIGN-SAME: vmi.selected_plan = "s16_reduce_block8"
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // ASSIGN: %[[B32:.*]] = pto.vmi.group_broadcast %[[SUM32]]
-// ASSIGN-SAME: vmi.selected_plan = "group_broadcast_slots8_vselr"
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
 // ASSIGN: %[[B32_SPLIT:.*]] = pto.vmi.ensure_layout %[[B32]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>

@@ -1522,8 +1522,8 @@ layout transition explicit: `group_broadcast` first produces a dense contiguous
 f32 value, then `pto.vmi.ensure_layout` materializes the deinterleaved=2 f32
 view required by dense `f32 -> f16` truncation. A future direct
 `group_broadcast -> deinterleaved=2` lowering may remove that materialization,
-but it must be implemented as a `group_broadcast` selected plan rather than
-hidden inside `truncf` lowering.
+but the `group_broadcast` result layout must make that recipe explicit rather
+than hiding it inside `truncf` lowering.
 
 VPTO lowering result for one full 8-row tile:
 
@@ -3045,9 +3045,9 @@ layout.  It is that each use has an explicit layout boundary:
 %b_for_cast_split = pto.vmi.ensure_layout %b_for_cast
 ```
 
-If a future `group_broadcast -> deinterleaved` selected plan is added, layout
+If a future direct `group_broadcast -> deinterleaved` recipe is added, layout
 assignment may assign `%b_for_mul` or `%b_for_cast` directly to that layout, but
-the choice must still be visible in the assigned IR and selected plan.
+the choice must still be visible in the assigned IR.
 
 VPTO lowering result:
 
@@ -5266,7 +5266,7 @@ one contiguous value for `masked_load`, and one deinterleaved value for
 `create_group_mask` by materializing the contiguous grouped predicate chunks
 and then applying `pdintlv_b32` in the same tree shape as the data
 `vdintlv`.  It does not walk from `group_reduce_addf` to the mask producer to
-choose or reject the selected plan.
+choose or reject the recipe.
 
 Assignment may select a deinterleaved S=32 load plan only when the rounded
 physical reads are memory-safe; otherwise it must diagnose or use a future

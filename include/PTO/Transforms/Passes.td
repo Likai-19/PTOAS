@@ -901,9 +901,11 @@ def PTOValidateVMILayoutIR
     Checks the post-layout-assignment VMI stage: every VMI data value must have
     a concrete VMI layout, every VMI mask must have concrete b8/b16/b32
     granularity and layout, physical VPTO register values must not appear yet,
-    VMI typed values must stay inside VMI semantic/helper or structural ops,
-    and context-sensitive VMI ops must carry the selected_plan contract emitted
-    by layout assignment.
+    and VMI typed values must stay inside VMI semantic/helper or structural ops.
+    vmi-to-vpto chooses deterministic local recipes from the current op's attrs,
+    operand/result types, layouts, and operand values; non-local choices must
+    be represented as explicit attrs, helper ops, cloned producers, or
+    diagnostics before this stage.
   }];
   let constructor = "mlir::pto::createPTOValidateVMILayoutIRPass()";
   let dependentDialects = ["mlir::cf::ControlFlowDialect",

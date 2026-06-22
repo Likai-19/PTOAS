@@ -16,7 +16,7 @@ module {
       %mask: !pto.vmi.mask<512xb32, #pto.vmi.layout<contiguous>>) {
     %c0 = arith.constant 0 : index
     %v = pto.vmi.group_load %src[%c0], %row_stride
-        {num_groups = 2, vmi.selected_plan = "group_load_contiguous_chunks"}
+        {num_groups = 2}
         : !pto.ptr<f32, ub> -> !pto.vmi.vreg<512xf32, #pto.vmi.layout<contiguous>>
     %r = pto.vmi.group_reduce_addf %v, %mask {num_groups = 2, reassoc}
         : !pto.vmi.vreg<512xf32, #pto.vmi.layout<contiguous>>,
