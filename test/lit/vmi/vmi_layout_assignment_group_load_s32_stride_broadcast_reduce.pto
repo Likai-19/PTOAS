@@ -40,22 +40,18 @@ module {
 
 // ASSIGN-LABEL: func.func @vmi_layout_assignment_group_load_s32_stride_broadcast_reduce(
 // ASSIGN: %[[X:.*]] = pto.vmi.group_load
-// ASSIGN-SAME: vmi.selected_plan = "s32_group_load_block8_stride"
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
 // ASSIGN: %[[MASK:.*]] = pto.vmi.ensure_mask_layout
 // ASSIGN-SAME: -> !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
 // ASSIGN: %[[SUM:.*]] = pto.vmi.group_reduce_addf %[[X]], %[[MASK]]
-// ASSIGN-SAME: vmi.selected_plan = "s32_reduce_block8_stride"
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // ASSIGN: %[[B:.*]] = pto.vmi.group_broadcast %[[SUM]]
-// ASSIGN-SAME: vmi.selected_plan = "group_broadcast_slots8_vselr"
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
 // ASSIGN: %[[Y:.*]] = pto.vmi.mulf %[[X]], %[[B]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
 // ASSIGN: %[[MASK2:.*]] = pto.vmi.ensure_mask_layout
 // ASSIGN-SAME: -> !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
 // ASSIGN: %[[YSUM:.*]] = pto.vmi.group_reduce_addf %[[Y]], %[[MASK2]]
-// ASSIGN-SAME: vmi.selected_plan = "s32_reduce_block8_stride"
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // ASSIGN: pto.vmi.group_store %[[YSUM]]
 

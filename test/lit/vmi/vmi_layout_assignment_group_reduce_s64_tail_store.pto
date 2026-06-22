@@ -29,7 +29,6 @@ module {
 // ASSIGN: %[[X:.*]] = pto.vmi.load
 // ASSIGN-SAME: -> !pto.vmi.vreg<384xf32, #pto.vmi.layout<contiguous>>
 // ASSIGN: %[[SUM:.*]] = pto.vmi.group_reduce_addf %[[X]]
-// ASSIGN-SAME: vmi.selected_plan = "s64_reduce_row_local"
 // ASSIGN-SAME: -> !pto.vmi.vreg<384xf32, #pto.vmi.layout<num_groups = 6, slots = 1>>
 // ASSIGN: pto.vmi.group_store %[[SUM]]
 

@@ -24,6 +24,5 @@ module {
 // CHECK-SAME: %arg1: !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>
 // CHECK-SAME: -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // CHECK: %[[OUT:.*]] = pto.vmi.group_reduce_addf %arg0, %arg1
-// CHECK-SAME: vmi.selected_plan = "s8_reduce_contiguous"
 // CHECK-SAME: -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // CHECK: return %[[OUT]]

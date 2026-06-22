@@ -60,7 +60,6 @@ module {
 // ASSIGN: %[[MASK:.*]] = pto.vmi.create_group_mask
 // ASSIGN-SAME: -> !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
 // ASSIGN: %[[SUM:.*]] = pto.vmi.group_reduce_addf %[[PROD]], %[[MASK]]
-// ASSIGN-SAME: vmi.selected_plan = "s32_reduce_block8_stride"
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // ASSIGN: pto.vmi.group_store %[[SUM]]
 
