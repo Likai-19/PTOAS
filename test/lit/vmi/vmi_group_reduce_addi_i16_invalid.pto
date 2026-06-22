@@ -1,0 +1,24 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). Please refer to the License for details. You may not use
+// this file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON
+// AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+// FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+// for the full text of the License.
+
+// RUN: not pto-test-opt %s -vmi-layout-assignment 2>&1 | FileCheck %s
+
+module {
+  func.func @direct_i16_group_reduce_invalid(
+      %source: !pto.vmi.vreg<128xi16>,
+      %mask: !pto.vmi.mask<128xpred>) {
+    %sum = pto.vmi.group_reduce_addi %source, %mask {num_groups = 8}
+        : !pto.vmi.vreg<128xi16>, !pto.vmi.mask<128xpred>
+        -> !pto.vmi.vreg<128xi16>
+    return
+  }
+}
+
+// CHECK: requires i32 accumulator element type; cast i8/i16 storage to i32 before grouped reduction because integer reduction widens narrow inputs

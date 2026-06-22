@@ -94,11 +94,18 @@ dense cast:
   f16 -> f32 -> store
   f32 -> f16 -> store
   f8  -> f32 -> compute -> f8
+  f8  -> f32 accumulator -> group_reduce_addf
+  i8/i16 -> signed/unsigned integer cast to i32 accumulator
+          -> group_reduce_addi
+  f8/i8 appear as cast source or cast destination at compute boundaries
+  integer narrowing back to i8 is an explicit cast, not implicit arithmetic
   f16 -> f32 shared by dense store and S=16 reduce
   f32 shared by f8 store and S=32 reduce
 
 group reduce:
-  S=8, S=16, S=32, S=64
+  32-bit accumulator: S=8, S=16, S=32, S=64
+  16-bit accumulator: S=16, S=32, S=64, S=128
+  8-bit storage reduces only through an explicit accumulator cast
   reduce -> group_store
   reduce -> group_slot_load/elemwise -> group_store
   reduce -> group_broadcast -> elemwise -> reduce -> store
@@ -204,6 +211,29 @@ diagnostic-only cases:
 
 Layout is a property of a layout-assigned VMI value, not a property inferred by
 the final lowering pattern.
+
+Type policy:
+
+```text
+storage boundary:
+  f8-like/i8/f16/i16/f32/i32 may appear in load/store values when the target
+  memory instruction supports the physical width.
+
+cast boundary:
+  f8-like participates through extf/truncf.
+  i8 participates through extsi/extui/trunci. Signedness is carried by the
+  cast op semantics, not by a separate layout.
+  On the current VPTO target, 32-bit to 8-bit integer narrowing is only a
+  baseline recipe for unsigned i8 results because the available VCVTII forms
+  are s32/u32 -> u8.
+
+compute boundary:
+  baseline floating compute uses f16/f32.
+  baseline integer grouped reduction compute uses i32 accumulators.  i8/i16
+  storage must be widened first because integer reduction instructions widen
+  narrow inputs.
+  f8/i8 are not baseline accumulator/compute element types.
+```
 
 ### 2.1 Dense Layouts
 
@@ -348,10 +378,37 @@ group_slot_load:
   rematerialized into two ops when different users require different result
   layouts; each clone is then locally deterministic.
 
-group_reduce_addf:
+group_reduce_add{f|i}:
   source/mask layout, result group_slots layout, num_groups, element type, and
-  reassoc decide S=8 contiguous vcgadd, S=16/S=32 deinterleaved vcgadd trees,
-  and S=64 row-local vcadd/vsel lowering.
+  the typed reduce semantics decide the local reduction recipe.  The recipe is
+  not keyed by f32 shape names.  It is derived from the element byte width.
+  Floating-point `group_reduce_addf` carries `reassoc`; integer
+  `group_reduce_addi` does not.
+
+  VLaneElems = 32B / sizeof(T)
+  L          = 256B / sizeof(T)
+  S          = logical_lane_count / num_groups
+
+  S == VLaneElems       -> contiguous vcgadd, result slots=8
+  S == 2 * VLaneElems   -> deinterleaved=2 vcgadd tree, result slots=8
+  S == 4 * VLaneElems   -> deinterleaved=4 vcgadd tree, result slots=8
+  S >= L && S % L == 0  -> contiguous row-local vcadd/vsel, result slots=1
+
+  Type support is controlled by the typed reduce op semantics and target
+  capability, not by separate per-type shape rules.  Once a type is legal for a
+  reduce op, the same formula above selects its layout and local recipe.  The
+  current checked-in implementation may lag this design target; that is staged
+  implementation status, not a design boundary.
+
+  The formula is applied to the accumulator/reduce element type, not
+  necessarily the storage element type.  8-bit floating-point storage first
+  casts to f32 for `group_reduce_addf`; 8-bit and 16-bit integer storage first
+  casts to a signed/unsigned i32 accumulator for
+  `group_reduce_addi`.  In the baseline VMI contract, f8/i8 are storage and
+  cast-boundary types: they may be the source or destination of cast, load, and
+  store, but they are not accumulator/compute types for group reduce.  Direct
+  8-bit grouped reduction is illegal unless the target exposes an explicit
+  8-bit compute recipe.
 
 group_broadcast:
   source group_slots layout, result dense layout, num_groups, and element type
@@ -480,30 +537,15 @@ load:
 ### 5.3 Group Recipes From Cases
 
 ```text
-group_reduce f32 S=8:
-  input contiguous
-  result group_slots(G, slots=8)
-
-group_reduce f32 S=16:
-  legal input layout A: deinterleaved=2, block_elems=1
-  legal input layout B: deinterleaved=2, block_elems=8
-  result group_slots(G, slots=8)
-
-group_reduce f32 S=32:
-  legal input layout A: deinterleaved=4, block_elems=1
-  legal input layout B: deinterleaved=4, block_elems=8
-  result group_slots(G, slots=8)
-
-group_reduce f32 S=64:
-  input contiguous
-  result group_slots(G, slots=1)
-
-group_reduce f32 S=128/S=256/...:
-  input contiguous
-  result group_slots(G, slots=1)
-  lowering reduces each full physical chunk with vcadd, accumulates all chunks
-  in the same logical group with lane0 vadd, and writes one physical result
-  part per group
+group_reduce_add{f|i} typed shape classification:
+  define E = sizeof(T), VLaneElems = 32B / E, L = 256B / E, S = N / G.
+  S=VLaneElems uses contiguous input and group_slots(G, slots=8).
+  S=2*VLaneElems uses deinterleaved=2 input/mask and group_slots(G, slots=8).
+  S=4*VLaneElems uses deinterleaved=4 input/mask and group_slots(G, slots=8).
+  S>=L && S%L==0 uses contiguous input/mask and group_slots(G, slots=1);
+  lowering reduces each full physical chunk, accumulates all chunks in the
+  same logical group through lane0, and writes one physical result part per
+  group.
 
 group_slot_load:
   result group_slots(G, slots=8) for packed slots
@@ -585,21 +627,18 @@ truncf f32 -> f8:
   requests source deinterleaved=4, block_elems=1
   requests result contiguous f8
 
-group_reduce S=8:
-  requests source contiguous
-  requests result group_slots(num_groups, slots=8)
-
-group_reduce S=16:
-  requests source deinterleaved=2, block_elems=1 or block_elems=8
-  requests result group_slots(num_groups, slots=8)
-
-group_reduce S=32:
-  requests source deinterleaved=4, block_elems=1 or block_elems=8
-  requests result group_slots(num_groups, slots=8)
-
-group_reduce S=64:
-  requests source contiguous
-  requests result group_slots(num_groups, slots=1)
+group_reduce_add{f|i}:
+  computes E = sizeof(accumulator type), VLaneElems = 32B / E,
+  L = 256B / E, and S = logical_lanes / num_groups
+  S=VLaneElems requests source contiguous and result group_slots(G, slots=8)
+  S=2*VLaneElems requests source deinterleaved=2 and result
+  group_slots(G, slots=8)
+  S=4*VLaneElems requests source deinterleaved=4 and result
+  group_slots(G, slots=8)
+  S>=L && S%L==0 requests source contiguous and result
+  group_slots(G, slots=1)
+  8-bit storage reaches this request only after an explicit cast to the
+  accumulator type
 
 group_broadcast:
   requests source group_slots(num_groups, slots=K)

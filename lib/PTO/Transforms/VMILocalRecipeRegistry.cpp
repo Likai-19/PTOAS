@@ -657,9 +657,12 @@ VMILocalRecipeRegistry::getGroupSlotsStoreRecipe(
 }
 
 FailureOr<VMIGroupReduceAddFRecipe>
-VMILocalRecipeRegistry::getGroupReduceAddFRecipe(
-    const VMITargetCapabilityRegistry &capabilities, VMIGroupReduceAddFOp op,
-    std::string *reason) const {
+getGroupReduceAddRecipeImpl(const VMITargetCapabilityRegistry &capabilities,
+                            Operation *op, VMIVRegType sourceType,
+                            VMIMaskType maskType, VMIVRegType resultType,
+                            int64_t numGroups, bool requiresReassoc,
+                            VMIReductionKind reductionKind,
+                            std::string *reason) {
   auto fail =
       [&](const Twine &message) -> FailureOr<VMIGroupReduceAddFRecipe> {
     if (reason)
@@ -667,17 +670,13 @@ VMILocalRecipeRegistry::getGroupReduceAddFRecipe(
     return failure();
   };
 
-  if (!op->hasAttr("reassoc"))
+  if (requiresReassoc && !op->hasAttr("reassoc"))
     return fail("requires reassoc attr for pair-wise floating-point "
                 "reduction");
 
-  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
-  auto maskType = cast<VMIMaskType>(op.getMask().getType());
-  auto resultType = cast<VMIVRegType>(op.getResult().getType());
   VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
   VMILayoutAttr maskLayout = maskType.getLayoutAttr();
   VMILayoutAttr resultLayout = resultType.getLayoutAttr();
-  int64_t numGroups = op.getNumGroupsAttr().getInt();
   if (!sourceLayout || !maskLayout || !resultLayout)
     return fail("requires assigned source, mask, and result layouts");
   if (!resultLayout.isGroupSlots() || resultLayout.getNumGroups() != numGroups)
@@ -685,23 +684,28 @@ VMILocalRecipeRegistry::getGroupReduceAddFRecipe(
   if (resultLayout.getSlots() != 8 && resultLayout.getSlots() != 1) {
     FailureOr<int64_t> groupSize =
         getGroupSizeFromNumGroups(sourceType, numGroups, reason);
+    FailureOr<int64_t> lanesPerPart =
+        getDataLanesPerPart(sourceType.getElementType());
+    int64_t vlaneElems =
+        succeeded(lanesPerPart) && *lanesPerPart % 8 == 0 ? *lanesPerPart / 8
+                                                          : -1;
     if (succeeded(groupSize) && resultLayout.getSlots() <= 0 &&
-        *groupSize != 8 && *groupSize != 16 && *groupSize != 32)
-      return fail("stable group_reduce_addf slots=8 recipes support group "
-                  "size 8, 16, or 32");
-    return fail("stable group_reduce_addf local recipes currently require "
+        (*groupSize != vlaneElems && *groupSize != 2 * vlaneElems &&
+         *groupSize != 4 * vlaneElems))
+      return fail("stable group_reduce_add slots=8 recipes support group "
+                  "sizes VLaneElems, 2*VLaneElems, or 4*VLaneElems");
+    return fail("stable group_reduce_add local recipes currently require "
                 "result layout slots=8 or slots=1");
   }
 
   VMICapabilityResult elementCapability =
-      capabilities.supportsReductionElementType(VMIReductionKind::AddF,
+      capabilities.supportsReductionElementType(reductionKind,
                                                 sourceType.getElementType());
   if (!elementCapability.isSupported())
     return fail(elementCapability.reason);
-  if (!sourceType.getElementType().isF32() ||
-      sourceType.getElementType() != resultType.getElementType())
-    return fail("stable group_reduce_addf local recipes require f32 "
-                "source/result");
+  if (sourceType.getElementType() != resultType.getElementType())
+    return fail("stable group_reduce_add local recipes require matching "
+                "source/result element types");
   if (sourceType.getElementCount() != resultType.getElementCount())
     return fail("requires source/result lane count to match");
 
@@ -709,6 +713,11 @@ VMILocalRecipeRegistry::getGroupReduceAddFRecipe(
       getGroupSizeFromNumGroups(sourceType, numGroups, reason);
   if (failed(groupSize))
     return failure();
+  FailureOr<int64_t> lanesPerPart =
+      getDataLanesPerPart(sourceType.getElementType());
+  if (failed(lanesPerPart) || *lanesPerPart % 8 != 0)
+    return fail("requires element type with known physical VLane width");
+  int64_t vlaneElems = *lanesPerPart / 8;
 
   FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
   FailureOr<int64_t> maskArity = getVMIPhysicalArity(maskType);
@@ -719,81 +728,105 @@ VMILocalRecipeRegistry::getGroupReduceAddFRecipe(
     return fail("requires matching non-empty source/mask physical arity");
 
   if (resultLayout.getSlots() == 1) {
-    FailureOr<int64_t> lanesPerPart =
-        getDataLanesPerPart(sourceType.getElementType());
     if (failed(lanesPerPart) || *groupSize < *lanesPerPart ||
         *groupSize % *lanesPerPart != 0)
-      return fail("stable group_reduce_addf slots=1 recipes support group "
+      return fail("stable group_reduce_add slots=1 recipes support group "
                   "sizes that are multiples of one physical chunk");
     if (!sourceLayout.isContiguous() || !maskLayout.isContiguous())
-      return fail("slots=1 group_reduce_addf requires contiguous source/mask "
+      return fail("slots=1 group_reduce_add requires contiguous source/mask "
                   "layouts");
     if (*resultArity != numGroups)
-      return fail("slots=1 group_reduce_addf requires one physical result "
+      return fail("slots=1 group_reduce_add requires one physical result "
                   "part per group");
     std::string sourceFullReason;
     if (failed(checkFullDataPhysicalChunks(sourceType, &sourceFullReason)))
-      return fail(Twine("slots=1 group_reduce_addf requires full source "
+      return fail(Twine("slots=1 group_reduce_add requires full source "
                         "chunks; ") +
                   sourceFullReason);
     return VMIGroupReduceAddFRecipe{
         VMIGroupReduceAddFRecipeKind::ContiguousVcaddRows};
   }
 
-  if (*groupSize == 8) {
+  if (*groupSize == vlaneElems) {
     if (!sourceLayout.isContiguous() || !maskLayout.isContiguous())
-      return fail("s8 group_reduce_addf requires contiguous source/mask "
+      return fail("one-vlane group_reduce_add requires contiguous source/mask "
                   "layouts");
     std::string sourceFullReason;
     if (failed(checkFullDataPhysicalChunks(sourceType, &sourceFullReason)))
-      return fail(Twine("s8 group_reduce_addf requires full source chunks; ") +
+      return fail(Twine("one-vlane group_reduce_add requires full source "
+                        "chunks; ") +
                   sourceFullReason);
     if (*resultArity != *sourceArity)
-      return fail("s8 group_reduce_addf requires source/result physical "
+      return fail("one-vlane group_reduce_add requires source/result physical "
                   "arity to match");
-    return VMIGroupReduceAddFRecipe{VMIGroupReduceAddFRecipeKind::S8Vcgadd};
+    return VMIGroupReduceAddFRecipe{
+        VMIGroupReduceAddFRecipeKind::OneVLaneVcgadd};
   }
 
-  if (*groupSize == 16) {
+  if (*groupSize == 2 * vlaneElems) {
     if (!sourceLayout.isDeinterleaved() || sourceLayout.getFactor() != 2 ||
         (sourceLayout.getBlockElems() != 1 &&
          sourceLayout.getBlockElems() != 8))
-      return fail("s16 group_reduce_addf requires source layout "
+      return fail("two-vlane group_reduce_add requires source layout "
                   "deinterleaved=2 with block_elems=1 or block_elems=8");
     if (!maskLayout.isDeinterleaved() || maskLayout.getFactor() != 2 ||
         maskLayout.getBlockElems() != sourceLayout.getBlockElems())
-      return fail("s16 group_reduce_addf requires matching mask layout "
+      return fail("two-vlane group_reduce_add requires matching mask layout "
                   "deinterleaved=2 with the same block_elems");
     int64_t expectedResultArity = ceilDivNonNegative(numGroups, 8);
     if (*resultArity != expectedResultArity ||
         *sourceArity != *resultArity * 2)
-      return fail("s16 group_reduce_addf requires two source/mask parts per "
+      return fail("two-vlane group_reduce_add requires two source/mask parts per "
                   "result part");
     return VMIGroupReduceAddFRecipe{
-        VMIGroupReduceAddFRecipeKind::S16Deinterleaved2VcgaddVadd};
+        VMIGroupReduceAddFRecipeKind::TwoVLaneDeinterleaved2VcgaddVadd};
   }
 
-  if (*groupSize == 32) {
+  if (*groupSize == 4 * vlaneElems) {
     if (!sourceLayout.isDeinterleaved() || sourceLayout.getFactor() != 4 ||
         (sourceLayout.getBlockElems() != 1 &&
          sourceLayout.getBlockElems() != 8))
-      return fail("s32 group_reduce_addf requires source layout "
+      return fail("four-vlane group_reduce_add requires source layout "
                   "deinterleaved=4 with block_elems=1 or block_elems=8");
     if (!maskLayout.isDeinterleaved() || maskLayout.getFactor() != 4 ||
         maskLayout.getBlockElems() != sourceLayout.getBlockElems())
-      return fail("s32 group_reduce_addf requires matching mask layout "
+      return fail("four-vlane group_reduce_add requires matching mask layout "
                   "deinterleaved=4 with the same block_elems");
     int64_t expectedResultArity = ceilDivNonNegative(numGroups, 8);
     if (*resultArity != expectedResultArity ||
         *sourceArity != *resultArity * 4)
-      return fail("s32 group_reduce_addf requires four source/mask parts per "
+      return fail("four-vlane group_reduce_add requires four source/mask parts per "
                   "result part");
     return VMIGroupReduceAddFRecipe{
-        VMIGroupReduceAddFRecipeKind::S32Deinterleaved4VcgaddTree};
+        VMIGroupReduceAddFRecipeKind::FourVLaneDeinterleaved4VcgaddTree};
   }
 
-  return fail("stable group_reduce_addf slots=8 recipes support group size "
-              "8, 16, or 32");
+  return fail("stable group_reduce_add slots=8 recipes support group sizes "
+              "VLaneElems, 2*VLaneElems, or 4*VLaneElems");
+}
+
+FailureOr<VMIGroupReduceAddFRecipe>
+VMILocalRecipeRegistry::getGroupReduceAddFRecipe(
+    const VMITargetCapabilityRegistry &capabilities, VMIGroupReduceAddFOp op,
+    std::string *reason) const {
+  return getGroupReduceAddRecipeImpl(
+      capabilities, op.getOperation(), cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIMaskType>(op.getMask().getType()),
+      cast<VMIVRegType>(op.getResult().getType()),
+      op.getNumGroupsAttr().getInt(), /*requiresReassoc=*/true,
+      VMIReductionKind::GroupAddF, reason);
+}
+
+FailureOr<VMIGroupReduceAddFRecipe>
+VMILocalRecipeRegistry::getGroupReduceAddIRecipe(
+    const VMITargetCapabilityRegistry &capabilities, VMIGroupReduceAddIOp op,
+    std::string *reason) const {
+  return getGroupReduceAddRecipeImpl(
+      capabilities, op.getOperation(), cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIMaskType>(op.getMask().getType()),
+      cast<VMIVRegType>(op.getResult().getType()),
+      op.getNumGroupsAttr().getInt(), /*requiresReassoc=*/false,
+      VMIReductionKind::GroupAddI, reason);
 }
 
 FailureOr<VMIGroupBroadcastRecipe>
@@ -962,6 +995,118 @@ VMILocalRecipeRegistry::getExtFRecipe(VMIExtFOp op,
 
   return fail("unsupported extf source element width, result factor, or "
               "physical arity");
+}
+
+template <typename OpT>
+static FailureOr<VMIExtIRecipe> getExtIRecipeImpl(OpT op,
+                                                  std::string *reason) {
+  auto fail = [&](const Twine &message) -> FailureOr<VMIExtIRecipe> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
+  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
+  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
+  if (!sourceLayout || !resultLayout || failed(sourceArity) ||
+      failed(resultArity))
+    return fail("requires assigned source/result layouts and computable "
+                "physical arity");
+  if (!sourceLayout.isContiguous() || !resultLayout.isDeinterleaved() ||
+      !isa<IntegerType>(sourceType.getElementType()) ||
+      !isa<IntegerType>(resultType.getElementType()))
+    return fail("requires contiguous integer source layout and deinterleaved "
+                "integer result layout");
+
+  unsigned sourceBits =
+      pto::getPTOStorageElemBitWidth(sourceType.getElementType());
+  unsigned resultBits =
+      pto::getPTOStorageElemBitWidth(resultType.getElementType());
+  if (sourceBits == 16 && resultBits == 32 && resultLayout.getFactor() == 2 &&
+      *resultArity == 2 * *sourceArity)
+    return VMIExtIRecipe{
+        VMIExtIRecipeKind::ContiguousI16ToDeinterleaved2I32};
+  if (sourceBits == 8 && resultBits == 32 && resultLayout.getFactor() == 4 &&
+      *resultArity == 4 * *sourceArity)
+    return VMIExtIRecipe{
+        VMIExtIRecipeKind::ContiguousI8ToDeinterleaved4I32};
+
+  return fail("unsupported integer extension source/result element width, "
+              "result factor, or physical arity");
+}
+
+FailureOr<VMIExtIRecipe>
+VMILocalRecipeRegistry::getExtSIRecipe(VMIExtSIOp op,
+                                       std::string *reason) const {
+  return getExtIRecipeImpl(op, reason);
+}
+
+FailureOr<VMIExtIRecipe>
+VMILocalRecipeRegistry::getExtUIRecipe(VMIExtUIOp op,
+                                       std::string *reason) const {
+  return getExtIRecipeImpl(op, reason);
+}
+
+FailureOr<VMITruncIRecipe>
+VMILocalRecipeRegistry::getTruncIRecipe(VMITruncIOp op,
+                                        std::string *reason) const {
+  auto fail = [&](const Twine &message) -> FailureOr<VMITruncIRecipe> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
+  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
+  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
+  if (!sourceLayout || !resultLayout || failed(sourceArity) ||
+      failed(resultArity))
+    return fail("requires assigned source/result layouts and computable "
+                "physical arity");
+  if (!isa<IntegerType>(sourceType.getElementType()) ||
+      !isa<IntegerType>(resultType.getElementType()))
+    return fail("requires integer source and result element types");
+
+  unsigned sourceBits =
+      pto::getPTOStorageElemBitWidth(sourceType.getElementType());
+  unsigned resultBits =
+      pto::getPTOStorageElemBitWidth(resultType.getElementType());
+
+  if (sourceLayout.isGroupSlots() || resultLayout.isGroupSlots()) {
+    if (!sourceLayout.isGroupSlots() || !resultLayout.isGroupSlots() ||
+        sourceLayout.getNumGroups() != resultLayout.getNumGroups() ||
+        sourceLayout.getSlots() != 1 || resultLayout.getSlots() != 1 ||
+        sourceBits != 32 || resultBits != 16 || *sourceArity != *resultArity)
+      return fail("group-slot trunci requires matching "
+                  "group_slots(num_groups=G, slots=1) source/result layouts, "
+                  "32-bit integer source, 16-bit integer result, and matching "
+                  "physical arity");
+    return VMITruncIRecipe{VMITruncIRecipeKind::GroupSlots1I32ToI16};
+  }
+
+  if (!sourceLayout.isDeinterleaved() || !resultLayout.isContiguous() ||
+      sourceBits != 32 || *resultArity != 1)
+    return fail("requires 32-bit integer deinterleaved source and contiguous "
+                "integer result");
+
+  if (sourceLayout.getFactor() == 2 && *sourceArity == 2 && resultBits == 16)
+    return VMITruncIRecipe{
+        VMITruncIRecipeKind::Deinterleaved2I32ToContiguousI16};
+  if (sourceLayout.getFactor() == 4 && *sourceArity == 4 && resultBits == 8 &&
+      cast<IntegerType>(resultType.getElementType()).isUnsigned())
+    return VMITruncIRecipe{
+        VMITruncIRecipeKind::Deinterleaved4I32ToContiguousI8};
+
+  return fail("unsupported deinterleaved trunci factor, arity, result element "
+              "width, or result signedness; 32-bit to 8-bit integer narrowing "
+              "requires unsigned i8 result");
 }
 
 FailureOr<VMIBitcastRecipe>

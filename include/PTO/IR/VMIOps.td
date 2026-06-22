@@ -418,6 +418,16 @@ def VMIGroupReduceAddFOp : VMI_Op<"group_reduce_addf"> {
   let assemblyFormat = "$source `,` $mask attr-dict `:` type($source) `,` type($mask) `->` type($result)";
 }
 
+def VMIGroupReduceAddIOp : VMI_Op<"group_reduce_addi"> {
+  let summary = "VMI masked integer add reduction within fixed logical groups";
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                       VMI_MaskTypeConstraint:$mask,
+                       I64Attr:$num_groups);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `,` $mask attr-dict `:` type($source) `,` type($mask) `->` type($result)";
+}
+
 def VMIGroupBroadcastOp : VMI_Op<"group_broadcast"> {
   let summary = "VMI broadcast group-slot values back to each logical group";
   let arguments = (ins VMI_VRegTypeConstraint:$source,
@@ -437,6 +447,30 @@ def VMIExtFOp : VMI_Op<"extf"> {
 
 def VMITruncFOp : VMI_Op<"truncf"> {
   let summary = "VMI floating-point elementwise truncation";
+  let arguments = (ins VMI_VRegTypeConstraint:$source);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
+}
+
+def VMIExtSIOp : VMI_Op<"extsi"> {
+  let summary = "VMI signed integer elementwise extension";
+  let arguments = (ins VMI_VRegTypeConstraint:$source);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
+}
+
+def VMIExtUIOp : VMI_Op<"extui"> {
+  let summary = "VMI unsigned integer elementwise extension";
+  let arguments = (ins VMI_VRegTypeConstraint:$source);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
+}
+
+def VMITruncIOp : VMI_Op<"trunci"> {
+  let summary = "VMI saturating integer elementwise truncation";
   let arguments = (ins VMI_VRegTypeConstraint:$source);
   let results = (outs VMI_VRegTypeConstraint:$result);
   let hasVerifier = 1;

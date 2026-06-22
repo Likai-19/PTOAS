@@ -3867,8 +3867,8 @@ Slice 4 完成条件：
    per-feature negative tests.
 9. Same-family reduction ops reject unsupported direct-lowering shapes consistently.
    Covered by vmi_to_vpto_reduce_shape_invalid.pto together with the existing reduce add/min/max positive and
-   per-feature negative tests, including vmi_to_vpto_reduce_addi_i16_invalid.pto and
-   vmi_to_vpto_reduce_addf_f16_invalid.pto.
+   per-feature tests, including vmi_to_vpto_reduce_addi_i16_invalid.pto for narrow integer rejection and
+   vmi_to_vpto_reduce_addf_f16.pto for f16 floating-point reduction lowering.
 10. Target-specific element contracts are checked before OneToN rewriting for direct VPTO ops.
     Covered by vmi_to_vpto_bf16_arith.pto, vmi_to_vpto_math_element_type_invalid.pto,
     vmi_to_vpto_cmp_select.pto, vmi_to_vpto_cmp_element_type_invalid.pto,

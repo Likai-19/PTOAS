@@ -61,6 +61,16 @@ static bool isVMIIntegerLikeType(Type type) {
   return isa<IntegerType, IndexType>(type);
 }
 
+static bool isVMISignedOrSignlessIntegerType(Type type) {
+  auto integerType = dyn_cast<IntegerType>(type);
+  return integerType && !integerType.isUnsigned();
+}
+
+static bool isVMIUnsignedIntegerType(Type type) {
+  auto integerType = dyn_cast<IntegerType>(type);
+  return integerType && integerType.isUnsigned();
+}
+
 static bool isVMIIotaElementType(Type type) {
   if (auto intType = dyn_cast<IntegerType>(type))
     return intType.getWidth() == 8 || intType.getWidth() == 16 ||
@@ -1154,6 +1164,50 @@ LogicalResult VMIGroupReduceAddFOp::verify() {
                          getNumGroupsAttr().getInt());
 }
 
+LogicalResult VMIGroupReduceAddIOp::verify() {
+  auto sourceType = cast<VMIVRegType>(getSource().getType());
+  auto maskType = cast<VMIMaskType>(getMask().getType());
+  auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (!isVMIIntegerLikeType(sourceType.getElementType()))
+    return emitOpError("requires integer-like VMI source element type");
+  auto intType = dyn_cast<IntegerType>(sourceType.getElementType());
+  if (!intType || intType.getWidth() != 32)
+    return emitOpError(
+        "requires i32 accumulator element type; cast i8/i16 storage to i32 "
+        "before grouped reduction because integer reduction widens narrow "
+        "inputs");
+  if (sourceType.getElementCount() != resultType.getElementCount())
+    return emitOpError(
+        "requires source and result logical lane counts to match");
+  if (sourceType.getElementType() != resultType.getElementType())
+    return emitOpError("requires source and result element types to match");
+  if (auto sourceLayout = sourceType.getLayoutAttr()) {
+    bool supportedSourceLayout =
+        sourceLayout.isContiguous() ||
+        (sourceLayout.isDeinterleaved() && sourceLayout.getFactor() == 2 &&
+         (sourceLayout.getBlockElems() == 1 ||
+          sourceLayout.getBlockElems() == 8)) ||
+        (sourceLayout.isDeinterleaved() && sourceLayout.getFactor() == 4 &&
+         (sourceLayout.getBlockElems() == 1 ||
+          sourceLayout.getBlockElems() == 8));
+    if (!supportedSourceLayout)
+      return emitOpError(
+          "requires layout-assigned source to use contiguous layout or "
+          "deinterleaved=2/4 layout with block_elems=1 or block_elems=8");
+  }
+  if (auto resultLayout = resultType.getLayoutAttr()) {
+    if (!resultLayout.isGroupSlots() ||
+        resultLayout.getNumGroups() != getNumGroupsAttr().getInt())
+      return emitOpError() << "requires layout-assigned result to use "
+                              "#pto.vmi.layout<num_groups = "
+                           << getNumGroupsAttr().getInt() << ">";
+  }
+  if (failed(verifyMaskMatchesData(getOperation(), maskType, sourceType)))
+    return failure();
+  return verifyNumGroups(getOperation(), sourceType,
+                         getNumGroupsAttr().getInt());
+}
+
 LogicalResult VMIGroupBroadcastOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
@@ -1205,6 +1259,56 @@ LogicalResult VMITruncFOp::verify() {
       !isVMIFloatLikeType(resultType.getElementType()))
     return emitOpError(
         "requires floating-point-like source and result element types");
+  if (getVMIElementBitWidth(sourceType.getElementType()) <=
+      getVMIElementBitWidth(resultType.getElementType()))
+    return emitOpError(
+        "requires result element type to be narrower than source element type");
+  return success();
+}
+
+LogicalResult VMIExtSIOp::verify() {
+  auto sourceType = cast<VMIVRegType>(getSource().getType());
+  auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (sourceType.getElementCount() != resultType.getElementCount())
+    return emitOpError(
+        "requires source and result logical lane counts to match");
+  if (!isVMISignedOrSignlessIntegerType(sourceType.getElementType()) ||
+      !isVMISignedOrSignlessIntegerType(resultType.getElementType()))
+    return emitOpError(
+        "requires signed or signless integer source and result element types");
+  if (getVMIElementBitWidth(sourceType.getElementType()) >=
+      getVMIElementBitWidth(resultType.getElementType()))
+    return emitOpError(
+        "requires result element type to be wider than source element type");
+  return success();
+}
+
+LogicalResult VMIExtUIOp::verify() {
+  auto sourceType = cast<VMIVRegType>(getSource().getType());
+  auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (sourceType.getElementCount() != resultType.getElementCount())
+    return emitOpError(
+        "requires source and result logical lane counts to match");
+  if (!isVMIUnsignedIntegerType(sourceType.getElementType()) ||
+      !isVMIUnsignedIntegerType(resultType.getElementType()))
+    return emitOpError(
+        "requires unsigned integer source and result element types");
+  if (getVMIElementBitWidth(sourceType.getElementType()) >=
+      getVMIElementBitWidth(resultType.getElementType()))
+    return emitOpError(
+        "requires result element type to be wider than source element type");
+  return success();
+}
+
+LogicalResult VMITruncIOp::verify() {
+  auto sourceType = cast<VMIVRegType>(getSource().getType());
+  auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (sourceType.getElementCount() != resultType.getElementCount())
+    return emitOpError(
+        "requires source and result logical lane counts to match");
+  if (!isVMIIntegerLikeType(sourceType.getElementType()) ||
+      !isVMIIntegerLikeType(resultType.getElementType()))
+    return emitOpError("requires integer source and result element types");
   if (getVMIElementBitWidth(sourceType.getElementType()) <=
       getVMIElementBitWidth(resultType.getElementType()))
     return emitOpError(
