@@ -876,13 +876,13 @@ the case catalog.
 Current broad runtime sweep:
 
 ```text
-WORK_SPACE=$PWD/.tmp/vmi-runtime-batch-dynamic-mask CASE_PREFIX='vmi/' JOBS=4 \
+WORK_SPACE=$PWD/.tmp/vmi-runtime-batch-dynamic-scalar CASE_PREFIX='vmi/' JOBS=4 \
   test/vpto/scripts/run_host_vpto_validation_parallel.sh
 
-PASS=40 FAIL=0
-summary: .tmp/vmi-runtime-batch-dynamic-mask/parallel-summary.tsv
+PASS=41 FAIL=0
+summary: .tmp/vmi-runtime-batch-dynamic-scalar/parallel-summary.tsv
 log scan: rg -n "RV_|alignment|\[ERROR\]|\[error\]|ERROR" \
-  .tmp/vmi-runtime-batch-dynamic-mask.log
+  .tmp/vmi-runtime-batch-dynamic-scalar.log
 result: no matches
 ```
 
@@ -948,12 +948,11 @@ SIM-backed positive endpoints:
   3.19.1, 3.20, 3.21, 3.22, 3.23, 3.24, 3.26,
   3.27 positive, 3.28 positive, 3.29, 3.31, 3.32,
   3.33, 3.34, 3.35, 3.36, 3.37, 3.38, 3.39,
-  3.40, 3.41, 3.42, 3.44
+  3.40, 3.41, 3.42, 3.44, 3.45
 
 lit-backed positive endpoints with runtime gap:
   3.25.1 private/internal function boundary
   3.43 internal function argument boundary materialization
-  3.45 dynamic S=32 create_group_mask
 
 diagnostic endpoints:
   3.7.4, 3.9, 3.11.2, 3.13, 3.14, 3.15.3,
@@ -964,9 +963,9 @@ diagnostic endpoints:
 
 repository evidence:
   all concrete lit/runtime paths listed below exist
-  all 40 runtime case directories contain kernel.pto, launch.cpp, main.cpp,
+  all 41 runtime case directories contain kernel.pto, launch.cpp, main.cpp,
   golden.py, and compare.py
-  latest broad VMI runtime sweep passed: PASS=40 FAIL=0
+  latest broad VMI runtime sweep passed: PASS=41 FAIL=0
   latest full VMI lit sweep passed: 312/312
 ```
 
@@ -1104,15 +1103,19 @@ runtime SIM:
   test/vpto/cases/vmi/masked-load-group-tail-s32-reduce-store
 ```
 
-Current checked-in lit coverage for 3.45 dynamic S=32 `create_group_mask`:
+Current checked-in coverage for 3.45 dynamic S=32 `create_group_mask`:
 
 ```text
 lit:
   test/lit/vmi/vmi_layout_assignment_create_group_mask_s32_dynamic.pto
 
 runtime SIM:
-  blocked by the current dynamic scalar source gap for vector kernels; see
-  known implementation gaps below
+  test/vpto/cases/vmi/dynamic-create-group-mask-s32-reduce-store
+
+runtime scalar source:
+  active_cols is passed as a kernel i32 scalar argument and cast to index inside
+  vecscope before pto.vmi.create_group_mask. This is an explicit scalar ABI,
+  not a value recovered by vmi-to-vpto from producer/consumer context.
 ```
 
 Current checked-in runtime coverage for 3.12 control-flow join before S=32
@@ -1392,15 +1395,6 @@ Known implementation gaps before all catalog cases can become runtime SIM
 coverage:
 
 ```text
-dynamic grouped mask runtime source:
-  vmi-to-vpto supports dynamic active_elems_per_group for contiguous b32
-  grouped masks and S=32 deinterleaved=4/block_elems=8 masks. Full runtime SIM
-  coverage still needs a supported scalar source for active_elems_per_group in
-  vector kernels. Direct GM pto.ldg crashed the Bisheng vector backend in this
-  test shape, and UB pto.load_scalar reached an invalid scalar LSU address in
-  the SIM. Do not replace grouped masks with prefix create_mask; that would
-  change the semantics.
-
 remaining function runtime coverage:
   3.25.1 internal function boundary specialization has layout-assignment and
   vmi-to-vpto lit coverage, but full ptoas emission still fails after
