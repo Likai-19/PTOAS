@@ -167,13 +167,13 @@ the immediately following complete endpoints.
 3.12 control-flow join before group_reduce               complete
 3.13 packed group-slot f32 -> f16 cast                   illegal diagnostic
 3.14 unsupported group size                              illegal diagnostic
-3.15 compact S=12 written as logical S=16                complete/design
+3.15 compact S=12 written as logical S=16                complete/diagnostic
 3.16 group_slot_load layout contract                     complete
 3.17 group_broadcast feeding deinterleaved consumer      complete
 3.18 one value with dense and group-reduce consumers     complete/materialization
 3.19 S=16 reduce block_elems plan selection              complete/diagnostic
 3.20 group_slots control-flow join                       complete
-3.21 S=32 tail with full-tile-readable source            complete/design
+3.21 S=32 tail with full-tile-readable source            complete
 3.22 scf.for loop-carried layout                         complete
 3.23 group_broadcast with multiple dense consumers       complete
 3.24 mask with elementwise/select/store                  complete
@@ -187,9 +187,9 @@ the immediately following complete endpoints.
 3.32 f32 feeding f8 store and S=32 reduce                complete
 3.33 one dense value feeding S=16 and S=32 reduces       complete/materialization
 3.34 S=64 group-slot result f32->f16 cast                complete
-3.35 group_slots fanout to group_store and broadcast     complete/design
-3.36 same scalar source materialized as slots=8/slots=1  complete/design
-3.37 S=64 group_store with non-unit output stride        complete/design
+3.35 group_slots fanout to group_store and broadcast     complete
+3.36 same scalar source materialized as slots=8/slots=1  complete/materialization
+3.37 S=64 group_store with non-unit output stride        complete
 3.38 multi-tile S=32 group_reduce                        complete
 3.39 strided S=32 group_load through broadcast/reduce    complete
 3.40 scalar broadcast feeding dense and grouped users    complete/materialization

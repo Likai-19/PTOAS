@@ -196,6 +196,55 @@ Ops that are uniquely determined by layout may omit this attr, but the rule
 should be conservative.  If future maintainers could reasonably ask "why this
 lowering?", assignment should write a plan.
 
+Required-plan table for the current implementation:
+
+```text
+op                         required when
+group_load                 result layout matches a registered group_load plan
+group_slot_load            explicit group_slots slots=8 or slots=1 result
+group_reduce_addf          source/result layouts match a registered reduce plan
+group_broadcast            explicit slots=8 or slots=1 source and dense result
+truncf                     group_slots slots=1 f32->f16 slot-preserving cast
+ensure_layout              always carries source/result layouts instead of plan
+ensure_mask_layout         always carries source/result layouts instead of plan
+ensure_mask_granularity    always carries source/result granularities instead of plan
+```
+
+Layout/attr-only decisions today:
+
+```text
+load                       result layout plus full_read_elems/full chunk proof
+group_store                source group_slots layout plus explicit output stride
+masked_load                explicit passthrough, mask layout, and memory proof
+masked_store/select        operand/result layouts plus mask granularity
+dense extf/truncf          source/result layouts and element widths
+```
+
+Implementation rule:
+
+```text
+vmi-layout-assignment attaches the required plan before type conversion.
+validate-assigned-vmi rejects a required-plan op that lacks vmi.selected_plan.
+vmi-to-vpto verifies the plan against the already assigned layouts and emits
+VMI-LAYOUT-CONTRACT instead of selecting a fallback from producer/user context.
+If a layout/attr-only op later gains a second legal recipe, that recipe must be
+promoted into the required-plan table before vmi-to-vpto can emit it.
+Unsupported shapes that have no registered plan still diagnose through their
+specific capability check rather than failing with a generic missing-plan error.
+```
+
+Examples of forbidden recovery in `vmi-to-vpto`:
+
+```text
+group_reduce_addf cannot walk to a load/group_load producer to choose S=16
+  parity versus block8.
+group_store cannot inspect the group_reduce producer; it consumes only the
+  assigned source layout and explicit stride.
+group_broadcast cannot inspect sibling users to decide whether to rematerialize.
+masked_load cannot inspect the mask producer to prove memory safety.
+func.call cannot inspect the callee body to decide physical function layout.
+```
+
 ## 4. VMI Surface Ops Required By Cases
 
 Initial op set from the case catalog:
@@ -1068,13 +1117,13 @@ the case catalog.
 Current broad runtime sweep:
 
 ```text
-WORK_SPACE=$PWD/.tmp/vmi-runtime-batch-private-calls CASE_PREFIX='vmi/' JOBS=4 \
+WORK_SPACE=$PWD/.tmp/vmi-runtime-batch-selected-plan-gate CASE_PREFIX='vmi/' JOBS=4 \
   test/vpto/scripts/run_host_vpto_validation_parallel.sh
 
 PASS=43 FAIL=0
-summary: .tmp/vmi-runtime-batch-private-calls/parallel-summary.tsv
+summary: .tmp/vmi-runtime-batch-selected-plan-gate/parallel-summary.tsv
 log scan: rg -n "RV_|alignment|\[ERROR\]|\[error\]|ERROR" \
-  .tmp/vmi-runtime-batch-private-calls.log
+  .tmp/vmi-runtime-batch-selected-plan-gate.log
 result: no matches
 ```
 
@@ -1154,7 +1203,7 @@ repository evidence:
   all 43 runtime case directories contain kernel.pto, launch.cpp, main.cpp,
   golden.py, and compare.py
   latest broad VMI runtime sweep passed: PASS=43 FAIL=0
-  latest full VMI lit sweep passed: 313/313
+  latest full VMI lit sweep passed: 314/314
 ```
 
 Current checked-in coverage for 3.3 dense f8->f32->compute->f8:
@@ -1585,6 +1634,7 @@ entries:
 
 ```text
 lit:
+  test/lit/vmi/vmi_layout_gate_missing_selected_plan_invalid.pto
   test/lit/vmi/vmi_layout_assignment_group_reduce_s32_tail_no_full_tile_invalid.pto
   test/lit/vmi/vmi_layout_assignment_group_load_s16_compact_stride12_invalid.pto
   test/lit/vmi/vmi_to_vpto_group_slot_load_nonunit_slots8_invalid.pto
