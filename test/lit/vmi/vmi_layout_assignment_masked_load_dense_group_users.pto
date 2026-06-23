@@ -48,8 +48,8 @@ module {
 // ASSIGN: pto.vmi.store %[[X]]
 // ASSIGN: %[[X_SPLIT:.*]] = pto.vmi.ensure_layout %[[X]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
-// ASSIGN: %[[MASK_SPLIT:.*]] = pto.vmi.create_mask
-// ASSIGN-SAME: -> !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+// ASSIGN: %[[MASK_SPLIT:.*]] = pto.vmi.ensure_mask_layout %[[MASK]]
+// ASSIGN-SAME: !pto.vmi.mask<256xb32, #pto.vmi.layout<contiguous>> -> !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
 // ASSIGN: %[[SUM:.*]] = pto.vmi.group_reduce_addf %[[X_SPLIT]], %[[MASK_SPLIT]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // ASSIGN: pto.vmi.group_store %[[SUM]]

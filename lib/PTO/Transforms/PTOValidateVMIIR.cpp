@@ -12,7 +12,7 @@
 #include "PTO/IR/PTO.h"
 #include "PTO/IR/VMIUtils.h"
 #include "PTO/Transforms/Passes.h"
-#include "PTO/Transforms/VMILocalRecipeRegistry.h"
+#include "PTO/Transforms/VMILayoutSupport.h"
 #include "PTO/Transforms/VMITargetCapabilities.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -22,6 +22,7 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -170,6 +171,33 @@ LogicalResult emitLayoutContract(Operation *op, llvm::raw_ostream *diagOS,
   return failure();
 }
 
+LogicalResult emitLayoutSupportContract(Operation *op,
+                                        llvm::raw_ostream *diagOS,
+                                        Twine message, StringRef reason) {
+  std::string text;
+  llvm::raw_string_ostream os(text);
+  os << message << ": " << reason;
+
+  bool printedAny = false;
+  auto printValueType = [&](StringRef kind, int64_t index, Type type) {
+    if (!isVMIType(type))
+      return;
+    if (!printedAny) {
+      os << "; VMI types:";
+      printedAny = true;
+    }
+    os << " " << kind << "#" << index << "=" << type;
+  };
+
+  for (auto [index, operand] : llvm::enumerate(op->getOperands()))
+    printValueType("operand", static_cast<int64_t>(index), operand.getType());
+  for (auto [index, result] : llvm::enumerate(op->getResults()))
+    printValueType("result", static_cast<int64_t>(index), result.getType());
+
+  os.flush();
+  return emitLayoutContract(op, diagOS, text);
+}
+
 LogicalResult emitHelperMaterializationContract(Operation *helper,
                                                 Type sourceType,
                                                 Type resultType,
@@ -179,7 +207,7 @@ LogicalResult emitHelperMaterializationContract(Operation *helper,
   auto emitFallback = [&]() {
     return emitLayoutContract(
         helper, diagOS,
-        Twine(helperName) + " has no registered materialization recipe: " +
+        Twine(helperName) + " has no registered materialization support: " +
             reason);
   };
 
@@ -192,7 +220,7 @@ LogicalResult emitHelperMaterializationContract(Operation *helper,
   llvm::raw_string_ostream os(message);
   os << requester->getName() << " operand #" << use.getOperandNumber()
      << " has type " << sourceType << " but requires " << resultType << "; "
-     << helperName << " has no registered materialization recipe: " << reason;
+     << helperName << " has no registered materialization support: " << reason;
   os.flush();
 
   InFlightDiagnostic diag =
@@ -395,10 +423,10 @@ LogicalResult verifyLayoutAssignedOperationTypes(Operation *op,
   return success();
 }
 
-LogicalResult verifyLayoutHelperRecipe(Operation *op,
+LogicalResult verifyLayoutHelperSupport(Operation *op,
                                        llvm::raw_ostream *diagOS);
 
-LogicalResult verifyLayoutSemanticRecipe(Operation *op,
+LogicalResult verifyLayoutSemanticSupport(Operation *op,
                                          llvm::raw_ostream *diagOS);
 
 LogicalResult verifyOperationBoundary(Operation *op,
@@ -422,7 +450,8 @@ LogicalResult verifyOperationBoundary(Operation *op,
 }
 
 LogicalResult verifyLayoutAssignedOperation(Operation *op,
-                                            llvm::raw_ostream *diagOS) {
+                                            llvm::raw_ostream *diagOS,
+                                            bool verifyHelperSupports = true) {
   if (failed(verifyLayoutAssignedOperationTypes(op, diagOS)))
     return failure();
 
@@ -431,14 +460,15 @@ LogicalResult verifyLayoutAssignedOperation(Operation *op,
 
   if (isVMIHelperOp(op)) {
     if (isVMILayoutHelperOp(op))
-      return verifyLayoutHelperRecipe(op, diagOS);
+      return verifyHelperSupports ? verifyLayoutHelperSupport(op, diagOS)
+                                 : success();
     return emitInvariant(
         op, diagOS,
         "VMI pack/unpack helper appears before VMI-to-VPTO physicalization");
   }
 
   if (isVMISemanticOp(op))
-    return verifyLayoutSemanticRecipe(op, diagOS);
+    return verifyLayoutSemanticSupport(op, diagOS);
   if (isStructuralOp(op))
     return success();
 
@@ -446,17 +476,16 @@ LogicalResult verifyLayoutAssignedOperation(Operation *op,
                        "VMI typed value is used by a non-VMI semantic op");
 }
 
-LogicalResult verifyLayoutHelperRecipe(Operation *op,
+LogicalResult verifyLayoutHelperSupport(Operation *op,
                                        llvm::raw_ostream *diagOS) {
-  VMILocalRecipeRegistry recipes;
+  VMILayoutSupport supports;
 
   if (auto ensure = dyn_cast<VMIEnsureLayoutOp>(op)) {
     auto sourceType = cast<VMIVRegType>(ensure.getSource().getType());
     auto resultType = cast<VMIVRegType>(ensure.getResult().getType());
     std::string reason;
-    if (failed(recipes.getDataLayoutMaterializationRecipe(sourceType,
-                                                          resultType,
-                                                          &reason)))
+    if (failed(supports.canMaterializeDataLayout(sourceType, resultType,
+                                                &reason)))
       return emitHelperMaterializationContract(
           op, sourceType, resultType, "pto.vmi.ensure_layout", reason, diagOS);
     return success();
@@ -466,9 +495,8 @@ LogicalResult verifyLayoutHelperRecipe(Operation *op,
     auto sourceType = cast<VMIMaskType>(ensure.getSource().getType());
     auto resultType = cast<VMIMaskType>(ensure.getResult().getType());
     std::string reason;
-    if (failed(recipes.getMaskLayoutMaterializationRecipe(sourceType,
-                                                          resultType,
-                                                          &reason)))
+    if (failed(supports.canMaterializeMaskLayout(sourceType, resultType,
+                                                &reason)))
       return emitHelperMaterializationContract(
           op, sourceType, resultType, "pto.vmi.ensure_mask_layout", reason,
           diagOS);
@@ -479,12 +507,12 @@ LogicalResult verifyLayoutHelperRecipe(Operation *op,
     auto sourceType = cast<VMIMaskType>(ensure.getSource().getType());
     auto resultType = cast<VMIMaskType>(ensure.getResult().getType());
     std::string reason;
-    if (failed(recipes.getMaskGranularityMaterializationRecipe(
-            sourceType, resultType, &reason)))
+    if (failed(supports.canMaterializeMaskGranularity(sourceType, resultType,
+                                                     &reason)))
       return emitLayoutContract(
           op, diagOS,
           Twine("pto.vmi.ensure_mask_granularity has no registered "
-                "materialization recipe: ") +
+                "materialization support: ") +
               reason);
     return success();
   }
@@ -492,9 +520,9 @@ LogicalResult verifyLayoutHelperRecipe(Operation *op,
   return success();
 }
 
-LogicalResult verifyLayoutSemanticRecipe(Operation *op,
+LogicalResult verifyLayoutSemanticSupport(Operation *op,
                                          llvm::raw_ostream *diagOS) {
-  VMILocalRecipeRegistry recipes;
+  VMILayoutSupport supports;
   VMITargetCapabilityRegistry capabilities;
 
   if (auto store = dyn_cast<VMIStoreOp>(op)) {
@@ -504,12 +532,11 @@ LogicalResult verifyLayoutSemanticRecipe(Operation *op,
       return success();
 
     std::string reason;
-    if (failed(recipes.getContiguousStoreRecipe(valueType, &reason)))
-      return emitLayoutContract(
+    if (failed(supports.getContiguousStoreSupport(valueType, &reason)))
+      return emitLayoutSupportContract(
           op, diagOS,
-          Twine("pto.vmi.store has no registered contiguous-memory local "
-                "recipe: ") +
-              reason);
+          "pto.vmi.store has no registered contiguous-memory layout support",
+          reason);
     return success();
   }
 
@@ -520,12 +547,12 @@ LogicalResult verifyLayoutSemanticRecipe(Operation *op,
       return success();
 
     std::string reason;
-    if (failed(recipes.getContiguousStoreRecipe(valueType, &reason)))
-      return emitLayoutContract(
+    if (failed(supports.getContiguousStoreSupport(valueType, &reason)))
+      return emitLayoutSupportContract(
           op, diagOS,
-          Twine("pto.vmi.tile_write has no registered contiguous-memory local "
-                "recipe: ") +
-              reason);
+          "pto.vmi.tile_write has no registered contiguous-memory layout "
+          "support",
+          reason);
     return success();
   }
 
@@ -537,21 +564,19 @@ LogicalResult verifyLayoutSemanticRecipe(Operation *op,
       return success();
 
     std::string reason;
-    if (failed(recipes.getGroupLoadRecipe(capabilities, load, &reason)))
-      return emitLayoutContract(
+    if (failed(supports.getGroupLoadSupport(capabilities, load, &reason)))
+      return emitLayoutSupportContract(
           op, diagOS,
-          Twine("pto.vmi.group_load has no registered block8 local recipe: ") +
-              reason);
+          "pto.vmi.group_load has no registered block8 layout support", reason);
     return success();
   }
 
   if (auto load = dyn_cast<VMIGroupSlotLoadOp>(op)) {
     std::string reason;
-    if (failed(recipes.getGroupSlotLoadRecipe(capabilities, load, &reason)))
-      return emitLayoutContract(
+    if (failed(supports.getGroupSlotLoadSupport(capabilities, load, &reason)))
+      return emitLayoutSupportContract(
           op, diagOS,
-          Twine("pto.vmi.group_slot_load has no registered local recipe: ") +
-              reason);
+          "pto.vmi.group_slot_load has no registered layout support", reason);
     return success();
   }
 
@@ -562,12 +587,11 @@ LogicalResult verifyLayoutSemanticRecipe(Operation *op,
       return success();
 
     std::string reason;
-    if (failed(recipes.getGroupSlotsStoreRecipe(capabilities, store, &reason)))
-      return emitLayoutContract(
+    if (failed(supports.getGroupSlotsStoreSupport(capabilities, store, &reason)))
+      return emitLayoutSupportContract(
           op, diagOS,
-          Twine("pto.vmi.group_store has no registered group_slots local "
-                "recipe: ") +
-              reason);
+          "pto.vmi.group_store has no registered group_slots layout support",
+          reason);
     return success();
   }
 
@@ -578,13 +602,13 @@ LogicalResult verifyLayoutSemanticRecipe(Operation *op,
       return success();
 
     std::string reason;
-    if (failed(recipes.getGroupReduceAddFRecipe(capabilities, reduce,
+    if (failed(supports.getGroupReduceAddFSupport(capabilities, reduce,
                                                 &reason)))
-      return emitLayoutContract(
+      return emitLayoutSupportContract(
           op, diagOS,
-          Twine("pto.vmi.group_reduce_addf has no registered group_slots "
-                "local recipe: ") +
-              reason);
+          "pto.vmi.group_reduce_addf has no registered group_slots layout "
+          "support",
+          reason);
     return success();
   }
 
@@ -595,39 +619,37 @@ LogicalResult verifyLayoutSemanticRecipe(Operation *op,
       return success();
 
     std::string reason;
-    if (failed(recipes.getGroupBroadcastRecipe(capabilities, broadcast,
+    if (failed(supports.getGroupBroadcastSupport(capabilities, broadcast,
                                                &reason)))
-      return emitLayoutContract(
+      return emitLayoutSupportContract(
           op, diagOS,
-          Twine("pto.vmi.group_broadcast has no registered local recipe: ") +
-              reason);
+          "pto.vmi.group_broadcast has no registered layout support", reason);
     return success();
   }
 
   if (auto truncf = dyn_cast<VMITruncFOp>(op)) {
     std::string reason;
-    if (failed(recipes.getTruncFRecipe(truncf, &reason)))
-      return emitLayoutContract(
-          op, diagOS,
-          Twine("pto.vmi.truncf has no registered local recipe: ") + reason);
+    if (failed(supports.getTruncFSupport(truncf, &reason)))
+      return emitLayoutSupportContract(
+          op, diagOS, "pto.vmi.truncf has no registered layout support",
+          reason);
     return success();
   }
 
   if (auto extf = dyn_cast<VMIExtFOp>(op)) {
     std::string reason;
-    if (failed(recipes.getExtFRecipe(extf, &reason)))
-      return emitLayoutContract(
-          op, diagOS,
-          Twine("pto.vmi.extf has no registered local recipe: ") + reason);
+    if (failed(supports.getExtFSupport(extf, &reason)))
+      return emitLayoutSupportContract(
+          op, diagOS, "pto.vmi.extf has no registered layout support", reason);
     return success();
   }
 
   if (auto bitcast = dyn_cast<VMIBitcastOp>(op)) {
     std::string reason;
-    if (failed(recipes.getBitcastRecipe(bitcast, &reason)))
-      return emitLayoutContract(
-          op, diagOS,
-          Twine("pto.vmi.bitcast has no registered local recipe: ") + reason);
+    if (failed(supports.getBitcastSupport(bitcast, &reason)))
+      return emitLayoutSupportContract(
+          op, diagOS, "pto.vmi.bitcast has no registered layout support",
+          reason);
     return success();
   }
 
@@ -668,9 +690,10 @@ LogicalResult mlir::pto::validateVMIProducerBoundaryIR(
 }
 
 LogicalResult mlir::pto::validateVMILayoutAssignedIR(
-    ModuleOp module, llvm::raw_ostream *diagOS) {
+    ModuleOp module, llvm::raw_ostream *diagOS, bool verifyHelperSupports) {
   WalkResult result = module.walk([&](Operation *op) {
-    if (failed(verifyLayoutAssignedOperation(op, diagOS)))
+    if (failed(verifyLayoutAssignedOperation(op, diagOS,
+                                             verifyHelperSupports)))
       return WalkResult::interrupt();
     return WalkResult::advance();
   });
