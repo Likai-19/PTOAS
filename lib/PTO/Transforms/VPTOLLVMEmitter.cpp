@@ -9300,6 +9300,41 @@ public:
   }
 };
 
+class ConvertArithSelectOp final : public OpConversionPattern<arith::SelectOp> {
+public:
+  ConvertArithSelectOp(TypeConverter &typeConverter, MLIRContext *context)
+      : OpConversionPattern<arith::SelectOp>(typeConverter, context,
+                                             PatternBenefit(2)) {}
+
+  LogicalResult
+  matchAndRewrite(arith::SelectOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!hasVPTOConvertibleType(op->getOperandTypes()) &&
+        !hasVPTOConvertibleType(op->getResultTypes()))
+      return failure();
+    if (!op.getCondition().getType().isInteger(1))
+      return rewriter.notifyMatchFailure(
+          op, "only scalar i1 conditions supported for VPTO arith.select");
+
+    Type convertedResultType =
+        getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedResultType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    Value trueValue = adaptor.getTrueValue();
+    Value falseValue = adaptor.getFalseValue();
+    if (trueValue.getType() != convertedResultType ||
+        falseValue.getType() != convertedResultType)
+      return rewriter.notifyMatchFailure(
+          op, "converted true/false values must match result type");
+
+    rewriter.replaceOpWithNewOp<arith::SelectOp>(
+        op, convertedResultType, adaptor.getCondition(), trueValue,
+        falseValue);
+    return success();
+  }
+};
+
 class ConvertPtoAddPtrOp final : public OpConversionPattern<pto::AddPtrOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -10177,6 +10212,7 @@ static LogicalResult lowerVPTOTypes(ModuleOp module, llvm::raw_ostream &diagOS) 
   patterns.add<ConvertPtoLoadOp, ConvertPtoStoreOp, ConvertPtoLdgOp,
                ConvertPtoStgOp>(
       typeConverter, context, state);
+  patterns.add<ConvertArithSelectOp>(typeConverter, context);
   patterns.add<ConvertVPTOUnrealizedCastOp>(typeConverter, context);
   patterns.add<ConvertVPTOTypedCarrierOp>(typeConverter, context);
 
