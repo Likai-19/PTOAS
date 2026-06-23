@@ -110,7 +110,8 @@ std::unique_ptr<Pass> createPTOValidateVPTOEmissionIRPass();
 LogicalResult validateVMIProducerBoundaryIR(ModuleOp module,
                                             llvm::raw_ostream *diagOS = nullptr);
 LogicalResult validateVMILayoutAssignedIR(ModuleOp module,
-                                          llvm::raw_ostream *diagOS = nullptr);
+                                          llvm::raw_ostream *diagOS = nullptr,
+                                          bool verifyHelperSupport = true);
 std::unique_ptr<Pass> createPTOValidateVMIIRPass();
 std::unique_ptr<Pass> createPTOValidateVMILayoutIRPass();
 std::unique_ptr<Pass> createVMILayoutAssignmentPass();

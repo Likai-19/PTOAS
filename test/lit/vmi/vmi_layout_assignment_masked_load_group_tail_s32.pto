@@ -40,8 +40,8 @@ module {
 // ASSIGN: pto.vmi.ensure_layout
 // ASSIGN-SAME: #pto.vmi.layout<contiguous>
 // ASSIGN-SAME: #pto.vmi.layout<deinterleaved = 4, block_elems = 8>
-// ASSIGN: pto.vmi.create_group_mask
-// ASSIGN-SAME: !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+// ASSIGN: pto.vmi.ensure_mask_layout
+// ASSIGN-SAME: !pto.vmi.mask<256xb32, #pto.vmi.layout<contiguous>> -> !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
 // ASSIGN: pto.vmi.group_reduce_addf
 // LOWER: pto.pdintlv_b32
 // LOWER: pto.pdintlv_b32
