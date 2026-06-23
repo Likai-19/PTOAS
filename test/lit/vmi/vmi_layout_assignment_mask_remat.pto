@@ -6,7 +6,8 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-layout-assignment | FileCheck %s
+// RUN: pto-test-opt %s -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-layout-rematerialize | FileCheck %s --check-prefix=REMAT
 
 module {
   func.func @vmi_layout_assignment_create_mask_remat(
@@ -47,27 +48,41 @@ module {
   }
 }
 
-// CHECK-LABEL: func.func @vmi_layout_assignment_create_mask_remat(
-// CHECK-SAME: %[[ACTIVE:.*]]: index
-// CHECK: %[[M32:.*]] = pto.vmi.create_mask %[[ACTIVE]]
-// CHECK-SAME: index -> !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
-// CHECK: %[[M16:.*]] = pto.vmi.create_mask %[[ACTIVE]]
-// CHECK-SAME: index -> !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
-// CHECK: pto.vmi.select %[[M16]]
-// CHECK-SAME: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
-// CHECK: pto.vmi.select %[[M32]]
-// CHECK-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
-// CHECK-NOT: pto.vmi.ensure_mask_layout
-// CHECK-NOT: pto.vmi.ensure_mask_granularity
+// ASSIGN-LABEL: func.func @vmi_layout_assignment_create_mask_remat(
+// ASSIGN-SAME: %[[ACTIVE:.*]]: index
+// ASSIGN: %[[M32:.*]] = pto.vmi.create_mask %[[ACTIVE]]
+// ASSIGN-SAME: index -> !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[M16:.*]] = pto.vmi.ensure_mask_granularity %[[M32]]
+// ASSIGN-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>> -> !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+// ASSIGN: pto.vmi.select %[[M16]]
+// ASSIGN-SAME: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+// ASSIGN: pto.vmi.select %[[M32]]
+// ASSIGN-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
 
-// CHECK-LABEL: func.func @vmi_layout_assignment_constant_mask_remat(
-// CHECK: %[[CM32:.*]] = "pto.vmi.constant_mask"()
-// CHECK-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
-// CHECK: %[[CM16:.*]] = "pto.vmi.constant_mask"()
-// CHECK-SAME: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
-// CHECK: pto.vmi.select %[[CM16]]
-// CHECK-SAME: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
-// CHECK: pto.vmi.select %[[CM32]]
-// CHECK-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
-// CHECK-NOT: pto.vmi.ensure_mask_layout
-// CHECK-NOT: pto.vmi.ensure_mask_granularity
+// ASSIGN-LABEL: func.func @vmi_layout_assignment_constant_mask_remat(
+// ASSIGN: %[[CM32:.*]] = "pto.vmi.constant_mask"()
+// ASSIGN-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[CM16:.*]] = pto.vmi.ensure_mask_granularity %[[CM32]]
+// ASSIGN-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>> -> !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+// ASSIGN: pto.vmi.select %[[CM16]]
+// ASSIGN-SAME: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+// ASSIGN: pto.vmi.select %[[CM32]]
+// ASSIGN-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+
+// REMAT-LABEL: func.func @vmi_layout_assignment_create_mask_remat(
+// REMAT-SAME: %[[ACTIVE:.*]]: index
+// REMAT: %[[M32:.*]] = pto.vmi.create_mask %[[ACTIVE]]
+// REMAT-SAME: index -> !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+// REMAT: %[[M16:.*]] = pto.vmi.create_mask %[[ACTIVE]]
+// REMAT-SAME: index -> !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+// REMAT: pto.vmi.select %[[M16]]
+// REMAT: pto.vmi.select %[[M32]]
+// REMAT-LABEL: func.func @vmi_layout_assignment_constant_mask_remat(
+// REMAT: %[[CM32:.*]] = "pto.vmi.constant_mask"()
+// REMAT-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+// REMAT: %[[CM16:.*]] = "pto.vmi.constant_mask"()
+// REMAT-SAME: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+// REMAT: pto.vmi.select %[[CM16]]
+// REMAT: pto.vmi.select %[[CM32]]
+// REMAT-NOT: pto.vmi.ensure_mask_layout
+// REMAT-NOT: pto.vmi.ensure_mask_granularity

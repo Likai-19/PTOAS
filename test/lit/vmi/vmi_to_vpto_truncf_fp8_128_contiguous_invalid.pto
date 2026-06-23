@@ -17,9 +17,9 @@ module {
   }
 }
 
-// CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.truncf operand #0 has type {{'?}}!pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.truncf operand #0 has type {{'?}}!pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
 // CHECK-SAME: but requires {{'?}}!pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 4>>
-// CHECK-SAME: pto.vmi.ensure_layout has no registered materialization recipe
+// CHECK-SAME: pto.vmi.ensure_layout cannot materialize this conversion
 // CHECK: failed helper conversion {{'?}}!pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
 // CHECK-SAME: {{'?}}!pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 4>>
 // CHECK-SAME: requires source and result to have the same physical arity

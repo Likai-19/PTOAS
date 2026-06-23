@@ -14,7 +14,7 @@
 #include "PTO/IR/PTO.h"
 #include "PTO/IR/VMIUtils.h"
 #include "PTO/Transforms/Passes.h"
-#include "PTO/Transforms/VMILocalRecipeRegistry.h"
+#include "PTO/Transforms/VMILayoutSupport.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -43,9 +43,9 @@ static bool isFoldableStoreEnsure(VMIEnsureLayoutOp ensure) {
   if (!sourceType || !resultType)
     return false;
 
-  VMILocalRecipeRegistry recipes;
+  VMILayoutSupport supports;
   return succeeded(
-      recipes.canFoldContiguousStoreMaterialization(sourceType, resultType));
+      supports.canFoldContiguousStoreMaterialization(sourceType, resultType));
 }
 
 static void tryFoldEnsureLayoutIntoOperand(

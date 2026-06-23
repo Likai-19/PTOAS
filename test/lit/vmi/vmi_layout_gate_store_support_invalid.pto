@@ -12,7 +12,7 @@ module {
   func.func @vmi_layout_gate_store_deint_tail_invalid(
       %value: !pto.vmi.vreg<129xf32, #pto.vmi.layout<deinterleaved = 2>>,
       %dst: !pto.ptr<f32, ub>, %offset: index) {
-    // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.store has no registered contiguous-memory local recipe
+    // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.store has no registered contiguous-memory layout support
     // CHECK-SAME: requires arity divisible by layout factor
     pto.vmi.store %value, %dst[%offset]
         : !pto.vmi.vreg<129xf32, #pto.vmi.layout<deinterleaved = 2>>,
@@ -27,7 +27,7 @@ module {
   func.func @vmi_layout_gate_tile_write_deint_tail_invalid(
       %value: !pto.vmi.vreg<129xf32, #pto.vmi.layout<deinterleaved = 2>>,
       %dst: memref<129xf32>) {
-    // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.tile_write has no registered contiguous-memory local recipe
+    // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.tile_write has no registered contiguous-memory layout support
     // CHECK-SAME: requires arity divisible by layout factor
     pto.vmi.tile_write %value, %dst
         : !pto.vmi.vreg<129xf32, #pto.vmi.layout<deinterleaved = 2>>,

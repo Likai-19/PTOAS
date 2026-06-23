@@ -9,14 +9,14 @@
 // RUN: not pto-test-opt %s -pto-validate-vmi-layout-ir 2>&1 | FileCheck %s
 
 module {
-  func.func @vmi_layout_gate_bitcast_recipe_invalid(
-      %source: !pto.vmi.vreg<65xf32, #pto.vmi.layout<deinterleaved = 2>>) {
-    // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.bitcast has no registered local recipe
-    // CHECK-SAME: requires matching logical bit footprint in every physical chunk
-    // CHECK: note: see current operation: %{{.*}} = "pto.vmi.bitcast"
-    %out = pto.vmi.bitcast %source
-        : !pto.vmi.vreg<65xf32, #pto.vmi.layout<deinterleaved = 2>>
-        -> !pto.vmi.vreg<130xi16, #pto.vmi.layout<deinterleaved = 2>>
+  func.func @vmi_layout_gate_helper_support_invalid(
+      %value: !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>) {
+    %bad = pto.vmi.ensure_layout %value
+        : !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
     return
   }
 }
+
+// CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.ensure_layout has no registered materialization support
+// CHECK-SAME: unsupported source/result layout pair

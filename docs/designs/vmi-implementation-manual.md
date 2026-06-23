@@ -143,8 +143,10 @@ values and ops. It is not part of the default PTOAS pipeline; existing PTO/VPTO 
 unless the flag is set.
 
 The `ptoas --enable-vmi` user-facing entry also rejects public functions whose signature contains `!pto.vmi.*`.
-Internal/private VMI-typed functions may still be specialized by `vmi-layout-assignment` and physicalized by
-`vmi-to-vpto`, but a public VMI ABI requires an explicit materialization plan and must not be inferred from the
+Internal/private VMI-typed functions are materialized at explicit boundary
+helpers by baseline `vmi-layout-assignment` and physicalized by `vmi-to-vpto`.
+A later optimization pass may specialize private signatures.  A public VMI ABI
+requires an explicit materialization plan and must not be inferred from the
 layout solver.
 
 CLI coverage:
@@ -198,7 +200,7 @@ vmi-to-vpto:
 写成 `pto.vmi.ensure_*`，physicalization 后不允许残留 `pto.vmi.*`、`!pto.vmi.*` 或
 `unrealized_conversion_cast`。不能把 layout 决策藏在 pass-private side table 里让后续 pass 猜。
 
-源码级实现应该进一步拆成六个独立层次：
+源码级实现应该进一步拆成七个独立层次：
 
 ```text
 IR layer:
@@ -220,6 +222,20 @@ Layout solving layer:
 
   负责从 producer/consumer/control-flow/call 关系解出每个 logical value 的 layout，
   然后把结果写回 type 或 ensure_* helper。
+
+Layout support query layer:
+  include/PTO/Transforms/VMILayoutSupport.h
+  lib/PTO/Transforms/VMILayoutSupport.cpp
+
+  只放跨阶段共享的纯查询：cast layout fact、group_reduce layout fact、
+  ensure_* materialization support、layout-aware store support 等。它可以被
+  assignment、validation、layout optimization 和 vmi-to-vpto 调用，但不能保存
+  per-value 状态，不能返回 VPTO 指令计划，不能决定 clone/rematerialize，也不能
+  通过 producer/user/control-flow context 恢复 lowering 决策。
+
+  加新 query 的标准是：至少两个阶段需要同一个语义事实，并且重复实现会导致
+  assignment、validation、lowering 对同一个 layout shape 得出不同结论。只有
+  一个 lowering pattern 自己使用的分支应该留在该 pattern 内。
 
 Layout optimization layer:
   lib/PTO/Transforms/VMILayoutFoldConsumers.cpp
@@ -257,7 +273,8 @@ Union-find + DenseMap<Value, id>:
   用于 layout assignment 的 per-SSA-value 等价类求解。
 
 IRRewriter/RewriterBase:
-  用于 layout assignment 之后的 type rewrite、helper insertion、cheap producer rematerialization。
+  用于 layout assignment 之后的 type rewrite、helper insertion；cheap producer
+  rematerialization 属于后续 layout optimization pass。
 
 OneToNTypeConverter + OneToNOpConversionPattern:
   只用于 vmi-to-vpto，把一个 logical VMI value 展成多个 VPTO value。
@@ -1002,7 +1019,7 @@ SymbolTable:
   解析 direct internal func.call；带 VMI type 的 external/indirect call 先拒绝。
 
 IRRewriter:
-  改写 function/block/result type，插入 ensure_*，必要时 rematerialize cheap producer。
+  改写 function/block/result type，插入 ensure_*。
 
 verifyLayoutAssignedVMIIR:
   pass 末尾 hard gate，确认所有决策已经 materialize 到 IR。
@@ -1248,7 +1265,7 @@ The solver runs in phases:
 3. add producer natural-layout constraints
 4. add consumer layout/granularity requests
 5. solve each equivalence class
-6. insert ensure_* or rematerialize producers for non-class-compatible uses
+6. insert ensure_* for non-class-compatible uses
 7. rewrite value types and function signatures
 8. run pto-validate-vmi-layout-ir
 ```
@@ -1300,9 +1317,10 @@ store/tile_write:
   consumer requests contiguous externally visible order
 ```
 
-If one equivalence class has incompatible natural layouts, the pass must diagnose `VMI-LAYOUT-CONTRACT` unless a
-defined rematerialization path can split the value before the conflict. The first version should only rematerialize
-trivially replayable producers:
+If one equivalence class has incompatible natural layouts, the pass must diagnose `VMI-LAYOUT-CONTRACT` unless an
+explicit use-site `ensure_*` can represent the requested materialization. Baseline layout assignment does not
+clone/rematerialize producers. The separate `vmi-layout-rematerialize` optimization may replace an `ensure_*`
+with a cloned trivially replayable producer after the materialization request is visible in IR:
 
 ```text
 constant
@@ -1595,8 +1613,8 @@ Layout assignment completion checks:
 2. No surface !pto.vmi.mask<Nxpred> remains.
 3. Every VMI function argument, result, block argument, branch operand, call operand, and return operand has the
    layout-assigned type selected by the solved equivalence class.
-4. Every consumer-specific mismatch is represented either by a rematerialized cheap producer or by an explicit
-   pto.vmi.ensure_* op immediately before that consumer.
+4. Every consumer-specific mismatch is represented by an explicit pto.vmi.ensure_* op immediately before that
+   consumer. Optional optimization passes may later replace selected helpers with rematerialized cheap producers.
 5. External declarations with VMI types are rejected; they are not rewritten into an implicit ABI.
 ```
 
@@ -2430,7 +2448,6 @@ allowed layouts: bitset {contiguous, deinterleaved2, deinterleaved4}
 required mask granularity: pred/b8/b16/b32 or unknown
 natural layout preference
 hard constraints
-soft costs
 ```
 
 No information required by later passes may live only in this data structure. After the pass, type/attr/op
@@ -2495,10 +2512,12 @@ bitcast:
   bitcast contract is defined.
 
 load/tile_read:
-  result layout chosen by consumers unless memory plan has a cheaper registered sink/source
+  baseline result layout is deterministic from explicit layout attrs or the
+  producer natural layout; consumer-specific alternatives are represented by
+  ensure_layout and optimized later
 
 store/tile_write:
-  can consume any layout only if target registry has preserving store path
+  baseline requests contiguous source layout
   current implementation records a contiguous use-site request for vmi.store and
   inserts pto.vmi.ensure_layout when the stored value class solved to a
   non-contiguous layout. This makes externally visible memory order explicit in
@@ -2508,7 +2527,8 @@ store/tile_write:
   the same physical chunk count and therefore forms complete intlv groups.
 
 shuffle/channel_split/channel_merge:
-  default result layout contiguous unless target registry provides direct layout-preserving path
+  default result layout contiguous unless the current op explicitly carries a
+  supported layout-preserving contract
   current implementation supports pto.vmi.shuffle when every result physical
   chunk forwards one source physical chunk with identical lane positions for
   all non-padding result lanes. Result padding lanes are ignored by the
@@ -2538,12 +2558,12 @@ Implement deterministic solving:
 ```text
 1. Collect region/SCC constraints, including scf/cf/function/call boundaries.
 2. Propagate impossible layouts and required mask granularities.
-3. Pick a layout per node using minimum cost.
-4. Tie-break: explicit layout already present on the VMI type, then natural layout, then contiguous.
+3. Pick one layout per node using deterministic priority, not a cost model:
+   explicit layout already present on the VMI type, then unique natural layout,
+   then hard non-contiguous request, then contiguous.
 5. Rewrite result/block/function types to layout-assigned VMI types.
 6. Insert ensure_layout / ensure_mask_layout / ensure_mask_granularity at uses that need conversion.
-7. Clone rematerializable producers per use when cheaper than conversion.
-8. Run verifier gate.
+7. Run verifier gate.
 ```
 
 Current implementation status:
@@ -2591,7 +2611,8 @@ Do not implement a local greedy pattern pass that ignores block arguments or fun
 CFG 处理分两层。第一层是必须做的 layout equivalence：同一个控制流值在
 result、yield、region/block argument 之间必须形成同一个 layout/mask 约束组。第二层才是
 layout conflict resolution：当同一个 producer 的不同 consumers 希望不同 layout 时，插入
-`ensure_layout`、`ensure_mask_layout` 或 rematerialize producer。
+`ensure_layout` 或 `ensure_mask_layout`。后续 `vmi-layout-rematerialize` 可以把部分 helper
+替换成重放的纯构造 producer。
 
 当前可落地的最小实现先做第一层。它不尝试在 branch 边界自动插入 conversion，因此下面这些
 关系一旦因为 natural layout 或 mask granularity 冲突无法合并，必须报 `VMI-LAYOUT-CONTRACT`，
@@ -3051,17 +3072,13 @@ pto.vmi.group_reduce_addf:
     requires {reassoc}
     N = logical lane count; G = num_groups; S = N / G
     L = physical lanes per 256B chunk for the element type.
-    The result carries #pto.vmi.layout<num_groups = G>, a sparse group-slot
-    layout. It is not a dense vector layout: only group_slot(g) lanes have
-    semantic values.
-    group_slot(g) is canonical and derived from N, G, and L:
-      if S < L:
-        low_elems = L / S
-        chunk_stride = 1
-      if S >= L:
-        low_elems = 1
-        chunk_stride = S / L
-      group_slot(g) = (g / low_elems) * chunk_stride * L + (g % low_elems)
+    The result carries #pto.vmi.layout<num_groups = G, slots = K>, a sparse
+    group-slot layout. It is not a dense vector layout: only slot lanes have
+    semantic values.  Supported K values are:
+      K = 8 for VCGADD-style packed results, where group g is stored in
+      physical chunk floor(g / 8), lane g % 8.
+      K = 1 for row-local VCADD results, where group g is stored in physical
+      chunk g, lane 0.
     for each group g:
       result[group_slot(g)] =
           reduce_add(source[g * S .. (g + 1) * S), mask in same range)
@@ -3069,10 +3086,10 @@ pto.vmi.group_reduce_addf:
     direct lowering materializes them as zero where the hardware path does not
     already define them.
     The result remains a VMI vector with the same element type and logical lane
-    count as the source, but its layout is #pto.vmi.layout<num_groups = G>.
+    count as the source, but its layout is an explicit group-slot layout.
   layout assignment:
     source use is requested as contiguous
-    result natural layout is #pto.vmi.layout<num_groups = G>
+    result natural layout is #pto.vmi.layout<num_groups = G, slots = K>
     mask use is requested as contiguous with granularity derived from source
     element width
   current direct lowering:
@@ -3085,8 +3102,8 @@ pto.vmi.group_reduce_addf:
     Otherwise:
     derived group size S must be a multiple of physical lanes per part
     lower each source chunk with pto.vcadd, combine chunks in the same group
-    with pto.vadd under PAT_VL1, then place group g at group_slot(g) in the
-    #pto.vmi.layout<num_groups = G> result. All other result chunks/lane values
+    with pto.vadd under PAT_VL1, then place group g in the slot lane defined by
+    K. All other result chunks/lane values
     are zero.
   unsupported cases:
     missing reassoc attr
@@ -3097,17 +3114,17 @@ pto.vmi.group_reduce_addf:
 pto.vmi.group_broadcast:
   semantic:
     N = logical lane count; G = num_groups; S = N / G
-    source must carry #pto.vmi.layout<num_groups = G>. For each group g, the
-    source value is read from group_slot(g), using the same canonical group_slot
-    definition as pto.vmi.group_reduce_addf. The result broadcasts it back to
+    source must carry #pto.vmi.layout<num_groups = G, slots = K>. For each group
+    g, the source value is read from the slot lane defined by K. The result broadcasts it back to
     each logical group:
       result[g * S + i] = source[group_slot(g)]
   layout assignment:
-    source use is requested as #pto.vmi.layout<num_groups = G>
+    source use is requested as #pto.vmi.layout<num_groups = G, slots = K>
     result is consumer-driven. If no consumer requests another layout, it
     defaults to contiguous.
   current direct lowering:
-    source must carry #pto.vmi.layout<num_groups = G> with full physical chunks
+    source must carry #pto.vmi.layout<num_groups = G, slots = K> with full
+    physical chunks
     result may be contiguous with full physical chunks
     result may also be deinterleaved when S is large enough that every physical
     result chunk stays inside one logical group, for example N=512, G=2, S=256,
@@ -4011,23 +4028,27 @@ Slice 5 完成条件：
    writeMask fallback paths must report `VMI-UNSUPPORTED`.
 ```
 
-## 8. Target Capability Registry
+## 8. Target Capabilities And Layout Fact Helpers
 
-Add one explicit registry object, passed into layout assignment and VMI-to-VPTO:
+Keep target capabilities separate from layout assignment policy.  The shared
+helpers expose target support and small layout/materialization facts; they do
+not select a global lowering plan and are not a shared lowering-plan registry
+between assignment and VMI-to-VPTO.
 
 ```text
 supportsElementType(type, purpose)
-getNaturalLayout(op)
-supportsLayoutConversion(srcLayout, dstLayout, elementType)
-getLayoutMaterializationPlan(srcLayout, dstLayout, elementType)
+getPreferredCastLayoutFact(sourceType, resultType)
+getPreferredGroupReduceLayoutFact(sourceType, numGroups)
+canMaterializeDataLayout(sourceType, resultType)
+canMaterializeMaskLayout(sourceType, resultType)
 supportsMaskGranularityConversion(srcG, dstG)
-supportsMemoryAccessPlan(plan)
+supportsMemoryAccessProof(proof)
 supportsPrefixPopcount(maskType)
 supportsReductionScanContract(op)
 getScratchResource(plan)
 ```
 
-The registry returns structured results:
+Capability and materialization helpers return structured results:
 
 ```text
 supported
@@ -4170,7 +4191,7 @@ If any answer is no, the slice is not ready to be treated as complete.
 
 ## 13. Adding One VMI Op End To End
 
-新增一个 `pto.vmi.*` op 时，不要只补 ODS 和 lowering pattern。它必须穿过固定的六个落点，
+新增一个 `pto.vmi.*` op 时，不要只补 ODS 和 lowering pattern。它必须穿过固定的七个落点，
 否则很容易出现 verifier 能过、layout pass 不知道怎么约束、或控制流 physicalization 后残留 VMI type。
 
 ```text
@@ -4180,20 +4201,24 @@ If any answer is no, the slice is not ready to be treated as complete.
 2. semantic verifier:
    lib/PTO/IR/VMI.cpp
 
-3. layout facts:
+3. layout assignment facts:
    lib/PTO/Transforms/VMILayoutAssignment.cpp
 
-4. vmi-to-vpto preflight:
+4. shared layout support, when the fact crosses stages:
+   include/PTO/Transforms/VMILayoutSupport.h
+   lib/PTO/Transforms/VMILayoutSupport.cpp
+
+5. vmi-to-vpto preflight:
    lib/PTO/Transforms/VMIToVPTO.cpp::verifySupportedVMIToVPTOOps
 
-5. OneToN lowering pattern:
+6. OneToN lowering pattern:
    lib/PTO/Transforms/VMIToVPTO.cpp::populateVMIOneToNConversionPatterns
 
-6. focused lit tests:
+7. focused lit tests:
    test/lit/vmi/
 ```
 
-这六个落点的职责不同：
+这七个落点的职责不同：
 
 ```text
 ODS:
@@ -4210,6 +4235,12 @@ LayoutAssignment:
     - consumer required layout
     - mask consumer required granularity
   不能在 collect 阶段改 IR。
+
+VMILayoutSupport:
+  只放跨 assignment、validation、optimization、lowering 中至少两个阶段共享的纯查询。
+  典型内容是 cast layout fact、group_reduce layout fact、ensure_* materialization support。
+  不能返回 VPTO instruction sequence、不能决定 clone/rematerialize、不能读取 producer/user context。
+  只有一个 lowering pattern 自己使用的判断不要抽到这里。
 
 VMIToVPTO preflight:
   在 rewrite 前拒绝当前 lowering 不支持但语义合法的 case。

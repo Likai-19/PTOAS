@@ -38,8 +38,8 @@ module {
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
 // ASSIGN: %[[H:.*]] = pto.vmi.truncf %[[X_SPLIT]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
-// ASSIGN: %[[M16:.*]] = pto.vmi.create_mask
-// ASSIGN-SAME: -> !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[M16:.*]] = pto.vmi.ensure_mask_granularity %[[M32]]
+// ASSIGN-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>> -> !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
 // ASSIGN: pto.vmi.masked_store %[[H]]
 // ASSIGN-SAME: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
 
@@ -54,7 +54,9 @@ module {
 // LOWER: pto.vcvt
 // LOWER: pto.vcvt
 // LOWER: pto.vor
-// LOWER: pto.plt_b16
+// LOWER: pto.ppack
+// LOWER: pto.ppack
+// LOWER: pto.por
 // LOWER: pto.vsts
 // LOWER-NOT: pto.vmi.
 // LOWER-NOT: !pto.vmi.
