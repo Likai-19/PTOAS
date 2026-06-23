@@ -83,7 +83,7 @@ G % K == 0
 K must fit in the physical vreg element count
 ```
 
-`K` is selected by the producer/consumer local recipe. It is not always 8. For
+`K` is selected by the producer/consumer layout support rule. It is not always 8. For
 `VCGADD`-packed results, `K = 8` matches the eight 32B block results written to
 the low lanes of one destination vreg. For row-local reductions where each
 logical group already occupies one full 256B vreg, `K = 1` keeps each group's
@@ -99,10 +99,11 @@ physical slot block slot_block(g), lane slot_lane(g)
 All other lanes are undefined for ordinary VMI consumers. They may only be read
 by group-aware ops that define how to interpret group slots.
 
-## 2. Recipe Selection Rules
+## 2. Layout Support Selection Rules
 
-VMI cast ops must not hard-code one physical `vcvt` recipe as their semantic
-layout rule.
+VMI cast ops must not hard-code one physical `vcvt` lowering as their semantic
+layout rule.  Layout assignment records the required value layout; target
+support queries only answer whether that layout can be materialized or lowered.
 
 ```text
 dense cast:
@@ -112,7 +113,7 @@ dense cast:
 group-slot cast:
   source/result are both group_slots(G,K).
   lowering preserves slot_block(g) and slot_lane(g). Width-changing casts are
-  legal only when a slot-preserving VPTO recipe is registered, or when the cast
+  legal only when slot-preserving VPTO lowering support exists, or when the cast
   can be commuted through a later group-aware consumer such as group_broadcast.
 ```
 
@@ -171,7 +172,7 @@ the immediately following complete endpoints.
 3.16 group_slot_load layout contract                     complete
 3.17 group_broadcast feeding deinterleaved consumer      complete
 3.18 one value with dense and group-reduce consumers     complete/materialization
-3.19 S=16 reduce block_elems recipe selection            complete/diagnostic
+3.19 S=16 reduce block_elems support selection           complete/diagnostic
 3.20 group_slots control-flow join                       complete
 3.21 S=32 tail with full-tile-readable source            complete
 3.22 scf.for loop-carried layout                         complete
@@ -752,7 +753,7 @@ row-major store of this layout must be rejected with:
 VMI-LAYOUT-CONTRACT:
   pto.vmi.store requires materializing
   #pto.vmi.layout<deinterleaved = 2, block_elems = 8> to contiguous, but no
-  VPTO block-interleave materialization/store plan is registered.
+  VPTO block-interleave materialization/store support exists.
 ```
 
 #### 3.5.3 Reduce Result, Elementwise, Store
@@ -1182,8 +1183,8 @@ slot_lane(r)  = 0
 
 Trying to canonicalize this result to `slots = 8` would require packing lane 0
 from eight different physical vregs into lanes 0..7 of one vreg. This document
-does not use that plan. `slots = 1` is the canonical layout for S=64 row-local
-group reductions.
+does not use that packing transform. `slots = 1` is the canonical layout for
+S=64 row-local group reductions.
 
 #### 3.7.1 Reduce And Store Group Sums
 
@@ -1464,8 +1465,8 @@ group_off + 0, group_off + 1, group_off + 2, ...
 
 Only the first address is necessarily 32B-aligned. The remaining f32 addresses
 are 4B apart and are not valid for this `vsts` lowering. The compiler must not
-accept this as a clean lowering until either a pack-to-slots=8 plan or an
-unaligned-store plan is selected.
+accept this as a clean lowering until either pack-to-slots=8 materialization
+support or unaligned-store support exists.
 
 VMI input:
 
@@ -1523,7 +1524,7 @@ layout transition explicit: `group_broadcast` first produces a dense contiguous
 f32 value, then `pto.vmi.ensure_layout` materializes the deinterleaved=2 f32
 view required by dense `f32 -> f16` truncation. A future direct
 `group_broadcast -> deinterleaved=2` lowering may remove that materialization,
-but the `group_broadcast` result layout must make that recipe explicit rather
+but the `group_broadcast` result layout must make that support path explicit rather
 than hiding it inside `truncf` lowering.
 
 VPTO lowering result for one full 8-row tile:
@@ -1776,13 +1777,13 @@ contract:
 ```text
 VMI-LAYOUT-CONTRACT:
   pto.vmi.group_reduce_addf with group size 32 and num_groups tail 6 requires
-  materializing #pto.vmi.layout<deinterleaved = 4>. The registered fast plan
+  materializing #pto.vmi.layout<deinterleaved = 4>. The fast lowering support
   uses vldsx2 DINTLV_B32 over a full 8-row tile. This source is not marked
-  full-tile-readable, and the stable gather tail plan is not implemented.
+  full-tile-readable, and the stable gather tail fallback is not implemented.
 ```
 
-If a future option enables the stable gather tail plan, the same VMI input may
-lower by gathering only the active lanes. Until that plan is registered, the
+If a future option enables the stable gather tail fallback, the same VMI input
+may lower by gathering only the active lanes. Until that support exists, the
 converter must not silently issue the full-tile `vldsx2` loads.
 
 ### 3.12 Control-Flow Join Before `group_reduce`
@@ -1848,7 +1849,8 @@ VPTO lowering result for the join:
   }
 ```
 
-The consumer after the join is the same S=32 reduction plan as section 3.6:
+The consumer after the join uses the same S=32 reduction lowering support as
+section 3.6:
 
 ```text
 %all_b32 = pto.pge_b32 "PAT_ALL"
@@ -1876,7 +1878,7 @@ for r = 0..7:
 ```
 
 If the two branches cannot be assigned the same layout and no materialization
-plan exists before `scf.yield`, the required diagnostic is:
+support exists before `scf.yield`, the required diagnostic is:
 
 ```text
 VMI-LAYOUT-CONTRACT:
@@ -1917,7 +1919,7 @@ Required diagnostic:
 VMI-LAYOUT-CONTRACT:
   pto.vmi.truncf cannot lower from
   #pto.vmi.layout<num_groups = 8, slots = 8> f32 to f16 because no
-  slot-preserving width-changing VPTO plan is registered. f32->f16 vcvt writes
+  slot-preserving width-changing VPTO support exists. f32->f16 vcvt writes
   even/odd sub-lanes, not lanes 0..7. Use group_broadcast before truncf, or
   keep the group_store element type as f32.
 ```
@@ -1936,8 +1938,8 @@ VMI input:
 pto.vmi.group_store %sum, %out[%group_off], %c1 {num_groups = 8}
 ```
 
-Here `S = 96 / 8 = 12` f32 elements per group. The current VCG-based plans use
-32B groups, i.e. 8 f32 elements per row fragment:
+Here `S = 96 / 8 = 12` f32 elements per group. The current VCG-based lowering
+support uses 32B groups, i.e. 8 f32 elements per row fragment:
 
 ```text
 S = 8   -> one VCGADD block per group
@@ -1950,8 +1952,8 @@ Required diagnostic:
 
 ```text
 VMI-LAYOUT-CONTRACT:
-  pto.vmi.group_reduce_addf with f32 group size 12 has no registered VPTO
-  layout plan. Supported VCG-based f32 group sizes are 8, 16, 32, and 64.
+  pto.vmi.group_reduce_addf with f32 group size 12 has no supported VPTO
+  layout/lowering path. Supported VCG-based f32 group sizes are 8, 16, 32, and 64.
   A scalar/gather fallback or a rewrite to logical group size 16 with an
   explicit per-group mask is required.
 ```
@@ -2291,8 +2293,8 @@ for g = 0..7:
   out[group_off + g] = rhs_base[rhs_off + g]
 ```
 
-If `source_group_stride != 1`, this packed `slots = 8` plan requires a
-strided/gather group-slot load materializer. Until that plan is registered,
+If `source_group_stride != 1`, this packed `slots = 8` layout requires a
+strided/gather group-slot load materializer. Until that support exists,
 `group_slot_load` with `slots = 8` and non-unit stride must diagnose instead of
 silently using full-group `group_load`.
 
@@ -2461,8 +2463,9 @@ look through the defining `group_broadcast` and choose a hidden broadcast shape.
 This case forces layout assignment to handle a solvable use-site conflict.  One
 consumer requires an S=32 group-reduce layout; another consumer requires dense
 row-major store.  This is not semantically illegal.  It must be solved by
-use-site materialization or producer rematerialization when a registered plan
-exists.
+explicit use-site materialization. A later optimization pass may fold the
+materialization into a store or rematerialize a cheap producer when the required
+support exists.
 
 VMI input:
 
@@ -2487,10 +2490,10 @@ Assigned layouts:
   requires #pto.vmi.layout<contiguous>
 ```
 
-If `%x` is cheap to rematerialize, layout assignment may clone the producer for
-the dense store.  Otherwise, if the registry has a `deinterleaved = 4 ->
-contiguous` materialization plan, layout assignment may keep `%x` in
-`deinterleaved = 4` and insert `ensure_layout` before the dense store.
+Baseline layout assignment keeps `%x` in the group-reduce layout and inserts
+`ensure_layout` before the dense store use.  A later rematerialization pass may
+clone the load for the dense store if that is profitable.  A later fold-consumer
+pass may also fold `ensure_layout + store` into a layout-aware store lowering.
 
 VPTO lowering result:
 
@@ -2551,18 +2554,17 @@ for i = 0..255:
   copy_out[off + i] = base[off + i]
 ```
 
-If the `deinterleaved = 4 -> contiguous` plan is not registered, the required
-diagnostic is:
+If `deinterleaved = 4 -> contiguous` materialization support does not exist, the
+required diagnostic is:
 
 ```text
 VMI-LAYOUT-CONTRACT:
   value %x is required as #pto.vmi.layout<deinterleaved = 4> by
   pto.vmi.group_reduce_addf and as #pto.vmi.layout<contiguous> by
-  pto.vmi.store, but no registered materialization plan exists at the store
-  use site.
+  pto.vmi.store, but no materialization support exists at the store use site.
 ```
 
-### 3.19 S=16 Reduce `block_elems` Recipe Selection
+### 3.19 S=16 Reduce `block_elems` Support Selection
 
 S=16 f32 group reduction has two legal dense input layouts:
 
@@ -2576,10 +2578,11 @@ It is also a valid S=16 reduction layout: each physical part contains eight
 values per row, so `VCGADD` can reduce each part and `VADD` can combine the two
 partial sums.
 
-`block_elems = 8` is still useful when the producer is a block load plan such
-as `BDINTLV` or `vsldb` over 32B row fragments.  Layout assignment must select
-between these plans by producer/consumer cost.  It must not hard-code S=16
-reduce to `block_elems = 8`.
+`block_elems = 8` is still useful when the producer is a block load shape such
+as `BDINTLV` or `vsldb` over 32B row fragments.  Baseline layout assignment must
+express any mismatch with an explicit `ensure_layout`; producer rematerialization
+or consumer folding can choose the cheaper equivalent form later.  Assignment
+must not hard-code S=16 reduce to `block_elems = 8`.
 
 #### 3.19.1 Continuous S=16 Reduce And Truncf, `block_elems = 1`
 
@@ -2662,7 +2665,7 @@ for i = 0..127:
 #### 3.19.2 Block-Load Producer Fixed To `block_elems = 8`
 
 This is the real conflict case.  The value is fixed to `block_elems = 8`
-because the producer is a registered block-load plan.  A later `truncf`
+because the producer uses block-load support.  A later `truncf`
 requires element-parity `block_elems = 1`.
 
 VMI input:
@@ -2691,7 +2694,8 @@ Assigned layouts before the conflicting `truncf` use:
 ```
 
 The reduction path is legal and uses the same `vsldb` block-load shape as
-section 3.15.2.  The `truncf` path is legal only if one of these plans exists:
+section 3.15.2.  The `truncf` path is legal only if one of these transforms
+exists:
 
 ```text
 1. rematerialize the original memory producer as block_elems=1
@@ -2699,15 +2703,15 @@ section 3.15.2.  The `truncf` path is legal only if one of these plans exists:
 3. use an explicitly enabled scratch/reload fallback
 ```
 
-If no such plan is registered, the required diagnostic is:
+If no such transform exists, the required diagnostic is:
 
 ```text
 VMI-LAYOUT-CONTRACT:
   pto.vmi.truncf requires
   #pto.vmi.layout<deinterleaved = 2, block_elems = 1>, but the source value is
-  fixed to #pto.vmi.layout<deinterleaved = 2, block_elems = 8> by the selected
-  strided group_load plan. Register a rematerialization or preserving
-  materialization plan, or avoid consuming this block-loaded value with truncf.
+  fixed to #pto.vmi.layout<deinterleaved = 2, block_elems = 8> by the strided
+  group_load. Add rematerialization or preserving materialization support, or
+  avoid consuming this block-loaded value with truncf.
 ```
 
 ### 3.20 `group_slots` Control-Flow Join
@@ -2987,8 +2991,9 @@ for r = 0..7:
 ### 3.23 `group_broadcast` With Multiple Dense Consumers
 
 One `group_slots` value may feed multiple `group_broadcast` uses with different
-dense result layout requirements.  Layout assignment should rematerialize the
-broadcast per use instead of forcing one result layout onto all consumers.
+dense result layout requirements.  Each `group_broadcast` op has its own result
+layout, so layout assignment should type each op at its use site instead of
+forcing one result layout onto all consumers.
 
 VMI input:
 
@@ -3046,7 +3051,7 @@ layout.  It is that each use has an explicit layout boundary:
 %b_for_cast_split = pto.vmi.ensure_layout %b_for_cast
 ```
 
-If a future direct `group_broadcast -> deinterleaved` recipe is added, layout
+If a future direct `group_broadcast -> deinterleaved` support path is added, layout
 assignment may assign `%b_for_mul` or `%b_for_cast` directly to that layout, but
 the choice must still be visible in the assigned IR.
 
@@ -3498,21 +3503,21 @@ Required diagnostic when the stride is not block-aligned:
 ```text
 VMI-LAYOUT-CONTRACT:
   pto.vmi.group_load group_size 32 with source_group_stride not divisible by
-  8 f32 elements cannot use the registered vsldb strided-block plan. Enable a
-  stable gather plan or choose a block-aligned source_group_stride.
+  8 f32 elements cannot use the vsldb strided-block lowering support. Enable a
+  stable gather fallback or choose a block-aligned source_group_stride.
 ```
 
 Required assignment rule:
 
 ```text
-This producer selects the S=32 block-fragment plan:
+This producer requires the S=32 block-fragment layout:
   #pto.vmi.layout<deinterleaved = 4, block_elems = 8>
 
 It must not be unified with the contiguous-load S=32 plan from section 3.6:
   #pto.vmi.layout<deinterleaved = 4, block_elems = 1>
 
 Both layouts are legal inputs to group_reduce_addf S=32, but they require
-different producer materialization plans.
+different producer materialization/lowering support.
 ```
 
 ### 3.28 `group_slot_load` `slots = 1` With Aligned Non-Unit Stride
@@ -3703,7 +3708,7 @@ Required assignment rule:
 the per-use typed mask materialization inserted by vmi-layout-assignment.  For
 a rematerializable `create_mask`, assignment may clone it as b32/b16 masks.  For
 a non-rematerializable mask producer, assignment must insert
-`ensure_mask_granularity` or diagnose if no materialization plan is registered.
+`ensure_mask_granularity` or diagnose if no materialization support exists.
 ```
 
 ### 3.30 `masked_load` Tail Without Padding
@@ -4002,10 +4007,10 @@ S=32 reduce over 8 groups:
   #pto.vmi.layout<deinterleaved = 4>
 ```
 
-The program is semantically legal.  Layout assignment must solve it by cloning
-or rematerializing the cheap load for one use, or by inserting an explicit
-registered materialization plan.  `vmi-to-vpto` must not inspect both users and
-choose one locally.
+The program is semantically legal.  Baseline layout assignment solves it by
+inserting an explicit use-site `ensure_layout`. A later optimization pass may
+clone or rematerialize the cheap load for one use. `vmi-to-vpto` must not
+inspect both users and choose one locally.
 
 VMI input:
 
@@ -4114,11 +4119,11 @@ for r = 0..7:
 Required assignment rule:
 
 ```text
-If a cheap producer such as load can produce both requested layouts, clone or
-rematerialize it at the use sites and assign each clone independently.  If the
-producer is not rematerializable and no deinterleaved=2 <-> deinterleaved=4
-materialization plan is registered, emit a layout-contract diagnostic naming
-both consumers and both required layouts.
+Baseline assignment inserts `ensure_layout` at the mismatched use. A later
+rematerialization pass may clone a cheap producer such as load and assign each
+clone independently. If no deinterleaved=2 <-> deinterleaved=4 materialization
+support exists, emit a layout-contract diagnostic naming both consumers and
+both required layouts.
 ```
 
 ### 3.34 S=64 Group-Slot Result `f32 -> f16` Cast
@@ -4380,7 +4385,7 @@ VPTO lowering result:
 pto.vsts %out16_block, %out16[%group_off16], %slot8 {dist = "NORM_B32"}
   : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
 
-// Row-local S=64 RHS: rematerialize the same scalar stream into one lane-0
+// Row-local S=64 RHS: a separate group_slot_load op produces one lane-0
 // value per physical row-local result.
 %rhs64_r = pto.vsldb %rhs_base[%rhs_off_plus_r], %c0_i16, %c0_i16, %one_b32
   : !pto.ptr<f32, ub>, i16, i16, !pto.mask<b32> -> !pto.vreg<64xf32>
@@ -4406,9 +4411,12 @@ for r = 0..7:
 Required assignment rule:
 
 ```text
-`group_slot_load` is cheaply rematerializable.  If two use sites request
-different `group_slots` layouts, clone/rematerialize the load per use.  Do not
-invent a common layout or make `vmi-to-vpto` inspect both users.
+`group_slot_load` is a memory op, so the baseline rematerialization pass must
+not clone it as a generic cheap producer. If two use sites need different
+`group_slots` layouts, the legal first-stage shape is to write two explicit
+`group_slot_load` ops, as above, or to introduce a future load-cloning
+optimization with an explicit memory-safety proof. Do not invent a common
+layout or make `vmi-to-vpto` inspect both users.
 ```
 
 ### 3.37 S=64 `group_store` With Non-Unit Output Stride
@@ -4467,15 +4475,15 @@ Required assignment rule:
 ```text
 If `group_store` has non-unit row_stride and the source can legally use
 `slots = 1`, assignment may select `slots = 1` to keep the store legal.  If the
-source is fixed to `slots = 8`, the current target plan must diagnose unless a
-strided packed store materializer is registered.
+source is fixed to `slots = 8`, current target support must diagnose unless a
+strided packed store materializer exists.
 ```
 
 ### 3.38 Multi-Tile S=32 `group_reduce`
 
 The S=32 plan is not only a one-tile special case.  For more than eight groups,
 layout assignment keeps the same layout and `vmi-to-vpto` emits the same
-8-row tile recipe for each physical tile.
+8-row tile lowering sequence for each physical tile.
 
 VMI input:
 
@@ -4663,10 +4671,11 @@ though both have four physical parts.
 ### 3.40 Scalar Broadcast Feeding Dense And Grouped Users
 
 This case fixes the rule for ordinary scalar broadcasts.  A scalar broadcast is
-not born with a physical layout.  Layout assignment may either rematerialize it
-per use, or assign the transfer-equivalent producer chain to the non-contiguous
-layout requested by the grouped consumer and insert an explicit materialization
-at the dense store use.  The latter is the concrete plan below.
+not born with a physical layout.  Baseline layout assignment assigns the
+transfer-equivalent producer chain to the non-contiguous layout requested by the
+grouped consumer and inserts an explicit materialization at the dense store use.
+The later `vmi-layout-rematerialize` pass may replace that helper with a cloned
+broadcast when profitable.
 
 VMI input:
 
@@ -4785,20 +4794,21 @@ for r = 0..7:
 Required assignment rule:
 
 ```text
-`broadcast` is layout-transparent and cheaply rematerializable, but assignment
-does not have to force a separate contiguous broadcast just because a dense
-store exists.  It may choose a common deinterleaved compute layout for
-transfer-equivalent elementwise ops and insert `ensure_layout` at the dense
-store.  The required invariant is that this choice is explicit in the assigned
-IR; `vmi-to-vpto` must not infer it by inspecting both users.
+`broadcast` is layout-transparent and cheaply rematerializable by the optional
+`vmi-layout-rematerialize` pass, but baseline assignment does not have to force
+a separate contiguous broadcast just because a dense store exists.  It may
+choose a common deinterleaved compute layout for transfer-equivalent elementwise
+ops and insert `ensure_layout` at the dense store.  The required invariant is
+that this choice is explicit in the assigned IR; `vmi-to-vpto` must not infer it
+by inspecting both users.
 ```
 
 ### 3.41 Non-Rematerializable Value With Incompatible Users
 
 This is the non-cheap counterpart to section 3.18.  A `masked_load` has explicit
 mask and passthrough semantics, so layout assignment should not clone it as a
-normal cheap load unless the registry explicitly marks that clone legal.  The
-conflict is solved by inserting `ensure_layout` at one use site.
+normal cheap load unless a dedicated rematerialization rule proves that clone
+legal.  The conflict is solved by inserting `ensure_layout` at one use site.
 
 VMI input:
 
@@ -4898,10 +4908,11 @@ for r = 0..7:
 Required assignment rule:
 
 ```text
-For non-rematerializable producers, assignment must insert a registered
-use-site materialization plan, such as contiguous -> deinterleaved=4.  If no
-plan exists, it must diagnose at assignment time.  `vmi-to-vpto` must not clone
-the masked_load or choose a materialization after seeing both users.
+For non-rematerializable producers, assignment must insert an explicit use-site
+materialization helper, such as contiguous -> deinterleaved=4. If that helper
+has no supported materialization, the layout gate must diagnose before
+vmi-to-vpto. `vmi-to-vpto` must not clone the masked_load or choose a
+materialization after seeing both users.
 ```
 
 ### 3.42 `group_slots` `scf.for` Loop-Carried Accumulator
@@ -5267,9 +5278,9 @@ one contiguous value for `masked_load`, and one deinterleaved value for
 `create_group_mask` by materializing the contiguous grouped predicate chunks
 and then applying `pdintlv_b32` in the same tree shape as the data
 `vdintlv`.  It does not walk from `group_reduce_addf` to the mask producer to
-choose or reject the recipe.
+choose or reject the support path.
 
-Assignment may select a deinterleaved S=32 load plan only when the rounded
+Assignment may select a deinterleaved S=32 load layout only when the rounded
 physical reads are memory-safe; otherwise it must diagnose or use a future
 stable gather fallback.
 
@@ -5437,7 +5448,7 @@ Optimization pass result:
 
 ```text
 // vmi-layout-fold-consumers may remove both ensure_layout ops if the target
-// supports a store recipe that consumes deinterleaved=2 and writes contiguous
+// supports store lowering that consumes deinterleaved=2 and writes contiguous
 // row-major memory.
 pto.vmi.store %t1, %out1[%off]
 pto.vmi.store %w,  %out2[%off]
@@ -6002,7 +6013,7 @@ pto.vmi.group_reduce_addi %x8, %mask
   -> verifier or layout-contract diagnostic
 ```
 
-An optimized row-local i8 full-chunk recipe may be added later for
+An optimized row-local i8 full-chunk lowering path may be added later for
 `S = 256` by using widening `vcadd`, but that requires a widening
 `group_slots` result contract and must not change the baseline cast-to-accumulator
 semantics above.
@@ -6016,6 +6027,6 @@ accumulator computation:
 pto.vmi.group_store %sum8, %out_i8[%group_off], %c1 {num_groups = 8}
 ```
 
-That packed group-slot `trunci` path is not a baseline recipe yet; the
-implementation must either define a slot-wise VCVTII recipe or diagnose at
+That packed group-slot `trunci` path is not baseline lowering support yet; the
+implementation must either define slot-wise VCVTII lowering support or diagnose at
 layout assignment.

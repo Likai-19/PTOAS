@@ -902,10 +902,12 @@ def PTOValidateVMILayoutIR
     a concrete VMI layout, every VMI mask must have concrete b8/b16/b32
     granularity and layout, physical VPTO register values must not appear yet,
     and VMI typed values must stay inside VMI semantic/helper or structural ops.
-    vmi-to-vpto chooses deterministic local recipes from the current op's attrs,
-    operand/result types, layouts, and operand values; non-local choices must
-    be represented as explicit attrs, helper ops, cloned producers, or
-    diagnostics before this stage.
+    vmi-to-vpto chooses deterministic lowerings from the current op's attrs,
+    operand/result types, layouts, and operand values. Non-local choices must
+    be represented as explicit attrs, helper ops, or diagnostics before this
+    stage. Later VMI layout optimization passes may replace helpers with
+    cloned/rematerialized producers, but the layout gate must not depend on
+    hidden producer/user context.
   }];
   let constructor = "mlir::pto::createPTOValidateVMILayoutIRPass()";
   let dependentDialects = ["mlir::cf::ControlFlowDialect",
