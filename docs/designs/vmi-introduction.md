@@ -206,40 +206,221 @@ pto-validate-vmi-ir
 这是硬合法化 pass。它选择具体 value layout、具体 mask granularity，
 并在 layout 不匹配的 use site 插入显式 helper op。
 
-实现上它维护 data 和 mask 两套求解状态：
+这个 pass 的工作顺序是固定的：
 
 ```text
-data value:
-  每个 !pto.vmi.vreg 是一个节点，节点记录最终选择的布局。
-
-mask value:
-  每个 !pto.vmi.mask 是一个节点，节点记录最终选择的布局和 predicate 粒度。
+1. 做少量 VMI 内部规整，让后续 layout 规则面对稳定形态。
+2. 为 data value 建 union-find 求解器，并收集 data 约束和 data use request。
+3. 把可采纳的 consumer request 提升为 producer/result 的最终 layout。
+4. 改写所有 data value type，让 !pto.vmi.vreg 携带具体 layout。
+5. 对仍不匹配的 data use 插入 pto.vmi.ensure_layout。
+6. 基于已经确定的 data layout 推导 mask layout 和 predicate granularity。
+7. 改写所有 mask type，并对不匹配的 mask use 插入 ensure_mask_*。
+8. 同步更新 function type、call boundary 和 block argument type。
+9. 校验 layout-assigned VMI IR。
 ```
 
-data value 使用 union-find 表示“这些 value 必须共用 layout”。函数参数、
-call operand/result、return/yield、block argument、bitcast 等边界会把相关
-value 合并到同一个等价类里。等价类只能有一个最终 data layout。
+Data 和 mask 分两轮求解。原因是 mask layout 通常依赖对应 data operand 或 result
+的 layout；例如 `cmpf` 产生的 mask 跟比较输入的 data layout 对齐，
+`select`/`reduce`/`masked_load` 消费的 mask 也要跟对应 data value 的 lane
+layout 和元素 bitwidth 对齐。
 
-assignment 遍历 IR 时，每类 op 向求解器贡献两种信息：
+Data 求解器为每个 `!pto.vmi.vreg` 建一个节点：
 
 ```text
-result 自然布局:
-  这个 op 自己产生的 result 适合用什么 layout 表达。
-
-operand 使用请求:
-  这个 op 消费某个 operand 时希望 operand 是什么 layout。
+DataNode:
+  value         = 对应 SSA value
+  original type = surface VMI type
+  parent        = union-find parent
+  naturalLayout = 当前等价类选择的自然 layout，可能为空
 ```
 
-有些 producer 生成的是同一个逻辑向量，但可以用多种物理 layout 表达。若它的
-所有 consumer 给出的使用请求一致，assignment 会把这个请求反推为 producer
-result 的最终布局。否则，producer 保持自己的布局，assignment 在不匹配的 use
-site 插入 `pto.vmi.ensure_layout`。mask 使用同样思路，但还会同时求解 predicate
-粒度，必要时插入 `ensure_mask_layout` 或 `ensure_mask_granularity`。
+遍历 IR 时，每个 op 向 data 求解器贡献三类信息。
 
-最后，pass 会把所有 VMI data/mask type 改写成带 layout 的 type，并同步更新
-function type、call site、block argument 和 terminator operand。这个阶段之后，
-IR 不再依赖隐藏 plan；后续 pass 和 `vmi-to-vpto` 都只读取 type 上的 layout
-和显式 `ensure_*` helper。
+第一类是 layout 等价约束。它表示几个 value 必须使用同一个 physical layout，
+也就是 union-find 中的同一个等价类。典型来源：
+
+```text
+layout-transparent elementwise:
+  addf/addi/subf/subi/mulf/muli/fma/divf/minf/maxf/...
+  L(operands...) = L(result)
+
+unary elementwise:
+  negf/absf/absi/sqrt/exp/ln/relu/not
+  L(source) = L(result)
+
+select:
+  L(true_value) = L(false_value) = L(result)
+
+bitcast:
+  L(source) = L(result)
+
+structured control flow:
+  scf.if result     = then/else yield operand
+  scf.for result    = init operand = iter_arg = yield operand
+  scf.while result  = init/before/condition/after/yield carried value
+
+cf branch:
+  branch operand = destination block argument
+
+function boundary:
+  call operand = callee argument
+  call result  = callee return operand
+  multiple returns of the same function agree per result index
+```
+
+这一步只说明“这些 value 如果存在布局，就必须一致”。它不等价于把某个
+consumer 的 request 无条件推过所有 producer 或控制流。
+
+第二类是 result 自然布局。某些 op 的结果本身有目标相关的自然布局：
+
+```text
+普通 reduce / compress / shuffle:
+  result 通常是 contiguous。
+
+group_reduce:
+  source 需要适配 group reduce 指令形态；
+  result 使用 group_slots(num_groups, slots) 描述 sparse group result。
+
+cast:
+  widening/narrowing 根据 cast support 决定 source request 和 result layout。
+
+group_load / group_slot_load:
+  result 根据 group size、row stride 和目标能力选择 contiguous、deinterleaved
+  或 group_slots。
+
+active_prefix_index:
+  result 使用 contiguous。
+```
+
+若同一个等价类已经有自然布局，再设置不同自然布局会报 layout contract 冲突。
+
+第三类是 operand 使用请求。consumer 不直接修改 operand 的 type，而是记录
+“这个 use site 希望 operand 是什么 layout”：
+
+```text
+store / tile_write / masked_store value:
+  wants contiguous
+
+ordinary reduce source/init:
+  wants contiguous
+
+group_reduce source:
+  wants preferred group-reduce source layout
+
+group_store value:
+  wants preferred group result layout
+
+truncf/trunci/extf/extsi/extui source:
+  wants cast support 给出的 source layout
+
+channel_split / channel_merge / shuffle:
+  wants 各自 lowering 需要的 source/input layout
+```
+
+收集完这些信息后，assignment 才尝试做 consumer-driven adoption。它逐个查看
+use request：如果 operand 的 producer 可以直接用 consumer 需要的 layout 产生
+同一个逻辑向量，并且多 use 时所有 use 都请求同一个 layout，那么这个 request
+会被提升为该 value 所在 data 等价类的最终 layout。
+
+可采纳 producer 是受限集合：
+
+```text
+load / tile_read
+broadcast / constant / iota
+layout-transparent elementwise
+select
+bitcast
+```
+
+这就是 request 看起来能穿过 elemwise 的原因：
+
+```mlir
+%x = pto.vmi.load ...
+%k = pto.vmi.broadcast ...
+%y = pto.vmi.mulf %x, %k
+%q = pto.vmi.truncf %y
+```
+
+`mulf` 先把 `%x`、`%k`、`%y` 合成同一个 data 等价类。`truncf` 对 `%y`
+的 source use 请求 `deinterleaved=4` 时，这个 request 作用到 `%y` 所在等价类；
+因为 `mulf` 是可采纳 producer，assignment 可以把整个等价类选成
+`deinterleaved=4`，从而让 load/broadcast/mulf 直接在这个 layout 下产生数据。
+
+控制流边界也会形成等价类，但它不是任意 request 的自动传播通道：
+
+```mlir
+%y = scf.if %c -> !pto.vmi.vreg<128xf32> {
+  scf.yield %a
+} else {
+  scf.yield %b
+}
+%q = pto.vmi.truncf %y
+```
+
+`%y`、`%a`、`%b` 的 layout 必须一致；但 `scf.if` result 本身不是
+consumer-driven adoption 的可采纳 producer。若 `%q` 需要的 layout 无法成为
+这个等价类的最终布局，assignment 会在 `%q` 的 use site 插
+`pto.vmi.ensure_layout`，而不是隐式重写两个 branch 的内部计算。
+
+Data layout 确定后，pass 会把每个 `!pto.vmi.vreg<NxT>` 改写成
+`!pto.vmi.vreg<NxT, layout>`。如果某个记录过的 use request 仍然和 operand
+当前 layout 不一致，pass 在该 consumer 前插显式 materialization：
+
+```mlir
+%x_req = pto.vmi.ensure_layout %x
+  : !pto.vmi.vreg<NxT, source_layout>
+    -> !pto.vmi.vreg<NxT, requested_layout>
+consumer %x_req
+```
+
+这个规则也处理多 consumer 冲突：
+
+```mlir
+%y = pto.vmi.mulf %x, %k
+pto.vmi.store %y, %out0      // wants contiguous
+%q = pto.vmi.truncf %y       // wants deinterleaved=4 source
+```
+
+一个 SSA value 只能属于一个 data layout 等价类。若两个 use 不能共同满足，
+baseline assignment 保留一个等价类 layout，并在不匹配 use 前插
+`ensure_layout`。后续 `vmi-layout-fold-consumers`、`vmi-layout-rematerialize`
+和 `vmi-layout-sink-materialization` 可以在显式 helper op 上做优化，但
+`vmi-to-vpto` 不读取隐藏 plan 或 sibling user。
+
+Mask 求解发生在 data type 改写之后。它同样维护 union-find 等价类，但节点记录
+两件事：
+
+```text
+mask layout
+predicate granularity: b8 / b16 / b32
+```
+
+mask request 从已经带 layout 的 data value 推导：
+
+```text
+cmpf/cmpi result:
+  mask layout = lhs data layout
+  granularity = lhs element bitwidth 对应的 predicate 粒度
+
+select mask:
+  mask layout = result data layout
+  granularity = result element bitwidth 对应的 predicate 粒度
+
+reduce / group_reduce / masked_load / expand_load mask:
+  mask layout = source/result data layout
+  granularity = 对应 data element bitwidth 的 predicate 粒度
+```
+
+若 mask use 的 layout 或 granularity 不匹配，pass 显式插
+`pto.vmi.ensure_mask_layout` 或 `pto.vmi.ensure_mask_granularity`。
+
+完成 data/mask 改写和 helper 插入后，pass 会同步更新 function type。直接
+internal call 会把 call operand/result 与 callee argument/return operand 合成
+同一布局约束；带 VMI type 的 external declaration 或 indirect call 没有可见
+body，当前需要显式 ABI materialization 设计，因此 layout assignment 会拒绝。
+这个阶段之后，IR 不再依赖隐藏 plan；后续 pass 和 `vmi-to-vpto` 都只读取 type
+上的 layout 和显式 `ensure_*` helper。
 
 ### 3.3 `vmi-layout-fold-consumers`
 
