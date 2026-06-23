@@ -287,15 +287,11 @@ module {
 // CHECK-SAME: %[[FQDST:[^,]+]]: !pto.ptr<f8E4M3FN, ub>
 // CHECK: scf.for
 // CHECK: scf.for
-// CHECK: pto.vlds {{.*}} : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
-// CHECK: pto.vlds {{.*}} : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
-// CHECK: pto.vlds {{.*}} : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
-// CHECK: pto.vlds {{.*}} : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+// CHECK: pto.vldsx2 {{.*}}, "DINTLV_B32" : !pto.ptr<f32, ub>, index -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
+// CHECK: pto.vldsx2 {{.*}}, "DINTLV_B32" : !pto.ptr<f32, ub>, index -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
+// CHECK: pto.vdintlv {{.*}} : !pto.vreg<64xf32>, !pto.vreg<64xf32> -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
+// CHECK: pto.vdintlv {{.*}} : !pto.vreg<64xf32>, !pto.vreg<64xf32> -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
 // CHECK: pto.vmul {{.*}} : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
-// CHECK: pto.vdintlv {{.*}} : !pto.vreg<64xf32>, !pto.vreg<64xf32> -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
-// CHECK: pto.vdintlv {{.*}} : !pto.vreg<64xf32>, !pto.vreg<64xf32> -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
-// CHECK: pto.vdintlv {{.*}} : !pto.vreg<64xf32>, !pto.vreg<64xf32> -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
-// CHECK: pto.vdintlv {{.*}} : !pto.vreg<64xf32>, !pto.vreg<64xf32> -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
 // CHECK: pto.vcvt {{.*}} {part = "P0", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<256xf8E4M3FN>
 // CHECK: pto.vcvt {{.*}} {part = "P1", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<256xf8E4M3FN>
 // CHECK: pto.vcvt {{.*}} {part = "P2", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<256xf8E4M3FN>

@@ -106,6 +106,16 @@ S=32 group_reduce f32:
   所以 source/mask 使用 deinterleaved=4, block_elems=8。
 ```
 
+`block_elems=8` 表示一种按 32B row fragment 组织的输入形态，不表示
+S=32 reduce 只能接受这一种形态。如果同一个 value 还要服务 narrow cast 等
+element-parity consumer，assignment 可以选择 `deinterleaved=4, block_elems=1`
+作为共同 layout，再由 lowering 生成对应的物理指令序列。
+
+`deinterleaved` 只描述最终物理 part 中有哪些 logical lane，不描述这个 layout
+由哪条指令生成。不同 producer 可以用不同方式直接产生同一个 layout；如果不能
+直接产生，后续 lowering 再通过显式 materialization helper 把 source layout
+转换成 consumer 需要的 layout。具体 lowering 形状见 case catalog。
+
 ### 2.3 `num_groups = G, slots = K`
 
 ```mlir
@@ -196,39 +206,40 @@ pto-validate-vmi-ir
 这是硬合法化 pass。它选择具体 value layout、具体 mask granularity，
 并在 layout 不匹配的 use site 插入显式 helper op。
 
-例子：`f16 -> f32 -> store`。
+实现上它维护 data 和 mask 两套求解状态：
 
-Surface VMI：
+```text
+data value:
+  每个 !pto.vmi.vreg 是一个节点，节点记录最终选择的布局。
 
-```mlir
-%x16 = pto.vmi.load %src[%off]
-  : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
-%x32 = pto.vmi.extf %x16
-  : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
-pto.vmi.store %x32, %dst[%off]
-  : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
+mask value:
+  每个 !pto.vmi.mask 是一个节点，节点记录最终选择的布局和 predicate 粒度。
 ```
 
-Assignment 之后：
+data value 使用 union-find 表示“这些 value 必须共用 layout”。函数参数、
+call operand/result、return/yield、block argument、bitcast 等边界会把相关
+value 合并到同一个等价类里。等价类只能有一个最终 data layout。
 
-```mlir
-%x16 = pto.vmi.load %src[%off]
-  : !pto.ptr<f16, ub>
-    -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
+assignment 遍历 IR 时，每类 op 向求解器贡献两种信息：
 
-%x32 = pto.vmi.extf %x16
-  : !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
-    -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+```text
+result 自然布局:
+  这个 op 自己产生的 result 适合用什么 layout 表达。
 
-%x32_dense = pto.vmi.ensure_layout %x32
-  : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
-    -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
-
-pto.vmi.store %x32_dense, %dst[%off]
-  : !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>, !pto.ptr<f32, ub>
+operand 使用请求:
+  这个 op 消费某个 operand 时希望 operand 是什么 layout。
 ```
 
-即使不跑任何优化 pass，这个 assignment 后的 IR 也已经是正确可降的。
+有些 producer 生成的是同一个逻辑向量，但可以用多种物理 layout 表达。若它的
+所有 consumer 给出的使用请求一致，assignment 会把这个请求反推为 producer
+result 的最终布局。否则，producer 保持自己的布局，assignment 在不匹配的 use
+site 插入 `pto.vmi.ensure_layout`。mask 使用同样思路，但还会同时求解 predicate
+粒度，必要时插入 `ensure_mask_layout` 或 `ensure_mask_granularity`。
+
+最后，pass 会把所有 VMI data/mask type 改写成带 layout 的 type，并同步更新
+function type、call site、block argument 和 terminator operand。这个阶段之后，
+IR 不再依赖隐藏 plan；后续 pass 和 `vmi-to-vpto` 都只读取 type 上的 layout
+和显式 `ensure_*` helper。
 
 ### 3.3 `vmi-layout-fold-consumers`
 
