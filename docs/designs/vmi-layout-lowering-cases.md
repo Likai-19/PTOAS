@@ -5494,6 +5494,12 @@ S          = logical_lane_count / num_groups
 The canonical grouped-reduce layouts are:
 
 ```text
+Packed group-slot rule:
+  K is the physical slot capacity of one packed group-result chunk.
+  For VCG-style packed reductions, K = 8.
+  G does not have to be divisible by K; the final chunk may be partial.
+  active_groups(chunk c) = min(K, G - c * K).
+
 S == VLaneElems:
   source/mask layout = contiguous
   result layout      = group_slots(num_groups=G, slots=8)
@@ -5694,6 +5700,155 @@ Memory result:
 ```text
 for r = 0..7:
   out[group_off + r] = reduce_T16(base[off + r * 64 + 0 .. 63])
+```
+
+#### 3.50.1 Partial Packed `S = 64` Reductions
+
+This is the same `S = 4 * VLaneElems` lowering family as section 3.50, but it
+covers `G` values that do not fill every packed group-result chunk.  The key
+point is that `slots = 8` is a physical capacity, not a promise that every
+chunk contains eight valid group results.
+
+The result layout remains:
+
+```text
+!pto.vmi.vreg<(G * 64)xf16, #pto.vmi.layout<num_groups = G, slots = 8>>
+```
+
+The lowering computes per result chunk:
+
+```text
+K = 8
+chunk c active groups A(c) = min(K, G - c * K)
+
+source active lanes per deinterleaved part for chunk c:
+  A(c) * VLaneElems = A(c) * 16 f16 lanes
+
+reduce input mask:
+  PAT_VL(A(c) * 16)
+
+combine/store mask:
+  PAT_VL(A(c))
+```
+
+For full chunks, `A(c) = 8`, so the reduce input mask is `PAT_ALL` for f16
+and the combine/store mask is `PAT_VL8`.  For partial chunks, masks are
+required for correctness.  The semantic source mask produced by
+`pto.vmi.create_group_mask` must also materialize only the valid source lanes;
+the reduce lowering should not treat padding lanes as active data.
+
+##### `G = 4`: `256xf16, num_groups = 4`
+
+VMI-shaped input:
+
+```text
+%x = pto.vmi.load %base[%off]
+  : memref<256xf16> -> !pto.vmi.vreg<256xf16>
+%mask = pto.vmi.create_group_mask %c64 {num_groups = 4, group_size = 64}
+  : index -> !pto.vmi.mask<256xpred>
+%sum = pto.vmi.group_reduce_addf %x, %mask {num_groups = 4, reassoc}
+pto.vmi.group_store %sum, %out[%group_off], %c1 {num_groups = 4}
+```
+
+Assigned layouts:
+
+```text
+%x, %mask:
+  #pto.vmi.layout<deinterleaved = 4, block_elems = 8>
+
+%sum:
+  !pto.vmi.vreg<256xf16, #pto.vmi.layout<num_groups = 4, slots = 8>>
+```
+
+VPTO lowering shape for the only result chunk:
+
+```text
+%x_p0, %x_p1, %x_p2, %x_p3 = materialize deinterleaved=4, block_elems=8 input
+  : four !pto.vreg<128xf16>
+
+%lane64_b16 = pto.pge_b16 "PAT_VL64"  // A * 16 = 4 * 16
+%slot4_b16 = pto.pge_b16 "PAT_VL4"
+
+%s0 = pto.vcgadd %x_p0, %lane64_b16 : !pto.vreg<128xf16>
+%s1 = pto.vcgadd %x_p1, %lane64_b16 : !pto.vreg<128xf16>
+%s2 = pto.vcgadd %x_p2, %lane64_b16 : !pto.vreg<128xf16>
+%s3 = pto.vcgadd %x_p3, %lane64_b16 : !pto.vreg<128xf16>
+
+%s01 = pto.vadd %s0, %s1, %slot4_b16 : !pto.vreg<128xf16>
+%s23 = pto.vadd %s2, %s3, %slot4_b16 : !pto.vreg<128xf16>
+%sum0 = pto.vadd %s01, %s23, %slot4_b16 : !pto.vreg<128xf16>
+
+pto.vsts %sum0, %out[%group_off], %slot4_b16 {dist = "NORM_B16"}
+  : !pto.vreg<128xf16>, !pto.ptr<f16, ub>, !pto.mask<b16>
+```
+
+Memory result:
+
+```text
+for r = 0..3:
+  out[group_off + r] = reduce_f16(base[off + r * 64 + 0 .. 63])
+
+sum0 lanes 4..127 are not semantic for this VMI result.
+```
+
+##### `G = 8`: full packed chunk
+
+This is section 3.50.  There is one result chunk with `A = 8`:
+
+```text
+source mask       = PAT_ALL        // 8 * 16 = 128 f16 lanes
+combine/store     = PAT_VL8
+result layout     = group_slots(num_groups=8, slots=8)
+```
+
+##### `G = 12`: full chunk plus partial chunk
+
+This case needs two packed result chunks:
+
+```text
+result layout = group_slots(num_groups=12, slots=8)
+result arity  = ceil(12 / 8) = 2
+```
+
+Chunk 0 handles groups `0..7`:
+
+```text
+A(0) = 8
+source mask   = PAT_ALL
+combine/store = PAT_VL8
+```
+
+Chunk 1 handles groups `8..11`:
+
+```text
+A(1) = 4
+source mask   = PAT_VL64
+combine/store = PAT_VL4
+```
+
+Implementation checklist for this family:
+
+```text
+layout attr:
+  slots=8 should be legal even when num_groups is not divisible by 8.
+  slot_block(g) = g / 8 and slot_lane(g) = g % 8 are still well-defined.
+
+layout assignment:
+  packed VCG-style group_reduce results keep slots=8.
+
+mask materialization:
+  create_group_mask must not activate padding lanes in partial chunks.
+  For chunk c, source active lanes are A(c) * VLaneElems.
+
+vmi-to-vpto group_reduce:
+  use A(c) from result layout slots and num_groups.
+  combine masks use PAT_VL(A(c)).
+  input vcgadd consumes the physical mask parts, which must already encode
+  PAT_VL(A(c) * VLaneElems) for all-true grouped masks.
+
+vmi-to-vpto group_store:
+  use A(c) to build the store predicate.
+  output group offset for chunk c is c * slots.
 ```
 
 ### 3.51 16-bit Typed Group Reduce, `S = L = 128`

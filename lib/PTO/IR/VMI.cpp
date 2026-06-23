@@ -531,12 +531,11 @@ VMILayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
     if (blockElems != 1)
       return emitError() << "#pto.vmi.layout<num_groups = " << factor
                          << "> requires block_elems to be 1";
-    if (slots < 0 || (slots != 0 && factor % slots != 0))
+    if (slots < 0)
       return emitError()
              << "#pto.vmi.layout<num_groups = " << factor
              << ", slots = " << slots
-             << "> requires slots to be positive and divide num_groups when "
-                "specified";
+             << "> requires slots to be omitted or positive";
     return success();
   }
 
