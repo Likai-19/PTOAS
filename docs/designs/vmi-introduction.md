@@ -272,6 +272,91 @@ function boundary:
 这一步只说明“这些 value 如果存在布局，就必须一致”。它不等价于把某个
 consumer 的 request 无条件推过所有 producer 或控制流。
 
+等价类可以画成“同一个框里的 value 共用一个 layout 变量”。例如普通
+elementwise 链：
+
+```text
+surface VMI:
+
+  %x = pto.vmi.load ...
+  %k = pto.vmi.broadcast ...
+  %y = pto.vmi.mulf %x, %k
+  %q = pto.vmi.truncf %y
+
+data layout 等价类:
+
+  class C0
+  +--------------------------------------+
+  | %x        %k        %y               |
+  | load      broadcast mulf result      |
+  +--------------------------------------+
+                         ^
+                         |
+              use request from truncf source:
+              wants deinterleaved=4
+
+若 %y 的 producer chain 可采纳该 request，assignment 可以选择:
+
+  L(C0) = deinterleaved=4
+```
+
+控制流 join 也是等价类，但 request adoption 的含义不同：
+
+```text
+surface VMI:
+
+  %y = scf.if %c -> !pto.vmi.vreg<128xf32> {
+    scf.yield %a
+  } else {
+    scf.yield %b
+  }
+  %q = pto.vmi.truncf %y
+
+data layout 等价类:
+
+  class C1
+  +--------------------------------------+
+  | %a        %b        %y               |
+  | then yield else yield if result      |
+  +--------------------------------------+
+                         ^
+                         |
+              use request from truncf source:
+              wants deinterleaved=4
+
+scf.if result 不是 consumer-driven adoption 的可采纳 producer。
+若 C1 不能直接选择 deinterleaved=4，assignment 保持 C1 的布局，
+并在 use site materialize:
+
+  %y_for_q = pto.vmi.ensure_layout %y : L(C1) -> deinterleaved=4
+  %q = pto.vmi.truncf %y_for_q
+```
+
+多 consumer 冲突时，等价类仍然只有一个 layout：
+
+```text
+surface VMI:
+
+  %y = pto.vmi.mulf %x, %k
+  pto.vmi.store %y, %out0
+  %q = pto.vmi.truncf %y
+
+data layout 等价类:
+
+  class C2
+  +-----------------------------+
+  | %x        %k        %y      |
+  +-----------------------------+
+                         |\
+                         | \ use request from truncf: deinterleaved=4
+                         |
+                         +--- use request from store: contiguous
+
+两个 use request 不一致时，不能让 %y 同时拥有两个 layout。
+baseline assignment 保留 C2 已有的 natural layout；若没有 natural layout，
+则使用默认 contiguous。与该 layout 不匹配的 edge 会插 ensure_layout。
+```
+
 第二类是 result 自然布局。某些 op 的结果本身有目标相关的自然布局：
 
 ```text
