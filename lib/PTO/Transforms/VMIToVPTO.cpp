@@ -3794,6 +3794,68 @@ struct OneToNVMILoadOpPattern : OneToNOpConversionPattern<VMILoadOp> {
       }
     }
 
+    if (resultLayout && resultLayout.isDeinterleaved() &&
+        resultLayout.getFactor() == 4 && resultLayout.getBlockElems() == 1) {
+      std::optional<std::string> dist =
+          getX2MemoryDistToken(resultVMIType.getElementType(), "DINTLV");
+      if (dist && !resultTypes.empty() && resultTypes.size() % 4 == 0) {
+        int64_t groups = resultTypes.size() / 4;
+        SmallVector<Value> part0;
+        SmallVector<Value> part1;
+        SmallVector<Value> part2;
+        SmallVector<Value> part3;
+        part0.reserve(groups);
+        part1.reserve(groups);
+        part2.reserve(groups);
+        part3.reserve(groups);
+        for (int64_t group = 0; group < groups; ++group) {
+          Type part0Type = resultTypes[group];
+          Type part1Type = resultTypes[groups + group];
+          Type part2Type = resultTypes[2 * groups + group];
+          Type part3Type = resultTypes[3 * groups + group];
+          if (part0Type != part1Type || part0Type != part2Type ||
+              part0Type != part3Type)
+            return rewriter.notifyMatchFailure(
+                op, "vldsx2 deinterleaved=4 load requires matching part "
+                    "types");
+
+          Value firstOffset = createChunkOffset(
+              op.getLoc(), *offset, group * 4 * *lanesPerPart, rewriter);
+          Value secondOffset = createChunkOffset(
+              op.getLoc(), *offset, (group * 4 + 2) * *lanesPerPart,
+              rewriter);
+          auto first =
+              rewriter.create<Vldsx2Op>(op.getLoc(), part0Type, part1Type,
+                                        *source, firstOffset,
+                                        rewriter.getStringAttr(*dist));
+          auto second =
+              rewriter.create<Vldsx2Op>(op.getLoc(), part2Type, part3Type,
+                                        *source, secondOffset,
+                                        rewriter.getStringAttr(*dist));
+
+          auto even = rewriter.create<VdintlvOp>(
+              op.getLoc(), part0Type, part2Type, first.getLow(),
+              second.getLow());
+          auto odd = rewriter.create<VdintlvOp>(
+              op.getLoc(), part1Type, part3Type, first.getHigh(),
+              second.getHigh());
+          part0.push_back(even.getLow());
+          part1.push_back(odd.getLow());
+          part2.push_back(even.getHigh());
+          part3.push_back(odd.getHigh());
+        }
+
+        SmallVector<Value> results;
+        results.reserve(resultTypes.size());
+        results.append(part0);
+        results.append(part1);
+        results.append(part2);
+        results.append(part3);
+        rewriter.replaceOp(op, results, adaptor.getResultMapping());
+        return success();
+      }
+    }
+
     SmallVector<Value> contiguousParts;
     contiguousParts.reserve(resultTypes.size());
     for (auto [index, resultType] : llvm::enumerate(resultTypes)) {

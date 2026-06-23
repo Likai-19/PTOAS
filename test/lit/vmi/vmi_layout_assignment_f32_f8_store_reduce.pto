@@ -48,8 +48,8 @@ module {
 // ASSIGN: pto.vmi.store %[[X8]]
 
 // LOWER-LABEL: func.func @vmi_layout_assignment_f32_f8_store_reduce(
-// LOWER-COUNT-4: pto.vlds
-// LOWER-COUNT-4: pto.vdintlv
+// LOWER-COUNT-2: pto.vldsx2
+// LOWER-COUNT-2: pto.vdintlv
 // LOWER-COUNT-4: pto.vcgadd
 // LOWER-COUNT-3: pto.vadd
 // LOWER: pto.vsts

@@ -131,6 +131,52 @@ group_store
 future explicit group-pack op
 ```
 
+Contiguous memory loads may produce a non-contiguous physical value directly
+when the requested result layout is a dense deinterleaved layout.  This is a
+lowering choice, not a separate layout family.
+
+```text
+pto.vmi.load -> #pto.vmi.layout<contiguous>
+  lower as:
+    vlds NORM for each physical chunk
+
+pto.vmi.load -> #pto.vmi.layout<deinterleaved = 2, block_elems = 1>
+  lower as:
+    vldsx2 DINTLV_B* for each pair of physical chunks
+
+pto.vmi.load -> #pto.vmi.layout<deinterleaved = 4, block_elems = 1>
+  lower as:
+    two vldsx2 DINTLV_B* operations for each four-chunk group
+    followed by two vdintlv operations to split mod4 parts
+
+pto.vmi.load -> #pto.vmi.layout<deinterleaved = F, block_elems != 1>
+  lower using the producer-specific path or fall back to explicit
+  materialization.  Do not treat DINTLV_B* as a block-fragment layout.
+```
+
+The `deinterleaved = 4` result order remains the normal VMI physical part
+order:
+
+```text
+results = [part0 chunks..., part1 chunks..., part2 chunks..., part3 chunks...]
+```
+
+For one full `256xf32` tile:
+
+```text
+%even0, %odd0 = pto.vldsx2 %base[%off0],   "DINTLV_B32"
+%even1, %odd1 = pto.vldsx2 %base[%off128], "DINTLV_B32"
+
+%part0, %part2 = pto.vdintlv %even0, %even1
+%part1, %part3 = pto.vdintlv %odd0,  %odd1
+
+replace pto.vmi.load with [%part0, %part1, %part2, %part3]
+```
+
+This optimization is legal only for full physical chunks and supported
+`DINTLV_B8/B16/B32` element widths.  Tail and masked loads keep their explicit
+safe lowering until a masked or guarded `vldsx2` strategy is designed.
+
 ## 3. Lowering Results
 
 The following examples use symbolic VPTO names. `PAT_ALL_B*` means an all-true
@@ -3927,18 +3973,14 @@ VPTO lowering result:
 %all_b32 = pto.pge_b32 "PAT_ALL"
 %sum_mask = pto.pge_b32 "PAT_VL8"
 
-%x0 = pto.vlds %base[%off] : memref<256xf32> -> !pto.vreg<64xf32>
-%x1 = pto.vlds %base[%off_plus_64] : memref<256xf32> -> !pto.vreg<64xf32>
-%x2 = pto.vlds %base[%off_plus_128] : memref<256xf32> -> !pto.vreg<64xf32>
-%x3 = pto.vlds %base[%off_plus_192] : memref<256xf32> -> !pto.vreg<64xf32>
+%x_even_0, %x_odd_0 = pto.vldsx2 %base[%off], "DINTLV_B32"
+  : memref<256xf32>, index -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
+%x_even_1, %x_odd_1 = pto.vldsx2 %base[%off_plus_128], "DINTLV_B32"
+  : memref<256xf32>, index -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
 
-%x01_lo, %x01_hi = pto.vdintlv %x0, %x1
+%x_p0, %x_p2 = pto.vdintlv %x_even_0, %x_even_1
   : !pto.vreg<64xf32>, !pto.vreg<64xf32> -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
-%x23_lo, %x23_hi = pto.vdintlv %x2, %x3
-  : !pto.vreg<64xf32>, !pto.vreg<64xf32> -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
-%x_p0, %x_p2 = pto.vdintlv %x01_lo, %x23_lo
-  : !pto.vreg<64xf32>, !pto.vreg<64xf32> -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
-%x_p1, %x_p3 = pto.vdintlv %x01_hi, %x23_hi
+%x_p1, %x_p3 = pto.vdintlv %x_odd_0, %x_odd_1
   : !pto.vreg<64xf32>, !pto.vreg<64xf32> -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
 
 %s0 = pto.vcgadd %x_p0, %all_b32 : !pto.vreg<64xf32>
@@ -3991,6 +4033,14 @@ The common layout selected for `%x32` is
 `truncf f32 -> f8` and S=32 `group_reduce_addf`.  A later strided block-load
 producer may introduce `block_elems = 8`, but that is a different case and
 requires an explicit materialization/rematerialization decision.
+
+When `%x32` is produced by a full contiguous `pto.vmi.load`, `vmi-to-vpto`
+should not first materialize four contiguous f32 chunks and then run a full
+four-op `vdintlv` tree.  The load lowering should fold the first deinterleave
+level into two `vldsx2 DINTLV_B32` operations and then run only the second
+`vdintlv` level, as shown above.  The layout remains just
+`deinterleaved = 4, block_elems = 1`; it does not encode the fact that `vldsx2`
+was used.
 ```
 
 ### 3.33 One Dense Value Feeding S=16 And S=32 Reduces
