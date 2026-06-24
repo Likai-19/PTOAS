@@ -422,8 +422,8 @@ group_reduce layout fact:
                        group_slots(G, slots=1) result.
 
 memory safety fact:
-  full_read_elems, shaped safe-tail memref, or explicit fallback option
-  proves whether rounded-up physical reads are legal.
+  full physical chunks are legal for pointer sources. Partial logical loads
+  need a shaped safe-tail memref proof or an explicit fallback option.
 ```
 
 These helpers return semantic layout requirements and capability diagnostics.
@@ -596,10 +596,11 @@ full_tile_readable:
 ```
 
 The full-tile-readable proof must be explicit.  It may be carried by a
-statically shaped memref source, or by `pto.vmi.load {full_read_elems = N}` for
-pointer sources.  `vmi-to-vpto` consumes only this proof carrier; it does not
-inspect surrounding MTE copies, producer bodies, callers, or later consumers to
-decide whether inactive physical lanes are safe to read.
+statically shaped memref source. Pointer-source runtime kernels should load a
+rounded physical vector and use a mask to express logical active lanes.
+`vmi-to-vpto` consumes only the op/type-local proof carrier; it does not inspect
+surrounding MTE copies, producer bodies, callers, or later consumers to decide
+whether inactive physical lanes are safe to read.
 
 Example:
 

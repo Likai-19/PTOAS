@@ -1394,10 +1394,6 @@ LogicalResult VMIBitcastOp::verify() {
 }
 
 LogicalResult VMILoadOp::verify() {
-  if (auto fullReadElems = getFullReadElemsAttr()) {
-    if (fullReadElems.getInt() <= 0)
-      return emitOpError("requires full_read_elems to be positive");
-  }
   return verifyMemoryElementMatches(getOperation(), getSource().getType(),
                                     cast<VMIVRegType>(getResult().getType()),
                                     "source");

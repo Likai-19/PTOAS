@@ -311,7 +311,7 @@ ensure_mask_granularity    always carries source/result granularities
 Layout/attr-only decisions today:
 
 ```text
-load                       result layout plus full_read_elems/full chunk proof
+load                       result layout plus full chunk or shaped memref proof
 group_store                source group_slots layout plus explicit output stride
 masked_load                explicit passthrough, mask layout, and memory proof
 masked_store/select        operand/result layouts plus mask granularity
@@ -410,9 +410,8 @@ Important semantic split:
 
 ```text
 load:
-  optional full_read_elems=N is a memory-safety contract for pointer sources.
-  It states that source[offset : offset + N) may be physically read even if the
-  VMI logical result has fewer active lanes.
+  pointer sources must load full physical chunks directly.  Partial logical
+  loads require a shaped memref proof or a future guarded/scratch fallback.
 
 group_load:
   loads group_size data elements per group
@@ -806,7 +805,7 @@ helpers with cheaper equivalent IR.
 ```text
 cheap rematerializable producers:
   load when address operands dominate the clone site, no intervening may-alias
-  write exists, and any full_read_elems proof is preserved
+  write exists, and any shaped memory proof is preserved
   broadcast
   create_mask
   create_group_mask
@@ -1036,7 +1035,7 @@ vmi-to-vpto contract:
 
 ```text
 case family                     builder / owner             assignment artifact
-3.21 S=32 safe full-read tail    buildMaskRequests           full_read_elems memory proof
+3.21 S=32 rounded tail mask      buildMaskRequests           rounded vector plus mask
 3.24 mask/select/store          buildMaskRequests           explicit mask layout/granularity
 3.12 scf.if before reduce       buildControlFlowRequests    common yielded layout
 3.20 group_slots scf.if         buildControlFlowRequests    common group_slots layout
@@ -1469,7 +1468,7 @@ Current audit result:
 masked_load:
   direct lowering is load + vsel.  It does not inspect the mask producer to
   choose a different load form; memory safety is provided by full physical
-  chunks, shaped memref proof, or load full_read_elems.
+  chunks or shaped memref proof.
 
 memref.subview:
   mentioned only after identity lane-to-address planning fails.  It is not used
@@ -2187,11 +2186,10 @@ private physical function ABI:
   rejected until a stable VMI ABI is defined.
 
 memory-proof runtime coverage:
-  3.21 S=32 full-tile-readable tail is covered by a runtime case that uses
-  `pto.vmi.load {full_read_elems = 256}` on a UB pointer source. The attr is
-  the explicit safe-read proof consumed by `vmi-to-vpto`; no surrounding MTE,
-  caller/body context, or producer/user scan is inspected to justify the
-  rounded-up physical reads.
+  3.21 S=32 rounded tail-mask coverage is provided by a runtime case that loads
+  a full 256xf32 UB pointer vector and uses a 192-lane mask to define the active
+  logical rows. No surrounding MTE, caller/body context, or producer/user scan is
+  inspected to justify partial pointer reads.
 ```
 
 ## 12. Implementation Slices
