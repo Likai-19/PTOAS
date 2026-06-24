@@ -14,7 +14,7 @@ module {
       %dst: !pto.ptr<f32, ub>,
       %indices: !pto.vmi.vreg<64xi32>,
       %mask: !pto.vmi.mask<64xpred>) {
-    pto.vmi.scatter %value, %dst[%indices], %mask {indices_unique}
+    pto.vmi.scatter %value, %dst[%indices], %mask
         : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>,
           !pto.vmi.vreg<64xi32>, !pto.vmi.mask<64xpred>
     return
@@ -26,7 +26,6 @@ module {
 // CHECK-SAME: %arg2: !pto.vmi.vreg<64xi32, #pto.vmi.layout<contiguous>>
 // CHECK-SAME: %arg3: !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>
 // CHECK: pto.vmi.scatter %arg0, %arg1[%arg2], %arg3
-// CHECK-SAME: indices_unique
 // CHECK-SAME: !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
 // CHECK-SAME: !pto.vmi.vreg<64xi32, #pto.vmi.layout<contiguous>>
 // CHECK-SAME: !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>
