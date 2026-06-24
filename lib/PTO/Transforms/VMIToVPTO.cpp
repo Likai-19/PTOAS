@@ -5986,6 +5986,76 @@ struct OneToNVMIGroupBroadcastOpPattern
   }
 };
 
+struct OneToNVMIDhistOpPattern : OneToNOpConversionPattern<VMIDhistOp> {
+  using OneToNOpConversionPattern<VMIDhistOp>::OneToNOpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(VMIDhistOp op, OpAdaptor adaptor,
+                  OneToNPatternRewriter &rewriter) const override {
+    ValueRange accParts = adaptor.getAcc();
+    ValueRange sourceParts = adaptor.getSource();
+    ValueRange maskParts = adaptor.getMask();
+    if (accParts.size() != 2 || sourceParts.empty() ||
+        sourceParts.size() != maskParts.size())
+      return rewriter.notifyMatchFailure(
+          op, "expected two accumulator parts and matching source/mask chunks");
+
+    auto loType = dyn_cast<VRegType>(accParts[0].getType());
+    auto hiType = dyn_cast<VRegType>(accParts[1].getType());
+    if (!loType || loType != hiType)
+      return rewriter.notifyMatchFailure(op,
+                                         "expected matching ui16 acc parts");
+    auto sourceType = cast<VMIVRegType>(op.getSource().getType());
+    FailureOr<int64_t> lanesPerPart =
+        getDataLanesPerPart(sourceType.getElementType());
+    if (failed(lanesPerPart))
+      return rewriter.notifyMatchFailure(op,
+                                         "failed to compute source lanes");
+
+    Location loc = op.getLoc();
+    Value bin0 = createI32Constant(loc, 0, rewriter);
+    Value bin1 = createI32Constant(loc, 1, rewriter);
+    Value lo = accParts[0];
+    Value hi = accParts[1];
+
+    for (size_t index = 0, e = sourceParts.size(); index < e; ++index) {
+      Value source = sourceParts[index];
+      Value userMask = maskParts[index];
+      auto maskType = dyn_cast<MaskType>(userMask.getType());
+      if (!maskType || !maskType.isB8())
+        return rewriter.notifyMatchFailure(op, "expected b8 source mask");
+
+      Value chunkMask = userMask;
+      int64_t firstLane = static_cast<int64_t>(index) * *lanesPerPart;
+      int64_t activeLanes =
+          std::min<int64_t>(*lanesPerPart,
+                            sourceType.getElementCount() - firstLane);
+      if (activeLanes < *lanesPerPart) {
+        FailureOr<Value> validMask =
+            createPrefixMaskForActiveLanes(loc, maskType, activeLanes,
+                                           rewriter);
+        FailureOr<Value> allMask = createAllTrueMask(loc, maskType, rewriter);
+        if (failed(validMask) || failed(allMask))
+          return rewriter.notifyMatchFailure(
+              op, "failed to materialize tail-valid b8 mask");
+        chunkMask = rewriter
+                        .create<PandOp>(loc, maskType, chunkMask, *validMask,
+                                        *allMask)
+                        .getResult();
+      }
+
+      lo = rewriter.create<Dhistv2Op>(loc, loType, lo, source, chunkMask, bin0)
+               .getResult();
+      hi = rewriter.create<Dhistv2Op>(loc, hiType, hi, source, chunkMask, bin1)
+               .getResult();
+    }
+
+    rewriter.replaceOp(op, SmallVector<Value>{lo, hi},
+                       adaptor.getResultMapping());
+    return success();
+  }
+};
+
 template <typename SourceOp, typename ChunkReduceOp, typename CombineOp>
 struct OneToNVMIReduceMinMaxFOpPattern : OneToNOpConversionPattern<SourceOp> {
   using OneToNOpConversionPattern<SourceOp>::OneToNOpConversionPattern;
@@ -6937,7 +7007,7 @@ void populateVMIOneToNConversionPatterns(
       OneToNVMISelectOpPattern, OneToNVMIActivePrefixIndexOpPattern,
       OneToNVMICompressOpPattern, OneToNVMICompressStoreOpPattern,
       OneToNVMIReduceAddIOpPattern, OneToNVMIReduceAddFOpPattern,
-      OneToNVMIGroupBroadcastOpPattern,
+      OneToNVMIGroupBroadcastOpPattern, OneToNVMIDhistOpPattern,
       OneToNVMIReduceMinMaxFOpPattern<VMIReduceMaxFOp, VcmaxOp, VmaxOp>,
       OneToNVMIReduceMinMaxFOpPattern<VMIReduceMinFOp, VcminOp, VminOp>,
       OneToNVMIExtFOpPattern, OneToNVMITruncFOpPattern,
@@ -7420,6 +7490,22 @@ LogicalResult checkSupportedGroupBroadcastShape(
   return success();
 }
 
+LogicalResult checkSupportedDhistShape(VMIDhistOp op,
+                                       std::string *reason = nullptr) {
+  VMILayoutSupport supports;
+  if (succeeded(supports.getDhistSupport(op, reason)))
+    return success();
+  return failure();
+}
+
+LogicalResult checkSupportedChistShape(VMIChistOp op,
+                                       std::string *reason = nullptr) {
+  VMILayoutSupport supports;
+  if (succeeded(supports.getChistSupport(op, reason)))
+    return success();
+  return failure();
+}
+
 LogicalResult
 checkSupportedFmaShape(const VMITargetCapabilityRegistry &capabilities,
                        VMIFmaOp op, std::string *reason = nullptr) {
@@ -7576,6 +7662,28 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
              "#pto.vmi.layout<num_groups = G, slots = K>, a dense full result layout, "
              "and num_groups deriving a group size that divides or is a "
              "multiple of physical chunk lanes ("
+          << reason << ")";
+      return WalkResult::interrupt();
+    }
+    if (auto hist = dyn_cast<VMIDhistOp>(op)) {
+      std::string reason;
+      if (succeeded(checkSupportedDhistShape(hist, &reason)))
+        return WalkResult::advance();
+      hist.emitError()
+          << kVMIDiagUnsupportedPrefix
+          << "pto.vmi.dhist requires contiguous Nxui8 source, contiguous b8 "
+             "mask, and contiguous 256xui16 acc/result ("
+          << reason << ")";
+      return WalkResult::interrupt();
+    }
+    if (auto hist = dyn_cast<VMIChistOp>(op)) {
+      std::string reason;
+      if (succeeded(checkSupportedChistShape(hist, &reason)))
+        return WalkResult::advance();
+      hist.emitError()
+          << kVMIDiagUnsupportedPrefix
+          << "pto.vmi.chist requires a verified CHISTv2 range semantics "
+             "contract before lowering ("
           << reason << ")";
       return WalkResult::interrupt();
     }

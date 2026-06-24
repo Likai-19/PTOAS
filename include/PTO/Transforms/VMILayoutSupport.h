@@ -188,6 +188,14 @@ struct VMIBitcastSupport {
   VMIBitcastSupportKind kind = VMIBitcastSupportKind::PerPartVbitcast;
 };
 
+enum class VMIHistogramSupportKind {
+  Full256BinDhist,
+};
+
+struct VMIHistogramSupport {
+  VMIHistogramSupportKind kind = VMIHistogramSupportKind::Full256BinDhist;
+};
+
 class VMILayoutSupport {
 public:
   FailureOr<VMIContiguousStoreSupport>
@@ -280,6 +288,12 @@ public:
 
   FailureOr<VMIBitcastSupport>
   getBitcastSupport(VMIBitcastOp op, std::string *reason = nullptr) const;
+
+  FailureOr<VMIHistogramSupport>
+  getDhistSupport(VMIDhistOp op, std::string *reason = nullptr) const;
+
+  FailureOr<VMIHistogramSupport>
+  getChistSupport(VMIChistOp op, std::string *reason = nullptr) const;
 };
 
 } // namespace mlir::pto

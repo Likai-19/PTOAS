@@ -892,6 +892,28 @@ struct LayoutSolver {
                            sourceType, broadcast.getNumGroupsAttr().getInt()));
         return WalkResult::advance();
       }
+      if (auto hist = dyn_cast<VMIDhistOp>(op)) {
+        requestDataUse(hist.getAccMutable(), getContiguousLayout());
+        requestDataUse(hist.getSourceMutable(), getContiguousLayout());
+        if (failed(requestMaskUse(hist.getMaskMutable(), getContiguousLayout(),
+                                  "b8", op)))
+          return WalkResult::interrupt();
+        if (failed(setNaturalLayout(hist.getResult(), getContiguousLayout(),
+                                    op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto hist = dyn_cast<VMIChistOp>(op)) {
+        requestDataUse(hist.getAccMutable(), getContiguousLayout());
+        requestDataUse(hist.getSourceMutable(), getContiguousLayout());
+        if (failed(requestMaskUse(hist.getMaskMutable(), getContiguousLayout(),
+                                  "b8", op)))
+          return WalkResult::interrupt();
+        if (failed(setNaturalLayout(hist.getResult(), getContiguousLayout(),
+                                    op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
       if (auto extf = dyn_cast<VMIExtFOp>(op)) {
         auto sourceType = cast<VMIVRegType>(extf.getSource().getType());
         auto resultType = cast<VMIVRegType>(extf.getResult().getType());

@@ -104,7 +104,7 @@ pto-validate-vmi-layout-ir:
   `pto.vmi.group_load`, `pto.vmi.group_slot_load`, group_slots
   `pto.vmi.group_store`, group_slots `pto.vmi.group_reduce_add{f|i}`,
   explicit-slots `pto.vmi.group_broadcast`, `pto.vmi.truncf`,
-  `pto.vmi.extf`, and `pto.vmi.bitcast`, at the layout gate.
+  `pto.vmi.extf`, `pto.vmi.bitcast`, and histogram family ops at the layout gate.
 
 vmi-to-vpto:
   use OneToN type conversion
@@ -302,6 +302,7 @@ group_slot_load            result group_slots layout and source_group_stride
 group_reduce_add{f|i}      source/mask/result layouts, num_groups, typed reduce semantics
 group_broadcast            source/result layouts and num_groups
 truncf                     source/result layouts and element widths
+dhist/chist                acc/source/mask/result layouts and target capability
 ensure_layout              always carries source/result layouts
 ensure_mask_layout         always carries source/result layouts
 ensure_mask_granularity    always carries source/result granularities
@@ -373,6 +374,8 @@ group_reduce_addf
 group_reduce_addi
 group_broadcast
 group_store
+dhist
+chist
 
 ensure_layout                 // internal
 ensure_mask_layout            // internal
@@ -443,6 +446,13 @@ group_reduce layout fact:
   shared by layout assignment, layout validation, and vmi-to-vpto.
   Example: S=2*VLaneElems means deinterleaved=2 source/mask and
   group_slots(G, slots=8) result in every stage.
+
+histogram layout fact:
+  shared by layout assignment, layout validation, and vmi-to-vpto.
+  Example: dhist requires contiguous Nxui8 source, contiguous b8 mask, and
+  contiguous 256xui16 acc/result. chist uses the same layout fact but also
+  requires a target capability that classifies CHISTv2 cumulative range
+  semantics.
 
 layout materialization support:
   shared by layout validation, vmi-to-vpto, and helper-based optimizations.
@@ -670,6 +680,15 @@ ordinary store:
 
 group_store:
   source request group_slots(G,K)
+
+dhist:
+  acc/result request contiguous 256xui16
+  source request contiguous Nxui8
+  mask request contiguous b8
+
+chist:
+  same layout requests as dhist
+  diagnostic unless CHISTv2 cumulative range semantics are classified
 ```
 
 Baseline assignment does not perform consumer-driven adoption for performance.
@@ -679,8 +698,8 @@ use.
 
 ```text
 natural layout producer:
-  extf/truncf, group_reduce, group_slot_load, group_load when the op itself
-  carries a layout-producing contract
+  extf/truncf, group_reduce, group_slot_load, group_load, dhist/chist when the
+  op itself carries a layout-producing contract
 
 layout equality producer:
   dense add/mul/select and CFG-carried values tie operands/results but do not
@@ -754,6 +773,14 @@ buildMaskRequests:
   masked_store requests source layout, mask layout, and store predicate
   granularity explicitly
 
+buildHistogramRequests:
+  dhist -> acc/result contiguous 256xui16, source contiguous Nxui8,
+           mask contiguous b8
+  chist -> same layout requests, plus target capability diagnostic until
+           CHISTv2 high-range semantics are classified
+  do not create group_slots or group_reduce requests; histogram result bins are
+  selected by source values, not by lane/group position
+
 buildControlFlowRequests:
   region yields, branch operands, loop iter_args, call operands, and returns
   create equality requests on the carried VMI layout variable
@@ -797,6 +824,7 @@ fixed-layout producers:
   extf/truncf physical conversion layouts
   group_load block-fragment layouts
   group_reduce result group_slots
+  dhist/chist result contiguous 256xui16 and source/mask contiguous b8 contract
   masked_load when the physical memory-safety proof fixes a full-read lowering
 ```
 
@@ -953,6 +981,20 @@ vmi-to-vpto contract:
   group_slots layout.  It must not walk to the load/group_load producer to
   decide parity versus block8, row-local versus packed slots, or static versus
   dynamic mask generation.
+```
+
+```text
+case family                     builder / owner             assignment artifact
+3.56 full distribution hist     buildHistogramRequests      contiguous src/mask/acc/result
+3.57 cumulative hist boundary   buildHistogramRequests      capability diagnostic or classified path
+
+vmi-to-vpto contract:
+  lower dhist from the current op and assigned layouts by carrying two physical
+  accumulator parts for bins 0..127 and 128..255.  It must not expose the VPTO
+  #bin range selector on the VMI surface and must not model histogram as
+  group_reduce.  chist remains rejected until the target records whether the
+  high-range cumulative result is global or range-local and, for range-local
+  behavior, until low-total materialization is explicit.
 ```
 
 ```text
@@ -1169,6 +1211,19 @@ group_reduce_add{f|i}, lowering=full_chunk_reduce_row_local:
   target lowering emits per-row vcgadd plus vcadd; the current prototype uses
   the existing row-local VCADD/VADD/VSEL sequence while preserving the same
   group_slots(G, slots=1) value contract
+
+dhist, lowering=full_256bin_histogram:
+  consumes contiguous Nxui8 source and contiguous b8 mask
+  consumes/produces contiguous 256xui16 accumulator/result
+  physical result parts are [bins 0..127, bins 128..255]
+  emits one low-range and one high-range histogram update for each 256-lane
+  source chunk
+  final partial source chunks require an explicit valid-lane b8 mask
+
+chist, lowering=capability_gated_cumulative_histogram:
+  uses the same layout shape as dhist
+  rejects until target capability classifies CHISTv2 high-range cumulative
+  semantics and any required low-total correction materialization is explicit
 
 group_slot_load, lowering=group_slot_load_slots8_unit_stride:
   result group_slots(G, slots=8)
@@ -1558,6 +1613,11 @@ strided/group-slot memory:
 
 function/control-flow:
   3.12, 3.20, 3.22, 3.25.1, 3.42, 3.43
+
+histogram:
+  3.56 positive dhist layout/lowering and simulator case when backend support
+  is enabled
+  3.57 diagnostic chist case until CHISTv2 range semantics are classified
 ```
 
 Aggregate catalog headings are covered through their endpoint subcases:
@@ -1607,6 +1667,8 @@ repository evidence:
   golden.py, and compare.py
   latest broad VMI runtime sweep passed: PASS=47 FAIL=0
   latest full VMI lit sweep passed: 350/350
+  this historical sweep predates 3.56/3.57; histogram endpoints require new
+  lit/SIM or diagnostic tests before they can be counted as implemented
 ```
 
 Current checked-in coverage for 3.3 dense f8->f32->compute->f8:
@@ -2208,23 +2270,34 @@ internal function argument boundary materialization
 public ABI diagnostic
 ```
 
+### Slice 7: Histogram
+
+```text
+3.56 full 256-bin dhist logical op
+3.57 chist semantic capability diagnostic
+```
+
 ## 13. Completion Checklist
 
 Current evidence for the case-catalog objective:
 
 ```text
-1. every catalog endpoint is mapped in section 6.6 to an assignment owner,
-   assignment artifact, and vmi-to-vpto contract
-2. every SIM-backed positive endpoint is listed in section 11.3 and has a
-   checked-in runtime case directory
-3. every runtime case directory contains kernel.pto, launch.cpp, main.cpp,
-   golden.py, and compare.py
-4. the latest broad VMI runtime sweep passed: PASS=47 FAIL=0
-5. the latest full VMI lit sweep passed: 350/350
-6. every unsupported endpoint listed in section 11.3 has a diagnostic lit test
+1. every pre-histogram catalog endpoint is mapped in section 6.6 to an
+   assignment owner, assignment artifact, and vmi-to-vpto contract
+2. every pre-histogram SIM-backed positive endpoint is listed in section 11.3
+   and has a checked-in runtime case directory
+3. every existing runtime case directory contains kernel.pto, launch.cpp,
+   main.cpp, golden.py, and compare.py
+4. the latest historical broad VMI runtime sweep passed: PASS=47 FAIL=0
+5. the latest historical full VMI lit sweep passed: 350/350
+6. every pre-histogram unsupported endpoint listed in section 11.3 has a
+   diagnostic lit test
 7. vmi-to-vpto decisions are represented by current-op attrs/operands,
    assigned layouts, helper ops, rematerialization, or diagnostics
 8. no separate lowering-plan string attr is emitted or consumed
 9. release docs remain untouched; this is still a design/implementation plan
    under docs/designs
+10. new histogram endpoints 3.56/3.57 are mapped in section 6.6, but their
+    implementation evidence is intentionally pending new lit/SIM or diagnostic
+    tests
 ```

@@ -1905,6 +1905,9 @@ layout-producing conversion:
 
 externally ordered memory:
   load, store, tile_read, tile_write
+
+value-indexed accumulation:
+  dhist, chist
 ```
 
 Per-part elementwise ops are straightforward only when all operands/results already share the same assigned layout:
@@ -2219,6 +2222,17 @@ pto.vmi.tile_read
 pto.vmi.tile_write
 ```
 
+Value-indexed accumulation：
+
+```text
+pto.vmi.dhist
+pto.vmi.chist
+```
+
+`pto.vmi.dhist` is a first-stage semantic op when histogram support is enabled.
+`pto.vmi.chist` may share the surface verifier, but its final lowering must be
+gated until the target CHISTv2 high-range cumulative semantics are verified.
+
 Current implementation scope note:
 
 ```text
@@ -2297,6 +2311,18 @@ Memory op verifier:
 ```text
 load/tile_read memory element type must match result VMI data element type when the source is PtrType or MemRefType
 store/tile_write memory element type must match stored VMI data element type when the destination is PtrType or MemRefType
+```
+
+Histogram op verifier:
+
+```text
+dhist/chist acc type must be !pto.vmi.vreg<256xui16>
+dhist/chist result type must match acc type
+source type must be !pto.vmi.vreg<Nxui8>
+mask logical lane count must match source logical lane count
+surface mask may be pred; after layout assignment it must be b8 contiguous
+source/result/acc must not carry layout before vmi-layout-assignment
+layout-assigned dhist/chist requires contiguous source, mask, acc, and result
 ```
 
 `shuffle` verifier：
@@ -3833,6 +3859,87 @@ vmi.tile_read / vmi.tile_write, current direct full-footprint path:
     any path that would expose padding lanes or reorder externally visible memory
 ```
 
+Histogram lowering：
+
+```text
+vmi.dhist semantics:
+  source lanes are ui8 samples
+  mask selects active source lanes
+  acc/result are complete logical 256-bin ui16 histograms
+  result[b] = acc[b] + count(active source lanes whose value equals b)
+
+layout assignment:
+  source layout = contiguous
+  mask layout = contiguous, granularity b8
+  acc/result layout = contiguous !pto.vmi.vreg<256xui16>
+
+physicalization:
+  acc/result physical arity is 2 because 256xui16 is 512B
+  part0 represents logical bins 0..127
+  part1 represents logical bins 128..255
+```
+
+`vmi-to-vpto` lowering for `pto.vmi.dhist` is local and deterministic from the
+op and assigned types:
+
+```text
+lo = converted acc part0
+hi = converted acc part1
+
+for each converted source physical chunk c in logical order:
+  chunk_mask = converted b8 mask chunk c
+
+  if source chunk c contains padding lanes because N is not a multiple of 256:
+    valid = pto.pge/plt_b8 prefix mask for the valid logical lanes in this chunk
+    chunk_mask = pto.pand chunk_mask, valid
+
+  lo = pto.dhistv2 lo, src_c, chunk_mask, #bin=0
+  hi = pto.dhistv2 hi, src_c, chunk_mask, #bin=1
+
+return physical result parts [lo, hi]
+```
+
+Required preflight:
+
+```text
+acc/result element type is ui16 and logical lane count is exactly 256
+source element type is ui8
+source and mask logical lane counts match
+source/mask are contiguous
+mask granularity is b8
+source physical chunks are 256-lane ui8 chunks; final partial chunk is allowed
+only when the lowering can construct the valid-lane prefix mask
+```
+
+Diagnostics:
+
+```text
+VMI-UNSUPPORTED: pto.vmi.dhist requires contiguous ui8 source, b8 mask, and
+contiguous 256xui16 accumulator/result
+
+VMI-UNSUPPORTED: pto.vmi.dhist final partial source chunk requires valid-lane
+b8 mask materialization
+```
+
+`pto.vmi.chist` has the same verifier and assignment requirements, but final
+lowering is capability-gated:
+
+```text
+if CHISTv2 high-range semantics are verified as global cumulative:
+  replace the two pto.dhistv2 calls above with pto.chistv2 calls
+
+elif CHISTv2 high-range semantics are verified as range-local cumulative:
+  lower low/high pto.chistv2 and add the low-half total count to every high-half bin,
+  but only after low-total materialization and broadcast support is explicit
+
+else:
+  VMI-UNSUPPORTED: pto.vmi.chist requires a verified CHISTv2 range semantics contract
+```
+
+Do not classify histogram as `group_reduce`.  Its result location is selected
+by source values, not by lane/group position, and its low/high split is caused
+by the physical `128xui16` VPTO result width.
+
 Final hard gate：
 
 ```text
@@ -3895,6 +4002,12 @@ Slice 4 完成条件：
 11. Same-family mask logic ops lower through the physical mask granularity instead of assuming b32 masks.
     Covered by vmi_to_vpto_mask_logic.pto for mask_and/mask_or/mask_xor/mask_not on b32 masks produced by
     cmpf and on direct b8/b16 mask operands.
+12. `pto.vmi.dhist` lowers one logical 256-bin histogram into two VPTO low/high
+    bin-range histogram accumulator chains, and tail source chunks are masked
+    with a valid-lane b8 prefix. `pto.vmi.chist` is rejected until the target
+    CHISTv2 cumulative range semantics are classified.
+    Covered by vmi_to_vpto_dhist.pto, vmi_to_vpto_dhist_tail_mask.pto, and
+    vmi_to_vpto_chist_semantics_invalid.pto.
 ```
 
 ## 7. Slice 5: Tile Memory And Padding
@@ -4075,6 +4188,7 @@ currently routed through the registry:
   supported source/result layout conversion pairs
   supported b8/b16/b32 mask granularity conversion pairs
   pto.vmi.channel_split/channel_merge supported channel count
+  pto.vmi.dhist direct target support and pto.vmi.chist cumulative range semantics classification
 
 still legacy helper-based and should migrate into the registry as follow-up:
   full layout materialization plans and padding-safety checks
@@ -4132,6 +4246,9 @@ vmi_to_vpto_deinterleaved2.mlir
 vmi_to_vpto_deinterleaved4.mlir
 vmi_to_vpto_compaction_deint_invalid.mlir
 vmi_to_vpto_non_full_tile.mlir
+vmi_to_vpto_dhist.mlir
+vmi_to_vpto_dhist_tail_mask.mlir
+vmi_to_vpto_chist_semantics_invalid.mlir
 vmi_tile_read_padding.mlir
 vmi_tile_write_mask.mlir
 vmi_pipeline_hard_gates.mlir
