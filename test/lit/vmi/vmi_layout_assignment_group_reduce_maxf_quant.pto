@@ -1,0 +1,78 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+
+module {
+  func.func @vmi_layout_assignment_group_reduce_maxf_quant(
+      %src: !pto.ptr<f32, ub>,
+      %scale_out: !pto.ptr<f32, ub>,
+      %out8: !pto.ptr<f8E4M3FN, ub>,
+      %off: index) {
+    %c8 = arith.constant 8 : index
+    %c256 = arith.constant 256 : index
+    %eps = arith.constant 1.000000e-04 : f32
+    %fp8_max = arith.constant 4.480000e+02 : f32
+    %mask = pto.vmi.create_mask %c256 : index -> !pto.vmi.mask<256xpred>
+    %x = pto.vmi.load %src[%off] : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
+    %abs = pto.vmi.absf %x : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+    %amax_raw = pto.vmi.group_reduce_maxf %abs, %mask {num_groups = 2}
+        : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred>
+        -> !pto.vmi.vreg<256xf32>
+    %eps2 = pto.vmi.broadcast %eps : f32 -> !pto.vmi.vreg<256xf32>
+    %amax = pto.vmi.maxf %amax_raw, %eps2
+        : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
+        -> !pto.vmi.vreg<256xf32>
+    %fp8_max2 = pto.vmi.broadcast %fp8_max : f32 -> !pto.vmi.vreg<256xf32>
+    %scale = pto.vmi.divf %amax, %fp8_max2
+        : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
+        -> !pto.vmi.vreg<256xf32>
+    pto.vmi.group_store %scale, %scale_out[%off], %c8 {num_groups = 2}
+        : !pto.vmi.vreg<256xf32>, !pto.ptr<f32, ub>
+    %scale_vec = pto.vmi.group_broadcast %scale {num_groups = 2}
+        : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+    %q = pto.vmi.divf %x, %scale_vec
+        : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
+        -> !pto.vmi.vreg<256xf32>
+    %q8 = pto.vmi.truncf %q
+        : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+    pto.vmi.store %q8, %out8[%off]
+        : !pto.vmi.vreg<256xf8E4M3FN>, !pto.ptr<f8E4M3FN, ub>
+    return
+  }
+}
+
+// ASSIGN-LABEL: func.func @vmi_layout_assignment_group_reduce_maxf_quant(
+// ASSIGN: %[[X:.*]] = pto.vmi.load
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[ABS:.*]] = pto.vmi.absf %[[X]]
+// ASSIGN: %[[AMAX_RAW:.*]] = pto.vmi.group_reduce_maxf %[[ABS]]
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 2, slots = 1>>
+// ASSIGN: %[[SCALE:.*]] = pto.vmi.divf
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 2, slots = 1>>
+// ASSIGN: pto.vmi.group_store %[[SCALE]]
+// ASSIGN: %[[SCALE_VEC:.*]] = pto.vmi.group_broadcast %[[SCALE]]
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[Q:.*]] = pto.vmi.divf %[[X]], %[[SCALE_VEC]]
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[Q_SPLIT:.*]] = pto.vmi.ensure_layout %[[Q]]
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
+// ASSIGN: %[[Q8:.*]] = pto.vmi.truncf %[[Q_SPLIT]]
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
+
+// LOWER-LABEL: func.func @vmi_layout_assignment_group_reduce_maxf_quant(
+// LOWER: pto.vcgmax
+// LOWER: pto.vmax
+// LOWER: pto.vsel
+// LOWER: pto.vdiv
+// LOWER: pto.vdintlv
+// LOWER: pto.vcvt
+// LOWER-NOT: pto.vmi.
+// LOWER-NOT: !pto.vmi.
+// LOWER-NOT: unrealized_conversion_cast

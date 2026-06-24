@@ -1,10 +1,12 @@
 // Copyright (c) 2026 Huawei Technologies Co., Ltd.
-// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
-// CANN Open Software License Agreement Version 2.0 (the "License").
-// Please refer to the License for details. You may not use this file except in compliance with the License.
-// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
-// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
-// See LICENSE in the root of the software repository for the full text of the License.
+// This program is free software, you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). Please refer to the License for details. You may not use
+// this file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON
+// AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+// FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+// for the full text of the License.
 
 //===- PTOValidateVMIIR.cpp - VMI boundary verifier ----------------------===//
 //===----------------------------------------------------------------------===//
@@ -50,9 +52,9 @@ bool containsVMIOrPhysicalType(Type type) {
     return true;
 
   if (auto functionType = dyn_cast<FunctionType>(type)) {
-    return llvm::any_of(functionType.getInputs(), [](Type input) {
-             return containsVMIOrPhysicalType(input);
-           }) ||
+    return llvm::any_of(
+               functionType.getInputs(),
+               [](Type input) { return containsVMIOrPhysicalType(input); }) ||
            llvm::any_of(functionType.getResults(), [](Type result) {
              return containsVMIOrPhysicalType(result);
            });
@@ -110,8 +112,8 @@ bool isVMIHelperOp(Operation *op) {
   StringRef name = op->getName().getStringRef();
   return name == "pto.vmi.ensure_layout" ||
          name == "pto.vmi.ensure_mask_layout" ||
-         name == "pto.vmi.ensure_mask_granularity" ||
-         name == "pto.vmi.pack" || name == "pto.vmi.unpack";
+         name == "pto.vmi.ensure_mask_granularity" || name == "pto.vmi.pack" ||
+         name == "pto.vmi.unpack";
 }
 
 bool isVMILayoutHelperOp(Operation *op) {
@@ -155,8 +157,8 @@ void mirrorDiagnostic(llvm::raw_ostream *diagOS, Twine message) {
 
 LogicalResult emitInvariant(Operation *op, llvm::raw_ostream *diagOS,
                             Twine message) {
-  InFlightDiagnostic diag =
-      op->emitError() << kVMIDiagPassInvariantPrefix << message;
+  InFlightDiagnostic diag = op->emitError()
+                            << kVMIDiagPassInvariantPrefix << message;
   (void)diag;
   mirrorDiagnostic(diagOS, Twine(kVMIDiagPassInvariantPrefix) + message);
   return failure();
@@ -164,8 +166,8 @@ LogicalResult emitInvariant(Operation *op, llvm::raw_ostream *diagOS,
 
 LogicalResult emitLayoutContract(Operation *op, llvm::raw_ostream *diagOS,
                                  Twine message) {
-  InFlightDiagnostic diag =
-      op->emitError() << kVMIDiagLayoutContractPrefix << message;
+  InFlightDiagnostic diag = op->emitError()
+                            << kVMIDiagLayoutContractPrefix << message;
   (void)diag;
   mirrorDiagnostic(diagOS, Twine(kVMIDiagLayoutContractPrefix) + message);
   return failure();
@@ -198,17 +200,15 @@ LogicalResult emitLayoutSupportContract(Operation *op,
   return emitLayoutContract(op, diagOS, text);
 }
 
-LogicalResult emitHelperMaterializationContract(Operation *helper,
-                                                Type sourceType,
-                                                Type resultType,
-                                                StringRef helperName,
-                                                StringRef reason,
-                                                llvm::raw_ostream *diagOS) {
+LogicalResult
+emitHelperMaterializationContract(Operation *helper, Type sourceType,
+                                  Type resultType, StringRef helperName,
+                                  StringRef reason, llvm::raw_ostream *diagOS) {
   auto emitFallback = [&]() {
     return emitLayoutContract(
         helper, diagOS,
-        Twine(helperName) + " has no registered materialization support: " +
-            reason);
+        Twine(helperName) +
+            " has no registered materialization support: " + reason);
   };
 
   if (helper->getNumResults() != 1 || !helper->getResult(0).hasOneUse())
@@ -223,8 +223,8 @@ LogicalResult emitHelperMaterializationContract(Operation *helper,
      << helperName << " has no registered materialization support: " << reason;
   os.flush();
 
-  InFlightDiagnostic diag =
-      requester->emitError() << kVMIDiagLayoutContractPrefix << message;
+  InFlightDiagnostic diag = requester->emitError()
+                            << kVMIDiagLayoutContractPrefix << message;
   diag.attachNote(helper->getLoc())
       << "failed helper conversion " << sourceType << " -> " << resultType
       << " (" << reason << ")";
@@ -340,8 +340,7 @@ bool isFunctionTypeAttr(Operation *op, NamedAttribute attr) {
   return isa<func::FuncOp>(op) && attr.getName() == "function_type";
 }
 
-LogicalResult verifyNoHiddenVMIAttributeType(Operation *op,
-                                             NamedAttribute attr,
+LogicalResult verifyNoHiddenVMIAttributeType(Operation *op, NamedAttribute attr,
                                              llvm::raw_ostream *diagOS) {
   if (isFunctionTypeAttr(op, attr))
     return success();
@@ -424,10 +423,10 @@ LogicalResult verifyLayoutAssignedOperationTypes(Operation *op,
 }
 
 LogicalResult verifyLayoutHelperSupport(Operation *op,
-                                       llvm::raw_ostream *diagOS);
+                                        llvm::raw_ostream *diagOS);
 
 LogicalResult verifyLayoutSemanticSupport(Operation *op,
-                                         llvm::raw_ostream *diagOS);
+                                          llvm::raw_ostream *diagOS);
 
 LogicalResult verifyOperationBoundary(Operation *op,
                                       llvm::raw_ostream *diagOS) {
@@ -461,7 +460,7 @@ LogicalResult verifyLayoutAssignedOperation(Operation *op,
   if (isVMIHelperOp(op)) {
     if (isVMILayoutHelperOp(op))
       return verifyHelperSupports ? verifyLayoutHelperSupport(op, diagOS)
-                                 : success();
+                                  : success();
     return emitInvariant(
         op, diagOS,
         "VMI pack/unpack helper appears before VMI-to-VPTO physicalization");
@@ -477,15 +476,15 @@ LogicalResult verifyLayoutAssignedOperation(Operation *op,
 }
 
 LogicalResult verifyLayoutHelperSupport(Operation *op,
-                                       llvm::raw_ostream *diagOS) {
+                                        llvm::raw_ostream *diagOS) {
   VMILayoutSupport supports;
 
   if (auto ensure = dyn_cast<VMIEnsureLayoutOp>(op)) {
     auto sourceType = cast<VMIVRegType>(ensure.getSource().getType());
     auto resultType = cast<VMIVRegType>(ensure.getResult().getType());
     std::string reason;
-    if (failed(supports.canMaterializeDataLayout(sourceType, resultType,
-                                                &reason)))
+    if (failed(
+            supports.canMaterializeDataLayout(sourceType, resultType, &reason)))
       return emitHelperMaterializationContract(
           op, sourceType, resultType, "pto.vmi.ensure_layout", reason, diagOS);
     return success();
@@ -495,11 +494,11 @@ LogicalResult verifyLayoutHelperSupport(Operation *op,
     auto sourceType = cast<VMIMaskType>(ensure.getSource().getType());
     auto resultType = cast<VMIMaskType>(ensure.getResult().getType());
     std::string reason;
-    if (failed(supports.canMaterializeMaskLayout(sourceType, resultType,
-                                                &reason)))
-      return emitHelperMaterializationContract(
-          op, sourceType, resultType, "pto.vmi.ensure_mask_layout", reason,
-          diagOS);
+    if (failed(
+            supports.canMaterializeMaskLayout(sourceType, resultType, &reason)))
+      return emitHelperMaterializationContract(op, sourceType, resultType,
+                                               "pto.vmi.ensure_mask_layout",
+                                               reason, diagOS);
     return success();
   }
 
@@ -508,7 +507,7 @@ LogicalResult verifyLayoutHelperSupport(Operation *op,
     auto resultType = cast<VMIMaskType>(ensure.getResult().getType());
     std::string reason;
     if (failed(supports.canMaterializeMaskGranularity(sourceType, resultType,
-                                                     &reason)))
+                                                      &reason)))
       return emitLayoutContract(
           op, diagOS,
           Twine("pto.vmi.ensure_mask_granularity has no registered "
@@ -521,7 +520,7 @@ LogicalResult verifyLayoutHelperSupport(Operation *op,
 }
 
 LogicalResult verifyLayoutSemanticSupport(Operation *op,
-                                         llvm::raw_ostream *diagOS) {
+                                          llvm::raw_ostream *diagOS) {
   VMILayoutSupport supports;
   VMITargetCapabilityRegistry capabilities;
 
@@ -587,7 +586,8 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
       return success();
 
     std::string reason;
-    if (failed(supports.getGroupSlotsStoreSupport(capabilities, store, &reason)))
+    if (failed(
+            supports.getGroupSlotsStoreSupport(capabilities, store, &reason)))
       return emitLayoutSupportContract(
           op, diagOS,
           "pto.vmi.group_store has no registered group_slots layout support",
@@ -602,11 +602,28 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
       return success();
 
     std::string reason;
-    if (failed(supports.getGroupReduceAddFSupport(capabilities, reduce,
-                                                &reason)))
+    if (failed(
+            supports.getGroupReduceAddFSupport(capabilities, reduce, &reason)))
       return emitLayoutSupportContract(
           op, diagOS,
           "pto.vmi.group_reduce_addf has no registered group_slots layout "
+          "support",
+          reason);
+    return success();
+  }
+
+  if (auto reduce = dyn_cast<VMIGroupReduceMaxFOp>(op)) {
+    auto resultType = cast<VMIVRegType>(reduce.getResult().getType());
+    VMILayoutAttr layout = resultType.getLayoutAttr();
+    if (!layout || !layout.isGroupSlots())
+      return success();
+
+    std::string reason;
+    if (failed(
+            supports.getGroupReduceMaxFSupport(capabilities, reduce, &reason)))
+      return emitLayoutSupportContract(
+          op, diagOS,
+          "pto.vmi.group_reduce_maxf has no registered group_slots layout "
           "support",
           reason);
     return success();
@@ -620,7 +637,7 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
 
     std::string reason;
     if (failed(supports.getGroupBroadcastSupport(capabilities, broadcast,
-                                               &reason)))
+                                                 &reason)))
       return emitLayoutSupportContract(
           op, diagOS,
           "pto.vmi.group_broadcast has no registered layout support", reason);
@@ -697,8 +714,9 @@ struct PTOValidateVMILayoutIRPass
 
 } // namespace
 
-LogicalResult mlir::pto::validateVMIProducerBoundaryIR(
-    ModuleOp module, llvm::raw_ostream *diagOS) {
+LogicalResult
+mlir::pto::validateVMIProducerBoundaryIR(ModuleOp module,
+                                         llvm::raw_ostream *diagOS) {
   WalkResult result = module.walk([&](Operation *op) {
     if (failed(verifyOperationBoundary(op, diagOS)))
       return WalkResult::interrupt();
@@ -710,8 +728,7 @@ LogicalResult mlir::pto::validateVMIProducerBoundaryIR(
 LogicalResult mlir::pto::validateVMILayoutAssignedIR(
     ModuleOp module, llvm::raw_ostream *diagOS, bool verifyHelperSupports) {
   WalkResult result = module.walk([&](Operation *op) {
-    if (failed(verifyLayoutAssignedOperation(op, diagOS,
-                                             verifyHelperSupports)))
+    if (failed(verifyLayoutAssignedOperation(op, diagOS, verifyHelperSupports)))
       return WalkResult::interrupt();
     return WalkResult::advance();
   });

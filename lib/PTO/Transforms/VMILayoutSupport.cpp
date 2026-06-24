@@ -313,10 +313,10 @@ getPhysicalLogicalBitFootprint(VMIVRegType type) {
 
 static FailureOr<VMILayoutMaterializationSupport>
 getLayoutMaterializationSupport(VMILayoutAttr sourceLayout,
-                               VMILayoutAttr resultLayout,
-                               std::string *reason) {
-  auto fail = [&](const Twine &message)
-      -> FailureOr<VMILayoutMaterializationSupport> {
+                                VMILayoutAttr resultLayout,
+                                std::string *reason) {
+  auto fail =
+      [&](const Twine &message) -> FailureOr<VMILayoutMaterializationSupport> {
     if (reason)
       *reason = message.str();
     return failure();
@@ -341,8 +341,9 @@ getLayoutMaterializationSupport(VMILayoutAttr sourceLayout,
 } // namespace
 
 FailureOr<VMIGroupReduceLayoutFact>
-VMILayoutSupport::getPreferredGroupReduceLayoutFact(
-    VMIVRegType sourceType, int64_t numGroups, std::string *reason) const {
+VMILayoutSupport::getPreferredGroupReduceLayoutFact(VMIVRegType sourceType,
+                                                    int64_t numGroups,
+                                                    std::string *reason) const {
   auto fail = [&](const Twine &message) -> FailureOr<VMIGroupReduceLayoutFact> {
     if (reason)
       *reason = message.str();
@@ -407,10 +408,8 @@ VMILayoutSupport::getPreferredGroupReduceLayoutFact(
               "2*VLaneElems, 4*VLaneElems, or full physical chunk multiples");
 }
 
-FailureOr<VMICastLayoutFact>
-VMILayoutSupport::getPreferredCastLayoutFact(VMIVRegType sourceType,
-                                             VMIVRegType resultType,
-                                             std::string *reason) const {
+FailureOr<VMICastLayoutFact> VMILayoutSupport::getPreferredCastLayoutFact(
+    VMIVRegType sourceType, VMIVRegType resultType, std::string *reason) const {
   auto fail = [&](const Twine &message) -> FailureOr<VMICastLayoutFact> {
     if (reason)
       *reason = message.str();
@@ -422,7 +421,8 @@ VMILayoutSupport::getPreferredCastLayoutFact(VMIVRegType sourceType,
   unsigned resultBits =
       pto::getPTOStorageElemBitWidth(resultType.getElementType());
   if (sourceBits == 0 || resultBits == 0)
-    return fail("requires source/result element types with known storage width");
+    return fail(
+        "requires source/result element types with known storage width");
   if (sourceType.getElementCount() != resultType.getElementCount())
     return fail("requires source/result lane count to match");
 
@@ -472,9 +472,9 @@ VMILayoutSupport::getPreferredCastLayoutFact(VMIVRegType sourceType,
 
 FailureOr<VMIContiguousStoreSupport>
 VMILayoutSupport::getContiguousStoreSupport(VMIVRegType valueType,
-                                                 std::string *reason) const {
-  auto fail = [&](const Twine &message)
-      -> FailureOr<VMIContiguousStoreSupport> {
+                                            std::string *reason) const {
+  auto fail =
+      [&](const Twine &message) -> FailureOr<VMIContiguousStoreSupport> {
     if (reason)
       *reason = message.str();
     return failure();
@@ -530,10 +530,9 @@ LogicalResult VMILayoutSupport::canFoldContiguousStoreMaterialization(
 
 FailureOr<VMILayoutMaterializationSupport>
 VMILayoutSupport::getDataLayoutMaterializationSupport(
-    VMIVRegType sourceType, VMIVRegType resultType,
-    std::string *reason) const {
-  auto fail = [&](const Twine &message)
-      -> FailureOr<VMILayoutMaterializationSupport> {
+    VMIVRegType sourceType, VMIVRegType resultType, std::string *reason) const {
+  auto fail =
+      [&](const Twine &message) -> FailureOr<VMILayoutMaterializationSupport> {
     if (reason)
       *reason = message.str();
     return failure();
@@ -550,29 +549,25 @@ VMILayoutSupport::getDataLayoutMaterializationSupport(
       getLayoutMaterializationSupport(sourceLayout, resultLayout, reason);
   if (failed(support))
     return failure();
-  if (failed(checkLayoutMaterializationShape(sourceType, resultType,
-                                             sourceLayout, resultLayout,
-                                             reason)))
+  if (failed(checkLayoutMaterializationShape(
+          sourceType, resultType, sourceLayout, resultLayout, reason)))
     return failure();
   return support;
 }
 
-LogicalResult
-VMILayoutSupport::canMaterializeDataLayout(VMIVRegType sourceType,
-                                          VMIVRegType resultType,
-                                          std::string *reason) const {
-  if (failed(getDataLayoutMaterializationSupport(sourceType, resultType,
-                                                 reason)))
+LogicalResult VMILayoutSupport::canMaterializeDataLayout(
+    VMIVRegType sourceType, VMIVRegType resultType, std::string *reason) const {
+  if (failed(
+          getDataLayoutMaterializationSupport(sourceType, resultType, reason)))
     return failure();
   return success();
 }
 
 FailureOr<VMILayoutMaterializationSupport>
 VMILayoutSupport::getMaskLayoutMaterializationSupport(
-    VMIMaskType sourceType, VMIMaskType resultType,
-    std::string *reason) const {
-  auto fail = [&](const Twine &message)
-      -> FailureOr<VMILayoutMaterializationSupport> {
+    VMIMaskType sourceType, VMIMaskType resultType, std::string *reason) const {
+  auto fail =
+      [&](const Twine &message) -> FailureOr<VMILayoutMaterializationSupport> {
     if (reason)
       *reason = message.str();
     return failure();
@@ -589,27 +584,23 @@ VMILayoutSupport::getMaskLayoutMaterializationSupport(
       getLayoutMaterializationSupport(sourceLayout, resultLayout, reason);
   if (failed(support))
     return failure();
-  if (failed(checkLayoutMaterializationShape(sourceType, resultType,
-                                             sourceLayout, resultLayout,
-                                             reason)))
+  if (failed(checkLayoutMaterializationShape(
+          sourceType, resultType, sourceLayout, resultLayout, reason)))
     return failure();
   return support;
 }
 
-LogicalResult
-VMILayoutSupport::canMaterializeMaskLayout(VMIMaskType sourceType,
-                                          VMIMaskType resultType,
-                                          std::string *reason) const {
-  if (failed(getMaskLayoutMaterializationSupport(sourceType, resultType,
-                                                 reason)))
+LogicalResult VMILayoutSupport::canMaterializeMaskLayout(
+    VMIMaskType sourceType, VMIMaskType resultType, std::string *reason) const {
+  if (failed(
+          getMaskLayoutMaterializationSupport(sourceType, resultType, reason)))
     return failure();
   return success();
 }
 
 FailureOr<VMIMaskGranularityMaterializationSupport>
 VMILayoutSupport::getMaskGranularityMaterializationSupport(
-    VMIMaskType sourceType, VMIMaskType resultType,
-    std::string *reason) const {
+    VMIMaskType sourceType, VMIMaskType resultType, std::string *reason) const {
   auto fail = [&](const Twine &message)
       -> FailureOr<VMIMaskGranularityMaterializationSupport> {
     if (reason)
@@ -633,16 +624,14 @@ VMILayoutSupport::getMaskGranularityMaterializationSupport(
 }
 
 LogicalResult VMILayoutSupport::canMaterializeMaskGranularity(
-    VMIMaskType sourceType, VMIMaskType resultType,
-    std::string *reason) const {
+    VMIMaskType sourceType, VMIMaskType resultType, std::string *reason) const {
   if (failed(getMaskGranularityMaterializationSupport(sourceType, resultType,
-                                                     reason)))
+                                                      reason)))
     return failure();
   return success();
 }
 
-FailureOr<VMIGroupSlotLoadSupport>
-VMILayoutSupport::getGroupSlotLoadSupport(
+FailureOr<VMIGroupSlotLoadSupport> VMILayoutSupport::getGroupSlotLoadSupport(
     const VMITargetCapabilityRegistry &capabilities, VMIGroupSlotLoadOp op,
     std::string *reason) const {
   auto fail = [&](const Twine &message) -> FailureOr<VMIGroupSlotLoadSupport> {
@@ -711,9 +700,8 @@ FailureOr<VMIGroupLoadSupport> VMILayoutSupport::getGroupLoadSupport(
       !resultType.getElementType().isF32())
     return fail("requires deinterleaved block8 f32 result layout");
 
-  FailureOr<int64_t> groupSize =
-      getGroupSizeFromNumGroups(resultType, op.getNumGroupsAttr().getInt(),
-                                reason);
+  FailureOr<int64_t> groupSize = getGroupSizeFromNumGroups(
+      resultType, op.getNumGroupsAttr().getInt(), reason);
   if (failed(groupSize))
     return failure();
 
@@ -815,13 +803,11 @@ VMILayoutSupport::getGroupSlotsStoreSupport(
               "unit-stride slots=8");
 }
 
-FailureOr<VMIGroupReduceAddFSupport>
-getGroupReduceAddSupportImpl(const VMITargetCapabilityRegistry &capabilities,
-                            Operation *op, VMIVRegType sourceType,
-                            VMIMaskType maskType, VMIVRegType resultType,
-                            int64_t numGroups, bool requiresReassoc,
-                            VMIReductionKind reductionKind,
-                            std::string *reason) {
+FailureOr<VMIGroupReduceAddFSupport> getGroupReduceAddSupportImpl(
+    const VMITargetCapabilityRegistry &capabilities, Operation *op,
+    VMIVRegType sourceType, VMIMaskType maskType, VMIVRegType resultType,
+    int64_t numGroups, bool requiresReassoc, VMIReductionKind reductionKind,
+    std::string *reason) {
   auto fail =
       [&](const Twine &message) -> FailureOr<VMIGroupReduceAddFSupport> {
     if (reason)
@@ -845,9 +831,9 @@ getGroupReduceAddSupportImpl(const VMITargetCapabilityRegistry &capabilities,
         getGroupSizeFromNumGroups(sourceType, numGroups, reason);
     FailureOr<int64_t> lanesPerPart =
         getDataLanesPerPart(sourceType.getElementType());
-    int64_t vlaneElems =
-        succeeded(lanesPerPart) && *lanesPerPart % 8 == 0 ? *lanesPerPart / 8
-                                                          : -1;
+    int64_t vlaneElems = succeeded(lanesPerPart) && *lanesPerPart % 8 == 0
+                             ? *lanesPerPart / 8
+                             : -1;
     if (succeeded(groupSize) && resultLayout.getSlots() <= 0 &&
         (*groupSize != vlaneElems && *groupSize != 2 * vlaneElems &&
          *groupSize != 4 * vlaneElems))
@@ -933,10 +919,10 @@ getGroupReduceAddSupportImpl(const VMITargetCapabilityRegistry &capabilities,
       return fail("two-vlane group_reduce_add requires matching mask layout "
                   "deinterleaved=2 with the same block_elems");
     int64_t expectedResultArity = ceilDivNonNegative(numGroups, 8);
-    if (*resultArity != expectedResultArity ||
-        *sourceArity != *resultArity * 2)
-      return fail("two-vlane group_reduce_add requires two source/mask parts per "
-                  "result part");
+    if (*resultArity != expectedResultArity || *sourceArity != *resultArity * 2)
+      return fail(
+          "two-vlane group_reduce_add requires two source/mask parts per "
+          "result part");
     return VMIGroupReduceAddFSupport{
         VMIGroupReduceAddFSupportKind::TwoVLaneDeinterleaved2VcgaddVadd};
   }
@@ -952,10 +938,10 @@ getGroupReduceAddSupportImpl(const VMITargetCapabilityRegistry &capabilities,
       return fail("four-vlane group_reduce_add requires matching mask layout "
                   "deinterleaved=4 with the same block_elems");
     int64_t expectedResultArity = ceilDivNonNegative(numGroups, 8);
-    if (*resultArity != expectedResultArity ||
-        *sourceArity != *resultArity * 4)
-      return fail("four-vlane group_reduce_add requires four source/mask parts per "
-                  "result part");
+    if (*resultArity != expectedResultArity || *sourceArity != *resultArity * 4)
+      return fail(
+          "four-vlane group_reduce_add requires four source/mask parts per "
+          "result part");
     return VMIGroupReduceAddFSupport{
         VMIGroupReduceAddFSupportKind::FourVLaneDeinterleaved4VcgaddTree};
   }
@@ -969,7 +955,8 @@ VMILayoutSupport::getGroupReduceAddFSupport(
     const VMITargetCapabilityRegistry &capabilities, VMIGroupReduceAddFOp op,
     std::string *reason) const {
   return getGroupReduceAddSupportImpl(
-      capabilities, op.getOperation(), cast<VMIVRegType>(op.getSource().getType()),
+      capabilities, op.getOperation(),
+      cast<VMIVRegType>(op.getSource().getType()),
       cast<VMIMaskType>(op.getMask().getType()),
       cast<VMIVRegType>(op.getResult().getType()),
       op.getNumGroupsAttr().getInt(), /*requiresReassoc=*/true,
@@ -977,21 +964,43 @@ VMILayoutSupport::getGroupReduceAddFSupport(
 }
 
 FailureOr<VMIGroupReduceAddFSupport>
+VMILayoutSupport::getGroupReduceMaxFSupport(
+    const VMITargetCapabilityRegistry &capabilities, VMIGroupReduceMaxFOp op,
+    std::string *reason) const {
+  return getGroupReduceAddSupportImpl(
+      capabilities, op.getOperation(),
+      cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIMaskType>(op.getMask().getType()),
+      cast<VMIVRegType>(op.getResult().getType()),
+      op.getNumGroupsAttr().getInt(), /*requiresReassoc=*/false,
+      VMIReductionKind::GroupMaxF, reason);
+}
+
+FailureOr<VMIGroupReduceAddFSupport>
 VMILayoutSupport::getGroupReduceAddISupport(
     const VMITargetCapabilityRegistry &capabilities, VMIGroupReduceAddIOp op,
     std::string *reason) const {
   return getGroupReduceAddSupportImpl(
-      capabilities, op.getOperation(), cast<VMIVRegType>(op.getSource().getType()),
+      capabilities, op.getOperation(),
+      cast<VMIVRegType>(op.getSource().getType()),
       cast<VMIMaskType>(op.getMask().getType()),
       cast<VMIVRegType>(op.getResult().getType()),
       op.getNumGroupsAttr().getInt(), /*requiresReassoc=*/false,
       VMIReductionKind::GroupAddI, reason);
 }
 
-FailureOr<VMIGroupBroadcastSupport>
-VMILayoutSupport::getGroupBroadcastSupport(
+FailureOr<VMIGroupBroadcastSupport> VMILayoutSupport::getGroupBroadcastSupport(
     const VMITargetCapabilityRegistry &capabilities, VMIGroupBroadcastOp op,
     std::string *reason) const {
+  return getGroupBroadcastSupport(capabilities,
+                                  cast<VMIVRegType>(op.getSource().getType()),
+                                  cast<VMIVRegType>(op.getResult().getType()),
+                                  op.getNumGroupsAttr().getInt(), reason);
+}
+
+FailureOr<VMIGroupBroadcastSupport> VMILayoutSupport::getGroupBroadcastSupport(
+    const VMITargetCapabilityRegistry &capabilities, VMIVRegType sourceType,
+    VMIVRegType resultType, int64_t numGroups, std::string *reason) const {
   (void)capabilities;
   auto fail = [&](const Twine &message) -> FailureOr<VMIGroupBroadcastSupport> {
     if (reason)
@@ -999,15 +1008,12 @@ VMILayoutSupport::getGroupBroadcastSupport(
     return failure();
   };
 
-  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
-  auto resultType = cast<VMIVRegType>(op.getResult().getType());
   if (sourceType.getElementType() != resultType.getElementType() ||
       sourceType.getElementCount() != resultType.getElementCount())
     return fail("requires source/result shape and element type to match");
 
   VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
   VMILayoutAttr resultLayout = resultType.getLayoutAttr();
-  int64_t numGroups = op.getNumGroupsAttr().getInt();
   if (!sourceLayout || !resultLayout)
     return fail("requires assigned source/result layouts");
   if (!sourceLayout.isGroupSlots() || sourceLayout.getNumGroups() != numGroups)
@@ -1068,8 +1074,7 @@ VMILayoutSupport::getGroupBroadcastSupport(
 }
 
 FailureOr<VMITruncFSupport>
-VMILayoutSupport::getTruncFSupport(VMITruncFOp op,
-                                        std::string *reason) const {
+VMILayoutSupport::getTruncFSupport(VMITruncFOp op, std::string *reason) const {
   auto fail = [&](const Twine &message) -> FailureOr<VMITruncFSupport> {
     if (reason)
       *reason = message.str();
@@ -1126,8 +1131,7 @@ VMILayoutSupport::getTruncFSupport(VMITruncFOp op,
 }
 
 FailureOr<VMIExtFSupport>
-VMILayoutSupport::getExtFSupport(VMIExtFOp op,
-                                      std::string *reason) const {
+VMILayoutSupport::getExtFSupport(VMIExtFOp op, std::string *reason) const {
   auto fail = [&](const Twine &message) -> FailureOr<VMIExtFSupport> {
     if (reason)
       *reason = message.str();
@@ -1159,13 +1163,11 @@ VMILayoutSupport::getExtFSupport(VMIExtFOp op,
   if (fact->kind == VMICastLayoutKind::Widen2x &&
       resultLayout.getFactor() == fact->factor &&
       *resultArity == fact->factor * *sourceArity)
-    return VMIExtFSupport{
-        VMIExtFSupportKind::ContiguousF16ToDeinterleaved2F32};
+    return VMIExtFSupport{VMIExtFSupportKind::ContiguousF16ToDeinterleaved2F32};
   if (fact->kind == VMICastLayoutKind::Widen4x &&
       resultLayout.getFactor() == fact->factor &&
       *resultArity == fact->factor * *sourceArity)
-    return VMIExtFSupport{
-        VMIExtFSupportKind::ContiguousF8ToDeinterleaved4F32};
+    return VMIExtFSupport{VMIExtFSupportKind::ContiguousF8ToDeinterleaved4F32};
 
   return fail("unsupported extf source element width, result factor, or "
               "physical arity");
@@ -1173,7 +1175,7 @@ VMILayoutSupport::getExtFSupport(VMIExtFOp op,
 
 template <typename OpT>
 static FailureOr<VMIExtISupport> getExtISupportImpl(OpT op,
-                                                  std::string *reason) {
+                                                    std::string *reason) {
   auto fail = [&](const Twine &message) -> FailureOr<VMIExtISupport> {
     if (reason)
       *reason = message.str();
@@ -1207,33 +1209,28 @@ static FailureOr<VMIExtISupport> getExtISupportImpl(OpT op,
   if (fact->kind == VMICastLayoutKind::Widen2x &&
       resultLayout.getFactor() == fact->factor &&
       *resultArity == fact->factor * *sourceArity)
-    return VMIExtISupport{
-        VMIExtISupportKind::ContiguousI16ToDeinterleaved2I32};
+    return VMIExtISupport{VMIExtISupportKind::ContiguousI16ToDeinterleaved2I32};
   if (fact->kind == VMICastLayoutKind::Widen4x &&
       resultLayout.getFactor() == fact->factor &&
       *resultArity == fact->factor * *sourceArity)
-    return VMIExtISupport{
-        VMIExtISupportKind::ContiguousI8ToDeinterleaved4I32};
+    return VMIExtISupport{VMIExtISupportKind::ContiguousI8ToDeinterleaved4I32};
 
   return fail("unsupported integer extension source/result element width, "
               "result factor, or physical arity");
 }
 
 FailureOr<VMIExtISupport>
-VMILayoutSupport::getExtSISupport(VMIExtSIOp op,
-                                       std::string *reason) const {
+VMILayoutSupport::getExtSISupport(VMIExtSIOp op, std::string *reason) const {
   return getExtISupportImpl(op, reason);
 }
 
 FailureOr<VMIExtISupport>
-VMILayoutSupport::getExtUISupport(VMIExtUIOp op,
-                                       std::string *reason) const {
+VMILayoutSupport::getExtUISupport(VMIExtUIOp op, std::string *reason) const {
   return getExtISupportImpl(op, reason);
 }
 
 FailureOr<VMITruncISupport>
-VMILayoutSupport::getTruncISupport(VMITruncIOp op,
-                                        std::string *reason) const {
+VMILayoutSupport::getTruncISupport(VMITruncIOp op, std::string *reason) const {
   auto fail = [&](const Twine &message) -> FailureOr<VMITruncISupport> {
     if (reason)
       *reason = message.str();
@@ -1302,7 +1299,7 @@ VMILayoutSupport::getTruncISupport(VMITruncIOp op,
 
 FailureOr<VMIBitcastSupport>
 VMILayoutSupport::getBitcastSupport(VMIBitcastOp op,
-                                         std::string *reason) const {
+                                    std::string *reason) const {
   auto fail = [&](const Twine &message) -> FailureOr<VMIBitcastSupport> {
     if (reason)
       *reason = message.str();
@@ -1399,14 +1396,12 @@ getHistogramSupportImpl(OpTy op, std::string *reason) {
 }
 
 FailureOr<VMIHistogramSupport>
-VMILayoutSupport::getDhistSupport(VMIDhistOp op,
-                                  std::string *reason) const {
+VMILayoutSupport::getDhistSupport(VMIDhistOp op, std::string *reason) const {
   return getHistogramSupportImpl(op, reason);
 }
 
 FailureOr<VMIHistogramSupport>
-VMILayoutSupport::getChistSupport(VMIChistOp op,
-                                  std::string *reason) const {
+VMILayoutSupport::getChistSupport(VMIChistOp op, std::string *reason) const {
   if (reason)
     *reason = "CHISTv2 cumulative high-range semantics are not classified";
   return failure();
