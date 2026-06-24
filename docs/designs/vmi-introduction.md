@@ -378,6 +378,10 @@ group_load / group_slot_load:
   result 根据 group size、row stride 和目标能力选择 contiguous、deinterleaved
   或 group_slots。
 
+stride_load:
+  result 是 contiguous。block/repeat stride 只描述 memory address map，
+  不改变 register 内 logical lane order。
+
 active_prefix_index:
   result 使用 contiguous。
 ```
@@ -388,7 +392,7 @@ active_prefix_index:
 “这个 use site 希望 operand 是什么 layout”：
 
 ```text
-store / tile_write / masked_store value:
+store / masked_store value:
   wants contiguous
 
 ordinary reduce source/init:
@@ -399,6 +403,10 @@ group_reduce source:
 
 group_store value:
   wants preferred group result layout
+
+stride_store value:
+  wants contiguous。block/repeat stride 只描述 memory write address map，
+  不表示 source vreg 是 sparse 或 NZ layout。
 
 truncf/trunci/extf/extsi/extui source:
   wants cast support 给出的 source layout
@@ -415,7 +423,7 @@ use request：如果 operand 的 producer 可以直接用 consumer 需要的 lay
 可采纳 producer 是受限集合：
 
 ```text
-load / tile_read
+load
 broadcast / constant / iota
 layout-transparent elementwise
 select
@@ -575,6 +583,7 @@ constant_mask
 
 ```text
 load / masked_load / group_load / group_slot_load
+stride_load
 reduce / group_reduce
 control-flow results
 ```
@@ -945,6 +954,63 @@ selector、lo/hi accumulator 和多条物理指令。
 在 high range 上返回的是全局累计还是 range-local 累计。这个差异会影响是否需要
 额外给 high half 加上 low half 的总计数，因此不能只按 op 名字猜 lowering。
 
+### 4.9 Block-Strided UB Staging
+
+有些 CCE kernel 并不是在 register 内做任意 byte shuffle，而是先把结果写到
+UB scratch，再用 block-strided vector load/store materialize 目标 UB layout。
+`quant_minimum` 的 MXFP8 NZ case 是典型例子：
+
+```text
+compute:
+  row-major ND FP8 scratch
+
+row-wise staging:
+  for row in 0..31:
+    q8_row = vmi.stride_load(nd + row * 64,
+                             block_stride=1, repeat_stride=1)
+    vmi.stride_store(q8_row, nz + row * 32,
+                     block_stride=33, repeat_stride=1)
+
+copy-out:
+  2D MTE copies two 1024B NZ planes from UB to GM
+```
+
+这里 `q8_row` 的 VMI value 仍然是 contiguous `64xf8` 逻辑向量：
+
+```mlir
+%q8_row = pto.vmi.stride_load %nd[%nd_off], %c1_i16, %c1_i16, %mask
+    : !pto.ptr<f8E4M3FN, ub>, i16, i16, !pto.vmi.mask<64xpred>
+    -> !pto.vmi.vreg<64xf8E4M3FN>
+
+pto.vmi.stride_store %q8_row, %nz[%nz_off], %c33_i16, %c1_i16, %mask
+    : !pto.vmi.vreg<64xf8E4M3FN>, !pto.ptr<f8E4M3FN, ub>, i16, i16,
+      !pto.vmi.mask<64xpred>
+```
+
+Assignment 形状：
+
+```text
+stride_load result = contiguous
+stride_load mask   = contiguous, granularity follows result element width
+stride_store value = contiguous
+stride_store mask  = contiguous, granularity follows value element width
+```
+
+VPTO 形状：
+
+```text
+base_in  = pto.addptr nd, nd_off
+q8_row   = pto.vsldb base_in, block_stride=1, repeat_stride=1, mask
+
+base_out = pto.addptr nz, nz_off
+updated = pto.vsstb q8_row, base_out, block_stride=33, repeat_stride=1, mask
+          -> updated_base
+```
+
+这个场景说明：memory layout transformation 不一定要变成 VMI data layout。
+只要 VMI op 的语义是“从哪些地址读/写哪些 logical lane”，register value
+仍然可以保持 contiguous，`vmi-to-vpto` 也仍然是 local lowering。
+
 ## 5. 当前边界
 
 当前设计方向：
@@ -973,15 +1039,30 @@ packed group_slots f32->f16 cast:
   非法，除非 assignment 能把它 commute 到 group_broadcast 之后，或者使用
   支持的 row-local slots=1 path。
 
+FP4 packed input/output:
+  packed FP4 不属于当前 VMI surface。PTO/VPTO 已有 !pto.f4E1M2x2
+  和 !pto.f4E2M1x2 packed 物理类型，且这些类型的 shape 语义是
+  packed pair/byte 数，不是 logical FP4 lane 数。在 VMI 中直接写
+  vreg<Nx!pto.f4E2M1x2> 会让 N 表示物理 packed byte 还是逻辑 FP4 元素
+  产生歧义，因此 verifier 会直接拒绝
+  vmi.vreg<...x!pto.f4E1M2x2/!pto.f4E2M1x2>。
+
+  当前 VMI surface 不包含专用 FP4 packed-memory op。FP4 packed IO
+  需要先作为独立语义重新设计，不能进入当前 dialect surface。
+
 extract:
   暂不作为支持的 VMI surface。
 
 padding transfer_read:
   当前 tail 设计不需要；tail 使用 mask。
 
-scan / contract / gather / scatter / compress / active_prefix_index:
+scan / contract / compress / active_prefix_index:
   dialect surface 中可以存在，但除非补充具体 case，否则不属于第一阶段聚焦的
   layout/lowering 实现集合。
+
+gather / scatter:
+  当前只覆盖 UB pointer、contiguous layout 和已明确支持的 element/index 宽度。
+  `ui16` gather 可承接 E8M0 byte-pair reorder；它不是通用 byte shuffle。
 ```
 
 设计目标是优先保证语义完整：只要 VMI 接受某个 case，所需的 layout 沟通就必须
