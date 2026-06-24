@@ -1374,10 +1374,6 @@ checkSupportedScatterShape(const VMITargetCapabilityRegistry &capabilities,
     return failure();
   };
 
-  if (!op->hasAttr("indices_unique"))
-    return fail("requires indices_unique proof because pto.vscatter does not "
-                "define logical-lane-order duplicate-index semantics");
-
   auto valueType = cast<VMIVRegType>(op.getValue().getType());
   auto indicesType = cast<VMIVRegType>(op.getIndices().getType());
   auto maskType = cast<VMIMaskType>(op.getMask().getType());
@@ -7800,10 +7796,9 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
         return WalkResult::advance();
       scatter.emitError()
           << kVMIDiagUnsupportedPrefix
-          << "pto.vmi.scatter lowers through pto.vscatter only with an "
-             "indices_unique proof, UB pointer destination, contiguous full "
-             "physical chunks, 32-bit value elements, i32 indices, and b32 "
-             "masks ("
+          << "pto.vmi.scatter lowers through pto.vscatter only with a UB "
+             "pointer destination, contiguous full physical chunks, 32-bit "
+             "value elements, i32 indices, and b32 masks ("
           << reason << ")";
       return WalkResult::interrupt();
     }

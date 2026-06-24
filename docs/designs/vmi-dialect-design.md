@@ -1178,7 +1178,7 @@ interleave/deinterleave boundary:
   vldsx2/vstsx2 dist or explicit rearrangement
 
 indexed memory:
-  gather/scatter if inactive and duplicate-index semantics match
+  gather/scatter; ordinary scatter requires pairwise-distinct active indices
 ```
 
 GM-backed VMI memory is semantic input, not a direct vector load/store target.
@@ -1356,20 +1356,21 @@ lanes to preserve passthru, so the `vsel` is semantically required, not an optim
 gather, tail gather, non-contiguous layout, memref/gm source, and fallback through guarded scalar load or scratch are
 future target-capability paths.
 
-当前 `scatter` direct lowering 只在 VMI IR 携带显式 no-conflict proof 时启用：
+`scatter` 的基础语义要求所有 active logical lanes 的 `%indices` 两两不同。inactive lane 不写内存，
+因此不参与这个唯一性约束。如果两个 active lane 的 index 相同，程序违反 `pto.vmi.scatter` 的
+语义前置条件；VMI 不为这种输入定义 logical lane order 或 winner。
 
 ```mlir
-pto.vmi.scatter %v, %base[%indices], %mask {indices_unique}
+pto.vmi.scatter %v, %base[%indices], %mask
   : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>,
     !pto.vmi.vreg<64xi32>, !pto.vmi.mask<64xpred>
 ```
 
-`indices_unique` 的含义是：所有 active logical lanes 的 `%indices` 两两不同。这个 proof 可以来自
-producer 的静态分析、前端语义或上游 canonicalization；VMI lowering 不从 runtime 值猜测它。direct
-path 的其它限制与 gather 对齐：UB pointer destination、contiguous full physical chunks、32-bit value
-element、i32 indices 和 b32 mask。没有 `indices_unique` 时，`vmi-to-vpto` 必须诊断，而不能直接发
-`VSCATTER`，因为 `VSCATTER` 对重复 index 的 grant procedure 是目标相关/未定义的，不等价于 VMI
-logical lane order。
+当前 direct path 的其它限制与 gather 对齐：UB pointer destination、contiguous full physical chunks、
+32-bit value element、i32 indices 和 b32 mask。允许冲突的 scatter 不能复用普通 `pto.vmi.scatter`，
+因为 `VSCATTER` 对重复 index 的 grant procedure 是目标相关/未定义的，不等价于确定的 VMI logical
+lane order。后续如果需要定义 duplicate-index scatter，需要新增显式语义，例如 ordered fallback、
+atomic scatter、reduce-scatter 或 target-specific unordered scatter。
 
 `expand_load/compress_store` 表达 masked contiguous stream，不是 arbitrary indexed access：
 
