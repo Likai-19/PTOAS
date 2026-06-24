@@ -1231,6 +1231,57 @@ LogicalResult VMIGroupBroadcastOp::verify() {
                          getNumGroupsAttr().getInt());
 }
 
+template <typename OpTy>
+static LogicalResult verifyVMIHistogramOp(OpTy op) {
+  auto accType = cast<VMIVRegType>(op.getAcc().getType());
+  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
+  auto maskType = cast<VMIMaskType>(op.getMask().getType());
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
+
+  auto accElemType = dyn_cast<IntegerType>(accType.getElementType());
+  auto sourceElemType = dyn_cast<IntegerType>(sourceType.getElementType());
+  if (!accElemType || !accElemType.isUnsigned() ||
+      accElemType.getWidth() != 16 || accType.getElementCount() != 256)
+    return op.emitOpError("requires acc type to be "
+                          "!pto.vmi.vreg<256xui16>");
+  if (resultType != accType)
+    return op.emitOpError("requires result type to match acc type");
+  if (!sourceElemType || !sourceElemType.isUnsigned() ||
+      sourceElemType.getWidth() != 8)
+    return op.emitOpError("requires source type to be "
+                          "!pto.vmi.vreg<Nxui8>");
+  if (maskType.getElementCount() != sourceType.getElementCount())
+    return op.emitOpError("requires mask logical lane count to match source");
+
+  if (auto accLayout = accType.getLayoutAttr()) {
+    if (!accLayout.isContiguous())
+      return op.emitOpError("requires layout-assigned acc to use contiguous "
+                            "layout");
+  }
+  if (auto sourceLayout = sourceType.getLayoutAttr()) {
+    if (!sourceLayout.isContiguous())
+      return op.emitOpError("requires layout-assigned source to use contiguous "
+                            "layout");
+  }
+  if (auto resultLayout = resultType.getLayoutAttr()) {
+    if (!resultLayout.isContiguous())
+      return op.emitOpError("requires layout-assigned result to use "
+                            "contiguous layout");
+  }
+  if (auto maskLayout = maskType.getLayoutAttr()) {
+    if (!maskLayout.isContiguous())
+      return op.emitOpError("requires layout-assigned mask to use contiguous "
+                            "layout");
+    if (maskType.getGranularity() != "b8")
+      return op.emitOpError("requires layout-assigned mask granularity b8");
+  }
+  return success();
+}
+
+LogicalResult VMIDhistOp::verify() { return verifyVMIHistogramOp(*this); }
+
+LogicalResult VMIChistOp::verify() { return verifyVMIHistogramOp(*this); }
+
 LogicalResult VMIExtFOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());

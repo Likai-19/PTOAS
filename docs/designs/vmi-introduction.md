@@ -11,6 +11,10 @@
 
 VMI 是 VPTO 之前的逻辑向量层。它让前端先表达“我要对 `NxT` 的逻辑向量做什么”，
 再由 layout assignment 决定这个逻辑向量如何拆到 256B 物理 vector register 上。
+当 VPTO 指令因为物理 register 宽度只能暴露半宽接口时，VMI 也负责提供完整的
+逻辑语义。例如 `ui8` histogram 的完整结果是 `256xui16`，物理 VPTO histogram
+一次只能返回 `128xui16`；VMI surface 应该表达完整 histogram，low/high bin
+range 拆分属于 lowering 细节。
 
 Surface VMI 类型不携带布局：
 
@@ -891,6 +895,55 @@ scf.if -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>)
 ```
 
 这个场景说明为什么 layout 应该是 type 的一部分，而不是依赖 defining op。
+
+### 4.8 完整 Histogram 语义
+
+VPTO 的 histogram 指令一次读取 `256xui8` source，但结果只能写
+`128xui16` accumulator。完整 `ui8` histogram 有 256 个 bin，因此物理 VPTO
+接口需要通过 `#bin = 0/1` 分两次统计低半区和高半区。
+
+VMI surface 不暴露这个物理 split：
+
+```mlir
+%hist = pto.vmi.dhist %acc, %src, %mask
+  : !pto.vmi.vreg<256xui16>,
+    !pto.vmi.vreg<Nxui8>,
+    !pto.vmi.mask<Nxpred>
+ -> !pto.vmi.vreg<256xui16>
+```
+
+语义是完整 256-bin distribution histogram：
+
+```text
+for b = 0..255:
+  hist[b] = acc[b] + count(i where mask[i] && src[i] == b)
+```
+
+Assignment 形状：
+
+```text
+src/mask = contiguous, b8 mask granularity
+acc/result = contiguous 256xui16 logical value
+```
+
+VPTO 形状：
+
+```text
+acc/result part0 = bins   0..127
+acc/result part1 = bins 128..255
+
+for each 256-lane source chunk:
+  part0 = dhistv2(part0, src_chunk, mask_chunk, #bin=0)
+  part1 = dhistv2(part1, src_chunk, mask_chunk, #bin=1)
+```
+
+这说明 VMI 的易用性不只来自 layout assignment。对于这种 value-indexed
+accumulation，VMI 还应该隐藏 VPTO 为了物理 vreg 宽度暴露出来的 range
+selector、lo/hi accumulator 和多条物理指令。
+
+`pto.vmi.chist` 可以使用相同 surface 形状，但当前必须先验证 VPTO `CHISTv2`
+在 high range 上返回的是全局累计还是 range-local 累计。这个差异会影响是否需要
+额外给 high half 加上 low half 的总计数，因此不能只按 op 名字猜 lowering。
 
 ## 5. 当前边界
 

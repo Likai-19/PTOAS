@@ -246,6 +246,9 @@ the immediately following complete endpoints.
 3.44 masked_load grouped tail feeding S=32 reduce        complete
 3.45 dynamic S=32 create_group_mask                      complete
 3.46 extf value and derived elemwise value both stored   complete/optimization
+3.47-3.55 typed group-reduce generalization              complete/diagnostic
+3.56 full 256-bin distribution histogram                 complete
+3.57 full 256-bin cumulative histogram                   design boundary
 ```
 
 ### 3.1 `f16 -> f32 -> store`
@@ -6235,3 +6238,194 @@ pto.vmi.group_store %sum8, %out_i8[%group_off], %c1 {num_groups = 8}
 That packed group-slot `trunci` path is not baseline lowering support yet; the
 implementation must either define slot-wise VCVTII lowering support or diagnose at
 layout assignment.
+
+### 3.56 Full 256-Bin Distribution Histogram
+
+Histogram is not modeled as `group_reduce`.  A group reduce maps source lanes to
+result slots by lane/group position.  A histogram maps each active source lane
+to a result bin by the source value itself.
+
+VMI-shaped input:
+
+```text
+%src = pto.vmi.load %src_base[%src_off]
+  : memref<Nxui8> -> !pto.vmi.vreg<Nxui8>
+%mask = pto.vmi.create_mask %active_lanes
+  : index -> !pto.vmi.mask<Nxpred>
+%acc = pto.vmi.load %acc_base[%acc_off]
+  : memref<256xui16> -> !pto.vmi.vreg<256xui16>
+%hist = pto.vmi.dhist %acc, %src, %mask
+  : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<Nxui8>,
+    !pto.vmi.mask<Nxpred> -> !pto.vmi.vreg<256xui16>
+pto.vmi.store %hist, %out[%out_off]
+```
+
+Logical semantics:
+
+```text
+for b = 0..255:
+  hist[b] = acc[b]
+
+for i = 0..N-1:
+  if mask[i]:
+    hist[src[i]] += 1
+```
+
+Assigned layouts:
+
+```text
+%src:
+  !pto.vmi.vreg<Nxui8, #pto.vmi.layout<contiguous>>
+
+%mask:
+  !pto.vmi.mask<Nxb8, #pto.vmi.layout<contiguous>>
+
+%acc, %hist:
+  !pto.vmi.vreg<256xui16, #pto.vmi.layout<contiguous>>
+```
+
+The `256xui16` accumulator/result is one logical VMI value but two physical
+VPTO vector registers:
+
+```text
+physical result part0 = logical bins   0..127
+physical result part1 = logical bins 128..255
+```
+
+For `N = 256`, VPTO lowering shape:
+
+```text
+%src0 = pto.vlds %src_base[%src_off] {dist = "NORM"}
+  : !pto.ptr<ui8, ub> -> !pto.vreg<256xui8>
+
+%acc_lo = pto.vlds %acc_base[%acc_off + 0] {dist = "NORM"}
+  : !pto.ptr<ui16, ub> -> !pto.vreg<128xui16>
+%acc_hi = pto.vlds %acc_base[%acc_off + 128] {dist = "NORM"}
+  : !pto.ptr<ui16, ub> -> !pto.vreg<128xui16>
+
+%hist_lo = pto.dhistv2 %acc_lo, %src0, %mask0, %bin0
+  : !pto.vreg<128xui16>, !pto.vreg<256xui8>, !pto.mask<b8>, i32
+    -> !pto.vreg<128xui16>
+%hist_hi = pto.dhistv2 %acc_hi, %src0, %mask0, %bin1
+  : !pto.vreg<128xui16>, !pto.vreg<256xui8>, !pto.mask<b8>, i32
+    -> !pto.vreg<128xui16>
+
+pto.vsts %hist_lo, %out[%out_off + 0],   %all_b16 {dist = "NORM_B16"}
+pto.vsts %hist_hi, %out[%out_off + 128], %all_b16 {dist = "NORM_B16"}
+```
+
+Memory result:
+
+```text
+for b = 0..127:
+  out[out_off + b] = acc_base[acc_off + b] +
+    count(i where mask[i] && src_base[src_off + i] == b)
+
+for b = 128..255:
+  out[out_off + b] = acc_base[acc_off + b] +
+    count(i where mask[i] && src_base[src_off + i] == b)
+```
+
+For `N > 256`, the source is processed in contiguous 256-lane chunks.  The two
+histogram accumulator parts are carried through all chunks:
+
+```text
+%lo = %acc_lo
+%hi = %acc_hi
+
+for source chunk c in logical order:
+  %chunk_mask = mask chunk c
+  if c is the final partial chunk:
+    %chunk_mask = %chunk_mask & valid-lane-prefix-for-this-chunk
+
+  %lo = pto.dhistv2 %lo, %src_c, %chunk_mask, %bin0
+  %hi = pto.dhistv2 %hi, %src_c, %chunk_mask, %bin1
+
+result physical parts = [%lo, %hi]
+```
+
+Tail source lanes are expressed only through the b8 mask.  Padding lanes in the
+last physical source chunk must be masked off before `pto.dhistv2`; they are
+not padding values.
+
+The VMI op does not expose `#bin`.  `#bin` is a VPTO range selector forced by
+the physical result width:
+
+```text
+ui8 value domain      = 256 bins
+complete histogram    = 256 x ui16 = 512B
+one VPTO vreg result  = 128 x ui16 = 256B
+```
+
+Therefore VMI represents one logical `256xui16` result and `vmi-to-vpto`
+locally emits the low-range and high-range VPTO histogram updates.
+
+### 3.57 Full 256-Bin Cumulative Histogram
+
+The desired VMI surface shape mirrors `dhist`:
+
+```text
+%hist = pto.vmi.chist %acc, %src, %mask
+  : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<Nxui8>,
+    !pto.vmi.mask<Nxpred> -> !pto.vmi.vreg<256xui16>
+```
+
+The intended logical semantics is a full cumulative histogram:
+
+```text
+dist[b] = count(i where mask[i] && src[i] == b)
+
+hist[0] = acc[0] + dist[0]
+for b = 1..255:
+  hist[b] = acc[b] + dist[0] + dist[1] + ... + dist[b]
+```
+
+The current VPTO/VISA documentation only states that `CHISTv2` computes a
+`uint16 Cumulative histogram` over the selected bin range.  It does not state
+whether the high-range call with `#bin = 1` returns:
+
+```text
+global cumulative:
+  result[j] = count(src <= 128 + j)
+
+or range-local cumulative:
+  result[j] = count(128 <= src <= 128 + j)
+```
+
+These two interpretations have different VMI lowerings.  If the hardware result
+is global cumulative, the full VMI lowering is the same low/high split as
+`dhist`, replacing `pto.dhistv2` with `pto.chistv2`.  If the hardware result is
+range-local cumulative, the high half also needs the total low-half count added
+to every high-half bin:
+
+```text
+%lo = pto.chistv2 %acc_lo, %src0, %mask0, %bin0
+%hi_local = pto.chistv2 %acc_hi, %src0, %mask0, %bin1
+
+%low_total = materialize count(src <= 127) from the low-half result
+%low_total_vec = broadcast %low_total to every high-half bin
+%hi = pto.vadd %hi_local, %low_total_vec, %all_b16
+```
+
+That correction path also requires a designed way to materialize and broadcast
+the low-half total.  Since baseline VMI does not support arbitrary vector
+extract, the range-local CHISTv2 interpretation remains unsupported until that
+materialization path is explicit.
+
+The baseline design therefore treats `pto.vmi.chist` as a semantic op whose
+exact lowering is gated by a target semantic capability:
+
+```text
+if target documents or validation proves CHISTv2 high range is global:
+  lower as two pto.chistv2 calls
+elif target documents or validation proves CHISTv2 high range is range-local:
+  lower as pto.chistv2 low/high plus explicit high-half correction only after
+  low-total materialization support is designed
+else:
+  VMI-UNSUPPORTED: pto.vmi.chist requires a verified CHISTv2 range semantics contract
+```
+
+This boundary is deliberate.  `pto.vmi.dhist` is fully defined because
+distribution bins are independent across the low/high split.  `pto.vmi.chist`
+has cross-range prefix semantics, so VMI must not guess the high-half behavior
+from the VPTO op name alone.
