@@ -22,4 +22,4 @@ module {
   }
 }
 
-// CHECK: 'pto.vmi.gather' op requires signless or unsigned 32-bit integer indices
+// CHECK: 'pto.vmi.gather' op requires signless or unsigned 16-bit or 32-bit integer indices

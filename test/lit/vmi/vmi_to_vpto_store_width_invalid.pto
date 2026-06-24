@@ -21,18 +21,3 @@ module {
 
 // CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.store requires an 8/16/32-bit predicate-maskable element type
 // CHECK-SAME: requires an 8/16/32-bit element type
-
-// -----
-
-module {
-  func.func @vmi_tile_write_f64_unsupported(
-      %value: !pto.vmi.vreg<32xf64, #pto.vmi.layout<contiguous>>,
-      %dst: memref<32xf64>) {
-    pto.vmi.tile_write %value, %dst
-        : !pto.vmi.vreg<32xf64, #pto.vmi.layout<contiguous>>, memref<32xf64>
-    return
-  }
-}
-
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.tile_write requires an 8/16/32-bit predicate-maskable element type
-// CHECK-SAME: requires an 8/16/32-bit element type

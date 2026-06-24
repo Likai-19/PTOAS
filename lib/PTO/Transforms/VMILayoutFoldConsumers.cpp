@@ -108,9 +108,6 @@ struct VMILayoutFoldConsumersPass
       if (auto store = dyn_cast<VMIStoreOp>(op))
         tryFoldEnsureLayoutIntoOperand(store.getValueMutable(),
                                        maybeDeadEnsures);
-      if (auto tileWrite = dyn_cast<VMITileWriteOp>(op))
-        tryFoldEnsureLayoutIntoOperand(tileWrite.getValueMutable(),
-                                       maybeDeadEnsures);
       if (auto maskedStore = dyn_cast<VMIMaskedStoreOp>(op))
         tryFoldEnsureLayoutIntoMaskedStore(maskedStore, maybeDeadEnsures,
                                            maybeDeadMaskEnsures);

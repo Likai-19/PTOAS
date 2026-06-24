@@ -438,6 +438,16 @@ def VMIGroupReduceAddIOp : VMI_Op<"group_reduce_addi"> {
   let assemblyFormat = "$source `,` $mask attr-dict `:` type($source) `,` type($mask) `->` type($result)";
 }
 
+def VMIGroupReduceMaxIOp : VMI_Op<"group_reduce_maxi"> {
+  let summary = "VMI masked integer maximum reduction within fixed logical groups";
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                       VMI_MaskTypeConstraint:$mask,
+                       I64Attr:$num_groups);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `,` $mask attr-dict `:` type($source) `,` type($mask) `->` type($result)";
+}
+
 def VMIGroupBroadcastOp : VMI_Op<"group_broadcast"> {
   let summary = "VMI broadcast group-slot values back to each logical group";
   let arguments = (ins VMI_VRegTypeConstraint:$source,
@@ -474,6 +484,23 @@ def VMIExtFOp : VMI_Op<"extf"> {
 
 def VMITruncFOp : VMI_Op<"truncf"> {
   let summary = "VMI floating-point elementwise truncation";
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                   OptionalAttr<StrAttr>:$rounding);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
+}
+
+def VMIFPToSIOp : VMI_Op<"fptosi"> {
+  let summary = "VMI floating-point to signed integer elementwise conversion";
+  let arguments = (ins VMI_VRegTypeConstraint:$source);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
+}
+
+def VMISIToFPOp : VMI_Op<"sitofp"> {
+  let summary = "VMI signed integer to floating-point elementwise conversion";
   let arguments = (ins VMI_VRegTypeConstraint:$source);
   let results = (outs VMI_VRegTypeConstraint:$result);
   let hasVerifier = 1;
@@ -538,6 +565,16 @@ def VMIGroupSlotLoadOp : VMI_Op<"group_slot_load", [DeclareOpInterfaceMethods<Me
   let assemblyFormat = "$source `[` $offset `]` `,` $source_group_stride attr-dict `:` type($source) `->` type($result)";
 }
 
+def VMIStrideLoadOp : VMI_Op<"stride_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "VMI block-strided vector load";
+  let arguments = (ins PtrOrMemRef:$source, Index:$offset,
+                       I16:$block_stride, I16:$repeat_stride,
+                       VMI_MaskTypeConstraint:$mask);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `[` $offset `]` `,` $block_stride `,` $repeat_stride `,` $mask attr-dict `:` type($source) `,` type($block_stride) `,` type($repeat_stride) `,` type($mask) `->` type($result)";
+}
+
 def VMIMaskedLoadOp : VMI_Op<"masked_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "VMI logical masked vector load with passthrough lanes";
   let arguments = (ins PtrOrMemRef:$source, Index:$offset,
@@ -595,6 +632,16 @@ def VMIMaskedStoreOp : VMI_Op<"masked_store", [DeclareOpInterfaceMethods<MemoryE
   let assemblyFormat = "$value `,` $destination `[` $offset `]` `,` $mask attr-dict `:` type($value) `,` type($destination) `,` type($mask)";
 }
 
+def VMIStrideStoreOp : VMI_Op<"stride_store", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "VMI block-strided vector store";
+  let arguments = (ins VMI_VRegTypeConstraint:$value, PtrOrMemRef:$destination,
+                       Index:$offset, I16:$block_stride, I16:$repeat_stride,
+                       VMI_MaskTypeConstraint:$mask);
+  let results = (outs);
+  let hasVerifier = 1;
+  let assemblyFormat = "$value `,` $destination `[` $offset `]` `,` $block_stride `,` $repeat_stride `,` $mask attr-dict `:` type($value) `,` type($destination) `,` type($block_stride) `,` type($repeat_stride) `,` type($mask)";
+}
+
 def VMIScatterOp : VMI_Op<"scatter", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "VMI logical masked indexed scatter";
   let arguments = (ins VMI_VRegTypeConstraint:$value,
@@ -604,22 +651,6 @@ def VMIScatterOp : VMI_Op<"scatter", [DeclareOpInterfaceMethods<MemoryEffectsOpI
   let results = (outs);
   let hasVerifier = 1;
   let assemblyFormat = "$value `,` $destination `[` $indices `]` `,` $mask attr-dict `:` type($value) `,` type($destination) `,` type($indices) `,` type($mask)";
-}
-
-def VMITileReadOp : VMI_Op<"tile_read", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
-  let summary = "VMI logical tile read";
-  let arguments = (ins AnyType:$source);
-  let results = (outs VMI_VRegTypeConstraint:$result);
-  let hasVerifier = 1;
-  let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
-}
-
-def VMITileWriteOp : VMI_Op<"tile_write", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
-  let summary = "VMI logical tile write";
-  let arguments = (ins VMI_VRegTypeConstraint:$value, AnyType:$destination);
-  let results = (outs);
-  let hasVerifier = 1;
-  let assemblyFormat = "$value `,` $destination attr-dict `:` type($value) `,` type($destination)";
 }
 
 def VMIShuffleOp : VMI_Op<"shuffle"> {

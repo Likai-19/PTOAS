@@ -25,4 +25,4 @@ module {
 }
 
 // CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.gather lowers through pto.vgather2_bc + pto.vsel only
-// CHECK-SAME: 32-bit result element type
+// CHECK-SAME: 32-bit result elements

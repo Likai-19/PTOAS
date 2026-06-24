@@ -335,6 +335,12 @@ getLayoutMaterializationSupport(VMILayoutAttr sourceLayout,
       (sourceLayout.getFactor() == 2 || sourceLayout.getFactor() == 4))
     return VMILayoutMaterializationSupport{
         VMILayoutMaterializationSupportKind::DeinterleavedToContiguous};
+  if (sourceLayout.isDeinterleaved() && resultLayout.isDeinterleaved() &&
+      (sourceLayout.getFactor() == 2 || sourceLayout.getFactor() == 4) &&
+      (resultLayout.getFactor() == 2 || resultLayout.getFactor() == 4))
+    return VMILayoutMaterializationSupport{
+        VMILayoutMaterializationSupportKind::
+            DeinterleavedToDeinterleavedViaContiguous};
   return fail("unsupported source/result layout pair");
 }
 
@@ -774,17 +780,18 @@ VMILayoutSupport::getGroupSlotsStoreSupport(
     if (elementBits == 0 || 256 % elementBits != 0)
       return fail("slots=1 group_store requires an 8/16/32-bit element "
                   "type");
-    int64_t alignedStrideElems = 256 / elementBits;
     std::optional<int64_t> rowStride = getConstantIndexValue(op.getRowStride());
-    if (!rowStride || *rowStride <= 0 || *rowStride % alignedStrideElems != 0)
-      return fail(Twine("slots=1 group_store currently lowers as one "
-                        "lane-0 vsts per group and requires constant "
-                        "positive row_stride divisible by ") +
-                  Twine(alignedStrideElems) +
-                  " elements for 32B store alignment; packed or unaligned "
-                  "contiguous store lowering is not implemented");
+    FailureOr<int64_t> lanesPerPart =
+        getDataLanesPerPart(valueType.getElementType());
+    if (rowStride && *rowStride == 1 && succeeded(lanesPerPart) &&
+        numGroups <= *lanesPerPart)
+      return VMIGroupSlotsStoreSupport{
+          VMIGroupSlotsStoreSupportKind::Slots1PackedUnitStrideVsts};
+    if (rowStride && *rowStride <= 0)
+      return fail("slots=1 group_store requires positive row_stride when "
+                  "row_stride is constant");
     return VMIGroupSlotsStoreSupport{
-        VMIGroupSlotsStoreSupportKind::Slots1AlignedLane0Vsts};
+        VMIGroupSlotsStoreSupportKind::Slots1PointVsts};
   }
 
   if (layout.getSlots() == 8) {
@@ -989,6 +996,19 @@ VMILayoutSupport::getGroupReduceAddISupport(
       VMIReductionKind::GroupAddI, reason);
 }
 
+FailureOr<VMIGroupReduceAddFSupport>
+VMILayoutSupport::getGroupReduceMaxISupport(
+    const VMITargetCapabilityRegistry &capabilities, VMIGroupReduceMaxIOp op,
+    std::string *reason) const {
+  return getGroupReduceAddSupportImpl(
+      capabilities, op.getOperation(),
+      cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIMaskType>(op.getMask().getType()),
+      cast<VMIVRegType>(op.getResult().getType()),
+      op.getNumGroupsAttr().getInt(), /*requiresReassoc=*/false,
+      VMIReductionKind::GroupMaxI, reason);
+}
+
 FailureOr<VMIGroupBroadcastSupport> VMILayoutSupport::getGroupBroadcastSupport(
     const VMITargetCapabilityRegistry &capabilities, VMIGroupBroadcastOp op,
     std::string *reason) const {
@@ -1064,6 +1084,15 @@ FailureOr<VMIGroupBroadcastSupport> VMILayoutSupport::getGroupBroadcastSupport(
     return VMIGroupBroadcastSupport{
         VMIGroupBroadcastSupportKind::GroupSlotsVselr};
 
+  bool deinterleavedSmallGroup =
+      resultLayout.isDeinterleaved() && resultLayout.getBlockElems() == 1 &&
+      *groupSize < *lanesPerPart && *groupSize >= *resultFactor &&
+      *groupSize % *resultFactor == 0 &&
+      *lanesPerPart % (*groupSize / *resultFactor) == 0;
+  if (deinterleavedSmallGroup)
+    return VMIGroupBroadcastSupport{
+        VMIGroupBroadcastSupportKind::GroupSlotsVselr};
+
   int64_t logicalSpanPerResultChunk = *lanesPerPart * *resultFactor;
   if (*groupSize < *lanesPerPart || *groupSize % logicalSpanPerResultChunk != 0)
     return fail("deinterleaved result requires every physical result chunk to "
@@ -1107,7 +1136,7 @@ VMILayoutSupport::getTruncFSupport(VMITruncFOp op, std::string *reason) const {
   }
 
   if (!sourceLayout.isDeinterleaved() || !resultLayout.isContiguous() ||
-      !sourceType.getElementType().isF32() || *resultArity != 1)
+      !sourceType.getElementType().isF32())
     return fail("requires f32 deinterleaved source and contiguous result");
 
   FailureOr<VMICastLayoutFact> fact =
@@ -1118,11 +1147,13 @@ VMILayoutSupport::getTruncFSupport(VMITruncFOp op, std::string *reason) const {
                 "element width");
 
   if (fact->kind == VMICastLayoutKind::Narrow2x &&
-      sourceLayout.getFactor() == fact->factor && *sourceArity == fact->factor)
+      sourceLayout.getFactor() == fact->factor &&
+      *sourceArity == fact->factor * *resultArity)
     return VMITruncFSupport{
         VMITruncFSupportKind::Deinterleaved2F32ToContiguousF16};
   if (fact->kind == VMICastLayoutKind::Narrow4x &&
-      sourceLayout.getFactor() == fact->factor && *sourceArity == fact->factor)
+      sourceLayout.getFactor() == fact->factor &&
+      *sourceArity == fact->factor * *resultArity)
     return VMITruncFSupport{
         VMITruncFSupportKind::Deinterleaved4F32ToContiguousF8};
 
@@ -1192,6 +1223,34 @@ static FailureOr<VMIExtISupport> getExtISupportImpl(OpT op,
       failed(resultArity))
     return fail("requires assigned source/result layouts and computable "
                 "physical arity");
+
+  if (sourceLayout.isGroupSlots() && resultLayout.isGroupSlots()) {
+    if (!isa<IntegerType>(sourceType.getElementType()) ||
+        !isa<IntegerType>(resultType.getElementType()))
+      return fail("requires integer source/result element types");
+    if (sourceLayout.getNumGroups() != resultLayout.getNumGroups() ||
+        sourceLayout.getSlots() != 8 || resultLayout.getSlots() != 8)
+      return fail("requires matching group_slots(num_groups=G, slots=8) "
+                  "source/result layouts");
+    if (*sourceArity != *resultArity)
+      return fail("group_slots integer extension requires matching physical "
+                  "arity");
+
+    unsigned sourceBits = pto::getPTOStorageElemBitWidth(
+        sourceType.getElementType());
+    unsigned resultBits = pto::getPTOStorageElemBitWidth(
+        resultType.getElementType());
+    if (resultBits != 32)
+      return fail("group_slots integer extension requires 32-bit result "
+                  "element type");
+    if (sourceBits == 16)
+      return VMIExtISupport{VMIExtISupportKind::GroupSlotsI16ToI32};
+    if (sourceBits == 8)
+      return VMIExtISupport{VMIExtISupportKind::GroupSlotsI8ToI32};
+    return fail("group_slots integer extension source must be 8-bit or "
+                "16-bit");
+  }
+
   if (!sourceLayout.isContiguous() || !resultLayout.isDeinterleaved() ||
       !isa<IntegerType>(sourceType.getElementType()) ||
       !isa<IntegerType>(resultType.getElementType()))
@@ -1259,13 +1318,15 @@ VMILayoutSupport::getTruncISupport(VMITruncIOp op, std::string *reason) const {
   if (sourceLayout.isGroupSlots() || resultLayout.isGroupSlots()) {
     if (!sourceLayout.isGroupSlots() || !resultLayout.isGroupSlots() ||
         sourceLayout.getNumGroups() != resultLayout.getNumGroups() ||
-        sourceLayout.getSlots() != 1 || resultLayout.getSlots() != 1 ||
-        sourceBits != 32 || resultBits != 16 || *sourceArity != *resultArity)
+        sourceLayout.getSlots() != resultLayout.getSlots() ||
+        (sourceLayout.getSlots() != 1 && sourceLayout.getSlots() != 8) ||
+        sourceBits != 32 || (resultBits != 16 && resultBits != 8) ||
+        *sourceArity != *resultArity)
       return fail("group-slot trunci requires matching "
-                  "group_slots(num_groups=G, slots=1) source/result layouts, "
-                  "32-bit integer source, 16-bit integer result, and matching "
-                  "physical arity");
-    return VMITruncISupport{VMITruncISupportKind::GroupSlots1I32ToI16};
+                  "group_slots(num_groups=G, slots=1 or 8) source/result layouts, "
+                  "32-bit integer source, 8/16-bit integer result, and "
+                  "matching physical arity");
+    return VMITruncISupport{VMITruncISupportKind::GroupSlots1I32ToNarrow};
   }
 
   if (!sourceLayout.isDeinterleaved() || !resultLayout.isContiguous() ||
@@ -1314,8 +1375,6 @@ VMILayoutSupport::getBitcastSupport(VMIBitcastOp op,
     return fail("requires assigned source and result layouts");
   if (sourceLayout != resultLayout)
     return fail("requires matching source and result layouts");
-  if (sourceLayout.isGroupSlots())
-    return fail("does not support group_slots layouts");
 
   FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
   FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
