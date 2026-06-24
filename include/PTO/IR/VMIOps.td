@@ -590,8 +590,7 @@ def VMIScatterOp : VMI_Op<"scatter", [DeclareOpInterfaceMethods<MemoryEffectsOpI
   let arguments = (ins VMI_VRegTypeConstraint:$value,
                        PtrOrMemRef:$destination,
                        VMI_VRegTypeConstraint:$indices,
-                       VMI_MaskTypeConstraint:$mask,
-                       OptionalAttr<UnitAttr>:$indices_unique);
+                       VMI_MaskTypeConstraint:$mask);
   let results = (outs);
   let hasVerifier = 1;
   let assemblyFormat = "$value `,` $destination `[` $indices `]` `,` $mask attr-dict `:` type($value) `,` type($destination) `,` type($indices) `,` type($mask)";

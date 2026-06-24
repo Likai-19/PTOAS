@@ -3730,13 +3730,11 @@ vmi.scatter:
     if mask[lane] is true, memory[base + indices[lane]] = value[lane]
     if mask[lane] is false, no memory write occurs for that lane
     indices are interpreted in element units, not bytes
-    if two active lanes have the same index, VMI logical semantics require an ordered conflict policy or an explicit
-    no-conflict proof before direct target lowering
+    all active lanes must have pairwise-distinct indices; duplicate active indices violate the VMI scatter contract
   layout assignment:
     value and indices uses are requested as contiguous
     mask use is requested as contiguous with granularity derived from value element width
   current direct path:
-    op must carry {indices_unique}
     destination must be !pto.ptr<T, ub>
     T must be a 32-bit element type
     indices must be signless or unsigned i32
@@ -3744,11 +3742,7 @@ vmi.scatter:
     mask granularity must be b32
     for each physical chunk i:
       pto.vscatter value_i, destination, indices_i, mask_i
-  reason for indices_unique:
-    VSCATTER false predicate lanes do not write, but duplicate active indices have target-defined/undefined grant
-    behavior. VMI cannot lower duplicate-index logical order semantics to VSCATTER without a proof or fallback.
   unsupported cases:
-    missing indices_unique proof
     f16/b16/f8/i8 value element types
     partial/tail chunks
     non-contiguous layouts
