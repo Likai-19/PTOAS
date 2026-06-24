@@ -200,82 +200,93 @@ class VMILayoutSupport {
 public:
   FailureOr<VMIContiguousStoreSupport>
   getContiguousStoreSupport(VMIVRegType valueType,
-                           std::string *reason = nullptr) const;
+                            std::string *reason = nullptr) const;
 
-  LogicalResult canFoldContiguousStoreMaterialization(
-      VMIVRegType sourceType, VMIVRegType resultType,
-      std::string *reason = nullptr) const;
-
-  FailureOr<VMILayoutMaterializationSupport>
-  getDataLayoutMaterializationSupport(VMIVRegType sourceType,
-                                     VMIVRegType resultType,
-                                     std::string *reason = nullptr) const;
-
-  LogicalResult canMaterializeDataLayout(VMIVRegType sourceType,
+  LogicalResult
+  canFoldContiguousStoreMaterialization(VMIVRegType sourceType,
                                         VMIVRegType resultType,
                                         std::string *reason = nullptr) const;
 
   FailureOr<VMILayoutMaterializationSupport>
+  getDataLayoutMaterializationSupport(VMIVRegType sourceType,
+                                      VMIVRegType resultType,
+                                      std::string *reason = nullptr) const;
+
+  LogicalResult canMaterializeDataLayout(VMIVRegType sourceType,
+                                         VMIVRegType resultType,
+                                         std::string *reason = nullptr) const;
+
+  FailureOr<VMILayoutMaterializationSupport>
   getMaskLayoutMaterializationSupport(VMIMaskType sourceType,
-                                     VMIMaskType resultType,
-                                     std::string *reason = nullptr) const;
+                                      VMIMaskType resultType,
+                                      std::string *reason = nullptr) const;
 
   LogicalResult canMaterializeMaskLayout(VMIMaskType sourceType,
-                                        VMIMaskType resultType,
-                                        std::string *reason = nullptr) const;
+                                         VMIMaskType resultType,
+                                         std::string *reason = nullptr) const;
 
   FailureOr<VMIMaskGranularityMaterializationSupport>
   getMaskGranularityMaterializationSupport(VMIMaskType sourceType,
-                                          VMIMaskType resultType,
-                                          std::string *reason = nullptr) const;
+                                           VMIMaskType resultType,
+                                           std::string *reason = nullptr) const;
 
-  LogicalResult canMaterializeMaskGranularity(
-      VMIMaskType sourceType, VMIMaskType resultType,
-      std::string *reason = nullptr) const;
+  LogicalResult
+  canMaterializeMaskGranularity(VMIMaskType sourceType, VMIMaskType resultType,
+                                std::string *reason = nullptr) const;
 
   FailureOr<VMICastLayoutFact>
   getPreferredCastLayoutFact(VMIVRegType sourceType, VMIVRegType resultType,
-                            std::string *reason = nullptr) const;
+                             std::string *reason = nullptr) const;
 
   FailureOr<VMIGroupSlotLoadSupport>
   getGroupSlotLoadSupport(const VMITargetCapabilityRegistry &capabilities,
-                         VMIGroupSlotLoadOp op,
-                         std::string *reason = nullptr) const;
+                          VMIGroupSlotLoadOp op,
+                          std::string *reason = nullptr) const;
 
   FailureOr<VMIGroupLoadSupport>
   getGroupLoadSupport(const VMITargetCapabilityRegistry &capabilities,
-                     VMIGroupLoadOp op,
-                     std::string *reason = nullptr) const;
+                      VMIGroupLoadOp op, std::string *reason = nullptr) const;
 
   FailureOr<VMIGroupSlotsStoreSupport>
   getGroupSlotsStoreSupport(const VMITargetCapabilityRegistry &capabilities,
-                           VMIGroupStoreOp op,
-                           std::string *reason = nullptr) const;
+                            VMIGroupStoreOp op,
+                            std::string *reason = nullptr) const;
 
   FailureOr<VMIGroupReduceLayoutFact>
   getPreferredGroupReduceLayoutFact(VMIVRegType sourceType, int64_t numGroups,
-                                   std::string *reason = nullptr) const;
+                                    std::string *reason = nullptr) const;
 
   FailureOr<VMIGroupReduceAddFSupport>
   getGroupReduceAddFSupport(const VMITargetCapabilityRegistry &capabilities,
-                           VMIGroupReduceAddFOp op,
-                           std::string *reason = nullptr) const;
+                            VMIGroupReduceAddFOp op,
+                            std::string *reason = nullptr) const;
+
+  FailureOr<VMIGroupReduceAddFSupport>
+  getGroupReduceMaxFSupport(const VMITargetCapabilityRegistry &capabilities,
+                            VMIGroupReduceMaxFOp op,
+                            std::string *reason = nullptr) const;
 
   FailureOr<VMIGroupReduceAddFSupport>
   getGroupReduceAddISupport(const VMITargetCapabilityRegistry &capabilities,
-                           VMIGroupReduceAddIOp op,
+                            VMIGroupReduceAddIOp op,
+                            std::string *reason = nullptr) const;
+
+  FailureOr<VMIGroupBroadcastSupport>
+  getGroupBroadcastSupport(const VMITargetCapabilityRegistry &capabilities,
+                           VMIGroupBroadcastOp op,
                            std::string *reason = nullptr) const;
 
   FailureOr<VMIGroupBroadcastSupport>
   getGroupBroadcastSupport(const VMITargetCapabilityRegistry &capabilities,
-                          VMIGroupBroadcastOp op,
-                          std::string *reason = nullptr) const;
+                           VMIVRegType sourceType, VMIVRegType resultType,
+                           int64_t numGroups,
+                           std::string *reason = nullptr) const;
 
   FailureOr<VMITruncFSupport>
   getTruncFSupport(VMITruncFOp op, std::string *reason = nullptr) const;
 
-  FailureOr<VMIExtFSupport>
-  getExtFSupport(VMIExtFOp op, std::string *reason = nullptr) const;
+  FailureOr<VMIExtFSupport> getExtFSupport(VMIExtFOp op,
+                                           std::string *reason = nullptr) const;
 
   FailureOr<VMIExtISupport>
   getExtSISupport(VMIExtSIOp op, std::string *reason = nullptr) const;
