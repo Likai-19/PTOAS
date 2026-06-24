@@ -349,6 +349,7 @@ struct LayoutSolver {
         solved.getSlots() > 0)
       return solved;
     if (value.getDefiningOp<VMIGroupReduceAddFOp>() ||
+        value.getDefiningOp<VMIGroupReduceMaxFOp>() ||
         value.getDefiningOp<VMIGroupReduceAddIOp>())
       return getPreferredGroupSlotsLayout(type, numGroups);
     if (value.getDefiningOp<VMIGroupSlotLoadOp>())
@@ -387,7 +388,8 @@ struct LayoutSolver {
       if (!resultType)
         continue;
       unsigned resultBits = getElementBitWidth(resultType.getElementType());
-      std::optional<int64_t> vlaneElems = getVLaneElems(sourceType.getElementType());
+      std::optional<int64_t> vlaneElems =
+          getVLaneElems(sourceType.getElementType());
       if (vlaneElems && groupSize == 2 * *vlaneElems && resultBits == 16)
         return true;
       if (vlaneElems && groupSize == 4 * *vlaneElems && resultBits == 8)
@@ -408,8 +410,8 @@ struct LayoutSolver {
            (layout.getBlockElems() == 1 || layout.getBlockElems() == 8);
   }
 
-  VMILayoutAttr getTruncFCompatibleGroupReduceSourceLayout(
-      VMIGroupReduceLayoutFact fact) {
+  VMILayoutAttr
+  getTruncFCompatibleGroupReduceSourceLayout(VMIGroupReduceLayoutFact fact) {
     if (fact.kind == VMIGroupReduceLayoutKind::TwoVLane)
       return VMILayoutAttr::getDeinterleaved(ctx, 2, /*blockElems=*/1);
     if (fact.kind == VMIGroupReduceLayoutKind::FourVLane)
@@ -458,6 +460,42 @@ struct LayoutSolver {
                VMISelectOp, VMIBitcastOp>(op);
   }
 
+  bool canGroupBroadcastProduceLayout(VMIGroupBroadcastOp broadcast,
+                                      VMILayoutAttr resultLayout) {
+    if (!resultLayout)
+      return false;
+    auto sourceType = cast<VMIVRegType>(broadcast.getSource().getType());
+    auto resultType = cast<VMIVRegType>(broadcast.getResult().getType());
+    int64_t numGroups = broadcast.getNumGroupsAttr().getInt();
+    auto assignedSourceType = VMIVRegType::get(
+        ctx, sourceType.getElementCount(), sourceType.getElementType(),
+        getPreferredGroupSlotsLayout(sourceType, numGroups));
+    auto assignedResultType =
+        VMIVRegType::get(ctx, resultType.getElementCount(),
+                         resultType.getElementType(), resultLayout);
+    VMILayoutSupport supports;
+    return succeeded(supports.getGroupBroadcastSupport(
+        capabilities, assignedSourceType, assignedResultType, numGroups));
+  }
+
+  bool canEquivalenceClassAdoptConsumerLayout(Value value,
+                                              VMILayoutAttr requestedLayout) {
+    unsigned id = addDataValue(value);
+    if (id == ~0u)
+      return true;
+    unsigned root = find(id);
+    for (DataNode &node : dataNodes) {
+      if (find(dataIds.lookup(node.value)) != root)
+        continue;
+      if (auto broadcast = node.value.getDefiningOp<VMIGroupBroadcastOp>()) {
+        if (node.value == broadcast.getResult() &&
+            !canGroupBroadcastProduceLayout(broadcast, requestedLayout))
+          return false;
+      }
+    }
+    return true;
+  }
+
   bool canAdoptConsumerRequestedLayout(Value value,
                                        VMILayoutAttr requestedLayout) {
     Operation *definingOp = value.getDefiningOp();
@@ -469,6 +507,8 @@ struct LayoutSolver {
       if (!canProducerAdoptConsumerLayout(definingOp))
         return false;
     }
+    if (!canEquivalenceClassAdoptConsumerLayout(value, requestedLayout))
+      return false;
     if (value.hasOneUse())
       return true;
 
@@ -502,9 +542,7 @@ struct LayoutSolver {
       unsigned root = find(id);
       VMILayoutAttr existing = dataNodes[root].naturalLayout;
       if (existing && existing != request.layout)
-        return request.operand->getOwner()->emitError()
-               << kVMIDiagLayoutContractPrefix << "conflicting natural layouts "
-               << existing << " and " << request.layout;
+        continue;
       dataNodes[root].naturalLayout = request.layout;
     }
     return success();
@@ -560,6 +598,7 @@ struct LayoutSolver {
     bool sourceIsGroupSlotValue =
         (sourceLayout && sourceLayout.isGroupSlots()) ||
         truncf.getSource().getDefiningOp<VMIGroupReduceAddFOp>() ||
+        truncf.getSource().getDefiningOp<VMIGroupReduceMaxFOp>() ||
         truncf.getSource().getDefiningOp<VMIGroupSlotLoadOp>();
     if (!sourceIsGroupSlotValue)
       return false;
@@ -828,8 +867,8 @@ struct LayoutSolver {
         VMILayoutSupport supports;
         FailureOr<VMIGroupReduceLayoutFact> fact =
             supports.getPreferredGroupReduceLayoutFact(sourceType, numGroups);
-        VMILayoutAttr sourceLayout = getPreferredGroupReduceSourceLayout(
-            sourceType, numGroups);
+        VMILayoutAttr sourceLayout =
+            getPreferredGroupReduceSourceLayout(sourceType, numGroups);
         VMILayoutAttr solvedSourceLayout =
             getExplicitDataLayout(reduce.getSource());
         if (solvedSourceLayout && succeeded(fact) &&
@@ -850,9 +889,45 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         if (failed(setNaturalLayout(
                 reduce.getResult(),
-                succeeded(fact) ? fact->resultLayout
-                                : getPreferredGroupSlotsLayout(resultType,
-                                                               numGroups),
+                succeeded(fact)
+                    ? fact->resultLayout
+                    : getPreferredGroupSlotsLayout(resultType, numGroups),
+                op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto reduce = dyn_cast<VMIGroupReduceMaxFOp>(op)) {
+        auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
+        auto resultType = cast<VMIVRegType>(reduce.getResult().getType());
+        int64_t numGroups = reduce.getNumGroupsAttr().getInt();
+        VMILayoutSupport supports;
+        FailureOr<VMIGroupReduceLayoutFact> fact =
+            supports.getPreferredGroupReduceLayoutFact(sourceType, numGroups);
+        VMILayoutAttr sourceLayout =
+            getPreferredGroupReduceSourceLayout(sourceType, numGroups);
+        VMILayoutAttr solvedSourceLayout =
+            getExplicitDataLayout(reduce.getSource());
+        if (solvedSourceLayout && succeeded(fact) &&
+            isCompatibleGroupReduceSourceLayout(*fact, solvedSourceLayout)) {
+          sourceLayout = solvedSourceLayout;
+        } else if (!sourceType.getLayoutAttr() && succeeded(fact)) {
+          if (hasCompatibleTruncFUseForGroupReduce(reduce.getSource(),
+                                                   fact->groupSize)) {
+            if (VMILayoutAttr truncLayout =
+                    getTruncFCompatibleGroupReduceSourceLayout(*fact))
+              sourceLayout = truncLayout;
+          }
+        }
+        requestDataUse(reduce.getSourceMutable(), sourceLayout);
+        if (failed(requestMaskUse(
+                reduce.getMaskMutable(), sourceLayout,
+                getMaskGranularityForElement(sourceType.getElementType()), op)))
+          return WalkResult::interrupt();
+        if (failed(setNaturalLayout(
+                reduce.getResult(),
+                succeeded(fact)
+                    ? fact->resultLayout
+                    : getPreferredGroupSlotsLayout(resultType, numGroups),
                 op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -864,8 +939,8 @@ struct LayoutSolver {
         VMILayoutSupport supports;
         FailureOr<VMIGroupReduceLayoutFact> fact =
             supports.getPreferredGroupReduceLayoutFact(sourceType, numGroups);
-        VMILayoutAttr sourceLayout = getPreferredGroupReduceSourceLayout(
-            sourceType, numGroups);
+        VMILayoutAttr sourceLayout =
+            getPreferredGroupReduceSourceLayout(sourceType, numGroups);
         VMILayoutAttr solvedSourceLayout =
             getExplicitDataLayout(reduce.getSource());
         if (solvedSourceLayout && succeeded(fact) &&
@@ -878,9 +953,9 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         if (failed(setNaturalLayout(
                 reduce.getResult(),
-                succeeded(fact) ? fact->resultLayout
-                                : getPreferredGroupSlotsLayout(resultType,
-                                                               numGroups),
+                succeeded(fact)
+                    ? fact->resultLayout
+                    : getPreferredGroupSlotsLayout(resultType, numGroups),
                 op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -898,8 +973,8 @@ struct LayoutSolver {
         if (failed(requestMaskUse(hist.getMaskMutable(), getContiguousLayout(),
                                   "b8", op)))
           return WalkResult::interrupt();
-        if (failed(setNaturalLayout(hist.getResult(), getContiguousLayout(),
-                                    op)))
+        if (failed(
+                setNaturalLayout(hist.getResult(), getContiguousLayout(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
@@ -909,8 +984,8 @@ struct LayoutSolver {
         if (failed(requestMaskUse(hist.getMaskMutable(), getContiguousLayout(),
                                   "b8", op)))
           return WalkResult::interrupt();
-        if (failed(setNaturalLayout(hist.getResult(), getContiguousLayout(),
-                                    op)))
+        if (failed(
+                setNaturalLayout(hist.getResult(), getContiguousLayout(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
@@ -920,9 +995,8 @@ struct LayoutSolver {
         VMILayoutSupport supports;
         FailureOr<VMICastLayoutFact> fact =
             supports.getPreferredCastLayoutFact(sourceType, resultType);
-        if (succeeded(fact) &&
-            (fact->kind == VMICastLayoutKind::Widen2x ||
-             fact->kind == VMICastLayoutKind::Widen4x)) {
+        if (succeeded(fact) && (fact->kind == VMICastLayoutKind::Widen2x ||
+                                fact->kind == VMICastLayoutKind::Widen4x)) {
           requestDataUse(extf.getSourceMutable(), fact->sourceLayout);
           if (failed(
                   setNaturalLayout(extf.getResult(), fact->resultLayout, op)))
@@ -936,9 +1010,8 @@ struct LayoutSolver {
         VMILayoutSupport supports;
         FailureOr<VMICastLayoutFact> fact =
             supports.getPreferredCastLayoutFact(sourceType, resultType);
-        if (succeeded(fact) &&
-            (fact->kind == VMICastLayoutKind::Widen2x ||
-             fact->kind == VMICastLayoutKind::Widen4x)) {
+        if (succeeded(fact) && (fact->kind == VMICastLayoutKind::Widen2x ||
+                                fact->kind == VMICastLayoutKind::Widen4x)) {
           requestDataUse(extsi.getSourceMutable(), fact->sourceLayout);
           if (failed(
                   setNaturalLayout(extsi.getResult(), fact->resultLayout, op)))
@@ -952,9 +1025,8 @@ struct LayoutSolver {
         VMILayoutSupport supports;
         FailureOr<VMICastLayoutFact> fact =
             supports.getPreferredCastLayoutFact(sourceType, resultType);
-        if (succeeded(fact) &&
-            (fact->kind == VMICastLayoutKind::Widen2x ||
-             fact->kind == VMICastLayoutKind::Widen4x)) {
+        if (succeeded(fact) && (fact->kind == VMICastLayoutKind::Widen2x ||
+                                fact->kind == VMICastLayoutKind::Widen4x)) {
           requestDataUse(extui.getSourceMutable(), fact->sourceLayout);
           if (failed(
                   setNaturalLayout(extui.getResult(), fact->resultLayout, op)))
@@ -970,16 +1042,15 @@ struct LayoutSolver {
             supports.getPreferredCastLayoutFact(sourceType, resultType);
         VMILayoutAttr sourceLayout = getDataLayout(truncf.getSource());
         if (succeeded(fact) && fact->kind == VMICastLayoutKind::Narrow2x &&
-            sourceLayout &&
-            sourceLayout.isGroupSlots() && sourceLayout.getSlots() == 1) {
+            sourceLayout && sourceLayout.isGroupSlots() &&
+            sourceLayout.getSlots() == 1) {
           requestDataUse(truncf.getSourceMutable(), sourceLayout);
           if (failed(setNaturalLayout(truncf.getResult(), sourceLayout, op)))
             return WalkResult::interrupt();
           return WalkResult::advance();
         }
-        if (succeeded(fact) &&
-            (fact->kind == VMICastLayoutKind::Narrow2x ||
-             fact->kind == VMICastLayoutKind::Narrow4x))
+        if (succeeded(fact) && (fact->kind == VMICastLayoutKind::Narrow2x ||
+                                fact->kind == VMICastLayoutKind::Narrow4x))
           requestDataUse(truncf.getSourceMutable(), fact->sourceLayout);
         VMILayoutAttr resultLayout =
             succeeded(fact) ? fact->resultLayout : getContiguousLayout();
@@ -995,16 +1066,15 @@ struct LayoutSolver {
             supports.getPreferredCastLayoutFact(sourceType, resultType);
         VMILayoutAttr sourceLayout = getDataLayout(trunci.getSource());
         if (succeeded(fact) && fact->kind == VMICastLayoutKind::Narrow2x &&
-            sourceLayout &&
-            sourceLayout.isGroupSlots() && sourceLayout.getSlots() == 1) {
+            sourceLayout && sourceLayout.isGroupSlots() &&
+            sourceLayout.getSlots() == 1) {
           requestDataUse(trunci.getSourceMutable(), sourceLayout);
           if (failed(setNaturalLayout(trunci.getResult(), sourceLayout, op)))
             return WalkResult::interrupt();
           return WalkResult::advance();
         }
-        if (succeeded(fact) &&
-            (fact->kind == VMICastLayoutKind::Narrow2x ||
-             fact->kind == VMICastLayoutKind::Narrow4x))
+        if (succeeded(fact) && (fact->kind == VMICastLayoutKind::Narrow2x ||
+                                fact->kind == VMICastLayoutKind::Narrow4x))
           requestDataUse(trunci.getSourceMutable(), fact->sourceLayout);
         VMILayoutAttr resultLayout =
             succeeded(fact) ? fact->resultLayout : getContiguousLayout();
@@ -1544,6 +1614,14 @@ struct LayoutSolver {
         return WalkResult::advance();
       }
       if (auto reduce = dyn_cast<VMIGroupReduceAddFOp>(op)) {
+        auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
+        if (failed(requestMaskUse(
+                reduce.getMaskMutable(), sourceType.getLayoutAttr(),
+                getMaskGranularityForElement(sourceType.getElementType()), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto reduce = dyn_cast<VMIGroupReduceMaxFOp>(op)) {
         auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
         if (failed(requestMaskUse(
                 reduce.getMaskMutable(), sourceType.getLayoutAttr(),

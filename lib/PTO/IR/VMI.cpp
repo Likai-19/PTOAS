@@ -532,10 +532,9 @@ VMILayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
       return emitError() << "#pto.vmi.layout<num_groups = " << factor
                          << "> requires block_elems to be 1";
     if (slots < 0)
-      return emitError()
-             << "#pto.vmi.layout<num_groups = " << factor
-             << ", slots = " << slots
-             << "> requires slots to be omitted or positive";
+      return emitError() << "#pto.vmi.layout<num_groups = " << factor
+                         << ", slots = " << slots
+                         << "> requires slots to be omitted or positive";
     return success();
   }
 
@@ -1121,21 +1120,23 @@ LogicalResult VMIReduceMaxFOp::verify() { return verifyReduceMinMaxFOp(*this); }
 
 LogicalResult VMIReduceMinFOp::verify() { return verifyReduceMinMaxFOp(*this); }
 
-LogicalResult VMIGroupReduceAddFOp::verify() {
-  auto sourceType = cast<VMIVRegType>(getSource().getType());
-  auto maskType = cast<VMIMaskType>(getMask().getType());
-  auto resultType = cast<VMIVRegType>(getResult().getType());
-  if (!getOperation()->hasAttr("reassoc"))
-    return emitOpError(
+template <typename OpTy>
+static LogicalResult verifyGroupReduceFloatOp(OpTy op, bool requiresReassoc) {
+  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
+  auto maskType = cast<VMIMaskType>(op.getMask().getType());
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
+  if (requiresReassoc && !op->hasAttr("reassoc"))
+    return op.emitOpError(
         "requires reassoc attr because grouped lowering uses pair-wise "
         "floating-point reductions");
   if (!isVMIFloatLikeType(sourceType.getElementType()))
-    return emitOpError("requires floating-point-like VMI source element type");
+    return op.emitOpError(
+        "requires floating-point-like VMI source element type");
   if (sourceType.getElementCount() != resultType.getElementCount())
-    return emitOpError(
+    return op.emitOpError(
         "requires source and result logical lane counts to match");
   if (sourceType.getElementType() != resultType.getElementType())
-    return emitOpError("requires source and result element types to match");
+    return op.emitOpError("requires source and result element types to match");
   if (auto sourceLayout = sourceType.getLayoutAttr()) {
     bool supportedSourceLayout =
         sourceLayout.isContiguous() ||
@@ -1146,21 +1147,29 @@ LogicalResult VMIGroupReduceAddFOp::verify() {
          (sourceLayout.getBlockElems() == 1 ||
           sourceLayout.getBlockElems() == 8));
     if (!supportedSourceLayout)
-      return emitOpError(
+      return op.emitOpError(
           "requires layout-assigned source to use contiguous layout or "
           "deinterleaved=2/4 layout with block_elems=1 or block_elems=8");
   }
   if (auto resultLayout = resultType.getLayoutAttr()) {
     if (!resultLayout.isGroupSlots() ||
-        resultLayout.getNumGroups() != getNumGroupsAttr().getInt())
-      return emitOpError() << "requires layout-assigned result to use "
-                              "#pto.vmi.layout<num_groups = "
-                           << getNumGroupsAttr().getInt() << ">";
+        resultLayout.getNumGroups() != op.getNumGroupsAttr().getInt())
+      return op.emitOpError() << "requires layout-assigned result to use "
+                                 "#pto.vmi.layout<num_groups = "
+                              << op.getNumGroupsAttr().getInt() << ">";
   }
-  if (failed(verifyMaskMatchesData(getOperation(), maskType, sourceType)))
+  if (failed(verifyMaskMatchesData(op.getOperation(), maskType, sourceType)))
     return failure();
-  return verifyNumGroups(getOperation(), sourceType,
-                         getNumGroupsAttr().getInt());
+  return verifyNumGroups(op.getOperation(), sourceType,
+                         op.getNumGroupsAttr().getInt());
+}
+
+LogicalResult VMIGroupReduceAddFOp::verify() {
+  return verifyGroupReduceFloatOp(*this, /*requiresReassoc=*/true);
+}
+
+LogicalResult VMIGroupReduceMaxFOp::verify() {
+  return verifyGroupReduceFloatOp(*this, /*requiresReassoc=*/false);
 }
 
 LogicalResult VMIGroupReduceAddIOp::verify() {
@@ -1231,8 +1240,7 @@ LogicalResult VMIGroupBroadcastOp::verify() {
                          getNumGroupsAttr().getInt());
 }
 
-template <typename OpTy>
-static LogicalResult verifyVMIHistogramOp(OpTy op) {
+template <typename OpTy> static LogicalResult verifyVMIHistogramOp(OpTy op) {
   auto accType = cast<VMIVRegType>(op.getAcc().getType());
   auto sourceType = cast<VMIVRegType>(op.getSource().getType());
   auto maskType = cast<VMIMaskType>(op.getMask().getType());
