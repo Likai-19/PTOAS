@@ -2845,11 +2845,10 @@ for r = 0..7:
 This is the positive counterpart to section 3.11.2.  Tail participation is
 still expressed by masks, but the source must provide a static proof that
 reading the rounded-up 8-row physical tile is memory-safe.  That proof is
-explicit: it can come from a statically shaped memref source, or from
-`pto.vmi.load {full_read_elems = N}` on a pointer source.  The pointer attr
-means the memory interval starting at the load offset is safe to read for `N`
-logical elements; it is not inferred from surrounding MTE copies or caller
-context.
+explicit for partial logical loads: it can come from a statically shaped memref
+source.  Pointer-source runtime kernels should instead load the rounded physical
+vector and use a mask to express active logical lanes; this is not inferred from
+surrounding MTE copies or caller context.
 
 VMI input:
 
@@ -2864,8 +2863,9 @@ pto.vmi.group_store %sum, %out[%group_off], %c1 {num_groups = 6}
 Equivalent pointer-source VMI input for runtime kernels:
 
 ```text
-%x = pto.vmi.load %base[%off] {full_read_elems = 256}
-  : !pto.ptr<f32, ub> -> !pto.vmi.vreg<192xf32>
+%x = pto.vmi.load %base[%off]
+  : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
+%mask = pto.vmi.create_mask %c192 : index -> !pto.vmi.mask<256xpred>
 ```
 
 Assigned layouts:

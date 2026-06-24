@@ -923,8 +923,7 @@ VMICapabilityResult requireIdentityMemRefLayout(Type memoryType, StringRef role,
 
 VMIMemorySafeReadProof computeSafeFullReadProof(
     Type sourceType, std::optional<int64_t> constantOffset,
-    VMIVRegType resultType,
-    std::optional<int64_t> explicitFullReadElems = std::nullopt) {
+    VMIVRegType resultType) {
   VMIMemorySafeReadProof proof;
   proof.constantOffset = constantOffset;
 
@@ -937,15 +936,11 @@ VMIMemorySafeReadProof computeSafeFullReadProof(
   if (!constantOffset)
     return fail("requires constant index offset");
 
-  std::optional<int64_t> elements = explicitFullReadElems;
-  if (!elements) {
-    FailureOr<int64_t> staticElements = getStaticMemRefElementCount(sourceType);
-    if (failed(staticElements))
-      return fail("requires statically shaped memref source or explicit "
-                  "full_read_elems");
-    elements = *staticElements;
-  }
-  proof.staticElementCount = *elements;
+  FailureOr<int64_t> staticElements = getStaticMemRefElementCount(sourceType);
+  if (failed(staticElements))
+    return fail("requires statically shaped memref source");
+  int64_t elements = *staticElements;
+  proof.staticElementCount = elements;
 
   if (*constantOffset < 0)
     return fail("requires non-negative offset");
@@ -959,11 +954,11 @@ VMIMemorySafeReadProof computeSafeFullReadProof(
   proof.laneAddressMap = *addressMap;
 
   proof.physicalFootprint = addressMap->physicalLaneFootprint;
-  if (addressMap->getExclusiveEndElement() > *elements)
+  if (addressMap->getExclusiveEndElement() > elements)
     return fail(Twine("full physical read footprint [") +
                 Twine(addressMap->baseElementOffset) + ", " +
                 Twine(addressMap->getExclusiveEndElement()) +
-                ") exceeds static memref element count " + Twine(*elements));
+                ") exceeds static memref element count " + Twine(elements));
 
   proof.proven = true;
   return proof;
@@ -972,8 +967,7 @@ VMIMemorySafeReadProof computeSafeFullReadProof(
 VMIMemoryAccessPlan buildReadAccessPlan(
     const VMITargetCapabilityRegistry &capabilities, Value source,
     Type sourceType, VMIVRegType resultType,
-    std::optional<int64_t> constantOffset, VMIMemoryValidMaskKind validMask,
-    std::optional<int64_t> explicitFullReadElems = std::nullopt) {
+    std::optional<int64_t> constantOffset, VMIMemoryValidMaskKind validMask) {
   VMIMemoryAccessPlan plan;
   plan.baseType = sourceType;
   plan.valueType = resultType;
@@ -982,8 +976,8 @@ VMIMemoryAccessPlan buildReadAccessPlan(
   plan.validMask = validMask;
   plan.permutation = VMIMemoryPermutationKind::Identity;
   plan.writeMask = VMIMemoryWriteMaskKind::AllTrue;
-  plan.safeReadProof = computeSafeFullReadProof(
-      sourceType, constantOffset, resultType, explicitFullReadElems);
+  plan.safeReadProof =
+      computeSafeFullReadProof(sourceType, constantOffset, resultType);
   plan.laneAddressMap = plan.safeReadProof.laneAddressMap;
   plan.targetCapability =
       capabilities.supportsDirectMemory(sourceType, "source");
@@ -1040,16 +1034,15 @@ void requireUnavailableReadFallback(VMIMemoryAccessPlan &plan) {
 
 FailureOr<int64_t> verifyFullOrSafeReadVRegChunks(
     Operation *op, VMIVRegType type, Type sourceType, Value offset,
-    PatternRewriter &rewriter,
-    std::optional<int64_t> explicitFullReadElems = std::nullopt) {
+    PatternRewriter &rewriter) {
   std::string fullChunkReason;
   FailureOr<int64_t> lanesPerPart =
       checkFullDataPhysicalChunks(type, &fullChunkReason);
   if (succeeded(lanesPerPart))
     return *lanesPerPart;
 
-  VMIMemorySafeReadProof safeReadProof = computeSafeFullReadProof(
-      sourceType, getConstantIndexValue(offset), type, explicitFullReadElems);
+  VMIMemorySafeReadProof safeReadProof =
+      computeSafeFullReadProof(sourceType, getConstantIndexValue(offset), type);
   if (safeReadProof.proven) {
     lanesPerPart = getDataLanesPerPart(type.getElementType());
     if (succeeded(lanesPerPart))
@@ -1065,7 +1058,7 @@ FailureOr<int64_t> verifyFullOrSafeReadVRegChunks(
 LogicalResult checkSupportedLoadShape(
     const VMITargetCapabilityRegistry &capabilities, VMIVRegType type,
     Value source, Type sourceType, std::optional<int64_t> constantOffset,
-    std::optional<int64_t> explicitFullReadElems, std::string *reason) {
+    std::string *reason) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
       *reason = message.str();
@@ -1074,7 +1067,7 @@ LogicalResult checkSupportedLoadShape(
 
   VMIMemoryAccessPlan accessPlan = buildReadAccessPlan(
       capabilities, source, sourceType, type, constantOffset,
-      VMIMemoryValidMaskKind::AllTrue, explicitFullReadElems);
+      VMIMemoryValidMaskKind::AllTrue);
   if (!accessPlan.targetCapability.isSupported())
     return fail(accessPlan.targetCapability.reason);
 
@@ -1195,7 +1188,7 @@ checkSupportedGroupLoadShape(const VMITargetCapabilityRegistry &capabilities,
   if (resultLayout.isContiguous()) {
     if (failed(checkSupportedLoadShape(capabilities, resultType, op.getSource(),
                                        op.getSource().getType(), std::nullopt,
-                                       std::nullopt, reason)))
+                                       reason)))
       return failure();
     return checkSupportedGroupChunkShape(resultType, *groupSize, reason);
   }
@@ -3750,12 +3743,8 @@ struct OneToNVMILoadOpPattern : OneToNOpConversionPattern<VMILoadOp> {
                        "load offset must convert to one value", rewriter);
     if (failed(source) || failed(offset))
       return failure();
-    std::optional<int64_t> explicitFullReadElems;
-    if (auto attr = op.getFullReadElemsAttr())
-      explicitFullReadElems = attr.getInt();
     FailureOr<int64_t> lanesPerPart = verifyFullOrSafeReadVRegChunks(
-        op, resultVMIType, op.getSource().getType(), *offset, rewriter,
-        explicitFullReadElems);
+        op, resultVMIType, op.getSource().getType(), *offset, rewriter);
     if (failed(lanesPerPart))
       return failure();
 
@@ -7585,13 +7574,11 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
                             bool enableStableGatherMaskedLoad) {
   auto emitMemoryUnsupported =
       [&](Operation *op, StringRef opName, VMIVRegType type, Value source,
-          std::optional<int64_t> constantOffset,
-          std::optional<int64_t> explicitFullReadElems =
-              std::nullopt) -> WalkResult {
+          std::optional<int64_t> constantOffset) -> WalkResult {
     std::string reason;
     if (succeeded(checkSupportedLoadShape(capabilities, type, source,
                                           source.getType(), constantOffset,
-                                          explicitFullReadElems, &reason)))
+                                          &reason)))
       return WalkResult::advance();
 
     op->emitError()
@@ -7689,13 +7676,9 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     }
 
     if (auto load = dyn_cast<VMILoadOp>(op)) {
-      std::optional<int64_t> explicitFullReadElems;
-      if (auto attr = load.getFullReadElemsAttr())
-        explicitFullReadElems = attr.getInt();
       return emitMemoryUnsupported(
           op, "pto.vmi.load", cast<VMIVRegType>(load.getResult().getType()),
-          load.getSource(), getConstantIndexValue(load.getOffset()),
-          explicitFullReadElems);
+          load.getSource(), getConstantIndexValue(load.getOffset()));
     }
     if (auto load = dyn_cast<VMIGroupLoadOp>(op)) {
       std::string reason;
