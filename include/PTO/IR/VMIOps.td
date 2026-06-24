@@ -504,8 +504,7 @@ def VMIBitcastOp : VMI_Op<"bitcast"> {
 
 def VMILoadOp : VMI_Op<"load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "VMI logical vector load";
-  let arguments = (ins PtrOrMemRef:$source, Index:$offset,
-                       OptionalAttr<I64Attr>:$full_read_elems);
+  let arguments = (ins PtrOrMemRef:$source, Index:$offset);
   let results = (outs VMI_VRegTypeConstraint:$result);
   let hasVerifier = 1;
   let assemblyFormat = "$source `[` $offset `]` attr-dict `:` type($source) `->` type($result)";
