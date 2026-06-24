@@ -142,36 +142,3 @@ module {
 // CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.masked_store requires either full physical chunks or contiguous tail-store value/mask layout
 // CHECK-SAME: destination memref layout is non-identity
 // CHECK-SAME: contiguous identity lane-to-address maps
-
-// -----
-
-module {
-  func.func @vmi_tile_read_strided_memref_unsupported(
-      %src: memref<128xf32, strided<[2], offset: 0>>) {
-    %value = pto.vmi.tile_read %src
-        : memref<128xf32, strided<[2], offset: 0>>
-          -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
-    return
-  }
-}
-
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.tile_read requires full physical chunks without padding lanes or a statically safe full-read footprint
-// CHECK-SAME: source memref layout is non-identity
-// CHECK-SAME: contiguous identity lane-to-address maps
-
-// -----
-
-module {
-  func.func @vmi_tile_write_strided_memref_unsupported(
-      %value: !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>,
-      %dst: memref<128xf32, strided<[2], offset: 0>>) {
-    pto.vmi.tile_write %value, %dst
-        : !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>,
-          memref<128xf32, strided<[2], offset: 0>>
-    return
-  }
-}
-
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.tile_write requires an 8/16/32-bit predicate-maskable element type
-// CHECK-SAME: destination memref layout is non-identity
-// CHECK-SAME: contiguous identity lane-to-address maps

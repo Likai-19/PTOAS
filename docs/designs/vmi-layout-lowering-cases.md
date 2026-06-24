@@ -1496,7 +1496,7 @@ for r = 0..7:
     = s * s
 ```
 
-#### 3.7.4 Unit-Stride Store Is Not A Valid Lowering Yet
+#### 3.7.4 Slots=1 Store Lowers To Packed Or Point Stores
 
 The row-local S=64 result uses one physical vreg per group with the semantic
 value in lane 0:
@@ -1505,17 +1505,15 @@ value in lane 0:
 %sum_r lane 0 = reduce(row_r[0..63])
 ```
 
-The current VPTO lowering for `slots = 1` group_store emits one lane-0 `vsts`
-per group. Therefore unit-stride f32 output would issue stores at:
+The current VPTO lowering for `slots = 1` group_store has two paths.
 
-```text
-group_off + 0, group_off + 1, group_off + 2, ...
-```
+For unit-stride output where all groups fit in one physical vector, the
+lowering packs the lane-0 values into one dense vector and stores that vector
+with a normal `vsts`.
 
-Only the first address is necessarily 32B-aligned. The remaining f32 addresses
-are 4B apart and are not valid for this `vsts` lowering. The compiler must not
-accept this as a clean lowering until either pack-to-slots=8 materialization
-support or unaligned-store support exists.
+For non-unit row strides, each group stores its lane-0 scalar with a point
+store. That emits `vsts` with `dist = "1PT_B32"` for f32 and only requires the
+natural 4B alignment of the scalar element.
 
 VMI input:
 
@@ -1525,14 +1523,10 @@ VMI input:
 pto.vmi.group_store %sum, %out[%group_off], %c1 {num_groups = 8}
 ```
 
-Required diagnostic:
+Current checked-in coverage for the point-store path is:
 
 ```text
-VMI-LAYOUT-CONTRACT:
-  pto.vmi.group_store with #pto.vmi.layout<num_groups = 8, slots = 1> lowers
-  as one lane-0 vsts per group and requires constant positive row_stride
-  divisible by 8 f32 elements for 32B store alignment. Packed or unaligned
-  contiguous store lowering is not implemented.
+test/lit/vmi/vmi_to_vpto_group_store_slots1_1pt.pto
 ```
 
 ### 3.8 `group_reduce -> truncf -> group_broadcast -> store`

@@ -38,6 +38,7 @@ enum class VMILayoutMaterializationSupportKind {
   Identity,
   ContiguousToDeinterleaved,
   DeinterleavedToContiguous,
+  DeinterleavedToDeinterleavedViaContiguous,
 };
 
 struct VMILayoutMaterializationSupport {
@@ -92,7 +93,8 @@ struct VMIGroupLoadSupport {
 
 enum class VMIGroupSlotsStoreSupportKind {
   Slots8UnitStrideVsts,
-  Slots1AlignedLane0Vsts,
+  Slots1PointVsts,
+  Slots1PackedUnitStrideVsts,
 };
 
 struct VMIGroupSlotsStoreSupport {
@@ -162,7 +164,7 @@ struct VMIExtFSupport {
 enum class VMITruncISupportKind {
   Deinterleaved2I32ToContiguousI16,
   Deinterleaved4I32ToContiguousI8,
-  GroupSlots1I32ToI16,
+  GroupSlots1I32ToNarrow,
 };
 
 struct VMITruncISupport {
@@ -173,6 +175,8 @@ struct VMITruncISupport {
 enum class VMIExtISupportKind {
   ContiguousI16ToDeinterleaved2I32,
   ContiguousI8ToDeinterleaved4I32,
+  GroupSlotsI16ToI32,
+  GroupSlotsI8ToI32,
 };
 
 struct VMIExtISupport {
@@ -269,6 +273,11 @@ public:
   FailureOr<VMIGroupReduceAddFSupport>
   getGroupReduceAddISupport(const VMITargetCapabilityRegistry &capabilities,
                             VMIGroupReduceAddIOp op,
+                            std::string *reason = nullptr) const;
+
+  FailureOr<VMIGroupReduceAddFSupport>
+  getGroupReduceMaxISupport(const VMITargetCapabilityRegistry &capabilities,
+                            VMIGroupReduceMaxIOp op,
                             std::string *reason = nullptr) const;
 
   FailureOr<VMIGroupBroadcastSupport>

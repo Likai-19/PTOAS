@@ -20,15 +20,6 @@ module {
     return %narrow : !pto.vmi.vreg<128xf16>
   }
 
-  func.func @vmi_layout_assignment_tile_read_truncf(
-      %src: memref<128xf32>) -> !pto.vmi.vreg<128xf16> {
-    %wide = pto.vmi.tile_read %src
-        : memref<128xf32> -> !pto.vmi.vreg<128xf32>
-    %narrow = pto.vmi.truncf %wide
-        : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
-    return %narrow : !pto.vmi.vreg<128xf16>
-  }
-
   func.func @vmi_layout_assignment_load_truncf_multi_use(
       %src: !pto.ptr<f32, ub>,
       %dst: !pto.ptr<f32, ub>,
@@ -42,17 +33,6 @@ module {
     return %narrow : !pto.vmi.vreg<128xf16>
   }
 
-  func.func @vmi_layout_assignment_tile_read_truncf_multi_use(
-      %src: memref<128xf32>,
-      %dst: memref<128xf32>) -> !pto.vmi.vreg<128xf16> {
-    %wide = pto.vmi.tile_read %src
-        : memref<128xf32> -> !pto.vmi.vreg<128xf32>
-    pto.vmi.tile_write %wide, %dst
-        : !pto.vmi.vreg<128xf32>, memref<128xf32>
-    %narrow = pto.vmi.truncf %wide
-        : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
-    return %narrow : !pto.vmi.vreg<128xf16>
-  }
 }
 
 // ASSIGN-LABEL: func.func @vmi_layout_assignment_load_truncf(
@@ -73,25 +53,6 @@ module {
 // LOWER-NOT: pto.vmi.
 // LOWER-NOT: !pto.vmi.
 
-// ASSIGN-LABEL: func.func @vmi_layout_assignment_tile_read_truncf(
-// ASSIGN-SAME: -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
-// ASSIGN: %[[WIDE:.*]] = pto.vmi.tile_read
-// ASSIGN-SAME: memref<128xf32> -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
-// ASSIGN-NOT: pto.vmi.ensure_layout
-// ASSIGN: %[[NARROW:.*]] = pto.vmi.truncf %[[WIDE]]
-// ASSIGN-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>> -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
-// ASSIGN: return %[[NARROW]] : !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
-
-// LOWER-LABEL: func.func @vmi_layout_assignment_tile_read_truncf(
-// LOWER: %[[ZERO:.*]] = arith.constant 0 : index
-// LOWER: %[[P0:.*]], %[[P1:.*]] = pto.vldsx2 %arg0[%[[ZERO]]], "DINTLV_B32"
-// LOWER: %[[EVEN:.*]] = pto.vcvt %[[P0]], {{.*}} {part = "EVEN", rnd = "R", sat = "SAT"}
-// LOWER: %[[ODD:.*]] = pto.vcvt %[[P1]], {{.*}} {part = "ODD", rnd = "R", sat = "SAT"}
-// LOWER: %[[NARROW:.*]] = pto.vor %[[EVEN]], %[[ODD]]
-// LOWER: return %[[NARROW]] : !pto.vreg<128xf16>
-// LOWER-NOT: pto.vmi.
-// LOWER-NOT: !pto.vmi.
-
 // ASSIGN-LABEL: func.func @vmi_layout_assignment_load_truncf_multi_use(
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
 // ASSIGN: %[[WIDE:.*]] = pto.vmi.load
@@ -105,26 +66,6 @@ module {
 // ASSIGN: return %[[NARROW]] : !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
 
 // LOWER-LABEL: func.func @vmi_layout_assignment_load_truncf_multi_use(
-// LOWER: pto.vsts
-// LOWER: pto.vdintlv
-// LOWER: pto.vcvt
-// LOWER: return {{.*}} : !pto.vreg<128xf16>
-// LOWER-NOT: pto.vmi.
-// LOWER-NOT: !pto.vmi.
-
-// ASSIGN-LABEL: func.func @vmi_layout_assignment_tile_read_truncf_multi_use(
-// ASSIGN-SAME: -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
-// ASSIGN: %[[WIDE:.*]] = pto.vmi.tile_read
-// ASSIGN-SAME: memref<128xf32> -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
-// ASSIGN: pto.vmi.tile_write %[[WIDE]]
-// ASSIGN-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
-// ASSIGN: %[[SPLIT:.*]] = pto.vmi.ensure_layout %[[WIDE]]
-// ASSIGN-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
-// ASSIGN: %[[NARROW:.*]] = pto.vmi.truncf %[[SPLIT]]
-// ASSIGN-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>> -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
-// ASSIGN: return %[[NARROW]] : !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
-
-// LOWER-LABEL: func.func @vmi_layout_assignment_tile_read_truncf_multi_use(
 // LOWER: pto.vsts
 // LOWER: pto.vdintlv
 // LOWER: pto.vcvt

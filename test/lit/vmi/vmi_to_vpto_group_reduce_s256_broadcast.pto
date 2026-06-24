@@ -35,7 +35,7 @@ module {
 }
 
 // CHECK-LABEL: func.func @vmi_to_vpto_group_reduce_s256_broadcast(
-// CHECK: pto.vcadd
+// CHECK: pto.vcgadd
 // CHECK: pto.vadd
 // CHECK: pto.vsel
 // CHECK: pto.vdup {{.*}} {position = "LOWEST"}

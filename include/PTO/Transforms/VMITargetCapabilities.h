@@ -45,6 +45,7 @@ enum class VMIReductionKind {
   AddI,
   AddF,
   GroupAddI,
+  GroupMaxI,
   GroupAddF,
   GroupMaxF,
   MaxF,
@@ -185,6 +186,10 @@ public:
     if (sourceLayout.isDeinterleaved() && resultLayout.isContiguous() &&
         (sourceLayout.getFactor() == 2 || sourceLayout.getFactor() == 4))
       return VMICapabilityResult::supported();
+    if (sourceLayout.isDeinterleaved() && resultLayout.isDeinterleaved() &&
+        (sourceLayout.getFactor() == 2 || sourceLayout.getFactor() == 4) &&
+        (resultLayout.getFactor() == 2 || resultLayout.getFactor() == 4))
+      return VMICapabilityResult::supported();
     return VMICapabilityResult::missingCapability(
         "unsupported source/result layout pair");
   }
@@ -238,12 +243,13 @@ public:
       return VMICapabilityResult::missingCapability(
           "currently supports only f16/f32 elements for floating-point "
           "reduction");
-    case VMIReductionKind::GroupAddI: {
+    case VMIReductionKind::GroupAddI:
+    case VMIReductionKind::GroupMaxI: {
       auto intType = dyn_cast<IntegerType>(elementType);
       if (intType && intType.getWidth() == 32)
         return VMICapabilityResult::supported();
       return VMICapabilityResult::missingCapability(
-          "grouped integer add reduction supports only i32 accumulator "
+          "grouped integer reduction supports only i32 accumulator "
           "elements because narrow integer reductions widen their result; "
           "cast i8/i16 storage before grouped reduction");
     }
