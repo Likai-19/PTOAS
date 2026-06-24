@@ -95,36 +95,3 @@ module {
 // CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.masked_store requires either full physical chunks or contiguous tail-store value/mask layout
 // CHECK-SAME: with UB-backed destination
 // CHECK-SAME: destination is GM-backed
-
-// -----
-
-module {
-  func.func @vmi_tile_read_gm_unsupported(
-      %src: memref<64xf32, #pto.address_space<gm>>) {
-    %value = pto.vmi.tile_read %src
-        : memref<64xf32, #pto.address_space<gm>>
-          -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
-    return
-  }
-}
-
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.tile_read requires full physical chunks without padding lanes or a statically safe full-read footprint
-// CHECK-SAME: source is GM-backed
-// CHECK-SAME: requires UB-backed memory
-
-// -----
-
-module {
-  func.func @vmi_tile_write_gm_unsupported(
-      %value: !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>,
-      %dst: memref<64xf32, #pto.address_space<gm>>) {
-    pto.vmi.tile_write %value, %dst
-        : !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>,
-          memref<64xf32, #pto.address_space<gm>>
-    return
-  }
-}
-
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.tile_write requires an 8/16/32-bit predicate-maskable element type
-// CHECK-SAME: with UB-backed destination
-// CHECK-SAME: destination is GM-backed

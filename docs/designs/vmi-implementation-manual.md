@@ -1,6 +1,6 @@
 # VMI 实现手册
 
-本文是 `docs/designs/vmi-dialect-design.md` 的落地手册。设计文档回答“为什么这样设计”，本文回答
+本文配套 `docs/designs/vmi-introduction.md` 和当前 VMI lowering 设计，回答
 “按什么顺序改哪些文件、每一步做到什么程度才算完成”。
 
 本文不替代最终 ODS / C++ verifier / lit 测试。实现时如果发现本文和 ODS 或 verifier 冲突，以
@@ -1313,7 +1313,7 @@ truncf f32 -> f16:
 truncf f32 -> fp8-like:
   result natural layout = contiguous
 
-store/tile_write:
+store:
   consumer requests contiguous externally visible order
 ```
 
@@ -1485,7 +1485,7 @@ Data natural layout:
   pto.vmi.channel_merge with C inputs: result natural = deinterleaved=C
 
 Data use request:
-  pto.vmi.store/tile_write: value requested as contiguous
+  pto.vmi.store: value requested as contiguous
   pto.vmi.channel_split with C results: source requested as deinterleaved=C
   op requiring a common operand/result layout: request producer class layout
 
@@ -1587,7 +1587,7 @@ allowed:
   pto.vmi.create_mask
 
 not allowed in the first implementation:
-  load/tile_read
+  load
   arithmetic result
   conversion result
   shuffle/channel_split/channel_merge result
@@ -1904,7 +1904,7 @@ layout-producing conversion:
   extf, truncf, bitcast
 
 externally ordered memory:
-  load, store, tile_read, tile_write
+  load, store
 
 value-indexed accumulation:
   dhist, chist
@@ -1934,7 +1934,7 @@ vmi.store of deinterleaved=2:
   or materialize source to contiguous before physical store
 ```
 
-Therefore `store/tile_write` lowering must either:
+Therefore `store` lowering must either:
 
 ```text
 1. consume contiguous layout directly, or
@@ -1960,9 +1960,6 @@ vmi.masked_load:
 vmi.store:
   materialize assigned source layout -> contiguous
   emit physical vsts chunks in memory order
-
-vmi.tile_read / vmi.tile_write:
-  follow the same externally ordered rule
 ```
 
 Current direct memory lowering may only emit VPTO vector memory ops for
@@ -1998,11 +1995,11 @@ current direct path supports this limited proof:
 
 ```text
 source is a statically shaped memref
-offset is a constant non-negative index, or tile_read implicit offset 0
+offset is a constant non-negative index
 offset + physical_arity(result) * lanes_per_physical_part <= static memref element count
 ```
 
-When this proof holds, `vmi.load` / `vmi.tile_read` may still issue full `pto.vlds` chunks. The extra padding lanes are
+When this proof holds, `vmi.load` may still issue full `pto.vlds` chunks. The extra padding lanes are
 not logical VMI lanes and must remain unobservable through later VMI materialization rules. Pointer sources, dynamic
 offsets, dynamic memrefs, and insufficient static footprints remain unsupported:
 
@@ -2014,7 +2011,7 @@ pto.vlds/pto.vsts and requires UB-backed memory)
 ```
 
 Store-style ops are different because inactive lanes can be made write-free with true predicates. `vmi.store`,
-`vmi.masked_store`, and `vmi.tile_write` therefore support the explicit contiguous/deinterleaved tail-store
+`vmi.masked_store` therefore support the explicit contiguous/deinterleaved tail-store
 materialization paths described below.
 
 ## 2. Slice 0: Type / Attr Bootstrap
@@ -2218,8 +2215,6 @@ pto.vmi.store
 pto.vmi.masked_store
 pto.vmi.scatter
 pto.vmi.compress_store
-pto.vmi.tile_read
-pto.vmi.tile_write
 ```
 
 Value-indexed accumulation：
@@ -2304,13 +2299,15 @@ mask granularity must match selected element width after layout assignment
 source/result lane count equal
 source/result element types are float
 bitwidth changes in the expected direction
+truncf rounding attr, when present, must be A/H and currently only applies to
+  f32 -> !pto.hif8
 ```
 
 Memory op verifier:
 
 ```text
-load/tile_read memory element type must match result VMI data element type when the source is PtrType or MemRefType
-store/tile_write memory element type must match stored VMI data element type when the destination is PtrType or MemRefType
+load memory element type must match result VMI data element type when the source is PtrType or MemRefType
+store memory element type must match stored VMI data element type when the destination is PtrType or MemRefType
 ```
 
 Histogram op verifier:
@@ -2524,6 +2521,9 @@ truncf f32 -> fp8-like:
   result. This mirrors the hardware packed-4 contract: each source part owns
   one quarter of the destination byte lanes, so the final externally visible
   vector remains logical lane order 0..N-1 after the merge.
+  default round mode is result-type specific: f8E4M3/f8E5M2 use rnd=R, hif8
+  uses rnd=A. hif8 may explicitly request hybrid lowering with
+  pto.vmi.truncf {rounding = "H"}, which forwards rnd=H to every packed part.
 
 bitcast:
   source and result layouts must match
@@ -2537,12 +2537,12 @@ bitcast:
   result logical bits. group_slots bitcast is unsupported until a slot-wise
   bitcast contract is defined.
 
-load/tile_read:
+load:
   baseline result layout is deterministic from explicit layout attrs or the
   producer natural layout; consumer-specific alternatives are represented by
   ensure_layout and optimized later
 
-store/tile_write:
+store:
   baseline requests contiguous source layout
   current implementation records a contiguous use-site request for vmi.store and
   inserts pto.vmi.ensure_layout when the stored value class solved to a
@@ -2599,7 +2599,7 @@ implemented:
   extf source -> contiguous use-site request for supported f16/fp8-like to f32 paths
   truncf f32->f16 source -> deinterleaved=2 use-site request
   truncf f32->fp8-like source -> deinterleaved=4 use-site request
-  single-use pto.vmi.load / tile_read results can adopt a consumer-requested
+  single-use pto.vmi.load results can adopt a consumer-requested
   layout before type rewrite; this covers direct memory producers such as
   load -> truncf without inserting a redundant ensure_layout
   vmi.store data operand -> contiguous use-site request
@@ -3246,10 +3246,12 @@ pto.vmi.truncf, direct path:
     result part; converted padding lanes remain result padding
   support f32 deinterleaved=4 source parts -> 8-bit contiguous result part
     materialize pto.pset_b32 "PAT_ALL" for the source conversion
-    emit pto.vcvt(p0_f32_part, mask, rnd=R, sat=SAT, part=P0)
-    emit pto.vcvt(p1_f32_part, mask, rnd=R, sat=SAT, part=P1)
-    emit pto.vcvt(p2_f32_part, mask, rnd=R, sat=SAT, part=P2)
-    emit pto.vcvt(p3_f32_part, mask, rnd=R, sat=SAT, part=P3)
+    emit pto.vcvt(p0_f32_part, mask, rnd=<result round>, sat=SAT, part=P0)
+    emit pto.vcvt(p1_f32_part, mask, rnd=<result round>, sat=SAT, part=P1)
+    emit pto.vcvt(p2_f32_part, mask, rnd=<result round>, sat=SAT, part=P2)
+    emit pto.vcvt(p3_f32_part, mask, rnd=<result round>, sat=SAT, part=P3)
+    result round is R for f8E4M3/f8E5M2, A for default hif8, or H for
+      hif8 truncf with {rounding = "H"}
     materialize pto.pset_b8 "PAT_ALL"
     merge mutually exclusive part results with pto.vor
     partial/tail is valid when the four source parts pack into one physical
@@ -3552,13 +3554,13 @@ Unsupported diagnostics:
   non-splat pto.vmi.constant:
     VMI-UNSUPPORTED: non-splat pto.vmi.constant requires a vreg immediate or scratch materialization plan
 
-  partial/tail pto.vmi.load/tile_read:
+  partial/tail pto.vmi.load:
     VMI-UNSUPPORTED: pto.vmi.<memory-op> requires full physical chunks without padding lanes or a statically safe
     full-read footprint (...; safe-read proof failed: ...)
-  GM-backed direct pto.vmi.load/masked_load/expand_load/tile_read:
+  GM-backed direct pto.vmi.load/masked_load/expand_load:
     VMI-UNSUPPORTED: pto.vmi.<memory-op> ... (source is GM-backed, but current direct VMI-to-VPTO memory lowering
     emits pto.vlds/pto.vsts and requires UB-backed memory)
-  unsupported partial/tail pto.vmi.store/masked_store/tile_write:
+  unsupported partial/tail pto.vmi.store/masked_store:
     VMI-UNSUPPORTED: pto.vmi.<store-op> requires an 8/16/32-bit predicate-maskable element type and either full
     physical chunks or contiguous/deinterleaved tail-store materialization, with UB-backed destination; unsupported
     cases include values such as f64/index that have no b64 predicate representation, GM-backed destinations that
@@ -3628,6 +3630,16 @@ f32 -> f16:
     pto.vor merges mutually exclusive f16 part results into one contiguous vreg
   source/result physical arity must be 2 -> 1
   current default conversion attrs are rnd=R, sat=SAT
+
+f32 -> 8-bit fp-like:
+  supported direct path when source is deinterleaved=4 and result is contiguous:
+    pto.vcvt part=P0/P1/P2/P3 consumes the four source partitions
+    pto.vor merges mutually exclusive byte-lane part results into one
+      contiguous vreg
+  source/result physical arity must be 4 -> 1
+  current default conversion attrs are rnd=R for f8E4M3/f8E5M2 and rnd=A for
+    hif8. pto.vmi.truncf {rounding = "H"} is accepted only for f32 -> hif8
+    and forwards rnd=H to the emitted pto.vcvt operations.
 ```
 
 Memory lowering：
@@ -3698,6 +3710,44 @@ vmi.masked_load:
     unsafe partial/tail read footprints
     target true masked/non-faulting load and guarded/scratch fallback
 
+vmi.stride_load:
+  semantics:
+    result lane order is contiguous VMI logical order
+    source addresses are described by the VPTO block/repeat stride operands
+    mask false lanes are inactive for the underlying block-strided load
+  layout assignment:
+    result natural layout is contiguous
+    mask use is requested as contiguous with granularity derived from result element width
+  current direct path:
+    source must be !pto.ptr<T, ub>
+    result and mask must be one contiguous physical chunk
+    base = pto.addptr source, offset
+    result = pto.vsldb base, block_stride, repeat_stride, mask
+  unsupported cases:
+    multi-chunk result or mask
+    non-contiguous layouts
+    memref/gm source
+
+vmi.stride_store:
+  semantics:
+    value lane order is contiguous VMI logical order
+    destination addresses are described by the VPTO block/repeat stride operands
+    mask false lanes do not write memory
+  layout assignment:
+    value use is requested as contiguous
+    mask use is requested as contiguous with granularity derived from value element width
+  current direct path:
+    destination must be !pto.ptr<T, ub>
+    value and mask must be one contiguous physical chunk
+    base = pto.addptr destination, offset
+    updated_base = pto.vsstb value, base, block_stride, repeat_stride, mask
+      The updated base result is intentionally unused by VMI lowering, but the
+      post-update VPTO form matches CCE block-strided staging behavior.
+  unsupported cases:
+    multi-chunk value or mask
+    non-contiguous layouts
+    memref/gm destination
+
 vmi.gather:
   semantics:
     if mask[lane] is true, result[lane] = memory[base + indices[lane]]
@@ -3709,15 +3759,27 @@ vmi.gather:
     mask use is requested as contiguous with granularity derived from result element width
   current direct path:
     source must be !pto.ptr<T, ub>
-    T must be a 32-bit element type
-    indices must be signless or unsigned i32
-    result / indices / passthru / mask must be contiguous full physical chunks
-    mask granularity must be b32
-    for each physical chunk i:
-      gathered_i = pto.vgather2_bc source, indices_i, mask_i
-      result_i   = pto.vsel gathered_i, passthru_i, mask_i
+    supported 32-bit mode:
+      T must be a 32-bit element type
+      indices must be signless or unsigned i32
+      result / indices / passthru / mask must be contiguous full physical chunks
+      mask granularity must be b32
+      for each physical chunk i:
+        gathered_i = pto.vgather2_bc source, indices_i, mask_i
+        result_i   = pto.vsel gathered_i, passthru_i, mask_i
+    supported ui16 mode:
+      T must be ui16
+      indices must be unsigned i16
+      result / indices / passthru / mask must be one contiguous physical chunk
+      mask granularity must be b16
+      gathered = pto.vgather2 source, indices, mask
+      result   = pto.vsel gathered, passthru, mask
+      VPTO LLVM emitter bitcasts the physical index register from <128xi16>
+      to the installed Bisheng intrinsic ABI <64xi32>; this is the same
+      256B register payload viewed as the wrapper-level vector_u16 index
+      container.
   reason for vsel:
-    VGATHER2_BC false predicate lanes do not read memory but produce zero; VMI false lanes preserve passthru.
+    VPTO gather false predicate lanes do not read memory but produce zero; VMI false lanes preserve passthru.
   unsupported cases:
     f16/b16/f8/i8 result element types
     partial/tail chunks
@@ -3808,49 +3870,18 @@ vmi.masked_store:
   emitting stores. This preserves logical memory order and keeps inactive lanes write-free.
 
 non-full chunks:
-  vmi.store, vmi.masked_store, and vmi.tile_write support contiguous tail chunks by predicating the final pto.vsts with
+  vmi.store and vmi.masked_store support contiguous tail chunks by predicating the final pto.vsts with
   a prefix valid mask. masked_store additionally ANDs the user mask with the tail-valid mask.
-  deinterleaved=2/4 tail store/masked_store/tile_write is supported only through explicit layout materialization to
+  deinterleaved=2/4 tail store/masked_store is supported only through explicit layout materialization to
   contiguous chunks first. This requires every deinterleaved part to have the same physical chunk count, so the
   materializer can build complete vintlv/pintlv groups. After materialization, each contiguous chunk is predicated by
   the logical tail-valid mask; chunks whose active logical lane count is zero are not emitted as stores. Uneven
   deinterleaved groups, such as 129xf32 with deinterleaved=2, remain unsupported until a padding/scratch plan can
   assemble only the observable contiguous chunks.
-  vmi.load and tile_read support partial/tail chunks only when the direct full physical read is statically safe:
-  statically shaped memref source, constant non-negative offset (or tile_read offset 0), and enough elements for the
+  vmi.load support partial/tail chunks only when the direct full physical read is statically safe:
+  statically shaped memref source, constant non-negative offset, and enough elements for the
   whole physical read footprint. Padding lanes must never become observable. Other partial/tail load cases still need
   scratch/guarded/true-masked load planning.
-
-vmi.tile_read / vmi.tile_write, current direct full-footprint path:
-  This is not transfer_read padding lowering. It is only the tile/memref equivalent of the full-chunk direct memory
-  path above.
-
-  tile_read:
-    source must lower to one VPTO buffer-like value.
-    logical lane count must be an exact multiple of the physical lanes per part.
-    use offset 0 as the tile base offset.
-    contiguous result layout reads physical chunks with pto.vlds.
-    deinterleaved=2 result layout prefers pto.vldsx2 "DINTLV_B8/B16/B32" with offset 0.
-    other supported layouts materialize the requested result layout after contiguous reads.
-
-  tile_write:
-    destination must lower to one VPTO buffer-like value.
-    use offset 0 as the tile base offset.
-    value element width must be 8, 16, or 32 bits so pto.vsts/pto.vstsx2 can receive a materialized predicate.
-    contiguous source layout stores every physical chunk with pto.vsts and an all-true mask.
-    if the final contiguous chunk is partial, store it with a prefix valid-lane mask.
-    deinterleaved=2 source layout prefers pto.vstsx2 "INTLV_B8/B16/B32" with offset 0.
-    other supported layouts materialize the source value to contiguous layout first.
-    deinterleaved=2/4 tail source layouts are supported through this materialization path only when every
-    deinterleaved part has the same physical chunk count; zero-active materialized chunks are skipped.
-
-  Unsupported:
-    padding value semantics
-    partial/tail tile footprints
-    transfer_read-style out-of-bounds reads
-    write masks
-    non-identity tile indexing/permutation
-    any path that would expose padding lanes or reorder externally visible memory
 ```
 
 Histogram lowering：
@@ -3958,9 +3989,9 @@ Slice 4 完成条件：
    vmi_to_vpto_masked_load_safe_tail_memref_negative_offset_invalid.pto,
    vmi_to_vpto_expand_load_all_active.pto,
    vmi_to_vpto_expand_load_all_active_negative_offset_invalid.pto, and multi-chunk load/store layout tests.
-4. Full-footprint tile_read/tile_write direct path lowers through pto.vlds/pto.vsts or deinterleaved=2 x2 dist
+4. Full-footprint load/store direct path lowers through pto.vlds/pto.vsts or deinterleaved=2 x2 dist
    instructions with offset 0.
-   Covered by vmi_to_vpto_tile_read_write.pto.
+   Covered by the load/store direct-path and layout-folding tests.
 5. Internal func.call boundaries expand callee signatures, call operands/results, and returned VMI values together.
    Covered by vmi_layout_assignment_call_boundary.pto, vmi_layout_assignment_indirect_call_invalid.pto,
    and vmi_to_vpto_call_boundary.pto.
@@ -4004,11 +4035,12 @@ Slice 4 完成条件：
     vmi_to_vpto_chist_semantics_invalid.pto.
 ```
 
-## 7. Slice 5: Tile Memory And Padding
+## 7. Slice 5: Memory Padding
 
-The Slice 4 direct path may lower full-footprint `tile_read/tile_write` with offset 0. For partial `tile_read`, it may
-also lower to plain `pto.vlds` only when the static safe-read proof above succeeds. Do not lower any other partial or
-padded `tile_read` as a plain load until a richer access plan proves it is safe.
+The Slice 4 direct path may lower full-footprint `load/store` when the
+physical memory footprint is statically safe. Do not lower any partial,
+padded, or out-of-bounds read-like operation as a plain `pto.vlds` until a
+richer access plan proves it is safe.
 
 Implement an internal `VMIMemoryAccessPlan`:
 
@@ -4050,8 +4082,8 @@ currently routed through the plan:
   direct pto.vmi.load partial/tail safe full-read proof
   pto.vmi.masked_load partial/tail safe full-read proof
   pto.vmi.expand_load static all-active safe full-read proof
-  VMI-to-VPTO rewrite match guard for load/tile_read full-or-safe reads
-  pto.vmi.store/tile_write direct write target decision with all-true writeMask kind
+  VMI-to-VPTO rewrite match guard for load full-or-safe reads
+  pto.vmi.store direct write target decision with all-true writeMask kind
   pto.vmi.masked_store direct write target decision with explicit writeMask kind
   unsafe partial/tail read fallback decision as RequiredUnavailable diagnostic
     covered by vmi_to_vpto_load_nonfull_invalid.pto,
@@ -4087,7 +4119,7 @@ unless it has already canonicalized to an all-valid load/masked_load subset
 whose invalid lanes are proven absent.
 ```
 
-`tile_read` decision tree：
+Read-like memory decision tree：
 
 ```text
 safeReadProof full && validMask all true:
@@ -4106,7 +4138,7 @@ otherwise:
   future: split safe regions, scratch fill/copy/load, guarded fallback, or diagnostic
 ```
 
-`tile_write` decision tree：
+Write-like memory decision tree：
 
 ```text
 writeMask all true && full footprint safe-writable:
@@ -4239,12 +4271,12 @@ vmi_layout_assignment_mask_remat.mlir
 vmi_to_vpto_deinterleaved2.mlir
 vmi_to_vpto_deinterleaved4.mlir
 vmi_to_vpto_compaction_deint_invalid.mlir
-vmi_to_vpto_non_full_tile.mlir
+vmi_to_vpto_load_safe_tail_memref.mlir
+vmi_to_vpto_masked_load_safe_tail_memref.mlir
+vmi_to_vpto_store_tail.mlir
 vmi_to_vpto_dhist.mlir
 vmi_to_vpto_dhist_tail_mask.mlir
 vmi_to_vpto_chist_semantics_invalid.mlir
-vmi_tile_read_padding.mlir
-vmi_tile_write_mask.mlir
 vmi_pipeline_hard_gates.mlir
 ```
 
@@ -4276,7 +4308,7 @@ Recommended merge order:
 6. vmi-to-vpto type conversion + pack/unpack/unpackable block args.
 7. deinterleaved=2 f16 widen end-to-end.
 8. deinterleaved=4 f8 widen end-to-end.
-9. tile_read/tile_write padding-safe lowering.
+9. load/store padding-safe lowering.
 10. remaining semantic op families.
 ```
 
@@ -4408,10 +4440,10 @@ layout-changing producer:
 
 memory consumer/producer:
   examples:
-    load/store/tile_read/tile_write
+    load/store/load/store
   layout rule:
-    load/tile_read result natural layout is chosen by memory dist capability
-    store/tile_write value operand requests the layout that memory dist can consume
+    load result natural layout is chosen by memory dist capability
+    store value operand requests the layout that memory dist can consume
   lowering rule:
     direct path only when every physical chunk has no padding lane and footprint is safe
 

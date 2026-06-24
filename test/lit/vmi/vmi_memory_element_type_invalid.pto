@@ -30,28 +30,3 @@ module {
 }
 
 // CHECK: 'pto.vmi.store' op requires memory destination element type to match VMI data element type
-
-// -----
-
-module {
-  func.func @vmi_tile_read_element_type_invalid(%src: memref<128xf32>) {
-    %value = pto.vmi.tile_read %src
-        : memref<128xf32> -> !pto.vmi.vreg<128xf16>
-    return
-  }
-}
-
-// CHECK: 'pto.vmi.tile_read' op requires memory source element type to match VMI data element type
-
-// -----
-
-module {
-  func.func @vmi_tile_write_element_type_invalid(
-      %value: !pto.vmi.vreg<128xf16>, %dst: memref<128xf32>) {
-    pto.vmi.tile_write %value, %dst
-        : !pto.vmi.vreg<128xf16>, memref<128xf32>
-    return
-  }
-}
-
-// CHECK: 'pto.vmi.tile_write' op requires memory destination element type to match VMI data element type

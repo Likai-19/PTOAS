@@ -4,7 +4,7 @@
 `vmi-layout-assignment-lowering-design.md`，并以
 `vmi-layout-lowering-cases.md` 为测试和验收来源。
 
-不使用旧 `vmi-dialect-design.md` 作为设计输入。
+不使用早期 VMI 草稿作为设计输入。
 
 ## 1. Pipeline
 
@@ -56,8 +56,8 @@ vmi-layout-fold-consumers:
   example: ensure_layout(deinterleaved=2 -> contiguous) feeding store may become
   a store of deinterleaved=2 when the store has a layout-aware vstsx2 INTLV
   lowering
-  current implementation: pto.vmi.store, pto.vmi.tile_write, and the value
-  operand of pto.vmi.masked_store when the existing mask arity matches, fed by
+  current implementation: pto.vmi.store and the value operand of
+  pto.vmi.masked_store when the existing mask arity matches, fed by
   ensure_layout from deinterleaved=2/4, block_elems=1 to contiguous.  factor=2
   uses the store's vstsx2 INTLV lowering; factor=4 is still store-local, but it
   materializes through physical interleave before vsts.
@@ -100,7 +100,7 @@ pto-validate-vmi-layout-ir:
   `ensure_mask_granularity` at the layout gate, so unsupported helper
   materializations fail before `vmi-to-vpto`.  It also checks the first
   semantic local lowering families, non-contiguous
-  `pto.vmi.store`/`pto.vmi.tile_write`, block8
+  `pto.vmi.store`, block8
   `pto.vmi.group_load`, `pto.vmi.group_slot_load`, group_slots
   `pto.vmi.group_store`, group_slots `pto.vmi.group_reduce_add{f|i}`,
   explicit-slots `pto.vmi.group_broadcast`, `pto.vmi.truncf`,
@@ -529,7 +529,7 @@ contains enough information for `vmi-to-vpto`.
 Implementation-relevant layout facts:
 
 ```text
-dense store/tile_write:
+dense store:
   requests contiguous source.  If the value is assigned deinterleaved,
   assignment inserts ensure_layout at the store use.  A later optimization may
   fold ensure_layout + store into a layout-aware store lowering.
@@ -709,7 +709,7 @@ Memory legality constraints:
 
 ```text
 S=32 tail fast load:
-  requires full_tile_readable
+  requires full_footprint_readable
   otherwise require gather fallback or diagnose
 
 compact S=12 logical S=16:
@@ -1054,7 +1054,7 @@ vmi-to-vpto contract:
 diagnostic family               builder / owner             required failure
 3.7.4 slots=1 unit-stride store buildStoreRequests          no aligned row-local store path
 3.9 dense store of group slots  buildStoreRequests          use group_store/group_broadcast
-3.11.2 S=32 unsafe tail         buildMaskRequests           missing full_tile_readable/gather
+3.11.2 S=32 unsafe tail         buildMaskRequests           missing full_footprint_readable/gather
 3.13 slots=8 width cast         buildCastRequests           no packed slot cast transform
 3.14 unsupported group size     buildGroupReduceRequests    no supported reduce layout/lowering
 3.15.3 compact S=12            buildGroupMemoryRequests    no compact gather plan
@@ -1316,13 +1316,10 @@ truncf group-slot cast:
 
 group_store:
   row-local group_slots(G, slots=1) lowering is implemented as one lane-0
-  vsts per group and is covered by the reduce->truncf->group_store lit case.
-  The current plan is accepted only when row_stride is a constant positive
-  multiple of the 32B store alignment in destination elements: 8 for f32,
-  16 for f16, and 32 for f8. Unit-stride f32 output is rejected because only
-  the first row-local store is 32B-aligned; later `group_off + r` stores are
-  4B apart. A future pack-to-slots=8 or unaligned-store lowering is required before
-  contiguous `%c1` slots=1 group_store can be accepted.
+  vsts per group for packed unit-stride output, or as one 1PT store per group
+  for non-unit row strides. The packed path is covered by the
+  reduce->truncf->group_store lit case, while the point-store path is covered
+  by `test/lit/vmi/vmi_to_vpto_group_store_slots1_1pt.pto`.
   Packed group_slots(G, slots=8) group_store is implemented only when
   num_groups is a multiple of 8 and row_stride is constant 1; it emits one
   PAT_VL8 store per packed slot block. Non-unit packed group stores remain a
@@ -1449,7 +1446,7 @@ not allowed:
   walking from a consumer to a producer to decide a lowering
   walking from a consumer to a mask producer to decide whether a lowering is legal
   inspecting users to choose a result layout or materialization
-  recovering full_tile_readable from surrounding MTE/caller context
+  recovering full_footprint_readable from surrounding MTE/caller context
 ```
 
 Current audit result:
@@ -1624,7 +1621,7 @@ Aggregate catalog headings are covered through their endpoint subcases:
 ```text
 3.11 partial tail groups:
   3.11.1 positive S=64 active-row tail
-  3.11.2 diagnostic S=32 tail without full_tile_readable
+  3.11.2 diagnostic S=32 tail without full_footprint_readable
 
 3.15 compact S=12 written as logical S=16:
   3.15.1 positive source row stride 16
@@ -1928,10 +1925,10 @@ runtime SIM:
   test/vpto/cases/vmi/group-reduce-s64-tail-store
 ```
 
-The companion negative lit case for contiguous `%c1` slots=1 group_store is:
+The companion lit case for non-unit slots=1 point-store lowering is:
 
 ```text
-test/lit/vmi/vmi_layout_assignment_group_store_slots1_unit_stride_invalid.pto
+test/lit/vmi/vmi_to_vpto_group_store_slots1_1pt.pto
 ```
 
 Current checked-in coverage for S=64 row-local group-slot RHS elementwise
@@ -2130,7 +2127,7 @@ Diagnostic-only cases:
 
 ```text
 3.9 dense store of group slots
-3.11.2 S=32 tail without full_tile_readable
+3.11.2 S=32 tail without full_footprint_readable
 3.7.4 S=64 slots=1 group_store with unit output stride
 3.13 packed group-slot f32 -> f16 cast
 3.14 unsupported group size
@@ -2165,7 +2162,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_slot_load_slots1_dynamic_stride_invalid.pto
   test/lit/vmi/vmi_layout_assignment_group_slot_load_slots1_unaligned_stride_invalid.pto
   test/lit/vmi/vmi_layout_assignment_group_load_block8_truncf_invalid.pto
-  test/lit/vmi/vmi_layout_assignment_group_store_slots1_unit_stride_invalid.pto
+  test/lit/vmi/vmi_to_vpto_group_store_slots1_1pt.pto
   test/lit/vmi/vmi_layout_assignment_group_load_s16_unaligned_stride_invalid.pto
   test/lit/vmi/vmi_layout_assignment_group_load_s32_unaligned_stride_invalid.pto
   test/lit/vmi/vmi_ptoas_public_abi_invalid.pto

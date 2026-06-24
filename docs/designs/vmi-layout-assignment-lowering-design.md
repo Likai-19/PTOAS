@@ -1,8 +1,8 @@
 # VMI Layout Assignment And Lowering Design
 
 本文是新的 VMI layout assignment / lowering 设计文档。它只以
-`docs/designs/vmi-layout-lowering-cases.md` 为 source of truth，不继承旧
-`vmi-dialect-design.md` 的 layout 设计，以避免旧上下文污染。
+`docs/designs/vmi-layout-lowering-cases.md` 为 source of truth，不继承早期
+VMI 草稿的 layout 设计，以避免旧上下文污染。
 
 目标：
 
@@ -140,7 +140,7 @@ mask and tail:
   masked_load grouped tail feeding group_reduce
   masked select/store
   one semantic mask used by multiple predicate granularities
-  S=32 tail with and without full_tile_readable
+  S=32 tail with and without full_footprint_readable
   compact S=12 diagnostic
 
 strided memory:
@@ -187,7 +187,7 @@ control-flow propagation:
   public ABI rejection
 
 memory legality:
-  full_tile_readable proof, grouped masks, predicate granularity, aligned
+  full_footprint_readable proof, grouped masks, predicate granularity, aligned
   strided group memory, stable gather diagnostic
 
 value-indexed accumulation:
@@ -591,7 +591,7 @@ Mask semantics and memory legality are separate:
 mask:
   decides which logical lanes participate in compute/store semantics
 
-full_tile_readable:
+full_footprint_readable:
   decides whether a rounded-up physical load is allowed to read inactive lanes
 ```
 
@@ -606,10 +606,10 @@ Example:
 
 ```text
 S=32 tail num_groups=6:
-  without full_tile_readable:
+  without full_footprint_readable:
     fast DINTLV_B32 full-tile load is illegal
 
-  with full_tile_readable:
+  with full_footprint_readable:
     full 8-row physical tile may be loaded
     compute mask is PAT_VL48 per physical part
     group store mask is PAT_VL6
@@ -807,7 +807,7 @@ Hard constraints:
 group_slots cannot feed ordinary dense consumers
 direct group-slot width-changing cast requires an explicit slot-preserving transform
 public/external VMI function boundary requires a stable ABI or diagnostic
-S=32 fast tail load requires full_tile_readable or gather fallback
+S=32 fast tail load requires full_footprint_readable or gather fallback
 ```
 
 `slots = 1` row-local cast may satisfy the slot-preserving transform requirement.
@@ -936,7 +936,7 @@ The pattern must not:
 1. inspect all users to decide result layout
 2. inspect defining ops to decide source layout
 3. choose between S=16 block_elems=1 and block_elems=8
-4. decide whether a load is full_tile_readable
+4. decide whether a load is full_footprint_readable
 5. decide function signature specialization
 ```
 
@@ -1016,8 +1016,8 @@ dense store of group_slots:
 packed group-slot f32->f16:
   group_broadcast before truncf, or keep group_store as f32
 
-S=32 tail without full_tile_readable:
-  mark source full_tile_readable or enable stable gather fallback
+S=32 tail without full_footprint_readable:
+  mark source full_footprint_readable or enable stable gather fallback
 
 S=32 group_load with unaligned source_group_stride:
   choose a stride divisible by 8 f32 elements or enable stable gather fallback

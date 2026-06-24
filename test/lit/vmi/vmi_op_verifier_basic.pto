@@ -11,7 +11,6 @@
 module {
   func.func @vmi_op_verifier_basic(
       %ptr: !pto.ptr<f32>,
-      %tile: memref<128xf32>,
       %layouted: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
       %mask_b16: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>,
       %mask_b32: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>) {
@@ -46,8 +45,6 @@ module {
     pto.vmi.group_store %slot_loaded, %ptr[%c0], %c1 {num_groups = 8}
         : !pto.vmi.vreg<128xf32>, !pto.ptr<f32>
     pto.vmi.store %loaded, %ptr[%c0] : !pto.vmi.vreg<128xf32>, !pto.ptr<f32>
-    %tile_read = pto.vmi.tile_read %tile : memref<128xf32> -> !pto.vmi.vreg<128xf32>
-    pto.vmi.tile_write %tile_read, %tile : !pto.vmi.vreg<128xf32>, memref<128xf32>
 
     %small = "pto.vmi.shuffle"(%broadcast) {
       indices = array<i64: 0, 1, 2, 3>
@@ -102,8 +99,6 @@ module {
 // CHECK: pto.vmi.group_slot_load
 // CHECK: pto.vmi.group_store
 // CHECK: pto.vmi.store
-// CHECK: pto.vmi.tile_read
-// CHECK: pto.vmi.tile_write
 // CHECK: pto.vmi.ensure_layout
 // CHECK: pto.vmi.ensure_mask_layout
 // CHECK: pto.vmi.ensure_mask_granularity
