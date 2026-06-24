@@ -627,6 +627,24 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
     return success();
   }
 
+  if (auto hist = dyn_cast<VMIDhistOp>(op)) {
+    std::string reason;
+    if (failed(supports.getDhistSupport(hist, &reason)))
+      return emitLayoutSupportContract(
+          op, diagOS, "pto.vmi.dhist has no registered histogram support",
+          reason);
+    return success();
+  }
+
+  if (auto hist = dyn_cast<VMIChistOp>(op)) {
+    std::string reason;
+    if (failed(supports.getChistSupport(hist, &reason)))
+      return emitLayoutSupportContract(
+          op, diagOS, "pto.vmi.chist has no registered histogram support",
+          reason);
+    return success();
+  }
+
   if (auto truncf = dyn_cast<VMITruncFOp>(op)) {
     std::string reason;
     if (failed(supports.getTruncFSupport(truncf, &reason)))
