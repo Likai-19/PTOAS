@@ -22,7 +22,7 @@ SENTINEL = np.float32(-777.0)
 def generate(output_dir: Path) -> None:
     src = np.empty(INPUT_ELEMS, dtype=np.float32)
     dst = np.full(PHYSICAL_ROWS, SENTINEL, dtype=np.float32)
-    golden = np.full(PHYSICAL_ROWS, SENTINEL, dtype=np.float32)
+    golden = np.zeros(PHYSICAL_ROWS, dtype=np.float32)
 
     base_row = np.linspace(-0.875, 0.625, GROUP_SIZE, dtype=np.float32)
     for row in range(PHYSICAL_ROWS):
