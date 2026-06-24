@@ -437,6 +437,23 @@ def VMIGroupBroadcastOp : VMI_Op<"group_broadcast"> {
   let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
 }
 
+class VMIHistogramOp<string mnemonic, string summaryText>
+    : VMI_Op<mnemonic> {
+  let summary = summaryText;
+  let arguments = (ins VMI_VRegTypeConstraint:$acc,
+                       VMI_VRegTypeConstraint:$source,
+                       VMI_MaskTypeConstraint:$mask);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$acc `,` $source `,` $mask attr-dict `:` type($acc) `,` type($source) `,` type($mask) `->` type($result)";
+}
+
+def VMIDhistOp : VMIHistogramOp<"dhist",
+  "VMI full 256-bin distribution histogram over unsigned 8-bit source lanes">;
+
+def VMIChistOp : VMIHistogramOp<"chist",
+  "VMI full 256-bin cumulative histogram over unsigned 8-bit source lanes">;
+
 def VMIExtFOp : VMI_Op<"extf"> {
   let summary = "VMI floating-point elementwise extension";
   let arguments = (ins VMI_VRegTypeConstraint:$source);

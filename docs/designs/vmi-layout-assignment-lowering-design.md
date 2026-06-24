@@ -148,6 +148,11 @@ strided memory:
   strided group_load feeding broadcast and a second group_reduce
   group_slot_load slots=1 with non-unit source stride
   group_store slots=1 with non-unit output stride
+
+value-indexed accumulation:
+  full 256-bin distribution histogram over Nxui8 source lanes
+  VPTO low/high bin range split hidden behind one logical 256xui16 VMI result
+  cumulative histogram is a semantic boundary until CHISTv2 range semantics are verified
 ```
 
 ### 1.1 Case-Set Sufficiency
@@ -184,6 +189,10 @@ control-flow propagation:
 memory legality:
   full_tile_readable proof, grouped masks, predicate granularity, aligned
   strided group memory, stable gather diagnostic
+
+value-indexed accumulation:
+  histogram source/result shape, b8 source mask, and fixed low/high VPTO bin
+  split for a logical 256-bin result
 ```
 
 No extra layout kind should be added unless a new case proves that the existing
@@ -235,6 +244,13 @@ compute boundary:
   storage must be widened first because integer reduction instructions widen
   narrow inputs.
   f8/i8 are not baseline accumulator/compute element types.
+
+value-indexed accumulation boundary:
+  pto.vmi.dhist consumes ui8 source lanes and produces a logical 256xui16
+  accumulator/result.  It is not a group_reduce family member because result
+  bins are selected by source values rather than by source lane/group position.
+  pto.vmi.chist uses the same surface shape only after the target CHISTv2
+  range semantics are verified.
 ```
 
 ### 2.1 Dense Layouts
@@ -297,6 +313,22 @@ Ordinary dense `add/mul/store/truncf` cannot consume `group_slots`.
 S=8/16/32 packed VCG result -> slots=8
 S=64 row-local result       -> slots=1
 ```
+
+Histogram does not add a layout family.  A full logical histogram result uses:
+
+```text
+!pto.vmi.vreg<256xui16, #pto.vmi.layout<contiguous>>
+```
+
+and physicalizes to two ordered VPTO parts:
+
+```text
+part0 = logical bins   0..127
+part1 = logical bins 128..255
+```
+
+The VPTO `#bin` selector is therefore an op-local lowering detail, not a VMI
+layout attribute and not a user-visible operand on `pto.vmi.dhist`.
 
 ## 3. Lowering Context Must Become Explicit IR Output
 
@@ -669,6 +701,20 @@ create_mask/create_group_mask:
   produces one assigned mask layout and granularity
   incompatible mask consumers are represented by ensure_mask_layout or
   ensure_mask_granularity; optimization may clone/rematerialize the mask op
+
+dhist:
+  requests acc/result contiguous !pto.vmi.vreg<256xui16>
+  requests source contiguous !pto.vmi.vreg<Nxui8>
+  requests mask contiguous with b8 granularity
+  lowers each 256-lane source chunk by carrying two accumulator parts:
+  bins 0..127 use VPTO histogram #bin=0, bins 128..255 use #bin=1
+  final partial source chunks are represented by AND-ing the user mask with a
+  valid-lane prefix mask before the VPTO histogram op
+
+chist:
+  same layout requests as dhist
+  baseline lowering is disabled until target capability records whether the
+  high-range VPTO cumulative result is global or range-local
 
 scf.if/scf.for/call/return:
   requests equality across carried VMI values, yielded values, call operands,

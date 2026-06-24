@@ -1344,3 +1344,70 @@ VMILayoutSupport::getBitcastSupport(VMIBitcastOp op,
 
   return VMIBitcastSupport{VMIBitcastSupportKind::PerPartVbitcast};
 }
+
+template <typename OpTy>
+static FailureOr<VMIHistogramSupport>
+getHistogramSupportImpl(OpTy op, std::string *reason) {
+  auto fail = [&](const Twine &message) -> FailureOr<VMIHistogramSupport> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  auto accType = cast<VMIVRegType>(op.getAcc().getType());
+  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
+  auto maskType = cast<VMIMaskType>(op.getMask().getType());
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
+
+  VMILayoutAttr accLayout = accType.getLayoutAttr();
+  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+  VMILayoutAttr maskLayout = maskType.getLayoutAttr();
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  if (!accLayout || !sourceLayout || !maskLayout || !resultLayout)
+    return fail("requires assigned acc/source/mask/result layouts");
+  if (!accLayout.isContiguous() || !sourceLayout.isContiguous() ||
+      !maskLayout.isContiguous() || !resultLayout.isContiguous())
+    return fail("requires contiguous acc, source, mask, and result layouts");
+  if (maskType.getGranularity() != "b8")
+    return fail("requires b8 mask granularity");
+  if (maskType.getElementCount() != sourceType.getElementCount())
+    return fail("requires mask lane count to match source lane count");
+
+  auto accElem = dyn_cast<IntegerType>(accType.getElementType());
+  auto sourceElem = dyn_cast<IntegerType>(sourceType.getElementType());
+  if (!accElem || !accElem.isUnsigned() || accElem.getWidth() != 16 ||
+      accType.getElementCount() != 256 || resultType != accType)
+    return fail("requires contiguous 256xui16 acc/result");
+  if (!sourceElem || !sourceElem.isUnsigned() || sourceElem.getWidth() != 8)
+    return fail("requires unsigned 8-bit source elements");
+
+  FailureOr<int64_t> accArity = getVMIPhysicalArity(accType);
+  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
+  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
+  FailureOr<int64_t> maskArity = getVMIPhysicalArity(maskType);
+  if (failed(accArity) || failed(resultArity) || failed(sourceArity) ||
+      failed(maskArity))
+    return fail("requires computable physical arity");
+  if (*accArity != 2 || *resultArity != 2)
+    return fail("requires acc/result to physicalize to two 128xui16 parts");
+  if (*sourceArity != *maskArity)
+    return fail("requires source and mask physical arity to match");
+  if (*sourceArity < 1)
+    return fail("requires at least one source physical chunk");
+
+  return VMIHistogramSupport{VMIHistogramSupportKind::Full256BinDhist};
+}
+
+FailureOr<VMIHistogramSupport>
+VMILayoutSupport::getDhistSupport(VMIDhistOp op,
+                                  std::string *reason) const {
+  return getHistogramSupportImpl(op, reason);
+}
+
+FailureOr<VMIHistogramSupport>
+VMILayoutSupport::getChistSupport(VMIChistOp op,
+                                  std::string *reason) const {
+  if (reason)
+    *reason = "CHISTv2 cumulative high-range semantics are not classified";
+  return failure();
+}
