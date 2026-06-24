@@ -1,10 +1,12 @@
 // Copyright (c) 2026 Huawei Technologies Co., Ltd.
-// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
-// CANN Open Software License Agreement Version 2.0 (the "License").
-// Please refer to the License for details. You may not use this file except in compliance with the License.
-// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
-// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
-// See LICENSE in the root of the software repository for the full text of the License.
+// This program is free software, you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). Please refer to the License for details. You may not use
+// this file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON
+// AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+// FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+// for the full text of the License.
 
 //===- VMITargetCapabilities.h - VMI target capability registry -*- C++ -*-===//
 //===----------------------------------------------------------------------===//
@@ -44,6 +46,7 @@ enum class VMIReductionKind {
   AddF,
   GroupAddI,
   GroupAddF,
+  GroupMaxF,
   MaxF,
   MinF,
 };
@@ -66,9 +69,7 @@ struct VMICapabilityResult {
     return result;
   }
 
-  bool isSupported() const {
-    return status == VMICapabilityStatus::supported;
-  }
+  bool isSupported() const { return status == VMICapabilityStatus::supported; }
 
   LogicalResult toLogicalResult(std::string *outReason = nullptr) const {
     if (isSupported())
@@ -188,8 +189,9 @@ public:
         "unsupported source/result layout pair");
   }
 
-  VMICapabilityResult supportsMaskGranularityConversion(
-      StringRef sourceGranularity, StringRef resultGranularity) const {
+  VMICapabilityResult
+  supportsMaskGranularityConversion(StringRef sourceGranularity,
+                                    StringRef resultGranularity) const {
     if (!VMIMaskType::isConcreteGranularity(sourceGranularity) ||
         !VMIMaskType::isConcreteGranularity(resultGranularity))
       return VMICapabilityResult::missingCapability(
@@ -207,8 +209,8 @@ public:
         "current VPTO pto.vlds surface has no mask operand");
   }
 
-  VMICapabilityResult supportsFallbackResource(
-      VMIFallbackResourceKind kind) const {
+  VMICapabilityResult
+  supportsFallbackResource(VMIFallbackResourceKind kind) const {
     switch (kind) {
     case VMIFallbackResourceKind::ScratchMemory:
       return VMICapabilityResult::missingCapability(
@@ -220,8 +222,8 @@ public:
     llvm_unreachable("unhandled VMI fallback resource kind");
   }
 
-  VMICapabilityResult supportsReductionElementType(
-      VMIReductionKind kind, Type elementType) const {
+  VMICapabilityResult supportsReductionElementType(VMIReductionKind kind,
+                                                   Type elementType) const {
     switch (kind) {
     case VMIReductionKind::AddI:
       if (pto::getPTOStorageElemBitWidth(elementType) == 32 &&
@@ -246,10 +248,11 @@ public:
           "cast i8/i16 storage before grouped reduction");
     }
     case VMIReductionKind::GroupAddF:
+    case VMIReductionKind::GroupMaxF:
       if (elementType.isF16() || elementType.isF32())
         return VMICapabilityResult::supported();
       return VMICapabilityResult::missingCapability(
-          "grouped floating-point add reduction supports f16/f32 accumulator "
+          "grouped floating-point reduction supports f16/f32 accumulator "
           "elements");
     case VMIReductionKind::MaxF:
     case VMIReductionKind::MinF:
