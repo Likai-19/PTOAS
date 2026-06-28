@@ -56,12 +56,13 @@ B > 0
 N % (F * B) == 0 for the direct full-chunk paths in this document
 ```
 
-### 1.2 Sparse Group-Slot Layout
+### 1.2 Group-Slot Layout
 
-Sparse group-slot layout is not dense. Only `G` lanes have semantic values.
+Group-slot layout is not dense. Only `G` lanes have semantic values.
 
 ```text
 #pto.vmi.layout<num_groups = G, slots = K>
+#pto.vmi.layout<num_groups = G, slots = K, lane_stride = LS>
 ```
 
 Physical slot mapping:
@@ -71,7 +72,7 @@ N = logical lane count
 S = N / G                 // logical lanes per source group
 
 slot_block(g) = g / K
-slot_lane(g)  = g % K
+slot_lane(g)  = (g % K) * LS
 ```
 
 Required invariants:
@@ -81,7 +82,13 @@ G > 0
 K > 0
 G % K == 0
 K must fit in the physical vreg element count
+LS > 0
 ```
+
+`LS` defaults to 1 and is counted in logical element-sized physical slots.  It
+is used when the group result value is intentionally stored with a regular lane
+gap.  For example, `ui8 lane_stride=4` places group slots in byte positions 0,
+4, 8, ... and can be lowered to a b32 carrier plus `PK4_B32` store.
 
 `K` is selected by the producer/consumer layout support rule. It is not always 8. For
 `VCGADD`-packed results, `K = 8` matches the eight 32B block results written to
@@ -123,7 +130,7 @@ Illegal consumer mix:
 group_slots value -> ordinary dense store/add/mul
 ```
 
-This must fail unless an explicit semantic op converts the sparse value:
+This must fail unless an explicit semantic op converts the group-slot value:
 
 ```text
 group_broadcast
@@ -643,7 +650,7 @@ sum_out[group_tile_off + 1] = reduce row1 lanes 0..15
 sum_out[group_tile_off + 7] = reduce row7 lanes 0..15
 ```
 
-This endpoint is fully specified: the only sparse value is `%sum`; `group_store`
+This endpoint is fully specified: the only group-slot value is `%sum`; `group_store`
 stores the low 8 slot lanes with an ordinary prefix store.
 
 #### 3.5.2 Reduce, Broadcast, Elementwise, Reduce, Store
@@ -1659,7 +1666,7 @@ It must not be diagnosed as:
 dense store materializes group slots implicitly
 ```
 
-That behavior would silently reinterpret a sparse group-slot value as a dense
+That behavior would silently reinterpret a group-slot value as a dense
 vector.
 
 ### 3.10 Non-Load Producer Feeding S=32 `group_reduce`
@@ -2272,7 +2279,7 @@ group_load:
   loads group_size data elements per group and produces dense grouped data.
 
 group_slot_load:
-  loads one scalar value per group and produces sparse group slots.
+  loads one scalar value per group and produces group slots.
 ```
 
 Surface form:
@@ -2290,7 +2297,7 @@ semantic group slot g = base[off + g * source_group_stride]
 ```
 
 The result logical lane count `N` remains the surrounding VMI value shape. Only
-the `G` group slots are semantic. Layout assignment chooses the sparse physical
+the `G` group slots are semantic. Layout assignment chooses the group-slot physical
 placement requested by the consumer:
 
 ```text
@@ -2760,7 +2767,7 @@ VMI-LAYOUT-CONTRACT:
 ### 3.20 `group_slots` Control-Flow Join
 
 `group_slots` values must be allowed to cross control flow.  The join type is a
-sparse physical tuple, not a dense vector.
+group-slot physical tuple, not a dense vector.
 
 VMI input:
 
@@ -4249,7 +4256,7 @@ This does not legalize packed `slots = 8` casts from section 3.13.
 
 ### 3.35 `group_slots` Fanout To `group_store` And `group_broadcast`
 
-This case fixes the fanout rule for sparse values.  A `group_slots` value may
+This case fixes the fanout rule for group-slot values.  A `group_slots` value may
 feed multiple group-aware consumers directly.  Layout assignment must not
 materialize it as dense just because one later use broadcasts it.
 
@@ -4315,11 +4322,11 @@ VPTO lowering result for one full 8-row tile:
   : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
 %sum_block = pto.vadd %lo_sum, %hi_sum, %slot8 : !pto.vreg<64xf32>
 
-// First sparse consumer: store the group slots without changing layout.
+// First group-slot consumer: store the group slots without changing layout.
 pto.vsts %sum_block, %sum_out[%group_off], %slot8 {dist = "NORM_B32"}
   : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
 
-// Second sparse consumer: materialize only this use as dense grouped data.
+// Second group-slot consumer: materialize only this use as dense grouped data.
 %broadcast_idx0 = compute index vector [0 repeated 16, 1 repeated 16,
                                         2 repeated 16, 3 repeated 16]
   : !pto.vreg<64xi32>
@@ -4363,7 +4370,7 @@ Required assignment rule:
 `%sum` keeps one assigned layout:
   #pto.vmi.layout<num_groups = 8, slots = 8>
 
-`group_store` consumes that sparse layout directly.
+`group_store` consumes that group-slot layout directly.
 `group_broadcast` is a use-site materialization to a dense layout.  It must not
 rewrite the defining `group_reduce` result or the sibling `group_store` use.
 ```
@@ -4372,7 +4379,7 @@ rewrite the defining `group_reduce` result or the sibling `group_store` use.
 
 The same memory scalar stream may be used by both packed S=16 group-slot
 compute and row-local S=64 group-slot compute.  The two uses require different
-logical vector shapes and different sparse layouts, so the source must be
+logical vector shapes and different group-slot layouts, so the source must be
 rematerialized as two VMI values.  There is no single `group_slots` layout that
 serves both uses.
 
@@ -4964,7 +4971,7 @@ materialization after seeing both users.
 
 ### 3.42 `group_slots` `scf.for` Loop-Carried Accumulator
 
-Section 3.22 covers dense loop-carried values.  Sparse group-slot values need a
+Section 3.22 covers dense loop-carried values.  Group-slot values need a
 separate case because the loop-carried block argument has no dense lane
 semantics outside the live group slots.
 
@@ -5284,7 +5291,7 @@ Lowering:
 %x_p0, %x_p2 = pto.vdintlv %x01_lo, %x23_lo
 %x_p1, %x_p3 = pto.vdintlv %x01_hi, %x23_hi
 
-// The reduce-side grouped mask is not built by guessing the final sparse
+// The reduce-side grouped mask is not built by guessing the final group-slot
 // predicate image.  It is first materialized as the same contiguous grouped
 // mask used by masked_load, then converted to the reduce layout with predicate
 // deinterleave.  This keeps predicate reordering identical to the data

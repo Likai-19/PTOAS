@@ -167,17 +167,17 @@ static FailureOr<int64_t> getLayoutBlockElems(Type type) {
 static FailureOr<Type> getVMIPhysicalElementType(VMIVRegType type) {
   Type elementType = type.getElementType();
   VMILayoutAttr layout = type.getLayoutAttr();
-  if (!layout || !layout.hasSparseFactor())
+  if (!layout || !layout.hasLaneStride())
     return elementType;
 
   auto integerType = dyn_cast<IntegerType>(elementType);
   if (!integerType || !integerType.isUnsigned())
     return failure();
   unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
-  int64_t sparseFactor = layout.getSparseFactor();
-  if (elementBits == 0 || sparseFactor <= 1)
+  int64_t laneStride = layout.getLaneStride();
+  if (elementBits == 0 || laneStride <= 1)
     return failure();
-  int64_t physicalBits = static_cast<int64_t>(elementBits) * sparseFactor;
+  int64_t physicalBits = static_cast<int64_t>(elementBits) * laneStride;
   if (physicalBits != 16 && physicalBits != 32)
     return failure();
   return IntegerType::get(type.getContext(), physicalBits);
@@ -462,15 +462,10 @@ VMILayoutAttr VMILayoutAttr::getDeinterleaved(MLIRContext *context,
   return VMILayoutAttr::get(context, "deinterleaved", factor, blockElems, 0);
 }
 
-VMILayoutAttr VMILayoutAttr::getSparse(MLIRContext *context,
-                                       int64_t sparseFactor) {
-  return VMILayoutAttr::get(context, "sparse", sparseFactor, 1, 0);
-}
-
 VMILayoutAttr VMILayoutAttr::getGroupSlots(MLIRContext *context,
                                            int64_t numGroups, int64_t slots,
-                                           int64_t sparseFactor) {
-  return VMILayoutAttr::get(context, "num_groups", numGroups, sparseFactor,
+                                           int64_t laneStride) {
+  return VMILayoutAttr::get(context, "num_groups", numGroups, laneStride,
                             slots);
 }
 
@@ -499,9 +494,6 @@ Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
         return {};
       }
     }
-  } else if (kind == "sparse") {
-    if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor)))
-      return {};
   } else if (kind == "num_groups") {
     if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor)))
       return {};
@@ -512,20 +504,20 @@ Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
       if (field == "slots") {
         if (failed(parser.parseInteger(slots)))
           return {};
-      } else if (field == "sparse") {
+      } else if (field == "lane_stride") {
         if (failed(parser.parseInteger(blockElems)))
           return {};
       } else {
         parser.emitError(parser.getCurrentLocation(),
                          "expected 'slots = <integer>' or "
-                         "'sparse = <integer>'");
+                         "'lane_stride = <integer>'");
         return {};
       }
     }
   } else {
     parser.emitError(parser.getCurrentLocation(),
                      "expected VMI layout kind 'contiguous' or "
-                     "'deinterleaved' or 'sparse' or 'num_groups'");
+                     "'deinterleaved' or 'num_groups'");
     return {};
   }
 
@@ -542,14 +534,12 @@ void VMILayoutAttr::print(AsmPrinter &printer) const {
     printer << " = " << getFactor();
     if (getBlockElems() != 1)
       printer << ", block_elems = " << getBlockElems();
-  } else if (isSparse()) {
-    printer << " = " << getFactor();
   } else if (isGroupSlots()) {
     printer << " = " << getFactor();
     if (getSlots() != 0)
       printer << ", slots = " << getSlots();
     if (getBlockElems() != 1)
-      printer << ", sparse = " << getBlockElems();
+      printer << ", lane_stride = " << getBlockElems();
   }
   printer << ">";
 }
@@ -580,24 +570,13 @@ VMILayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
     return success();
   }
 
-  if (kind == "sparse") {
-    if (factor <= 1)
-      return emitError() << "#pto.vmi.layout<sparse = " << factor
-                         << "> requires sparse factor greater than 1";
-    if (blockElems != 1 || slots != 0)
-      return emitError() << "#pto.vmi.layout<sparse = " << factor
-                         << "> requires block_elems and slots to be their "
-                            "defaults";
-    return success();
-  }
-
   if (kind == "num_groups") {
     if (factor <= 0)
       return emitError() << "#pto.vmi.layout<num_groups = " << factor
                          << "> requires num_groups to be positive";
     if (blockElems <= 0)
       return emitError() << "#pto.vmi.layout<num_groups = " << factor
-                         << "> requires sparse factor to be positive";
+                         << "> requires lane_stride to be positive";
     if (slots < 0)
       return emitError() << "#pto.vmi.layout<num_groups = " << factor
                          << ", slots = " << slots
@@ -606,7 +585,7 @@ VMILayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   }
 
   return emitError() << "expected VMI layout kind to be 'contiguous' or "
-                        "'deinterleaved' or 'sparse' or 'num_groups'";
+                        "'deinterleaved' or 'num_groups'";
 }
 
 Type VMIVRegType::parse(AsmParser &parser) {
