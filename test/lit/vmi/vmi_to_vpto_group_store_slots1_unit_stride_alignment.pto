@@ -10,25 +10,25 @@
 
 module {
   func.func @aligned_unit_stride_group_store(
-      %value: !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>,
+      %value: !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>,
       %dst: !pto.ptr<f32, ub>) {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     pto.vmi.group_store %value, %dst[%c0], %c1 {num_groups = 8}
-        : !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>,
+        : !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>,
           !pto.ptr<f32, ub>
     return
   }
 
   func.func @unaligned_unit_stride_group_store(
-      %value: !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>,
+      %value: !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>,
       %dst: !pto.ptr<f32, ub>,
       %row: index) {
     %c1 = arith.constant 1 : index
     %c2 = arith.constant 2 : index
     %off = arith.muli %row, %c2 : index
     pto.vmi.group_store %value, %dst[%off], %c1 {num_groups = 8}
-        : !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>,
+        : !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>,
           !pto.ptr<f32, ub>
     return
   }

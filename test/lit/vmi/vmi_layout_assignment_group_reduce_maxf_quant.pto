@@ -24,19 +24,19 @@ module {
     %abs = pto.vmi.absf %x : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
     %amax_raw = pto.vmi.group_reduce_maxf %abs, %mask {num_groups = 2}
         : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred>
-        -> !pto.vmi.vreg<256xf32>
-    %eps2 = pto.vmi.broadcast %eps : f32 -> !pto.vmi.vreg<256xf32>
+        -> !pto.vmi.vreg<2xf32>
+    %eps2 = pto.vmi.broadcast %eps : f32 -> !pto.vmi.vreg<2xf32>
     %amax = pto.vmi.maxf %amax_raw, %eps2
-        : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
-        -> !pto.vmi.vreg<256xf32>
-    %fp8_max2 = pto.vmi.broadcast %fp8_max : f32 -> !pto.vmi.vreg<256xf32>
+        : !pto.vmi.vreg<2xf32>, !pto.vmi.vreg<2xf32>
+        -> !pto.vmi.vreg<2xf32>
+    %fp8_max2 = pto.vmi.broadcast %fp8_max : f32 -> !pto.vmi.vreg<2xf32>
     %scale = pto.vmi.divf %amax, %fp8_max2
-        : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
-        -> !pto.vmi.vreg<256xf32>
+        : !pto.vmi.vreg<2xf32>, !pto.vmi.vreg<2xf32>
+        -> !pto.vmi.vreg<2xf32>
     pto.vmi.group_store %scale, %scale_out[%off], %c8 {num_groups = 2}
-        : !pto.vmi.vreg<256xf32>, !pto.ptr<f32, ub>
+        : !pto.vmi.vreg<2xf32>, !pto.ptr<f32, ub>
     %scale_vec = pto.vmi.group_broadcast %scale {num_groups = 2}
-        : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+        : !pto.vmi.vreg<2xf32> -> !pto.vmi.vreg<256xf32>
     %q = pto.vmi.divf %x, %scale_vec
         : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
         -> !pto.vmi.vreg<256xf32>
@@ -53,9 +53,9 @@ module {
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>
 // ASSIGN: %[[ABS:.*]] = pto.vmi.absf %[[X]]
 // ASSIGN: %[[AMAX_RAW:.*]] = pto.vmi.group_reduce_maxf %[[ABS]]
-// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 2, slots = 1>>
+// ASSIGN-SAME: -> !pto.vmi.vreg<2xf32, #pto.vmi.layout<num_groups = 2, slots = 1>>
 // ASSIGN: %[[SCALE:.*]] = pto.vmi.divf
-// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 2, slots = 1>>
+// ASSIGN-SAME: -> !pto.vmi.vreg<2xf32, #pto.vmi.layout<num_groups = 2, slots = 1>>
 // ASSIGN: pto.vmi.group_store %[[SCALE]]
 // ASSIGN: %[[SCALE_VEC:.*]] = pto.vmi.group_broadcast %[[SCALE]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>

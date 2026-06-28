@@ -18,25 +18,25 @@ module {
     %c1 = arith.constant 1 : index
     %c128 = arith.constant 128 : index
     %mask = pto.vmi.create_mask %c128 : index -> !pto.vmi.mask<128xpred>
-    %sum = scf.if %cond -> !pto.vmi.vreg<128xf32> {
+    %sum = scf.if %cond -> !pto.vmi.vreg<8xf32> {
       %x = pto.vmi.load %src[%off]
           : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
       %a = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8, reassoc}
           : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
-          -> !pto.vmi.vreg<128xf32>
-      scf.yield %a : !pto.vmi.vreg<128xf32>
+          -> !pto.vmi.vreg<8xf32>
+      scf.yield %a : !pto.vmi.vreg<8xf32>
     } else {
       %b = pto.vmi.group_slot_load %rhs[%off], %c1 {num_groups = 8}
-          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
-      scf.yield %b : !pto.vmi.vreg<128xf32>
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<8xf32>
+      scf.yield %b : !pto.vmi.vreg<8xf32>
     }
     %bias = pto.vmi.group_slot_load %rhs[%off], %c1 {num_groups = 8}
-        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<8xf32>
     %out = pto.vmi.addf %sum, %bias
-        : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
-        -> !pto.vmi.vreg<128xf32>
+        : !pto.vmi.vreg<8xf32>, !pto.vmi.vreg<8xf32>
+        -> !pto.vmi.vreg<8xf32>
     pto.vmi.group_store %out, %dst[%off], %c1 {num_groups = 8}
-        : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
+        : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
     return
   }
 }

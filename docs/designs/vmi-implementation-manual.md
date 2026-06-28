@@ -2534,8 +2534,9 @@ bitcast:
   65xf32 -> 130xi16, where the second physical chunk carries 32 logical bits on
   both sides, and uneven deinterleaved tails such as 129xf32 -> 129xi32.
   Partial/tail bitcast remains unsupported if source padding bits would become
-  result logical bits. group_slots bitcast is unsupported until a slot-wise
-  bitcast contract is defined.
+  result logical bits. group_slots bitcast follows the same rule: it is valid
+  only when the source/result group_slots layout is identical and every
+  physical group-slot chunk carries the same logical bit footprint.
 
 load:
   baseline result layout is deterministic from explicit layout attrs or the
@@ -3019,7 +3020,7 @@ pto.vmi.reduce_addi:
   current direct lowering:
     source element width must be 32 bits; narrower vcadd widens its result and needs a separate result type plan
     source must materialize to one or more full physical chunks with no padding logical lanes
-    init/result must be rank-0 VMI vectors and each materialize to one physical chunk
+    init/result must be 1-lane VMI vectors and each materialize to one physical chunk
     mask must materialize to the same number of physical chunks as source
     lower as:
       first_lane = pto.pge_b32 "PAT_VL1"
@@ -3048,7 +3049,7 @@ pto.vmi.reduce_addf:
   current direct lowering:
     source element type must be f32
     source must materialize to one or more full physical chunks with no padding logical lanes
-    init/result must be rank-0 VMI vectors and each materialize to one physical chunk
+    init/result must be 1-lane VMI vectors and each materialize to one physical chunk
     mask must materialize to the same number of b32 physical chunks as source
     lower as:
       first_lane = pto.pge_b32 "PAT_VL1"
@@ -3111,8 +3112,10 @@ pto.vmi.group_reduce_addf:
     Non-slot lanes are not consumed by pto.vmi.group_broadcast. The current
     direct lowering materializes them as zero where the hardware path does not
     already define them.
-    The result remains a VMI vector with the same element type and logical lane
-    count as the source, but its layout is an explicit group-slot layout.
+    The result remains a VMI vector with the same element type as the source,
+    but its logical lane count is G: one scalar result per group.  Its layout
+    is an explicit group-slot layout that describes where those G scalars are
+    placed in physical registers.
   layout assignment:
     source use is requested as contiguous
     result natural layout is #pto.vmi.layout<num_groups = G, slots = K>
@@ -3120,7 +3123,9 @@ pto.vmi.group_reduce_addf:
     element width
   current direct lowering:
     source/result element type must be f32
-    source, result, and mask must have matching physical arity and full chunks
+    source and mask must have compatible full physical chunks. The result is
+    `GxT` group-slot data and may have different physical arity from the
+    source tile.
     if S=8 for f32, lower each physical chunk with pto.vcgadd. This is the
     hardware 32B VLane group reduction path for f32: each source chunk produces
     eight 8-lane group sums in the low lanes of that physical chunk. The
@@ -3139,18 +3144,19 @@ pto.vmi.group_reduce_addf:
 
 pto.vmi.group_broadcast:
   semantic:
-    N = logical lane count; G = num_groups; S = N / G
-    source must carry #pto.vmi.layout<num_groups = G, slots = K>. For each group
-    g, the source value is read from the slot lane defined by K. The result broadcasts it back to
-    each logical group:
+    source logical lane count is G; result logical lane count is N.
+    S = N / G.
+    source must carry #pto.vmi.layout<num_groups = G, slots = K>. For each
+    group g, the source value is read from the slot lane defined by K. The
+    result broadcasts it back to each logical group:
       result[g * S + i] = source[group_slot(g)]
   layout assignment:
     source use is requested as #pto.vmi.layout<num_groups = G, slots = K>
     result is consumer-driven. If no consumer requests another layout, it
     defaults to contiguous.
   current direct lowering:
-    source must carry #pto.vmi.layout<num_groups = G, slots = K> with full
-    physical chunks
+    source must carry #pto.vmi.layout<num_groups = G, slots = K> with one
+    logical lane per group
     result may be contiguous with full physical chunks
     result may also be deinterleaved when S is large enough that every physical
     result chunk stays inside one logical group, for example N=512, G=2, S=256,
@@ -3184,7 +3190,7 @@ pto.vmi.reduce_maxf / pto.vmi.reduce_minf:
     NaN and signed-zero behavior follows pto.vcmax/pto.vcmin for the chunk
     reduction and pto.vmax/pto.vmin for serial chunk accumulation. The index
     lane produced by pto.vcmax/pto.vcmin is ignored because VMI exposes only the
-    rank-0 value result.
+    1-lane value result.
   layout assignment:
     source use is requested as contiguous
     init use is requested as contiguous
@@ -3193,7 +3199,7 @@ pto.vmi.reduce_maxf / pto.vmi.reduce_minf:
   current direct lowering:
     source element type must be f16 or f32
     source must materialize to one or more full physical chunks with no padding logical lanes
-    init/result must be rank-0 VMI vectors and each materialize to one physical chunk
+    init/result must be 1-lane VMI vectors and each materialize to one physical chunk
     mask must materialize to the same number of physical chunks as source
     lower reduce_maxf as:
       first_lane = pto.pge_b16/b32 "PAT_VL1"
@@ -3261,12 +3267,11 @@ pto.vmi.truncf, direct path:
 pto.vmi.bitcast:
   for each physical part:
     emit pto.vbitcast(source_part) -> result_part_type
-  source/result layouts must match and must be contiguous/deinterleaved,
-  physical arity must match, and every corresponding physical chunk must carry
-  the same number of logical bits. Padding bits may map only to result padding
-  bits; any shape where source padding would become result logical data remains
-  unsupported. group_slots bitcast is rejected before vmi-to-vpto until it has
-  a slot-wise contract.
+  source/result layouts must match, physical arity must match, and every
+  corresponding physical chunk must carry the same number of logical bits.
+  This includes contiguous, deinterleaved, and identical group_slots layouts.
+  Padding bits may map only to result padding bits; any shape where source
+  padding would become result logical data remains unsupported.
 
 pto.vmi.channel_split / pto.vmi.channel_merge:
   support 2-way and 4-way channel transforms for contiguous per-channel values
@@ -3596,7 +3601,7 @@ Unsupported diagnostics:
     or f32 deinterleaved=4 source parts to one contiguous fp8-like result chunk
 
   unsupported pto.vmi.bitcast shape:
-    VMI-UNSUPPORTED: pto.vmi.bitcast requires matching non-group_slots source/result layouts with identical physical
+    VMI-UNSUPPORTED: pto.vmi.bitcast requires matching source/result layouts with identical physical
     arity and matching per-chunk logical bit footprints (...)
 
   unsupported pto.vmi.channel_split / pto.vmi.channel_merge channel count:
@@ -4594,8 +4599,7 @@ use VMI-UNSUPPORTED in preflight:
     partial/tail memory access
     pred-only constant mask without concrete b8/b16/b32 granularity
     shuffle that requires vselr index-vector materialization
-    bitcast with mismatched per-chunk logical bit footprints or group_slots
-    bitcast without a slot-wise contract
+    bitcast with mismatched layouts or per-chunk logical bit footprints
 
 use VMI-RESIDUAL-OP:
   conversion framework finished but VMI op/type/helper/cast remains.

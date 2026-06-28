@@ -14,15 +14,15 @@ module {
   func.func @vmi_extsi_i8_to_i32_group_reduce(
       %source: !pto.vmi.vreg<256xi8>,
       %mask: !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4>>)
-      -> !pto.vmi.vreg<256xi32, #pto.vmi.layout<num_groups = 8, slots = 8>> {
+      -> !pto.vmi.vreg<8xi32, #pto.vmi.layout<num_groups = 8, slots = 8>> {
     %wide = pto.vmi.extsi %source
         : !pto.vmi.vreg<256xi8>
         -> !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
     %sum = pto.vmi.group_reduce_addi %wide, %mask {num_groups = 8}
         : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>,
           !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4>>
-        -> !pto.vmi.vreg<256xi32, #pto.vmi.layout<num_groups = 8, slots = 8>>
-    return %sum : !pto.vmi.vreg<256xi32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+        -> !pto.vmi.vreg<8xi32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+    return %sum : !pto.vmi.vreg<8xi32, #pto.vmi.layout<num_groups = 8, slots = 8>>
   }
 }
 

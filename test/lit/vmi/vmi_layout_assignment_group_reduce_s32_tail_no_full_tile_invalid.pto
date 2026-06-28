@@ -24,9 +24,9 @@ module {
     %sum = pto.vmi.group_reduce_addf %source, %mask
         {num_groups = 6, reassoc}
         : !pto.vmi.vreg<192xf32>, !pto.vmi.mask<192xpred>
-        -> !pto.vmi.vreg<192xf32>
+        -> !pto.vmi.vreg<6xf32>
     pto.vmi.group_store %sum, %dst[%off], %c1 {num_groups = 6}
-        : !pto.vmi.vreg<192xf32>, !pto.ptr<f32, ub>
+        : !pto.vmi.vreg<6xf32>, !pto.ptr<f32, ub>
     return
   }
 }

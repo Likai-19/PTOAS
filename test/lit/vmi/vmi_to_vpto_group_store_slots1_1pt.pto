@@ -10,12 +10,12 @@
 
 module {
   func.func @vmi_to_vpto_group_store_slots1_1pt(
-      %value: !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>,
+      %value: !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>,
       %dst: !pto.ptr<f32, ub>,
       %off: index) {
     %c2 = arith.constant 2 : index
     pto.vmi.group_store %value, %dst[%off], %c2 {num_groups = 8}
-        : !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>,
+        : !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>,
           !pto.ptr<f32, ub>
     return
   }

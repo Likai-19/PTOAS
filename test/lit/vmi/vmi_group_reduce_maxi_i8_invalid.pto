@@ -16,7 +16,7 @@ module {
       %mask: !pto.vmi.mask<256xpred>) {
     %max = pto.vmi.group_reduce_maxi %source, %mask {num_groups = 8}
         : !pto.vmi.vreg<256xi8>, !pto.vmi.mask<256xpred>
-        -> !pto.vmi.vreg<256xi8>
+        -> !pto.vmi.vreg<8xi8>
     return
   }
 }

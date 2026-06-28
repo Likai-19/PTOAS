@@ -647,10 +647,12 @@ FailureOr<VMIGroupSlotLoadSupport> VMILayoutSupport::getGroupSlotLoadSupport(
   };
 
   auto resultType = cast<VMIVRegType>(op.getResult().getType());
+  int64_t numGroups = op.getNumGroupsAttr().getInt();
+  if (resultType.getElementCount() != numGroups)
+    return fail("requires result logical lane count to match num_groups");
   VMILayoutAttr layout = resultType.getLayoutAttr();
   if (!layout || !layout.isGroupSlots() ||
-      layout.getNumGroups() != op.getNumGroupsAttr().getInt() ||
-      layout.getSlots() <= 0)
+      layout.getNumGroups() != numGroups || layout.getSlots() <= 0)
     return fail("requires explicit group_slots result layout matching "
                 "num_groups");
 
@@ -858,8 +860,8 @@ FailureOr<VMIGroupReduceAddFSupport> getGroupReduceAddSupportImpl(
   if (sourceType.getElementType() != resultType.getElementType())
     return fail("stable group_reduce_add layout support requires matching "
                 "source/result element types");
-  if (sourceType.getElementCount() != resultType.getElementCount())
-    return fail("requires source/result lane count to match");
+  if (resultType.getElementCount() != numGroups)
+    return fail("requires result lane count to match num_groups");
 
   FailureOr<int64_t> groupSize =
       getGroupSizeFromNumGroups(sourceType, numGroups, reason);
@@ -1028,9 +1030,12 @@ FailureOr<VMIGroupBroadcastSupport> VMILayoutSupport::getGroupBroadcastSupport(
     return failure();
   };
 
-  if (sourceType.getElementType() != resultType.getElementType() ||
-      sourceType.getElementCount() != resultType.getElementCount())
-    return fail("requires source/result shape and element type to match");
+  if (sourceType.getElementType() != resultType.getElementType())
+    return fail("requires source/result element type to match");
+  if (sourceType.getElementCount() != numGroups)
+    return fail("requires source lane count to match num_groups");
+  if (resultType.getElementCount() % numGroups != 0)
+    return fail("requires num_groups to evenly divide result lane count");
 
   VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
   VMILayoutAttr resultLayout = resultType.getLayoutAttr();
@@ -1046,9 +1051,6 @@ FailureOr<VMIGroupBroadcastSupport> VMILayoutSupport::getGroupBroadcastSupport(
                 "layouts");
 
   std::string fullChunkReason;
-  if (failed(checkFullDataPhysicalChunks(sourceType, &fullChunkReason)))
-    return fail(Twine("requires full source physical chunks; ") +
-                fullChunkReason);
   if (failed(checkFullDataPhysicalChunks(resultType, &fullChunkReason)))
     return fail(Twine("requires full result physical chunks; ") +
                 fullChunkReason);
@@ -1062,7 +1064,7 @@ FailureOr<VMIGroupBroadcastSupport> VMILayoutSupport::getGroupBroadcastSupport(
     return fail("requires matching physical lanes per part");
 
   FailureOr<int64_t> groupSize =
-      getGroupSizeFromNumGroups(sourceType, numGroups, reason);
+      getGroupSizeFromNumGroups(resultType, numGroups, reason);
   if (failed(groupSize))
     return failure();
   if (*lanesPerPart % *groupSize != 0 && *groupSize % *lanesPerPart != 0)

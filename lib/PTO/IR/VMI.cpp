@@ -641,11 +641,11 @@ LogicalResult VMIVRegType::verify(function_ref<InFlightDiagnostic()> emitError,
                        << "' expected layout to be #pto.vmi.layout";
   if (auto layoutAttr = llvm::dyn_cast_or_null<VMILayoutAttr>(layout)) {
     if (layoutAttr.isGroupSlots() &&
-        elementCount % layoutAttr.getNumGroups() != 0)
+        elementCount != layoutAttr.getNumGroups())
       return emitError() << "'"
                          << formatVMIVRegType(elementCount, elementType, layout)
-                         << "' expected num_groups layout to evenly divide "
-                            "the VMI logical lane count";
+                         << "' expected num_groups layout to describe exactly "
+                            "one logical result lane per group";
   }
 
   return success();
@@ -1116,7 +1116,7 @@ LogicalResult VMIReduceAddIOp::verify() {
     return emitOpError(
         "requires source, init, and result element types to match");
   if (initType.getElementCount() != 1 || resultType.getElementCount() != 1)
-    return emitOpError("requires init and result to be rank-0 VMI vectors");
+    return emitOpError("requires init and result to be 1-lane VMI vectors");
   if (failed(verifyAllSameVRegShapeAndLayout(getOperation(),
                                              {initType, resultType},
                                              /*requireSameElement=*/true)))
@@ -1140,7 +1140,7 @@ LogicalResult VMIReduceAddFOp::verify() {
     return emitOpError(
         "requires source, init, and result element types to match");
   if (initType.getElementCount() != 1 || resultType.getElementCount() != 1)
-    return emitOpError("requires init and result to be rank-0 VMI vectors");
+    return emitOpError("requires init and result to be 1-lane VMI vectors");
   if (failed(verifyAllSameVRegShapeAndLayout(getOperation(),
                                              {initType, resultType},
                                              /*requireSameElement=*/true)))
@@ -1161,7 +1161,7 @@ template <typename OpTy> LogicalResult verifyReduceMinMaxFOp(OpTy op) {
     return op.emitOpError(
         "requires source, init, and result element types to match");
   if (initType.getElementCount() != 1 || resultType.getElementCount() != 1)
-    return op.emitOpError("requires init and result to be rank-0 VMI vectors");
+    return op.emitOpError("requires init and result to be 1-lane VMI vectors");
   if (failed(verifyAllSameVRegShapeAndLayout(op.getOperation(),
                                              {initType, resultType},
                                              /*requireSameElement=*/true)))
@@ -1185,9 +1185,9 @@ static LogicalResult verifyGroupReduceFloatOp(OpTy op, bool requiresReassoc) {
   if (!isVMIFloatLikeType(sourceType.getElementType()))
     return op.emitOpError(
         "requires floating-point-like VMI source element type");
-  if (sourceType.getElementCount() != resultType.getElementCount())
+  if (resultType.getElementCount() != op.getNumGroupsAttr().getInt())
     return op.emitOpError(
-        "requires source and result logical lane counts to match");
+        "requires result logical lane count to match num_groups");
   if (sourceType.getElementType() != resultType.getElementType())
     return op.emitOpError("requires source and result element types to match");
   if (auto sourceLayout = sourceType.getLayoutAttr()) {
@@ -1238,9 +1238,9 @@ static LogicalResult verifyGroupReduceIntegerOp(OpTy op) {
         "requires i32 accumulator element type; cast i8/i16 storage to i32 "
         "before grouped reduction because integer reduction widens narrow "
         "inputs");
-  if (sourceType.getElementCount() != resultType.getElementCount())
+  if (resultType.getElementCount() != op.getNumGroupsAttr().getInt())
     return op.emitOpError(
-        "requires source and result logical lane counts to match");
+        "requires result logical lane count to match num_groups");
   if (sourceType.getElementType() != resultType.getElementType())
     return op.emitOpError("requires source and result element types to match");
   if (auto sourceLayout = sourceType.getLayoutAttr()) {
@@ -1281,25 +1281,28 @@ LogicalResult VMIGroupReduceMaxIOp::verify() {
 LogicalResult VMIGroupBroadcastOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
-  if (sourceType.getElementCount() != resultType.getElementCount())
+  int64_t numGroups = getNumGroupsAttr().getInt();
+  if (sourceType.getElementCount() != numGroups)
     return emitOpError(
-        "requires source and result logical lane counts to match");
+        "requires source logical lane count to match num_groups");
+  if (resultType.getElementCount() % numGroups != 0)
+    return emitOpError(
+        "requires num_groups to evenly divide result logical lane count");
   if (sourceType.getElementType() != resultType.getElementType())
     return emitOpError("requires source and result element types to match");
   if (auto sourceLayout = sourceType.getLayoutAttr()) {
     if (!sourceLayout.isGroupSlots() ||
-        sourceLayout.getNumGroups() != getNumGroupsAttr().getInt())
+        sourceLayout.getNumGroups() != numGroups)
       return emitOpError() << "requires layout-assigned source to use "
                               "#pto.vmi.layout<num_groups = "
-                           << getNumGroupsAttr().getInt() << ">";
+                           << numGroups << ">";
   }
   if (auto resultLayout = resultType.getLayoutAttr()) {
     if (resultLayout.isGroupSlots())
       return emitOpError(
           "requires layout-assigned result to use a dense VMI layout");
   }
-  return verifyNumGroups(getOperation(), sourceType,
-                         getNumGroupsAttr().getInt());
+  return verifyNumGroups(getOperation(), resultType, numGroups);
 }
 
 template <typename OpTy> static LogicalResult verifyVMIHistogramOp(OpTy op) {
@@ -1536,18 +1539,21 @@ void VMIGroupLoadOp::getEffects(
 
 LogicalResult VMIGroupSlotLoadOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
+  int64_t numGroups = getNumGroupsAttr().getInt();
+  if (resultType.getElementCount() != numGroups)
+    return emitOpError(
+        "requires result logical lane count to match num_groups");
   if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
                                         resultType, "source")))
     return failure();
   if (auto resultLayout = resultType.getLayoutAttr()) {
     if (!resultLayout.isGroupSlots() ||
-        resultLayout.getNumGroups() != getNumGroupsAttr().getInt())
+        resultLayout.getNumGroups() != numGroups)
       return emitOpError() << "requires layout-assigned result to use "
                               "#pto.vmi.layout<num_groups = "
-                           << getNumGroupsAttr().getInt() << ">";
+                           << numGroups << ">";
   }
-  return verifyNumGroups(getOperation(), resultType,
-                         getNumGroupsAttr().getInt());
+  return verifyNumGroups(getOperation(), resultType, numGroups);
 }
 
 void VMIGroupSlotLoadOp::getEffects(
@@ -1958,6 +1964,16 @@ mlir::pto::mapLogicalLaneToPhysical(Type type, int64_t logicalLane) {
   if (logicalLane < 0 || logicalLane >= *elementCount)
     return failure();
 
+  FailureOr<VMILayoutAttr> layout = getAssignedVMILayout(type);
+  if (succeeded(layout) && (*layout).isGroupSlots() &&
+      (*layout).getSlots() > 0) {
+    int64_t slots = (*layout).getSlots();
+    int64_t lane = logicalLane % slots;
+    if (lane >= *lanesPerPart)
+      return failure();
+    return VMIPhysicalLane{/*part=*/0, logicalLane / slots, lane};
+  }
+
   int64_t part = 0;
   std::optional<int64_t> indexInPart = mapDenseLogicalLaneToPartIndex(
       *elementCount, *factor, *blockElems, logicalLane, part);
@@ -1981,6 +1997,18 @@ FailureOr<int64_t> mlir::pto::mapPhysicalLaneToLogical(Type type, int64_t part,
       lane >= *lanesPerPart)
     return failure();
 
+  FailureOr<VMILayoutAttr> layout = getAssignedVMILayout(type);
+  if (succeeded(layout) && (*layout).isGroupSlots() &&
+      (*layout).getSlots() > 0) {
+    int64_t slots = (*layout).getSlots();
+    if (part != 0 || lane >= slots)
+      return failure();
+    int64_t logicalLane = chunk * slots + lane;
+    if (logicalLane >= *elementCount)
+      return failure();
+    return logicalLane;
+  }
+
   int64_t indexInPart = chunk * *lanesPerPart + lane;
   std::optional<int64_t> logicalLane = mapDensePartIndexToLogicalLane(
       *elementCount, *factor, *blockElems, part, indexInPart);
@@ -2001,6 +2029,17 @@ FailureOr<bool> mlir::pto::isPaddingLane(Type type, int64_t part, int64_t chunk,
   if (part < 0 || part >= *factor || chunk < 0 || lane < 0 ||
       lane >= *lanesPerPart)
     return failure();
+
+  FailureOr<VMILayoutAttr> layout = getAssignedVMILayout(type);
+  if (succeeded(layout) && (*layout).isGroupSlots() &&
+      (*layout).getSlots() > 0) {
+    int64_t slots = (*layout).getSlots();
+    if (part != 0)
+      return true;
+    if (lane >= slots)
+      return true;
+    return chunk * slots + lane >= *elementCount;
+  }
 
   int64_t lanesInPart =
       getDenseLogicalLanesInPart(*elementCount, *factor, *blockElems, part);
