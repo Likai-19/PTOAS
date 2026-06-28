@@ -12,7 +12,7 @@
 // RUN: pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
 
 module {
-  func.func @vmi_layout_assignment_group_slot_trunci_sparse(
+  func.func @vmi_layout_assignment_group_slot_trunci_lane_stride(
       %wide: !pto.vmi.vreg<256xi32, #pto.vmi.layout<num_groups = 8, slots = 8>>,
       %dst: !pto.ptr<ui8, ub>,
       %off: index) {
@@ -26,12 +26,12 @@ module {
   }
 }
 
-// ASSIGN-LABEL: func.func @vmi_layout_assignment_group_slot_trunci_sparse(
+// ASSIGN-LABEL: func.func @vmi_layout_assignment_group_slot_trunci_lane_stride(
 // ASSIGN: %[[NARROW:.*]] = pto.vmi.trunci
-// ASSIGN-SAME: -> !pto.vmi.vreg<256xui8, #pto.vmi.layout<num_groups = 8, slots = 8, sparse = 4>>
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>>
 // ASSIGN: pto.vmi.group_store %[[NARROW]]
 
-// LOWER-LABEL: func.func @vmi_layout_assignment_group_slot_trunci_sparse(
+// LOWER-LABEL: func.func @vmi_layout_assignment_group_slot_trunci_lane_stride(
 // LOWER-NOT: pto.vcvt
 // LOWER-NOT: pto.vpack
 // LOWER: pto.vsts {{.*}} {dist = "PK4_B32"} : !pto.vreg<64xi32>, !pto.ptr<ui8, ub>, !pto.mask<b32>

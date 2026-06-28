@@ -827,7 +827,7 @@ deinterleaved=4:
   part3 chunks for lanes 3,7,11,...
 
 num_groups=G:
-  sparse group-slot reduce result layout
+  group-slot reduce result layout
   physical storage is contiguous chunk order
   only canonical group_slot(g) lanes contain semantic values
 ```
@@ -3098,7 +3098,7 @@ pto.vmi.group_reduce_addf:
     requires {reassoc}
     N = logical lane count; G = num_groups; S = N / G
     L = physical lanes per 256B chunk for the element type.
-    The result carries #pto.vmi.layout<num_groups = G, slots = K>, a sparse
+    The result carries #pto.vmi.layout<num_groups = G, slots = K>, a group-slot
     group-slot layout. It is not a dense vector layout: only slot lanes have
     semantic values.  Supported K values are:
       K = 8 for VCGADD-style packed results, where group g is stored in

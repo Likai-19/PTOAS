@@ -1189,7 +1189,7 @@ struct LayoutSolver {
               fact->kind == VMICastLayoutKind::Narrow4x)
             resultLayout = VMILayoutAttr::getGroupSlots(
                 ctx, sourceLayout.getNumGroups(), sourceLayout.getSlots(),
-                /*sparseFactor=*/4);
+                /*laneStride=*/4);
           if (failed(setNaturalLayout(trunci.getResult(), resultLayout, op)))
             return WalkResult::interrupt();
           return WalkResult::advance();

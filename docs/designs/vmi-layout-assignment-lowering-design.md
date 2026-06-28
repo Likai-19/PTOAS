@@ -165,7 +165,7 @@ design so far:
 physical dense layout:
   contiguous, deinterleaved=2/4, block_elems=1/8
 
-sparse result layout:
+group-slot result layout:
   group_slots(G, slots=8) for packed VCG results
   group_slots(G, slots=1) for row-local S=64 results
 
@@ -291,21 +291,28 @@ deinterleaved=2, block_elems=8
 are different layouts.  They cannot be treated as compatible because `F` is the
 same.
 
-### 2.2 Sparse Group-Slot Layouts
+### 2.2 Group-Slot Layouts
 
 ```text
 #pto.vmi.layout<num_groups = G, slots = K>
+#pto.vmi.layout<num_groups = G, slots = K, lane_stride = LS>
 ```
 
 Only `G` lanes have semantic values:
 
 ```text
 slot_block(g) = g / K
-slot_lane(g)  = g % K
+slot_lane(g)  = (g % K) * LS
 ```
 
 All non-slot lanes are undefined and may only be read by group-aware operations.
 Ordinary dense `add/mul/store/truncf` cannot consume `group_slots`.
+
+`LS` defaults to 1 and is measured in logical element-sized physical slots.  It
+is not a new group semantic; it records regular physical spacing for each stored
+group slot.  For example, `ui8 lane_stride=4` maps slot values to byte lanes
+0, 4, 8, ... and lets `group_store` lower through a b32 carrier `PK4_B32`
+store.
 
 `K` is selected by the assigned producer/result contract:
 
