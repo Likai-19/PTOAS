@@ -19,7 +19,7 @@ See LICENSE in the root of the software repository for the full text of the Lice
 
 ## 当前目录范围
 
-当前目录保留 35 个 runtime case：
+当前目录保留 36 个 runtime case：
 
 | CCE family | 当前 case 数 | 范围 |
 | --- | ---: | --- |
@@ -29,6 +29,7 @@ See LICENSE in the root of the software repository for the full text of the Lice
 | `dequant/anti_mx_quant` | 7 | 当前保留 VMI 能表达的 FP8 行；FP4 输入暂缓 |
 | `block_mx_quant` | 4 | 当前保留 canonical FP8/OCP 等价性行；FP4、DDR `scale_alg=2` 和额外 `test_cce.py` union 行暂缓 |
 | `swiglu_mx_quant` | 4 | 当前保留 FP8/OCP 等价性行；FP4 和 CCE 已标记异常的 CUBLAS `scale_alg=1` 暂缓 |
+| `simdvf_per_block_cast` | 1 | 对齐 PTOAS PR #488 中的 16x256 f16 + 4x8 scale -> fp8 per-block cast case |
 
 ## 设计上暂缓
 
