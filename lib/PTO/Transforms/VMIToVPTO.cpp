@@ -244,17 +244,17 @@ materializeVMIToVPTO(OpBuilder &builder, TypeRange resultTypes, Value input,
 static FailureOr<Type> getVMIVRegPhysicalElementType(VMIVRegType type) {
   Type elementType = type.getElementType();
   VMILayoutAttr layout = type.getLayoutAttr();
-  if (!layout || !layout.hasSparseFactor())
+  if (!layout || !layout.hasLaneStride())
     return elementType;
 
   auto integerType = dyn_cast<IntegerType>(elementType);
   if (!integerType || !integerType.isUnsigned())
     return failure();
   unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
-  int64_t sparseFactor = layout.getSparseFactor();
-  if (elementBits == 0 || sparseFactor <= 1)
+  int64_t laneStride = layout.getLaneStride();
+  if (elementBits == 0 || laneStride <= 1)
     return failure();
-  int64_t physicalBits = static_cast<int64_t>(elementBits) * sparseFactor;
+  int64_t physicalBits = static_cast<int64_t>(elementBits) * laneStride;
   if (physicalBits != 16 && physicalBits != 32)
     return failure();
   return IntegerType::get(type.getContext(), physicalBits);
@@ -4903,7 +4903,7 @@ struct OneToNVMIGroupStoreOpPattern
         bool packedByteStore = isPackedByteGroupStore(
             op.getDestination().getType(), firstVRegType);
         if (packedByteStore) {
-          bool sparsePackedByteStore = layout.hasSparseFactor();
+          bool laneStridedPackedByteStore = layout.hasLaneStride();
           for (Value value : valueParts) {
             auto vregType = dyn_cast<VRegType>(value.getType());
             if (!vregType || vregType != firstVRegType)
@@ -4916,7 +4916,7 @@ struct OneToNVMIGroupStoreOpPattern
           if (failed(maskType))
             return rewriter.notifyMatchFailure(
                 op, "unsupported element type for packed group_store mask");
-          if (!sparsePackedByteStore && numGroups == 8 &&
+          if (!laneStridedPackedByteStore && numGroups == 8 &&
               valueParts.size() == 1 &&
               isKnownIndexMultipleOf(*offset, 32)) {
             MLIRContext *ctx = rewriter.getContext();
@@ -7028,8 +7028,8 @@ struct OneToNVMITruncIOpPattern : OneToNOpConversionPattern<VMITruncIOp> {
 
         unsigned physicalResultBits =
             pto::getPTOStorageElemBitWidth(resultType.getElementType());
-        if (resultLayout.hasSparseFactor() &&
-            resultLayout.getSparseFactor() == 4 &&
+        if (resultLayout.hasLaneStride() &&
+            resultLayout.getLaneStride() == 4 &&
             pto::getPTOStorageElemBitWidth(resultVMIType.getElementType()) ==
                 8 &&
             physicalResultBits == 32) {

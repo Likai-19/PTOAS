@@ -199,6 +199,7 @@ Represent layout as a closed attribute family:
 #pto.vmi.layout<contiguous>
 #pto.vmi.layout<deinterleaved = F, block_elems = B>
 #pto.vmi.layout<num_groups = G, slots = K>
+#pto.vmi.layout<num_groups = G, slots = K, lane_stride = LS>
 ```
 
 C++ form:
@@ -216,6 +217,7 @@ struct VMILayoutKey {
   int64_t blockElems = 1;
   int64_t numGroups = 0;
   int64_t slots = 0;
+  int64_t laneStride = 1;
 };
 ```
 
@@ -235,6 +237,7 @@ group_slots:
   K > 0
   G % K == 0
   K fits in one physical vreg for element type
+  LS > 0
 ```
 
 Parser compatibility during migration:
@@ -251,10 +254,15 @@ New `vmi-layout-assignment` output must print one of:
 ```text
 #pto.vmi.layout<num_groups = G, slots = 8>
 #pto.vmi.layout<num_groups = G, slots = 1>
+#pto.vmi.layout<num_groups = G, slots = 8, lane_stride = 4>
 ```
 
 so `vmi-to-vpto` can lower from the assigned type without reconstructing group
 slot placement from producer or consumer context.
+
+`lane_stride` is counted in logical element-sized physical slots and records a
+regular gap between stored group slots.  It is used for carrier-style packed
+stores such as `ui8` group slots lowered through b32 `PK4_B32`.
 
 ### 3.2 VMI Types
 
