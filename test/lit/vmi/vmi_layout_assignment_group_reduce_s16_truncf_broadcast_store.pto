@@ -17,12 +17,13 @@ module {
       %off: index) {
     %sum32 = pto.vmi.group_reduce_addf %source, %mask {num_groups = 8, reassoc}
         : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
-        -> !pto.vmi.vreg<128xf32>
-    %sum16 = pto.vmi.truncf %sum32
+        -> !pto.vmi.vreg<8xf32>
+    %rows32 = pto.vmi.group_broadcast %sum32 {num_groups = 8}
+        : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<128xf32>
+    %rows16 = pto.vmi.truncf %rows32
         : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
-    %rows = pto.vmi.group_broadcast %sum16 {num_groups = 8}
-        : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf16>
-    pto.vmi.store %rows, %dst[%off] : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>
+    pto.vmi.store %rows16, %dst[%off]
+        : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>
     return
   }
 }
@@ -35,7 +36,7 @@ module {
 // ASSIGN: %[[MASK:.*]] = pto.vmi.ensure_mask_layout %arg1
 // ASSIGN-SAME: -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
 // ASSIGN: %[[SUM32:.*]] = pto.vmi.group_reduce_addf %[[SOURCE]], %[[MASK]]
-// ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+// ASSIGN-SAME: -> !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // ASSIGN: %[[B32:.*]] = pto.vmi.group_broadcast %[[SUM32]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
 // ASSIGN: %[[B32_SPLIT:.*]] = pto.vmi.ensure_layout %[[B32]]

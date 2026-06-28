@@ -17,9 +17,9 @@ module {
     // CHECK-SAME: requires constant positive source_group_stride divisible by 8 elements
     // CHECK-SAME: packed or unaligned scalar load lowering is not implemented
     // CHECK: note: see current operation: %{{.*}} = "pto.vmi.group_slot_load"
-    // CHECK-SAME: !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
+    // CHECK-SAME: !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
     %out = pto.vmi.group_slot_load %src[%off], %c2 {num_groups = 8}
-        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<512xf32>
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<8xf32>
     return
   }
 }

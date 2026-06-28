@@ -269,19 +269,17 @@ struct LayoutSolver {
     return getContiguousLayout();
   }
 
-  VMILayoutAttr getPreferredGroupSlotLoadLayout(VMIVRegType type,
-                                                int64_t numGroups) {
+  VMILayoutAttr getPreferredGroupSlotLoadLayout(VMIGroupSlotLoadOp op) {
+    auto type = cast<VMIVRegType>(op.getResult().getType());
+    int64_t numGroups = op.getNumGroupsAttr().getInt();
     if (VMILayoutAttr existing = type.getLayoutAttr())
       if (existing.isGroupSlots() && existing.getSlots() > 0)
         return existing;
-    if (numGroups > 0 && type.getElementCount() % numGroups == 0) {
-      int64_t groupSize = type.getElementCount() / numGroups;
-      FailureOr<int64_t> lanesPerPart =
-          getDataLanesPerPart(type.getElementType());
-      if (succeeded(lanesPerPart) && groupSize == *lanesPerPart)
-        return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/1);
-    }
-    return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/8);
+    std::optional<int64_t> sourceGroupStride =
+        getConstantIndexValue(op.getSourceGroupStride());
+    if (sourceGroupStride && *sourceGroupStride == 1)
+      return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/8);
+    return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/1);
   }
 
   VMILayoutAttr getPreferredGroupBroadcastSourceLayout(Value value,
@@ -296,8 +294,8 @@ struct LayoutSolver {
     if (solved && solved.isGroupSlots() && solved.getNumGroups() == numGroups &&
         solved.getSlots() > 0)
       return solved;
-    if (value.getDefiningOp<VMIGroupSlotLoadOp>())
-      return getPreferredGroupSlotLoadLayout(type, numGroups);
+    if (auto load = value.getDefiningOp<VMIGroupSlotLoadOp>())
+      return getPreferredGroupSlotLoadLayout(load);
     return getPreferredGroupSlotsLayout(type, numGroups);
   }
 
@@ -370,8 +368,8 @@ struct LayoutSolver {
         value.getDefiningOp<VMIGroupReduceAddIOp>() ||
         value.getDefiningOp<VMIGroupReduceMaxIOp>())
       return getPreferredGroupSlotsLayout(type, numGroups);
-    if (value.getDefiningOp<VMIGroupSlotLoadOp>())
-      return getPreferredGroupSlotLoadLayout(type, numGroups);
+    if (auto load = value.getDefiningOp<VMIGroupSlotLoadOp>())
+      return getPreferredGroupSlotLoadLayout(load);
     return getContiguousLayout();
   }
 
@@ -1244,12 +1242,8 @@ struct LayoutSolver {
         return WalkResult::advance();
       }
       if (auto load = dyn_cast<VMIGroupSlotLoadOp>(op)) {
-        auto resultType = cast<VMIVRegType>(load.getResult().getType());
         if (failed(setNaturalLayout(
-                load.getResult(),
-                getPreferredGroupSlotLoadLayout(
-                    resultType, load.getNumGroupsAttr().getInt()),
-                op)))
+                load.getResult(), getPreferredGroupSlotLoadLayout(load), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }

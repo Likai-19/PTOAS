@@ -50,7 +50,7 @@ def VMIConstantOp : VMI_Op<"constant"> {
 }
 
 def VMIBroadcastOp : VMI_Op<"broadcast"> {
-  let summary = "Broadcast one scalar or rank-0 VMI vector to a VMI logical vector";
+  let summary = "Broadcast one scalar or 1-lane VMI vector to a VMI logical vector";
   let arguments = (ins AnyType:$value);
   let results = (outs VMI_VRegTypeConstraint:$result);
   let hasVerifier = 1;
@@ -367,7 +367,7 @@ def VMICompressStoreOp : VMI_Op<"compress_store", [DeclareOpInterfaceMethods<Mem
 }
 
 def VMIReduceAddIOp : VMI_Op<"reduce_addi"> {
-  let summary = "VMI masked integer add reduction with a rank-0 vector init";
+  let summary = "VMI masked integer add reduction with a 1-lane vector init";
   let arguments = (ins VMI_VRegTypeConstraint:$source,
                        VMI_VRegTypeConstraint:$init,
                        VMI_MaskTypeConstraint:$mask);
@@ -388,7 +388,7 @@ def VMIReduceAddFOp : VMI_Op<"reduce_addf"> {
 }
 
 def VMIReduceMaxFOp : VMI_Op<"reduce_maxf"> {
-  let summary = "VMI masked floating-point maximum reduction with a rank-0 vector init";
+  let summary = "VMI masked floating-point maximum reduction with a 1-lane vector init";
   let arguments = (ins VMI_VRegTypeConstraint:$source,
                        VMI_VRegTypeConstraint:$init,
                        VMI_MaskTypeConstraint:$mask);
@@ -398,7 +398,7 @@ def VMIReduceMaxFOp : VMI_Op<"reduce_maxf"> {
 }
 
 def VMIReduceMinFOp : VMI_Op<"reduce_minf"> {
-  let summary = "VMI masked floating-point minimum reduction with a rank-0 vector init";
+  let summary = "VMI masked floating-point minimum reduction with a 1-lane vector init";
   let arguments = (ins VMI_VRegTypeConstraint:$source,
                        VMI_VRegTypeConstraint:$init,
                        VMI_MaskTypeConstraint:$mask);

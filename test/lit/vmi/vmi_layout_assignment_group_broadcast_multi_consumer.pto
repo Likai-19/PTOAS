@@ -21,19 +21,19 @@ module {
     %mask = pto.vmi.create_mask %c128 : index -> !pto.vmi.mask<128xpred>
     %sum = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8, reassoc}
         : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
-        -> !pto.vmi.vreg<128xf32>
+        -> !pto.vmi.vreg<8xf32>
     %b_for_mul = pto.vmi.group_broadcast %sum {num_groups = 8}
-        : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
+        : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<128xf32>
     %y = pto.vmi.mulf %x, %b_for_mul
         : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
         -> !pto.vmi.vreg<128xf32>
     %ysum = pto.vmi.group_reduce_addf %y, %mask {num_groups = 8, reassoc}
         : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
-        -> !pto.vmi.vreg<128xf32>
+        -> !pto.vmi.vreg<8xf32>
     pto.vmi.group_store %ysum, %sum_out[%off], %c1 {num_groups = 8}
-        : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
+        : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
     %b_for_cast = pto.vmi.group_broadcast %sum {num_groups = 8}
-        : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
+        : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<128xf32>
     %h = pto.vmi.truncf %b_for_cast
         : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
     pto.vmi.store %h, %dense_out[%off]
@@ -46,7 +46,7 @@ module {
 // ASSIGN: %[[X:.*]] = pto.vmi.load
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
 // ASSIGN: %[[SUM:.*]] = pto.vmi.group_reduce_addf %[[X]]
-// ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+// ASSIGN-SAME: -> !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // ASSIGN: %[[B_MUL:.*]] = pto.vmi.group_broadcast %[[SUM]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
 // ASSIGN: %[[Y:.*]] = pto.vmi.mulf %[[X]], %[[B_MUL]]

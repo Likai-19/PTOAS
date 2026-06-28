@@ -10,12 +10,12 @@
 
 module {
   func.func @vmi_to_vpto_group_store_slots8_nonunit_invalid(
-      %value: !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>,
+      %value: !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>,
       %dst: !pto.ptr<f32, ub>,
       %off: index,
       %row_stride: index) {
     pto.vmi.group_store %value, %dst[%off], %row_stride {num_groups = 8}
-        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>,
+        : !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>,
           !pto.ptr<f32, ub>
     return
   }
