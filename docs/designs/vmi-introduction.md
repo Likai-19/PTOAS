@@ -660,10 +660,10 @@ vmi-to-vpto 之前没有物理 VPTO value 泄漏到 VMI IR 中
 
 ```mlir
 %sum = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8, reassoc}
-  : ... -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  : ... -> !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 
 pto.vmi.store %sum, %dst[%off]
-  : !pto.vmi.vreg<64xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>,
+  : !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>,
     !pto.ptr<f32, ub>
 ```
 
@@ -689,7 +689,7 @@ VMI op 做 local lowering。
   -> 两个 physical !pto.vreg<64xf32> part
      part0 携带 even lanes，part1 携带 odd lanes
 
-!pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 32, slots = 8>>
+!pto.vmi.vreg<32xf32, #pto.vmi.layout<num_groups = 32, slots = 8>>
   -> 四个 physical part
      part0 携带 group 0..7，part1 携带 group 8..15，...
 ```
@@ -824,8 +824,8 @@ Surface 意图：
 
 ```mlir
 %sum32 = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8, reassoc}
-%sum16 = pto.vmi.truncf %sum32
-%rows16 = pto.vmi.group_broadcast %sum16 {num_groups = 8}
+%rows32 = pto.vmi.group_broadcast %sum32 {num_groups = 8}
+%rows16 = pto.vmi.truncf %rows32
 pto.vmi.store %rows16, %dst[%off]
 ```
 
@@ -833,7 +833,7 @@ pto.vmi.store %rows16, %dst[%off]
 
 ```mlir
 %sum32 = pto.vmi.group_reduce_addf ...
-  -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  -> !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 
 %rows32 = pto.vmi.group_broadcast %sum32 {num_groups = 8}
   -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>

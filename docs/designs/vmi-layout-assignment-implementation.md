@@ -550,7 +550,11 @@ data/mask helper materialization:
 
 group_slot_load:
   assigned result layout is group_slots(G, slots=8) for packed slots or
-  group_slots(G, slots=1) for row-local slots.
+  group_slots(G, slots=1) for row-local slots.  Because the result type is
+  `GxT`, assignment does not derive this choice from result lane count.  A
+  constant unit `source_group_stride` selects slots=8; non-unit or dynamic
+  stride selects slots=1 first, then the support query rejects dynamic or
+  unaligned row-local lowering when the target cannot materialize it.
 
 block8 group_load:
   assigned result layout is deinterleaved=2/4 with block_elems=8 only when the
@@ -588,10 +592,9 @@ extsi/extui/trunci:
   slot-wise transform is represented explicitly.
 
 bitcast:
-  per-part vbitcast is valid for contiguous/deinterleaved layouts when
-  source/result layouts match, physical arity matches, and every physical chunk
-  carries the same logical bit footprint.  group_slots bitcast is unsupported
-  until a slot-wise bitcast contract is defined.
+  per-part vbitcast is valid when source/result layouts match, physical arity
+  matches, and every physical chunk carries the same logical bit footprint.
+  This includes contiguous, deinterleaved, and identical group_slots layouts.
 ```
 
 `vmi-layout-fold-consumers`, rematerialization, sink/hoist, and private
@@ -940,7 +943,7 @@ Canonical assigned IR shape for `group_broadcast` multi-use:
 
 ```text
 %b = pto.vmi.group_broadcast %slots
-  : !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  : !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
  -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
 
 %b_c = pto.vmi.ensure_layout %b
@@ -1730,8 +1733,8 @@ runtime SIM:
   test/vpto/cases/vmi/group-slots-fanout-store-broadcast
 ```
 
-Current checked-in coverage for 3.8 `group_reduce -> truncf ->
-group_broadcast -> dense store` and 3.17 `group_broadcast` feeding a
+Current checked-in coverage for 3.8 `group_reduce -> group_broadcast ->
+truncf -> dense store` and 3.17 `group_broadcast` feeding a
 deinterleaved consumer:
 
 ```text
@@ -2078,7 +2081,7 @@ test/lit/vmi/vmi_layout_gate_group_broadcast_support_invalid.pto
 test/lit/vmi/vmi_layout_gate_truncf_support_invalid.pto
 test/lit/vmi/vmi_layout_gate_extf_support_invalid.pto
 test/lit/vmi/vmi_layout_gate_bitcast_support_invalid.pto
-test/lit/vmi/vmi_layout_gate_bitcast_group_slots_invalid.pto
+test/lit/vmi/vmi_layout_gate_bitcast_group_slots.pto
 ```
 
 Current checked-in direct `vmi-to-vpto` preflight coverage for bitcast local
@@ -2086,7 +2089,7 @@ lowering is:
 
 ```text
 test/lit/vmi/vmi_to_vpto_bitcast_footprint_invalid.pto
-test/lit/vmi/vmi_to_vpto_bitcast_group_slots_invalid.pto
+test/lit/vmi/vmi_to_vpto_bitcast_group_slots.pto
 ```
 
 Current checked-in coverage for 3.32 f32 feeding f8 store and S=32 reduce:

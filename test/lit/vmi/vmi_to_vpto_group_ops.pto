@@ -21,12 +21,9 @@ module {
     %r = pto.vmi.group_reduce_addf %v, %mask {num_groups = 2, reassoc}
         : !pto.vmi.vreg<512xf32, #pto.vmi.layout<contiguous>>,
           !pto.vmi.mask<512xb32, #pto.vmi.layout<contiguous>>
-        -> !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 2, slots = 1>>
-    %b = pto.vmi.group_broadcast %r {num_groups = 2}
-        : !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 2, slots = 1>>
-        -> !pto.vmi.vreg<512xf32, #pto.vmi.layout<contiguous>>
-    pto.vmi.group_store %b, %dst[%c0], %row_stride {num_groups = 2}
-        : !pto.vmi.vreg<512xf32, #pto.vmi.layout<contiguous>>, !pto.ptr<f32, ub>
+        -> !pto.vmi.vreg<2xf32, #pto.vmi.layout<num_groups = 2, slots = 1>>
+    pto.vmi.group_store %r, %dst[%c0], %row_stride {num_groups = 2}
+        : !pto.vmi.vreg<2xf32, #pto.vmi.layout<num_groups = 2, slots = 1>>, !pto.ptr<f32, ub>
     return
   }
 }
@@ -36,8 +33,7 @@ module {
 // CHECK: pto.vcgadd
 // CHECK: pto.vselr
 // CHECK-COUNT-7: pto.vcgadd
-// CHECK-COUNT-8: {position = "LOWEST"}
-// CHECK-COUNT-8: pto.vsts
+// CHECK-COUNT-2: pto.vsts {{.*}} {dist = "1PT_B32"}
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
 // CHECK-NOT: unrealized_conversion_cast

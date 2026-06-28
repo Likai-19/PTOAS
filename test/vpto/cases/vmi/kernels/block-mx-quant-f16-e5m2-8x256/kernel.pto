@@ -66,42 +66,39 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
             : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
         %amax = pto.vmi.group_reduce_maxf %abs, %mask {num_groups = 8}
             : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred>
-            -> !pto.vmi.vreg<256xf32>
-
+            -> !pto.vmi.vreg<8xf32>
         %amax_bits = pto.vmi.bitcast %amax
-            : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xi32>
+            : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xi32>
         %exp_mask = pto.vmi.broadcast %c2139095040_i32
-            : i32 -> !pto.vmi.vreg<256xi32>
+            : i32 -> !pto.vmi.vreg<8xi32>
         %shift = pto.vmi.broadcast %c23_i32
-            : i32 -> !pto.vmi.vreg<256xi32>
+            : i32 -> !pto.vmi.vreg<8xi32>
         %emax = pto.vmi.broadcast %c15_i32
-            : i32 -> !pto.vmi.vreg<256xi32>
+            : i32 -> !pto.vmi.vreg<8xi32>
         %scale_exp_bias = pto.vmi.broadcast %c254_i32
-            : i32 -> !pto.vmi.vreg<256xi32>
+            : i32 -> !pto.vmi.vreg<8xi32>
         %exp_bits = pto.vmi.andi %amax_bits, %exp_mask
-            : !pto.vmi.vreg<256xi32>, !pto.vmi.vreg<256xi32>
-            -> !pto.vmi.vreg<256xi32>
+            : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32>
+            -> !pto.vmi.vreg<8xi32>
         %exp = pto.vmi.shrui %exp_bits, %shift
-            : !pto.vmi.vreg<256xi32>, !pto.vmi.vreg<256xi32>
-            -> !pto.vmi.vreg<256xi32>
+            : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32>
+            -> !pto.vmi.vreg<8xi32>
         %e8m0_i32 = pto.vmi.subi %exp, %emax
-            : !pto.vmi.vreg<256xi32>, !pto.vmi.vreg<256xi32>
-            -> !pto.vmi.vreg<256xi32>
-
+            : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32>
+            -> !pto.vmi.vreg<8xi32>
         %scale_ub_off = arith.muli %row, %c32 : index
         pto.vmi.group_store %e8m0_i32, %ub_scale1[%scale_ub_off], %c1 {num_groups = 8}
-            : !pto.vmi.vreg<256xi32>, !pto.ptr<ui8, ub>
-
+            : !pto.vmi.vreg<8xi32>, !pto.ptr<ui8, ub>
         %scale_exp = pto.vmi.subi %scale_exp_bias, %e8m0_i32
-            : !pto.vmi.vreg<256xi32>, !pto.vmi.vreg<256xi32>
-            -> !pto.vmi.vreg<256xi32>
+            : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32>
+            -> !pto.vmi.vreg<8xi32>
         %scale_bits = pto.vmi.shli %scale_exp, %shift
-            : !pto.vmi.vreg<256xi32>, !pto.vmi.vreg<256xi32>
-            -> !pto.vmi.vreg<256xi32>
+            : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32>
+            -> !pto.vmi.vreg<8xi32>
         %scale = pto.vmi.bitcast %scale_bits
-            : !pto.vmi.vreg<256xi32> -> !pto.vmi.vreg<256xf32>
+            : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
         %scale_vec = pto.vmi.group_broadcast %scale {num_groups = 8}
-            : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+            : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
         %scaled = pto.vmi.mulf %x, %scale_vec
             : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
             -> !pto.vmi.vreg<256xf32>
