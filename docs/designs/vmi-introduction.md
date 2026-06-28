@@ -125,17 +125,23 @@ element-parity consumer，assignment 可以选择 `deinterleaved=4, block_elems=
 ```mlir
 #pto.vmi.layout<num_groups = 8, slots = 8>
 #pto.vmi.layout<num_groups = 8, slots = 1>
+#pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>
 ```
 
-这是 sparse group-result layout。它不表示全部 `N` 个 logical lane 都有语义值。
+这是 group-slot result layout。它不表示全部 `N` 个 logical lane 都有语义值。
 只有 `G` 个 group 结果 slot 有语义值。
 
 ```text
 slot_block(g) = g / K
-slot_lane(g)  = g % K
+slot_lane(g)  = (g % K) * lane_stride
 
 physical part slot_block(g) 的 lane slot_lane(g) 保存 group g 的结果
 ```
+
+`lane_stride` 缺省为 1，单位是 logical element-sized physical slot。
+它描述 group result 在物理存储中的固定间距，不改变 VMI 的逻辑元素类型。
+例如 `ui8 lane_stride=4` 表示 group slot 存在 byte lane 0, 4, 8, ...
+这种形态可以 lower 为 `PK4_B32` store，物理上使用 b32 carrier 的 low byte。
 
 `num_groups=16, slots=8` 的例子：
 
@@ -369,7 +375,7 @@ baseline assignment 保留 C2 已有的 natural layout；若没有 natural layou
 
 group_reduce:
   source 需要适配 group reduce 指令形态；
-  result 使用 group_slots(num_groups, slots) 描述 sparse group result。
+  result 使用 group_slots(num_groups, slots) 描述 group-slot result。
 
 cast:
   widening/narrowing 根据 cast support 决定 source request 和 result layout。
@@ -406,7 +412,7 @@ group_store value:
 
 stride_store value:
   wants contiguous。block/repeat stride 只描述 memory write address map，
-  不表示 source vreg 是 sparse 或 NZ layout。
+  不表示 source vreg 是 lane-strided 或 NZ layout。
 
 truncf/trunci/extf/extsi/extui source:
   wants cast support 给出的 source layout
@@ -664,7 +670,7 @@ pto.vmi.store %sum, %dst[%off]
 原因：
 
 ```text
-dense store 不能把 sparse group_slots 当 dense vector 读取。
+dense store 不能把 group_slots 当 dense vector 读取。
 应使用 group_store、group_broadcast 或显式支持的 group-to-dense op。
 ```
 

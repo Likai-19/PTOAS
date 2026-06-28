@@ -28,23 +28,20 @@ def VMILayoutAttr : PTO_Attr<"VMILayout", "vmi.layout"> {
     static VMILayoutAttr getDeinterleaved(::mlir::MLIRContext *context,
                                           int64_t factor,
                                           int64_t blockElems = 1);
-    static VMILayoutAttr getSparse(::mlir::MLIRContext *context,
-                                   int64_t sparseFactor);
     static VMILayoutAttr getGroupSlots(::mlir::MLIRContext *context,
                                        int64_t numGroups,
                                        int64_t slots = 0,
-                                       int64_t sparseFactor = 1);
+                                       int64_t laneStride = 1);
 
     bool isContiguous() const { return getKind() == "contiguous"; }
     bool isDeinterleaved() const { return getKind() == "deinterleaved"; }
-    bool isSparse() const { return getKind() == "sparse"; }
     bool isGroupSlots() const { return getKind() == "num_groups"; }
     int64_t getNumGroups() const { return getFactor(); }
-    bool hasSparseFactor() const {
-      return isSparse() || (isGroupSlots() && getBlockElems() != 1);
+    bool hasLaneStride() const {
+      return isGroupSlots() && getBlockElems() != 1;
     }
-    int64_t getSparseFactor() const {
-      return isSparse() ? getFactor() : getBlockElems();
+    int64_t getLaneStride() const {
+      return isGroupSlots() ? getBlockElems() : 1;
     }
   }];
 }

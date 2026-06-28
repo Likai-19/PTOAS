@@ -83,16 +83,16 @@ module {
     return
   }
 
-  func.func @vmi_to_vpto_group_slot_trunci_slots8_i32_to_ui8_sparse(
+  func.func @vmi_to_vpto_group_slot_trunci_slots8_i32_to_ui8_lane_stride(
       %wide: !pto.vmi.vreg<256xi32, #pto.vmi.layout<num_groups = 8, slots = 8>>,
       %dst: !pto.ptr<ui8, ub>,
       %off: index) {
     %c1 = arith.constant 1 : index
     %narrow = pto.vmi.trunci %wide
         : !pto.vmi.vreg<256xi32, #pto.vmi.layout<num_groups = 8, slots = 8>>
-        -> !pto.vmi.vreg<256xui8, #pto.vmi.layout<num_groups = 8, slots = 8, sparse = 4>>
+        -> !pto.vmi.vreg<256xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>>
     pto.vmi.group_store %narrow, %dst[%off], %c1 {num_groups = 8}
-        : !pto.vmi.vreg<256xui8, #pto.vmi.layout<num_groups = 8, slots = 8, sparse = 4>>,
+        : !pto.vmi.vreg<256xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>>,
           !pto.ptr<ui8, ub>
     return
   }
@@ -146,7 +146,7 @@ module {
 // CHECK-NOT: !pto.vmi.
 // CHECK-NOT: unrealized_conversion_cast
 
-// CHECK-LABEL: func.func @vmi_to_vpto_group_slot_trunci_slots8_i32_to_ui8_sparse(
+// CHECK-LABEL: func.func @vmi_to_vpto_group_slot_trunci_slots8_i32_to_ui8_lane_stride(
 // CHECK-NOT: pto.vcvt
 // CHECK-NOT: pto.vpack
 // CHECK: pto.vsts {{.*}} {dist = "PK4_B32"} : !pto.vreg<64xi32>, !pto.ptr<ui8, ub>, !pto.mask<b32>
