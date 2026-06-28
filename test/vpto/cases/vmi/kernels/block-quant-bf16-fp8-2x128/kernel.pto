@@ -47,16 +47,16 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
           : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
       %amax = pto.vmi.group_reduce_maxf %abs, %mask {num_groups = 2}
           : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred>
-          -> !pto.vmi.vreg<256xf32>
+          -> !pto.vmi.vreg<2xf32>
       %fp8_max_v = pto.vmi.broadcast %fp8_max
-          : f32 -> !pto.vmi.vreg<256xf32>
+          : f32 -> !pto.vmi.vreg<2xf32>
       %scale = pto.vmi.divf %amax, %fp8_max_v
-          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
-          -> !pto.vmi.vreg<256xf32>
+          : !pto.vmi.vreg<2xf32>, !pto.vmi.vreg<2xf32>
+          -> !pto.vmi.vreg<2xf32>
       pto.vmi.group_store %scale, %ub_scale[%c0], %c1 {num_groups = 2}
-          : !pto.vmi.vreg<256xf32>, !pto.ptr<f32, ub>
+          : !pto.vmi.vreg<2xf32>, !pto.ptr<f32, ub>
       %scale_vec = pto.vmi.group_broadcast %scale {num_groups = 2}
-          : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+          : !pto.vmi.vreg<2xf32> -> !pto.vmi.vreg<256xf32>
       %q = pto.vmi.divf %x, %scale_vec
           : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
           -> !pto.vmi.vreg<256xf32>

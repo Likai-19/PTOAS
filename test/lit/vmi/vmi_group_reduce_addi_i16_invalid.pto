@@ -16,7 +16,7 @@ module {
       %mask: !pto.vmi.mask<128xpred>) {
     %sum = pto.vmi.group_reduce_addi %source, %mask {num_groups = 8}
         : !pto.vmi.vreg<128xi16>, !pto.vmi.mask<128xpred>
-        -> !pto.vmi.vreg<128xi16>
+        -> !pto.vmi.vreg<8xi16>
     return
   }
 }

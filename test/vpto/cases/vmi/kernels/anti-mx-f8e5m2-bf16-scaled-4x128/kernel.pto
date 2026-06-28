@@ -49,20 +49,20 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
         %scale_tile = arith.divui %offset, %c256 : index
         %scale_off = arith.muli %scale_tile, %c32 : index
         %scale_u8 = pto.vmi.group_slot_load %ub_mxscale[%scale_off], %c1 {num_groups = 8}
-            : !pto.ptr<ui8, ub> -> !pto.vmi.vreg<256xui8>
+            : !pto.ptr<ui8, ub> -> !pto.vmi.vreg<8xui8>
         %scale_u32 = pto.vmi.extui %scale_u8
-            : !pto.vmi.vreg<256xui8> -> !pto.vmi.vreg<256xui32>
+            : !pto.vmi.vreg<8xui8> -> !pto.vmi.vreg<8xui32>
         %scale_i32 = pto.vmi.bitcast %scale_u32
-            : !pto.vmi.vreg<256xui32> -> !pto.vmi.vreg<256xi32>
+            : !pto.vmi.vreg<8xui32> -> !pto.vmi.vreg<8xi32>
         %shift = pto.vmi.broadcast %c23_i32
-            : i32 -> !pto.vmi.vreg<256xi32>
+            : i32 -> !pto.vmi.vreg<8xi32>
         %scale_bits = pto.vmi.shli %scale_i32, %shift
-            : !pto.vmi.vreg<256xi32>, !pto.vmi.vreg<256xi32>
-            -> !pto.vmi.vreg<256xi32>
+            : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32>
+            -> !pto.vmi.vreg<8xi32>
         %scale = pto.vmi.bitcast %scale_bits
-            : !pto.vmi.vreg<256xi32> -> !pto.vmi.vreg<256xf32>
+            : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xf32>
         %scale_vec = pto.vmi.group_broadcast %scale {num_groups = 8}
-            : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+            : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
         %scaled = pto.vmi.mulf %wide, %scale_vec
             : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
             -> !pto.vmi.vreg<256xf32>

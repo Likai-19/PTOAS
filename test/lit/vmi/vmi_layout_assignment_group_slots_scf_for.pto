@@ -20,9 +20,9 @@ module {
     %c2 = arith.constant 2 : index
     %c16 = arith.constant 16 : index
     %acc0 = pto.vmi.group_slot_load %init[%off], %c1 {num_groups = 8}
-        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<8xf32>
     %acc = scf.for %i = %c0 to %c2 step %c1
-        iter_args(%arg = %acc0) -> (!pto.vmi.vreg<128xf32>) {
+        iter_args(%arg = %acc0) -> (!pto.vmi.vreg<8xf32>) {
       %x = pto.vmi.group_load %base[%off], %c16 {num_groups = 8}
           : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
       %mask = pto.vmi.create_group_mask %c16
@@ -31,24 +31,24 @@ module {
       %sum = pto.vmi.group_reduce_addf %x, %mask
           {num_groups = 8, reassoc}
           : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
-          -> !pto.vmi.vreg<128xf32>
+          -> !pto.vmi.vreg<8xf32>
       %next = pto.vmi.addf %arg, %sum
-          : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
-          -> !pto.vmi.vreg<128xf32>
-      scf.yield %next : !pto.vmi.vreg<128xf32>
+          : !pto.vmi.vreg<8xf32>, !pto.vmi.vreg<8xf32>
+          -> !pto.vmi.vreg<8xf32>
+      scf.yield %next : !pto.vmi.vreg<8xf32>
     }
     pto.vmi.group_store %acc, %out[%off], %c1 {num_groups = 8}
-        : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
+        : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
     return
   }
 }
 
 // ASSIGN-LABEL: func.func @vmi_layout_assignment_group_slots_scf_for(
 // ASSIGN: %[[ACC0:.*]] = pto.vmi.group_slot_load
-// ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+// ASSIGN-SAME: -> !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // ASSIGN: %[[ACC:.*]] = scf.for
 // ASSIGN-SAME: iter_args(%[[ARG:.*]] = %[[ACC0]])
-// ASSIGN-SAME: -> (!pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>)
+// ASSIGN-SAME: -> (!pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>)
 // ASSIGN: %[[X:.*]] = pto.vmi.group_load
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
 // ASSIGN: %[[MASK0:.*]] = pto.vmi.create_group_mask
@@ -56,13 +56,13 @@ module {
 // ASSIGN: %[[MASK:.*]] = pto.vmi.ensure_mask_layout %[[MASK0]]
 // ASSIGN-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>> -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
 // ASSIGN: %[[SUM:.*]] = pto.vmi.group_reduce_addf %[[X]], %[[MASK]]
-// ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+// ASSIGN-SAME: -> !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // ASSIGN: pto.vmi.addf %[[ARG]], %[[SUM]]
-// ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+// ASSIGN-SAME: -> !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // ASSIGN: scf.yield
-// ASSIGN-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+// ASSIGN-SAME: !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // ASSIGN: pto.vmi.group_store %[[ACC]]
-// ASSIGN-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>, !pto.ptr<f32, ub>
+// ASSIGN-SAME: !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>, !pto.ptr<f32, ub>
 
 // LOWER-LABEL: func.func @vmi_layout_assignment_group_slots_scf_for(
 // LOWER: pto.vsldb

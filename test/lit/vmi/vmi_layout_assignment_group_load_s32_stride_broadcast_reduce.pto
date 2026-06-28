@@ -22,18 +22,18 @@ module {
     %sum = pto.vmi.group_reduce_addf %x, %mask
         {num_groups = 8, reassoc}
         : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred>
-        -> !pto.vmi.vreg<256xf32>
+        -> !pto.vmi.vreg<8xf32>
     %b = pto.vmi.group_broadcast %sum {num_groups = 8}
-        : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf32>
+        : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<256xf32>
     %y = pto.vmi.mulf %x, %b
         : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
         -> !pto.vmi.vreg<256xf32>
     %ysum = pto.vmi.group_reduce_addf %y, %mask
         {num_groups = 8, reassoc}
         : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred>
-        -> !pto.vmi.vreg<256xf32>
+        -> !pto.vmi.vreg<8xf32>
     pto.vmi.group_store %ysum, %dst[%off], %c1 {num_groups = 8}
-        : !pto.vmi.vreg<256xf32>, !pto.ptr<f32, ub>
+        : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
     return
   }
 }
@@ -44,7 +44,7 @@ module {
 // ASSIGN: %[[MASK:.*]] = pto.vmi.ensure_mask_layout
 // ASSIGN-SAME: -> !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
 // ASSIGN: %[[SUM:.*]] = pto.vmi.group_reduce_addf %[[X]], %[[MASK]]
-// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+// ASSIGN-SAME: -> !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // ASSIGN: %[[B:.*]] = pto.vmi.group_broadcast %[[SUM]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
 // ASSIGN: %[[Y:.*]] = pto.vmi.mulf %[[X]], %[[B]]
@@ -52,7 +52,7 @@ module {
 // ASSIGN: %[[MASK2:.*]] = pto.vmi.ensure_mask_layout
 // ASSIGN-SAME: -> !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
 // ASSIGN: %[[YSUM:.*]] = pto.vmi.group_reduce_addf %[[Y]], %[[MASK2]]
-// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+// ASSIGN-SAME: -> !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // ASSIGN: pto.vmi.group_store %[[YSUM]]
 
 // LOWER-LABEL: func.func @vmi_layout_assignment_group_load_s32_stride_broadcast_reduce(

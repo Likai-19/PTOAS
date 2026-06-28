@@ -41,9 +41,9 @@ module {
 
     %loaded = pto.vmi.load %ptr[%c0] : !pto.ptr<f32> -> !pto.vmi.vreg<128xf32>
     %slot_loaded = pto.vmi.group_slot_load %ptr[%c0], %c1 {num_groups = 8}
-        : !pto.ptr<f32> -> !pto.vmi.vreg<128xf32>
+        : !pto.ptr<f32> -> !pto.vmi.vreg<8xf32>
     pto.vmi.group_store %slot_loaded, %ptr[%c0], %c1 {num_groups = 8}
-        : !pto.vmi.vreg<128xf32>, !pto.ptr<f32>
+        : !pto.vmi.vreg<8xf32>, !pto.ptr<f32>
     pto.vmi.store %loaded, %ptr[%c0] : !pto.vmi.vreg<128xf32>, !pto.ptr<f32>
 
     %small = "pto.vmi.shuffle"(%broadcast) {
