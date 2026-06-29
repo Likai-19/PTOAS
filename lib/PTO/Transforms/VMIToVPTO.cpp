@@ -7265,9 +7265,8 @@ struct OneToNVMIExtIOpPattern : OneToNOpConversionPattern<OpT> {
       auto resultVRegType = dyn_cast<VRegType>(resultType);
       if (!resultVRegType ||
           !isa<IntegerType>(resultVRegType.getElementType()) ||
-          (resultVRegTypes.empty() ? pto::getPTOStorageElemBitWidth(
-                                         resultVRegType.getElementType()) != 32
-                                   : resultVRegType != resultVRegTypes.front()))
+          (!resultVRegTypes.empty() &&
+           resultVRegType != resultVRegTypes.front()))
         return rewriter.notifyMatchFailure(
             op, "unsupported physical integer extension result type");
       resultVRegTypes.push_back(resultVRegType);
@@ -7275,13 +7274,16 @@ struct OneToNVMIExtIOpPattern : OneToNOpConversionPattern<OpT> {
 
     unsigned sourceBits =
         pto::getPTOStorageElemBitWidth(sourceType.getElementType());
+    unsigned resultBits = pto::getPTOStorageElemBitWidth(
+        resultVRegTypes.front().getElementType());
     ArrayRef<StringRef> parts;
     int64_t factor = 0;
-    if (sourceBits == 16 && resultTypes.size() == 2 * sourceParts.size()) {
+    if (resultBits == sourceBits * 2 &&
+        resultTypes.size() == 2 * sourceParts.size()) {
       static constexpr StringRef kEvenOddParts[] = {"EVEN", "ODD"};
       parts = kEvenOddParts;
       factor = 2;
-    } else if (sourceBits == 8 &&
+    } else if (resultBits == sourceBits * 4 &&
                resultTypes.size() == 4 * sourceParts.size()) {
       static constexpr StringRef kPacked4Parts[] = {"P0", "P1", "P2", "P3"};
       parts = kPacked4Parts;
@@ -9394,8 +9396,8 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
       extsi.emitError()
           << kVMIDiagUnsupportedPrefix
           << "pto.vmi.extsi supports contiguous signed/signless 8-bit or "
-             "16-bit integer physical source chunks to 32-bit integer "
-             "deinterleaved=4/2 results, or matching "
+             "16-bit integer physical source chunks to 2x/4x wider integer "
+             "deinterleaved results, or matching "
              "group_slots(num_groups=G, slots=8) 8/16-bit integer source to "
              "32-bit integer result ("
           << reason << ")";
@@ -9410,8 +9412,8 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
       extui.emitError()
           << kVMIDiagUnsupportedPrefix
           << "pto.vmi.extui supports contiguous unsigned 8-bit or 16-bit "
-             "integer physical source chunks to unsigned 32-bit integer "
-             "deinterleaved=4/2 results, or matching "
+             "integer physical source chunks to 2x/4x wider unsigned integer "
+             "deinterleaved results, or matching "
              "group_slots(num_groups=G, slots=8) 8/16-bit integer source to "
              "32-bit integer result ("
           << reason << ")";
