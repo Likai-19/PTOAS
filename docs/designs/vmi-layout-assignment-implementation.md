@@ -14,8 +14,6 @@ Recommended pass pipeline:
 pto-validate-vmi-ir
   -> vmi-layout-assignment                  // hard legalization baseline
   -> canonicalize/cse
-  -> vmi-layout-fold              // optional optimization
-  -> canonicalize/cse
   -> vmi-layout-rematerialize               // optional optimization
   -> canonicalize/cse
   -> vmi-layout-fold              // optional optimization over remat-exposed helpers

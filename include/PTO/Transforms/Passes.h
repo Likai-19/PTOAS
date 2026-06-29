@@ -102,6 +102,7 @@ std::unique_ptr<Pass> createPTOFusionLoadStoreElisionPass();
 std::unique_ptr<Pass> createPTOFlattenFusionRegionPass();
 std::unique_ptr<Pass> createVPTOPtrNormalizePass();
 std::unique_ptr<Pass> createVPTOPtrCastCleanupPass();
+std::unique_ptr<Pass> createVPTONormalizeEquivalentVcvtPass();
 LogicalResult validateVPTOAuthoringIR(ModuleOp module,
                                       llvm::raw_ostream *diagOS = nullptr);
 LogicalResult validateVPTOEmissionIR(ModuleOp module,

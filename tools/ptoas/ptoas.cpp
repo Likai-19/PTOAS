@@ -2721,6 +2721,7 @@ static void prepareVPTOForEmission(PassManager &pm) {
   kernelModulePM.addPass(createCSEPass());
   kernelModulePM.addPass(pto::createVPTOPtrNormalizePass());
   kernelModulePM.addPass(pto::createVPTOPtrCastCleanupPass());
+  kernelModulePM.addPass(pto::createVPTONormalizeEquivalentVcvtPass());
   kernelModulePM.addPass(createReconcileUnrealizedCastsPass());
   kernelModulePM.addNestedPass<func::FuncOp>(
       createVPTOExpandWrapperOpsPass());
@@ -3010,10 +3011,10 @@ static LogicalResult runVMISemanticPipeline(OwningOpRef<ModuleOp> &module) {
   pm.addPass(pto::createVMILayoutAssignmentPass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
-  pm.addPass(pto::createVMILayoutFoldPass());
+  pm.addPass(pto::createVMILayoutRematerializePass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
-  pm.addPass(pto::createVMILayoutRematerializePass());
+  pm.addPass(pto::createVMILayoutFoldPass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
   pm.addPass(pto::createVMILayoutSinkMaterializationPass());
@@ -3022,6 +3023,7 @@ static LogicalResult runVMISemanticPipeline(OwningOpRef<ModuleOp> &module) {
   pm.addPass(pto::createVMILegalizeArithSelectPass());
   pm.addPass(pto::createPTOValidateVMILayoutIRPass());
   pm.addPass(pto::createVMIToVPTOPass());
+  pm.addPass(pto::createVPTONormalizeEquivalentVcvtPass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
   if (failed(applyConfiguredPassManagerCLOptions(pm,
