@@ -1,0 +1,56 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+
+module {
+  func.func @vmi_deinterleave_load(
+      %src: !pto.ptr<f32, ub>,
+      %offset: index) -> (!pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>) {
+    %low, %high = pto.vmi.deinterleave_load %src[%offset]
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+    return %low, %high : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+  }
+
+  func.func @vmi_interleave_store(
+      %low: !pto.vmi.vreg<64xf32>,
+      %high: !pto.vmi.vreg<64xf32>,
+      %dst: !pto.ptr<f32, ub>,
+      %offset: index) {
+    pto.vmi.interleave_store %low, %high, %dst[%offset]
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+    return
+  }
+}
+
+// ASSIGN-LABEL: func.func @vmi_deinterleave_load(
+// ASSIGN-SAME: -> (!pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>, !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>)
+// ASSIGN: %[[LOW:.*]], %[[HIGH:.*]] = pto.vmi.deinterleave_load
+// ASSIGN-SAME: !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>, !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
+// ASSIGN: return %[[LOW]], %[[HIGH]] : !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>, !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
+
+// LOWER-LABEL: func.func @vmi_deinterleave_load(
+// LOWER: %[[LOW:.*]], %[[HIGH:.*]] = pto.vldsx2 %arg0[%arg1], "DINTLV_B32"
+// LOWER: return %[[LOW]], %[[HIGH]] : !pto.vreg<64xf32>, !pto.vreg<64xf32>
+// LOWER-NOT: pto.vmi.
+// LOWER-NOT: !pto.vmi.
+// LOWER-NOT: unrealized_conversion_cast
+
+// ASSIGN-LABEL: func.func @vmi_interleave_store(
+// ASSIGN-SAME: %[[LOW_ARG:[^:]+]]: !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
+// ASSIGN-SAME: %[[HIGH_ARG:[^:]+]]: !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
+// ASSIGN: pto.vmi.interleave_store %[[LOW_ARG]], %[[HIGH_ARG]]
+// ASSIGN-SAME: !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>, !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>, !pto.ptr<f32, ub>
+
+// LOWER-LABEL: func.func @vmi_interleave_store(
+// LOWER: %[[MASK:.*]] = pto.pset_b32 "PAT_ALL"
+// LOWER: pto.vstsx2 %arg0, %arg1, %arg2[%arg3], "INTLV_B32", %[[MASK]]
+// LOWER-NOT: pto.vmi.
+// LOWER-NOT: !pto.vmi.
+// LOWER-NOT: unrealized_conversion_cast
