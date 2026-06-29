@@ -456,7 +456,8 @@ FailureOr<VMICastLayoutFact> VMILayoutSupport::getPreferredCastLayoutFact(
     return fact;
   }
 
-  if (sourceBits == 32 && resultBits == 16) {
+  if ((resultBits == 8 || resultBits == 16) &&
+      sourceBits == resultBits * 2) {
     fact.kind = VMICastLayoutKind::Narrow2x;
     fact.factor = 2;
     fact.sourceLayout =
@@ -1458,32 +1459,41 @@ VMILayoutSupport::getTruncISupport(VMITruncIOp op, std::string *reason) const {
     return VMITruncISupport{VMITruncISupportKind::GroupSlots1I32ToNarrow};
   }
 
-  if (!sourceLayout.isDeinterleaved() || !resultLayout.isContiguous() ||
-      *resultArity != 1)
-    return fail("requires integer deinterleaved source and contiguous "
-                "integer result");
-
   FailureOr<VMICastLayoutFact> fact =
       getPreferredCastLayoutFact(sourceType, resultType, reason);
   if (failed(fact) || (fact->kind != VMICastLayoutKind::Narrow2x &&
                        fact->kind != VMICastLayoutKind::Narrow4x))
     return fail("unsupported deinterleaved trunci factor, arity, result "
-                "element width, or result signedness; 32-bit to 8-bit integer "
-                "narrowing requires unsigned i8 result");
+                "element width, or result signedness; 8-bit integer narrowing "
+                "requires unsigned i8 result");
 
-  if (fact->kind == VMICastLayoutKind::Narrow2x &&
-      sourceLayout.getFactor() == fact->factor && *sourceArity == fact->factor)
+  if (!sourceLayout.isDeinterleaved() || sourceLayout.getBlockElems() != 1 ||
+      !(resultLayout.isContiguous() ||
+        (resultLayout.isDeinterleaved() &&
+         resultLayout.getBlockElems() == 1)))
+    return fail("requires integer deinterleaved source and contiguous or "
+                "deinterleaved integer result with block_elems=1");
+
+  int64_t resultFactor =
+      resultLayout.isDeinterleaved() ? resultLayout.getFactor() : 1;
+  if (sourceLayout.getFactor() != resultFactor * fact->factor ||
+      *sourceArity != *resultArity * fact->factor)
+    return fail("unsupported deinterleaved trunci source/result layout factor "
+                "or physical arity");
+
+  if (resultBits == 8 &&
+      !cast<IntegerType>(resultType.getElementType()).isUnsigned())
+    return fail("8-bit integer narrowing requires unsigned i8 result");
+
+  if (fact->kind == VMICastLayoutKind::Narrow2x)
     return VMITruncISupport{
         VMITruncISupportKind::Deinterleaved2I32ToContiguousI16};
-  if (fact->kind == VMICastLayoutKind::Narrow4x &&
-      sourceLayout.getFactor() == fact->factor &&
-      *sourceArity == fact->factor &&
-      cast<IntegerType>(resultType.getElementType()).isUnsigned())
+  if (fact->kind == VMICastLayoutKind::Narrow4x)
     return VMITruncISupport{
         VMITruncISupportKind::Deinterleaved4I32ToContiguousI8};
 
   return fail("unsupported deinterleaved trunci factor, arity, result element "
-              "width, or result signedness; 32-bit to 8-bit integer narrowing "
+              "width, or result signedness; 8-bit integer narrowing "
               "requires unsigned i8 result");
 }
 

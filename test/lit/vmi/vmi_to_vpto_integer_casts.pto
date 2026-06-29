@@ -51,6 +51,18 @@ module {
     return %p : !pto.vreg<256xui8>
   }
 
+  func.func @vmi_to_vpto_trunci_i32_d4_to_ui16_d2(
+      %wide: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>)
+      -> (!pto.vreg<128xui16>, !pto.vreg<128xui16>) {
+    %narrow = pto.vmi.trunci %wide
+        : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
+        -> !pto.vmi.vreg<256xui16, #pto.vmi.layout<deinterleaved = 2>>
+    %low, %high = "pto.vmi.unpack"(%narrow)
+        : (!pto.vmi.vreg<256xui16, #pto.vmi.layout<deinterleaved = 2>>)
+        -> (!pto.vreg<128xui16>, !pto.vreg<128xui16>)
+    return %low, %high : !pto.vreg<128xui16>, !pto.vreg<128xui16>
+  }
+
   func.func @vmi_to_vpto_fptosi_f32_to_i32(
       %input: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>)
       -> (!pto.vreg<64xi32>, !pto.vreg<64xi32>,
@@ -138,6 +150,19 @@ module {
 // CHECK: %[[M01:.*]] = pto.vor %[[P0]], %[[P1]]
 // CHECK: %[[M012:.*]] = pto.vor %[[M01]], %[[P2]]
 // CHECK: pto.vor %[[M012]], %[[P3]]
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast
+
+// CHECK-LABEL: func.func @vmi_to_vpto_trunci_i32_d4_to_ui16_d2(
+// CHECK-SAME: %[[P0:.*]]: !pto.vreg<64xi32>, %[[P1:.*]]: !pto.vreg<64xi32>, %[[P2:.*]]: !pto.vreg<64xi32>, %[[P3:.*]]: !pto.vreg<64xi32>
+// CHECK: %[[MASK:.*]] = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+// CHECK: %[[R0_EVEN:.*]] = pto.vcvt %[[P0]], %[[MASK]] {part = "EVEN", sat = "SAT"} : !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<128xui16>
+// CHECK: %[[R0_ODD:.*]] = pto.vcvt %[[P1]], %[[MASK]] {part = "ODD", sat = "SAT"} : !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<128xui16>
+// CHECK: pto.vor %[[R0_EVEN]], %[[R0_ODD]]
+// CHECK: %[[R1_EVEN:.*]] = pto.vcvt %[[P2]], %[[MASK]] {part = "EVEN", sat = "SAT"} : !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<128xui16>
+// CHECK: %[[R1_ODD:.*]] = pto.vcvt %[[P3]], %[[MASK]] {part = "ODD", sat = "SAT"} : !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<128xui16>
+// CHECK: pto.vor %[[R1_EVEN]], %[[R1_ODD]]
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
 // CHECK-NOT: unrealized_conversion_cast
