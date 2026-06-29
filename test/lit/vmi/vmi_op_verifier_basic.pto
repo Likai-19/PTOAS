@@ -13,7 +13,18 @@ module {
       %ptr: !pto.ptr<f32>,
       %layouted: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
       %mask_b16: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>,
-      %mask_b32: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>) {
+      %mask_b32: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>)
+      -> (!pto.vmi.vreg<128xf32>,
+          !pto.vmi.mask<128xpred>,
+          !pto.vmi.vreg<128xf32>,
+          !pto.vmi.vreg<128xf16>,
+          !pto.vmi.vreg<4xf32>,
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xi32>,
+          !pto.vmi.mask<128xpred>) {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %f32 = arith.constant 1.000000e+00 : f32
@@ -84,7 +95,19 @@ module {
     %icmp = pto.vmi.cmpi "slt", %iv0, %iv0
         : !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32> -> !pto.vmi.mask<128xpred>
 
-    return
+    return %add, %cmp, %sel, %trunc, %merged, %layouted_trunc, %mask_layout,
+        %mask_granularity, %packed, %iadd, %icmp
+        : !pto.vmi.vreg<128xf32>,
+          !pto.vmi.mask<128xpred>,
+          !pto.vmi.vreg<128xf32>,
+          !pto.vmi.vreg<128xf16>,
+          !pto.vmi.vreg<4xf32>,
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xi32>,
+          !pto.vmi.mask<128xpred>
   }
 }
 

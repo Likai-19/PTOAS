@@ -12,7 +12,7 @@ module {
   func.func @vmi_layout_gate_extf_support_invalid(
       %source: !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>) {
     // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.extf has no registered layout support
-    // CHECK-SAME: requires contiguous source layout and deinterleaved f32 result layout
+    // CHECK-SAME: requires contiguous or deinterleaved source layout and deinterleaved f32 result layout with block_elems=1
     // CHECK: note: see current operation: %{{.*}} = "pto.vmi.extf"
     %out = pto.vmi.extf %source
         : !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
