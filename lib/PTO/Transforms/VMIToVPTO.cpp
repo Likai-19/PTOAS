@@ -7405,36 +7405,47 @@ struct OneToNVMITruncIOpPattern : OneToNOpConversionPattern<VMITruncIOp> {
       return success();
     }
 
-    if ((sourceParts.size() != 2 && sourceParts.size() != 4) ||
-        resultTypes.size() != 1)
+    if (sourceParts.empty() || resultTypes.empty())
       return rewriter.notifyMatchFailure(
-          op, "only 32-bit integer deinterleaved=2/4 to 16/8-bit contiguous "
-              "trunci is supported");
+          op, "trunci requires non-empty physical source and result parts");
 
     auto sourceType0 = dyn_cast<VRegType>(sourceParts.front().getType());
-    auto resultType = dyn_cast<VRegType>(resultTypes.front());
+    auto resultType0 = dyn_cast<VRegType>(resultTypes.front());
     if (!sourceType0 || !isa<IntegerType>(sourceType0.getElementType()) ||
-        !resultType || !isa<IntegerType>(resultType.getElementType()))
+        !resultType0 || !isa<IntegerType>(resultType0.getElementType()))
       return rewriter.notifyMatchFailure(
           op, "unsupported physical trunci source/result type");
     for (Value sourcePart : sourceParts) {
       auto sourceType = dyn_cast<VRegType>(sourcePart.getType());
       if (!sourceType || sourceType != sourceType0)
         return rewriter.notifyMatchFailure(
-            op, "trunci source physical parts must have matching 32-bit "
-                "integer type");
+            op, "trunci source physical parts must have matching integer type");
+    }
+    for (Type resultType : resultTypes) {
+      auto resultVRegType = dyn_cast<VRegType>(resultType);
+      if (!resultVRegType || resultVRegType != resultType0)
+        return rewriter.notifyMatchFailure(
+            op, "trunci result physical parts must have matching integer type");
     }
 
-    if (pto::getPTOStorageElemBitWidth(sourceType0.getElementType()) != 32)
-      return rewriter.notifyMatchFailure(
-          op, "trunci source physical element width must be 32-bit");
+    unsigned sourceBits =
+        pto::getPTOStorageElemBitWidth(sourceType0.getElementType());
     unsigned resultBits =
-        pto::getPTOStorageElemBitWidth(resultType.getElementType());
+        pto::getPTOStorageElemBitWidth(resultType0.getElementType());
+    if (sourceBits == 0 || resultBits == 0 || sourceBits % resultBits != 0)
+      return rewriter.notifyMatchFailure(
+          op, "unsupported physical trunci source/result width relation");
+    int64_t factor = sourceBits / resultBits;
+    if ((factor != 2 && factor != 4) ||
+        sourceParts.size() != resultTypes.size() * factor)
+      return rewriter.notifyMatchFailure(
+          op, "unsupported physical trunci source/result arity relation");
+
     ArrayRef<StringRef> parts;
-    if (sourceParts.size() == 2 && resultBits == 16) {
+    if (factor == 2) {
       static constexpr StringRef kEvenOddParts[] = {"EVEN", "ODD"};
       parts = kEvenOddParts;
-    } else if (sourceParts.size() == 4 && resultBits == 8) {
+    } else if (factor == 4) {
       static constexpr StringRef kPacked4Parts[] = {"P0", "P1", "P2", "P3"};
       parts = kPacked4Parts;
     } else {
@@ -7445,30 +7456,38 @@ struct OneToNVMITruncIOpPattern : OneToNOpConversionPattern<VMITruncIOp> {
     FailureOr<Value> sourceMask =
         createAllTrueMaskForVReg(op.getLoc(), sourceType0, rewriter);
     FailureOr<Value> resultMask =
-        createAllTrueMaskForVReg(op.getLoc(), resultType, rewriter);
+        createAllTrueMaskForVReg(op.getLoc(), resultType0, rewriter);
     if (failed(sourceMask) || failed(resultMask))
       return rewriter.notifyMatchFailure(op, "failed to build trunci masks");
 
     StringAttr sat = rewriter.getStringAttr("SAT");
-    SmallVector<Value> partials;
-    partials.reserve(parts.size());
-    for (auto [sourcePart, part] : llvm::zip_equal(sourceParts, parts)) {
-      partials.push_back(rewriter
-                             .create<VcvtOp>(op.getLoc(), resultType,
-                                             sourcePart, *sourceMask,
-                                             /*rnd=*/nullptr, sat,
-                                             rewriter.getStringAttr(part))
-                             .getResult());
+    SmallVector<Value> results;
+    results.reserve(resultTypes.size());
+    for (int64_t resultIndex = 0, resultCount = resultTypes.size();
+         resultIndex < resultCount; ++resultIndex) {
+      Type resultType = resultTypes[resultIndex];
+      SmallVector<Value> partials;
+      partials.reserve(parts.size());
+      for (int64_t partIndex = 0; partIndex < factor; ++partIndex) {
+        Value sourcePart = sourceParts[resultIndex * factor + partIndex];
+        partials.push_back(
+            rewriter
+                .create<VcvtOp>(op.getLoc(), resultType, sourcePart,
+                                *sourceMask, /*rnd=*/nullptr, sat,
+                                rewriter.getStringAttr(parts[partIndex]))
+                .getResult());
+      }
+
+      Value merged = partials.front();
+      for (Value partial : llvm::drop_begin(partials))
+        merged = rewriter
+                     .create<VorOp>(op.getLoc(), resultType, merged, partial,
+                                    *resultMask)
+                     .getResult();
+      results.push_back(merged);
     }
 
-    Value merged = partials.front();
-    for (Value partial : llvm::drop_begin(partials))
-      merged = rewriter
-                   .create<VorOp>(op.getLoc(), resultType, merged, partial,
-                                  *resultMask)
-                   .getResult();
-
-    rewriter.replaceOp(op, merged, adaptor.getResultMapping());
+    rewriter.replaceOp(op, results, adaptor.getResultMapping());
     return success();
   }
 };
@@ -9427,10 +9446,9 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
 
       trunci.emitError()
           << kVMIDiagUnsupportedPrefix
-          << "pto.vmi.trunci supports only 32-bit integer deinterleaved=2 "
-             "source parts to one contiguous 16-bit integer result chunk, "
-             "32-bit integer deinterleaved=4 source parts to one contiguous "
-             "8-bit integer result chunk, or 32-bit integer "
+          << "pto.vmi.trunci supports integer deinterleaved source layouts "
+             "whose factor is the 2x/4x narrowing multiple of the contiguous "
+             "or deinterleaved result layout factor, or 32-bit integer "
              "group_slots(num_groups=G, slots=1 or 8) to 8/16-bit integer "
              "group_slots(num_groups=G, slots=1 or 8) ("
           << reason << ")";
