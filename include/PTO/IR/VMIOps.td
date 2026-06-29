@@ -547,6 +547,14 @@ def VMILoadOp : VMI_Op<"load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterfa
   let assemblyFormat = "$source `[` $offset `]` attr-dict `:` type($source) `->` type($result)";
 }
 
+def VMIDeinterleaveLoadOp : VMI_Op<"deinterleave_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "VMI two-way logical deinterleave load";
+  let arguments = (ins PtrOrMemRef:$source, Index:$offset);
+  let results = (outs VMI_VRegTypeConstraint:$low, VMI_VRegTypeConstraint:$high);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `[` $offset `]` attr-dict `:` type($source) `->` type($low) `,` type($high)";
+}
+
 def VMIGroupLoadOp : VMI_Op<"group_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "VMI logical grouped vector load with a row stride between groups";
   let arguments = (ins PtrOrMemRef:$source, Index:$offset, Index:$row_stride,
@@ -612,6 +620,15 @@ def VMIStoreOp : VMI_Op<"store", [DeclareOpInterfaceMethods<MemoryEffectsOpInter
   let results = (outs);
   let hasVerifier = 1;
   let assemblyFormat = "$value `,` $destination `[` $offset `]` attr-dict `:` type($value) `,` type($destination)";
+}
+
+def VMIInterleaveStoreOp : VMI_Op<"interleave_store", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "VMI two-way logical interleave store";
+  let arguments = (ins VMI_VRegTypeConstraint:$low, VMI_VRegTypeConstraint:$high,
+                       PtrOrMemRef:$destination, Index:$offset);
+  let results = (outs);
+  let hasVerifier = 1;
+  let assemblyFormat = "$low `,` $high `,` $destination `[` $offset `]` attr-dict `:` type($low) `,` type($high) `,` type($destination)";
 }
 
 def VMIGroupStoreOp : VMI_Op<"group_store", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {

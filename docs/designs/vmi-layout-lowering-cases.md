@@ -184,6 +184,21 @@ This optimization is legal only for full physical chunks and supported
 `DINTLV_B8/B16/B32` element widths.  Tail and masked loads keep their explicit
 safe lowering until a masked or guarded `vldsx2` strategy is designed.
 
+Two-way logical interleaved memory access is represented by dedicated VMI ops,
+not by exposing assigned layouts in surface IR:
+
+```mlir
+%x, %y = pto.vmi.deinterleave_load %src[%off]
+    : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+
+pto.vmi.interleave_store %x, %y, %dst[%off]
+    : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+```
+
+Each VMI value is an ordinary dense logical vector.  Layout assignment requests
+contiguous layouts for both streams.  Lowering maps full-chunk 8/16/32-bit cases
+to `vldsx2 DINTLV_B*` and `vstsx2 INTLV_B*`.
+
 ## 3. Lowering Results
 
 The following examples use symbolic VPTO names. `PAT_ALL_B*` means an all-true
