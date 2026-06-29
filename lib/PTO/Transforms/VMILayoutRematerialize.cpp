@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PTO/IR/PTO.h"
+#include "PTO/IR/PTOTypeUtils.h"
 #include "PTO/Transforms/Passes.h"
 #include "PTO/Transforms/VMILayoutSupport.h"
 
@@ -277,6 +278,63 @@ static bool tryReplaceDataEnsure(VMIEnsureLayoutOp ensure) {
   return true;
 }
 
+static bool tryRematerializeTruncIThroughSourceEnsure(VMITruncIOp trunc) {
+  auto resultType = dyn_cast<VMIVRegType>(trunc.getResult().getType());
+  if (!resultType || !hasConcreteLayout(resultType))
+    return false;
+
+  auto ensure = trunc.getSource().getDefiningOp<VMIEnsureLayoutOp>();
+  if (!ensure)
+    return false;
+
+  auto originalSourceType = dyn_cast<VMIVRegType>(ensure.getSource().getType());
+  if (!originalSourceType || !hasConcreteLayout(originalSourceType))
+    return false;
+  VMILayoutAttr originalSourceLayout = originalSourceType.getLayoutAttr();
+  if (!originalSourceLayout.isDeinterleaved() ||
+      originalSourceLayout.getBlockElems() != 1)
+    return false;
+
+  VMILayoutSupport supports;
+  FailureOr<VMICastLayoutFact> fact =
+      supports.getPreferredCastLayoutFact(originalSourceType, resultType);
+  if (failed(fact) || (fact->kind != VMICastLayoutKind::Narrow2x &&
+                       fact->kind != VMICastLayoutKind::Narrow4x))
+    return false;
+  if (originalSourceLayout.getFactor() % fact->factor != 0)
+    return false;
+
+  unsigned resultBits =
+      pto::getPTOStorageElemBitWidth(resultType.getElementType());
+  if (resultBits == 8 &&
+      !cast<IntegerType>(resultType.getElementType()).isUnsigned())
+    return false;
+
+  int64_t rematResultFactor = originalSourceLayout.getFactor() / fact->factor;
+  VMILayoutAttr rematResultLayout =
+      rematResultFactor == 1
+          ? VMILayoutAttr::getContiguous(resultType.getContext())
+          : VMILayoutAttr::getDeinterleaved(resultType.getContext(),
+                                            rematResultFactor,
+                                            /*blockElems=*/1);
+  auto rematResultType =
+      VMIVRegType::get(resultType.getContext(), resultType.getElementCount(),
+                       resultType.getElementType(), rematResultLayout);
+  if (rematResultType == resultType)
+    return false;
+
+  OpBuilder builder(trunc);
+  Value remat =
+      builder.create<VMITruncIOp>(trunc->getLoc(), rematResultType,
+                                  ensure.getSource())
+          .getResult();
+  Value replacement =
+      materializeDataLayout(remat, resultType, trunc->getLoc(), builder);
+  trunc.getResult().replaceAllUsesWith(replacement);
+  trunc.erase();
+  return true;
+}
+
 template <typename EnsureOp>
 static bool tryReplaceMaskEnsure(EnsureOp ensure) {
   auto resultType = dyn_cast<VMIMaskType>(ensure.getResult().getType());
@@ -307,7 +365,7 @@ struct VMILayoutRematerializePass
       SmallVector<Operation *> helpers;
       module.walk([&](Operation *op) {
         if (isa<VMIEnsureLayoutOp, VMIEnsureMaskLayoutOp,
-                VMIEnsureMaskGranularityOp>(op))
+                VMIEnsureMaskGranularityOp, VMITruncIOp>(op))
           helpers.push_back(op);
       });
 
@@ -327,6 +385,9 @@ struct VMILayoutRematerializePass
 
         if (auto ensure = dyn_cast<VMIEnsureMaskGranularityOp>(op))
           changed |= tryReplaceMaskEnsure(ensure);
+
+        if (auto trunc = dyn_cast<VMITruncIOp>(op))
+          changed |= tryRematerializeTruncIThroughSourceEnsure(trunc);
       }
     }
   }
