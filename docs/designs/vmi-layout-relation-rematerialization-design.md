@@ -142,8 +142,6 @@ load contiguous + ensure_layout to deinterleaved=2
 ```text
 vmi-layout-assignment
   -> canonicalize/cse
-  -> vmi-layout-fold
-  -> canonicalize/cse
   -> vmi-layout-rematerialize
   -> canonicalize/cse
   -> vmi-layout-fold
@@ -236,4 +234,3 @@ relation-aware remat 必须在 `vmi-to-vpto` 前把 IR 显式改写为：
 ```
 
 之后 lowering 只消费这个 local shape。
-
