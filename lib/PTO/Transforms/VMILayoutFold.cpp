@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PTO/IR/PTO.h"
+#include "PTO/IR/PTOTypeUtils.h"
 #include "PTO/IR/VMIUtils.h"
 #include "PTO/Transforms/Passes.h"
 #include "PTO/Transforms/VMILayoutSupport.h"
@@ -42,6 +43,21 @@ static bool hasSameDataShapeAndElementType(VMIVRegType lhs, VMIVRegType rhs) {
          lhs.getElementType() == rhs.getElementType();
 }
 
+static bool isLoadProducerLayout(VMIVRegType type) {
+  if (!type)
+    return false;
+  VMILayoutAttr layout = type.getLayoutAttr();
+  if (!layout)
+    return false;
+  if (layout.isContiguous())
+    return true;
+  if (!layout.isDeinterleaved() || layout.getBlockElems() != 1 ||
+      (layout.getFactor() != 2 && layout.getFactor() != 4))
+    return false;
+  unsigned elementBits = pto::getPTOStorageElemBitWidth(type.getElementType());
+  return elementBits == 8 || elementBits == 16 || elementBits == 32;
+}
+
 static bool isFoldableLoadEnsure(VMIEnsureLayoutOp ensure) {
   auto load = ensure.getSource().getDefiningOp<VMILoadOp>();
   if (!load)
@@ -52,8 +68,7 @@ static bool isFoldableLoadEnsure(VMIEnsureLayoutOp ensure) {
   if (!hasSameDataShapeAndElementType(sourceType, resultType))
     return false;
 
-  VMILayoutSupport supports;
-  return succeeded(supports.canMaterializeDataLayout(sourceType, resultType));
+  return isLoadProducerLayout(resultType);
 }
 
 static void tryFoldLoadEnsures(
@@ -86,6 +101,21 @@ static void tryFoldLoadEnsures(
     ensure.getResult().replaceAllUsesWith(load.getResult());
     maybeDeadEnsures.push_back(ensure);
   }
+}
+
+static void
+tryFoldNestedEnsureLayout(VMIEnsureLayoutOp ensure,
+                          SmallVectorImpl<VMIEnsureLayoutOp> &maybeDeadEnsures) {
+  auto inner = ensure.getSource().getDefiningOp<VMIEnsureLayoutOp>();
+  if (!inner)
+    return;
+
+  if (inner.getSource().getType() != ensure.getResult().getType())
+    return;
+
+  ensure.getResult().replaceAllUsesWith(inner.getSource());
+  maybeDeadEnsures.push_back(ensure);
+  maybeDeadEnsures.push_back(inner);
 }
 
 static bool isFoldableStoreEnsure(VMIEnsureLayoutOp ensure) {
@@ -156,6 +186,10 @@ struct VMILayoutFoldPass
 
     module.walk([&](VMILoadOp load) {
       tryFoldLoadEnsures(load, maybeDeadEnsures);
+    });
+
+    module.walk([&](VMIEnsureLayoutOp ensure) {
+      tryFoldNestedEnsureLayout(ensure, maybeDeadEnsures);
     });
 
     module.walk([&](Operation *op) {

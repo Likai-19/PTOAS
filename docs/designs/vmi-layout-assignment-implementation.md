@@ -18,6 +18,8 @@ pto-validate-vmi-ir
   -> canonicalize/cse
   -> vmi-layout-rematerialize               // optional optimization
   -> canonicalize/cse
+  -> vmi-layout-fold              // optional optimization over remat-exposed helpers
+  -> canonicalize/cse
   -> vmi-layout-sink-materialization        // optional optimization
   -> canonicalize/cse
   -> vmi-legalize-arith-select
@@ -66,8 +68,12 @@ vmi-layout-rematerialize:
   replace explicit ensure_* helpers with cloned cheap layout-polymorphic
   producers when the clone directly creates the requested result type
   current implementation: splat pto.vmi.constant, pto.vmi.broadcast,
-  pto.vmi.iota, pto.vmi.create_mask, pto.vmi.create_group_mask, and
-  pto.vmi.constant_mask
+  pto.vmi.iota, selected layout-transparent data ops, widening
+  pto.vmi.ext{f,si,ui}, pto.vmi.create_mask, pto.vmi.create_group_mask, and
+  pto.vmi.constant_mask.  Relation-aware remat rewrites result-side
+  ensure_layout through layout-transparent producers and widening ext
+  producers, leaving any newly exposed producer-side helpers for the following
+  vmi-layout-fold.
   not included in the first implementation: load, group_load, masked_load,
   group_slot_load, and group_broadcast; those require separate memory,
   execution-count, or source-layout proof before they can be rematerialized
