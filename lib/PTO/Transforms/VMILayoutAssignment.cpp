@@ -282,6 +282,59 @@ struct LayoutSolver {
     return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/1);
   }
 
+  bool isE2BGroupBroadcastLoadCandidate(VMIVRegType type, Type sourceType,
+                                        Value sourceGroupStride,
+                                        int64_t numGroups) {
+    if (numGroups <= 0 || type.getElementCount() % numGroups != 0)
+      return false;
+    int64_t groupSize = type.getElementCount() / numGroups;
+    if (numGroups % 8 != 0)
+      return false;
+
+    if (!isa<PtrType>(sourceType))
+      return false;
+    unsigned elementBits = getElementBitWidth(type.getElementType());
+    if (elementBits != 16 && elementBits != 32)
+      return false;
+    int64_t directGroupSize = 256 / elementBits;
+    if (groupSize != directGroupSize && groupSize != 2 * directGroupSize)
+      return false;
+    std::optional<int64_t> strideValue =
+        getConstantIndexValue(sourceGroupStride);
+    if (!strideValue || *strideValue != 1)
+      return false;
+
+    VMILayoutAttr existing = type.getLayoutAttr();
+    if (!existing)
+      return true;
+    if (groupSize == directGroupSize)
+      return existing.isContiguous();
+    return existing.isDeinterleaved() && existing.getFactor() == 2 &&
+           existing.getBlockElems() == 1;
+  }
+
+  bool isE2BGroupBroadcastLoadCandidate(VMIGroupBroadcastLoadOp op) {
+    return isE2BGroupBroadcastLoadCandidate(
+        cast<VMIVRegType>(op.getResult().getType()), op.getSource().getType(),
+        op.getSourceGroupStride(), op.getNumGroupsAttr().getInt());
+  }
+
+  VMILayoutAttr getPreferredGroupBroadcastLoadLayout(
+      VMIGroupBroadcastLoadOp op) {
+    auto type = cast<VMIVRegType>(op.getResult().getType());
+    if (VMILayoutAttr existing = type.getLayoutAttr())
+      return existing;
+
+    if (!isE2BGroupBroadcastLoadCandidate(op))
+      return getContiguousLayout();
+    int64_t numGroups = op.getNumGroupsAttr().getInt();
+    int64_t groupSize = type.getElementCount() / numGroups;
+    int64_t directGroupSize = 256 / getElementBitWidth(type.getElementType());
+    if (groupSize == directGroupSize)
+      return getContiguousLayout();
+    return VMILayoutAttr::getDeinterleaved(ctx, 2, /*blockElems=*/1);
+  }
+
   VMILayoutAttr getPreferredGroupBroadcastSourceLayout(Value value,
                                                        int64_t numGroups) {
     auto type = dyn_cast<VMIVRegType>(value.getType());
@@ -680,6 +733,43 @@ struct LayoutSolver {
       broadcast.erase();
       if (truncf->use_empty())
         truncf.erase();
+    }
+    return success();
+  }
+
+  LogicalResult fuseGroupSlotBroadcastLoads() {
+    SmallVector<VMIGroupBroadcastOp> broadcasts;
+    module.walk([&](VMIGroupBroadcastOp broadcast) {
+      auto load = broadcast.getSource().getDefiningOp<VMIGroupSlotLoadOp>();
+      if (!load || !load.getResult().hasOneUse())
+        return;
+      if (load.getNumGroupsAttr().getInt() !=
+          broadcast.getNumGroupsAttr().getInt())
+        return;
+
+      if (!isE2BGroupBroadcastLoadCandidate(
+              cast<VMIVRegType>(broadcast.getResult().getType()),
+              load.getSource().getType(), load.getSourceGroupStride(),
+              broadcast.getNumGroupsAttr().getInt()))
+        return;
+      broadcasts.push_back(broadcast);
+    });
+
+    OpBuilder builder(ctx);
+    for (VMIGroupBroadcastOp broadcast : broadcasts) {
+      auto load = broadcast.getSource().getDefiningOp<VMIGroupSlotLoadOp>();
+      if (!load)
+        continue;
+
+      builder.setInsertionPoint(broadcast);
+      auto fused = builder.create<VMIGroupBroadcastLoadOp>(
+          broadcast.getLoc(), broadcast.getResult().getType(),
+          load.getSource(), load.getOffset(), load.getSourceGroupStride(),
+          broadcast.getNumGroupsAttr());
+      broadcast.getResult().replaceAllUsesWith(fused.getResult());
+      broadcast.erase();
+      if (load->use_empty())
+        load.erase();
     }
     return success();
   }
@@ -1250,6 +1340,13 @@ struct LayoutSolver {
       if (auto load = dyn_cast<VMIGroupSlotLoadOp>(op)) {
         if (failed(setNaturalLayout(
                 load.getResult(), getPreferredGroupSlotLoadLayout(load), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto load = dyn_cast<VMIGroupBroadcastLoadOp>(op)) {
+        if (failed(setNaturalLayout(
+                load.getResult(),
+                getPreferredGroupBroadcastLoadLayout(load), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
@@ -1898,6 +1995,8 @@ struct LayoutSolver {
   }
 
   LogicalResult run() {
+    if (failed(fuseGroupSlotBroadcastLoads()))
+      return failure();
     if (failed(commuteTruncFAfterGroupBroadcast()))
       return failure();
     if (failed(collect()))

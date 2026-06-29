@@ -563,6 +563,17 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
     return success();
   }
 
+  if (auto load = dyn_cast<VMIGroupBroadcastLoadOp>(op)) {
+    std::string reason;
+    if (failed(
+            supports.getGroupBroadcastLoadSupport(capabilities, load, &reason)))
+      return emitLayoutSupportContract(
+          op, diagOS,
+          "pto.vmi.group_broadcast_load has no registered layout support",
+          reason);
+    return success();
+  }
+
   if (auto store = dyn_cast<VMIGroupStoreOp>(op)) {
     auto valueType = cast<VMIVRegType>(store.getValue().getType());
     VMILayoutAttr layout = valueType.getLayoutAttr();

@@ -573,6 +573,15 @@ def VMIGroupSlotLoadOp : VMI_Op<"group_slot_load", [DeclareOpInterfaceMethods<Me
   let assemblyFormat = "$source `[` $offset `]` `,` $source_group_stride attr-dict `:` type($source) `->` type($result)";
 }
 
+def VMIGroupBroadcastLoadOp : VMI_Op<"group_broadcast_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "VMI load one scalar value per logical group and broadcast it to group lanes";
+  let arguments = (ins PtrOrMemRef:$source, Index:$offset, Index:$source_group_stride,
+                       I64Attr:$num_groups);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `[` $offset `]` `,` $source_group_stride attr-dict `:` type($source) `->` type($result)";
+}
+
 def VMIStrideLoadOp : VMI_Op<"stride_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "VMI block-strided vector load";
   let arguments = (ins PtrOrMemRef:$source, Index:$offset,

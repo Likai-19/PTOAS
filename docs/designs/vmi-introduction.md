@@ -380,9 +380,10 @@ group_reduce:
 cast:
   widening/narrowing 根据 cast support 决定 source request 和 result layout。
 
-group_load / group_slot_load:
+group_load / group_slot_load / group_broadcast_load:
   result 根据 group size、row stride 和目标能力选择 contiguous、deinterleaved
-  或 group_slots。
+  或 group_slots。group_broadcast_load 表达“每个 logical group load 一个值并
+  广播到组内 lanes”的逻辑语义；E2B 只是兼容 layout 下的一种 lowering。
 
 stride_load:
   result 是 contiguous。block/repeat stride 只描述 memory address map，
@@ -588,7 +589,7 @@ constant_mask
 这个 pass 不 rematerialize：
 
 ```text
-load / masked_load / group_load / group_slot_load
+load / masked_load / group_load / group_slot_load / group_broadcast_load
 stride_load
 reduce / group_reduce
 control-flow results
