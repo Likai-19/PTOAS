@@ -14,7 +14,7 @@ Recommended pass pipeline:
 pto-validate-vmi-ir
   -> vmi-layout-assignment                  // hard legalization baseline
   -> canonicalize/cse
-  -> vmi-layout-fold-consumers              // optional optimization
+  -> vmi-layout-fold              // optional optimization
   -> canonicalize/cse
   -> vmi-layout-rematerialize               // optional optimization
   -> canonicalize/cse
@@ -50,7 +50,7 @@ canonicalize/cse:
   remove dead helpers and merge identical cloned producers where MLIR legality
   permits
 
-vmi-layout-fold-consumers:
+vmi-layout-fold:
   fold use-site materialization into consumers that can directly consume the
   source layout while preserving the same logical effect
   example: ensure_layout(deinterleaved=2 -> contiguous) feeding store may become
@@ -597,7 +597,7 @@ bitcast:
   This includes contiguous, deinterleaved, and identical group_slots layouts.
 ```
 
-`vmi-layout-fold-consumers`, rematerialization, sink/hoist, and private
+`vmi-layout-fold`, rematerialization, sink/hoist, and private
 function specialization passes consume explicit helper IR.  They may replace
 helpers with cheaper equivalent IR, but they must not introduce hidden lowering
 plans that `vmi-to-vpto` has to rediscover from producer/user context.
@@ -2033,13 +2033,13 @@ runtime SIM:
   test/vpto/cases/vmi/widen-f16-to-f32-store-reduce
 ```
 
-Current checked-in lit coverage for the first `vmi-layout-fold-consumers`
+Current checked-in lit coverage for the first `vmi-layout-fold`
 optimization is:
 
 ```text
-test/lit/vmi/vmi_layout_fold_consumers_store.pto
-test/lit/vmi/vmi_layout_fold_consumers_masked_store.pto
-test/lit/vmi/vmi_layout_fold_consumers_deint4.pto
+test/lit/vmi/vmi_layout_fold_store.pto
+test/lit/vmi/vmi_layout_fold_masked_store.pto
+test/lit/vmi/vmi_layout_fold_deint4.pto
 ```
 
 Current checked-in lit coverage for the first `vmi-layout-rematerialize`
