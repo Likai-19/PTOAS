@@ -1597,6 +1597,31 @@ void VMIGroupSlotLoadOp::getEffects(
   effects.emplace_back(MemoryEffects::Read::get(), &getSourceMutable());
 }
 
+LogicalResult VMIGroupBroadcastLoadOp::verify() {
+  auto resultType = cast<VMIVRegType>(getResult().getType());
+  int64_t numGroups = getNumGroupsAttr().getInt();
+  if (numGroups <= 0)
+    return emitOpError("requires num_groups to be positive");
+  if (resultType.getElementCount() % numGroups != 0)
+    return emitOpError(
+        "requires num_groups to evenly divide result logical lane count");
+  if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
+                                        resultType, "source")))
+    return failure();
+  if (auto resultLayout = resultType.getLayoutAttr()) {
+    if (resultLayout.isGroupSlots())
+      return emitOpError(
+          "requires layout-assigned result to use a dense VMI layout");
+  }
+  return verifyNumGroups(getOperation(), resultType, numGroups);
+}
+
+void VMIGroupBroadcastLoadOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getSourceMutable());
+}
+
 LogicalResult VMIMaskedLoadOp::verify() {
   auto maskType = cast<VMIMaskType>(getMask().getType());
   auto passthruType = cast<VMIVRegType>(getPassthru().getType());
