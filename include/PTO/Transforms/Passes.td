@@ -953,10 +953,11 @@ def VMILayoutRematerialize : Pass<"vmi-layout-rematerialize", "ModuleOp"> {
   let summary = "Rematerialize cheap VMI producers at layout helpers";
   let description = [{
     Optimizes legal layout-assigned VMI IR by replacing selected ensure_layout,
-    ensure_mask_layout, and ensure_mask_granularity helpers with cloned cheap
-    producers that directly create the requested result type. The pass is
-    deliberately limited to pure construction ops, so memory, control-flow, and
-    mask-tail proofs remain explicit in the IR.
+    ensure_mask_layout, and ensure_mask_granularity helpers with cloned
+    producers that directly create the requested result type. The pass covers
+    pure construction ops, selected layout-transparent data ops, and dense
+    widening ext relation rematerialization. Memory, control-flow, and mask-tail
+    proofs remain explicit in the IR.
   }];
   let constructor = "mlir::pto::createVMILayoutRematerializePass()";
   let dependentDialects = ["mlir::cf::ControlFlowDialect",
