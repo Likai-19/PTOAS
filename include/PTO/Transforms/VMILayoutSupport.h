@@ -140,6 +140,15 @@ struct VMIGroupBroadcastSupport {
       VMIGroupBroadcastSupportKind::GroupSlotsVselr;
 };
 
+enum class VMIGroupBroadcastLoadSupportKind {
+  E2BVlds,
+};
+
+struct VMIGroupBroadcastLoadSupport {
+  VMIGroupBroadcastLoadSupportKind kind =
+      VMIGroupBroadcastLoadSupportKind::E2BVlds;
+};
+
 enum class VMITruncFSupportKind {
   Deinterleaved2F32ToContiguousF16,
   Deinterleaved4F32ToContiguousF8,
@@ -290,6 +299,11 @@ public:
                            VMIVRegType sourceType, VMIVRegType resultType,
                            int64_t numGroups,
                            std::string *reason = nullptr) const;
+
+  FailureOr<VMIGroupBroadcastLoadSupport>
+  getGroupBroadcastLoadSupport(const VMITargetCapabilityRegistry &capabilities,
+                               VMIGroupBroadcastLoadOp op,
+                               std::string *reason = nullptr) const;
 
   FailureOr<VMITruncFSupport>
   getTruncFSupport(VMITruncFOp op, std::string *reason = nullptr) const;

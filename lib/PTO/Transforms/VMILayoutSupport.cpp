@@ -1020,6 +1020,77 @@ FailureOr<VMIGroupBroadcastSupport> VMILayoutSupport::getGroupBroadcastSupport(
                                   op.getNumGroupsAttr().getInt(), reason);
 }
 
+FailureOr<VMIGroupBroadcastLoadSupport>
+VMILayoutSupport::getGroupBroadcastLoadSupport(
+    const VMITargetCapabilityRegistry &capabilities,
+    VMIGroupBroadcastLoadOp op, std::string *reason) const {
+  auto fail =
+      [&](const Twine &message) -> FailureOr<VMIGroupBroadcastLoadSupport> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
+  int64_t numGroups = op.getNumGroupsAttr().getInt();
+  if (numGroups <= 0)
+    return fail("requires positive num_groups");
+  if (resultType.getElementCount() % numGroups != 0)
+    return fail("requires num_groups to evenly divide result lane count");
+  if (!capabilities.supportsDirectMemory(op.getSource().getType(), "source")
+           .isSupported())
+    return fail("requires supported direct memory source");
+  if (!isa<PtrType>(op.getSource().getType()))
+    return fail("requires !pto.ptr source for E2B lowering");
+
+  unsigned elementBits =
+      pto::getPTOStorageElemBitWidth(resultType.getElementType());
+  if (elementBits != 16 && elementBits != 32)
+    return fail("E2B lowering currently supports only 16-bit and 32-bit "
+                "element types");
+  int64_t directGroupSize = 256 / elementBits;
+
+  VMILayoutAttr layout = resultType.getLayoutAttr();
+  if (!layout)
+    return fail("E2B lowering requires assigned result layout");
+  bool contiguousPacketLayout = layout.isContiguous();
+  bool splitPacketLayout = layout.isDeinterleaved() && layout.getFactor() == 2 &&
+                           layout.getBlockElems() == 1;
+  if (!contiguousPacketLayout && !splitPacketLayout)
+    return fail("E2B lowering requires contiguous result layout for "
+                "direct group size or deinterleaved=2, block_elems=1 "
+                "result layout for split group size");
+
+  std::string fullChunkReason;
+  if (failed(checkFullDataPhysicalChunks(resultType, &fullChunkReason)))
+    return fail(Twine("requires full result physical chunks; ") +
+                fullChunkReason);
+
+  FailureOr<int64_t> lanesPerPart =
+      getDataLanesPerPart(resultType.getElementType());
+  if (failed(lanesPerPart) || *lanesPerPart != (2048 / elementBits))
+    return fail("E2B lowering requires one full 256-byte vreg per physical "
+                "part");
+
+  int64_t groupSize = resultType.getElementCount() / numGroups;
+  if (contiguousPacketLayout && groupSize != directGroupSize)
+    return fail("E2B contiguous lowering requires logical group size matching "
+                "the element-width direct packet size");
+  if (splitPacketLayout && groupSize != 2 * directGroupSize)
+    return fail("E2B deinterleaved=2 lowering requires logical group size "
+                "matching the element-width split packet size");
+  if (numGroups % 8 != 0)
+    return fail("E2B lowering requires num_groups to be a multiple of 8");
+
+  std::optional<int64_t> stride =
+      getConstantIndexValue(op.getSourceGroupStride());
+  if (!stride || *stride != 1)
+    return fail("E2B lowering requires constant unit source_group_stride");
+
+  return VMIGroupBroadcastLoadSupport{
+      VMIGroupBroadcastLoadSupportKind::E2BVlds};
+}
+
 FailureOr<VMIGroupBroadcastSupport> VMILayoutSupport::getGroupBroadcastSupport(
     const VMITargetCapabilityRegistry &capabilities, VMIVRegType sourceType,
     VMIVRegType resultType, int64_t numGroups, std::string *reason) const {
