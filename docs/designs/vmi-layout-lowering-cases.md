@@ -5516,7 +5516,7 @@ for i = 0..127:
 Optimization pass result:
 
 ```text
-// vmi-layout-fold-consumers may remove both ensure_layout ops if the target
+// vmi-layout-fold may remove both ensure_layout ops if the target
 // supports store lowering that consumes deinterleaved=2 and writes contiguous
 // row-major memory.
 pto.vmi.store %t1, %out1[%off]

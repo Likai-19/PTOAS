@@ -126,7 +126,7 @@ pipeline:
 pto-validate-vmi-ir
 vmi-layout-assignment
 canonicalize/cse
-vmi-layout-fold-consumers
+vmi-layout-fold
 canonicalize/cse
 vmi-layout-rematerialize
 canonicalize/cse
@@ -182,7 +182,7 @@ vmi-layout-assignment:
   module-level per-SSA-value constraint solver。先收集等价类、producer natural layout 和 consumer request，
   再把结果写回 VMI type/helper op。它可以使用 IRRewriter 改 IR，但不以 TypeConverter 为主模型。
 
-vmi-layout-fold-consumers / vmi-layout-rematerialize / vmi-layout-sink-materialization:
+vmi-layout-fold / vmi-layout-rematerialize / vmi-layout-sink-materialization:
   legal-to-legal VMI optimization passes。它们只消费 layout-assigned VMI IR，并继续产出
   layout-assigned VMI IR；所有新选择必须体现在 current op、type 或 helper IR 中。
 
@@ -238,7 +238,7 @@ Layout support query layer:
   一个 lowering pattern 自己使用的分支应该留在该 pattern 内。
 
 Layout optimization layer:
-  lib/PTO/Transforms/VMILayoutFoldConsumers.cpp
+  lib/PTO/Transforms/VMILayoutFold.cpp
   lib/PTO/Transforms/VMILayoutRematerialize.cpp
   lib/PTO/Transforms/VMILayoutSinkMaterialization.cpp
   lib/PTO/Transforms/VMILegalizeArithSelect.cpp
@@ -362,12 +362,12 @@ lib/PTO/Transforms/VMILayoutAssignment.cpp
     hide chosen layout in a pass-private side table
     infer external VMI ABI
 
-lib/PTO/Transforms/VMILayoutFoldConsumers.cpp
+lib/PTO/Transforms/VMILayoutFold.cpp
 lib/PTO/Transforms/VMILayoutRematerialize.cpp
 lib/PTO/Transforms/VMILayoutSinkMaterialization.cpp
 lib/PTO/Transforms/VMILegalizeArithSelect.cpp
   pass:
-    VMILayoutFoldConsumersPass
+    VMILayoutFoldPass
     VMILayoutRematerializePass
     VMILayoutSinkMaterializationPass
     VMILegalizeArithSelectPass
@@ -437,8 +437,8 @@ source file                                pass                         primary 
 lib/PTO/Transforms/PTOValidateVMIIR.cpp    pto-validate-vmi-ir          Operation::walk + recursive type/attr scan
 lib/PTO/Transforms/PTOValidateVMIIR.cpp    pto-validate-vmi-layout-ir   Operation::walk + recursive type/attr scan
 lib/PTO/Transforms/VMILayoutAssignment.cpp vmi-layout-assignment        module-level union-find solver + IRRewriter
-lib/PTO/Transforms/VMILayoutFoldConsumers.cpp
-                                          vmi-layout-fold-consumers     Pattern-free local IR rewrite
+lib/PTO/Transforms/VMILayoutFold.cpp
+                                          vmi-layout-fold     Pattern-free local IR rewrite
 lib/PTO/Transforms/VMILayoutRematerialize.cpp
                                           vmi-layout-rematerialize      Pattern-free local IR rewrite
 lib/PTO/Transforms/VMILayoutSinkMaterialization.cpp
@@ -1186,7 +1186,7 @@ raw VMI producer
   -> pto-validate-vmi-ir
   -> vmi-layout-assignment
   -> canonicalize/cse
-  -> vmi-layout-fold-consumers
+  -> vmi-layout-fold
   -> canonicalize/cse
   -> vmi-layout-rematerialize
   -> canonicalize/cse

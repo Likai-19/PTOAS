@@ -2927,7 +2927,7 @@ static LogicalResult runVMISemanticPipeline(OwningOpRef<ModuleOp> &module) {
   pm.addPass(pto::createVMILayoutAssignmentPass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
-  pm.addPass(pto::createVMILayoutFoldConsumersPass());
+  pm.addPass(pto::createVMILayoutFoldPass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
   pm.addPass(pto::createVMILayoutRematerializePass());
