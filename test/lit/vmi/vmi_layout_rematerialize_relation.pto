@@ -79,6 +79,18 @@ module {
         : !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>,
           !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
   }
+
+  func.func @vmi_layout_rematerialize_trunci_source_ensure(
+      %x32_d4: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>)
+      -> !pto.vmi.vreg<256xui16, #pto.vmi.layout<contiguous>> {
+    %x32_d2 = pto.vmi.ensure_layout %x32_d4
+        : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
+        -> !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>
+    %y16 = pto.vmi.trunci %x32_d2
+        : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<256xui16, #pto.vmi.layout<contiguous>>
+    return %y16 : !pto.vmi.vreg<256xui16, #pto.vmi.layout<contiguous>>
+  }
 }
 
 // REMAT-LABEL: func.func @vmi_layout_rematerialize_direct_ext(
@@ -110,6 +122,14 @@ module {
 // REMAT-SAME: !pto.vmi.vreg<256xf16, #pto.vmi.layout<deinterleaved = 2>> -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
 // REMAT: pto.vmi.truncf %[[X32_D4]]
 // REMAT-NOT: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>> -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
+
+// REMAT-LABEL: func.func @vmi_layout_rematerialize_trunci_source_ensure(
+// REMAT-SAME: %[[X32_D4:.*]]: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
+// REMAT: %[[Y16_D2:.*]] = pto.vmi.trunci %[[X32_D4]]
+// REMAT-SAME: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>> -> !pto.vmi.vreg<256xui16, #pto.vmi.layout<deinterleaved = 2>>
+// REMAT: pto.vmi.ensure_layout %[[Y16_D2]]
+// REMAT-SAME: !pto.vmi.vreg<256xui16, #pto.vmi.layout<deinterleaved = 2>> -> !pto.vmi.vreg<256xui16, #pto.vmi.layout<contiguous>>
+// REMAT-NOT: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>> -> !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>
 
 // LOWER-LABEL: func.func @vmi_layout_rematerialize_direct_ext(
 // LOWER: pto.vldsx2

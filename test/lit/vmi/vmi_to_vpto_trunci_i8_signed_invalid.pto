@@ -25,5 +25,5 @@ module {
 }
 
 // CHECK: VMI-UNSUPPORTED
-// CHECK: pto.vmi.trunci supports only
-// CHECK: 32-bit to 8-bit integer narrowing requires unsigned i8 result
+// CHECK: pto.vmi.trunci supports integer deinterleaved source layouts
+// CHECK: 8-bit integer narrowing requires unsigned i8 result
