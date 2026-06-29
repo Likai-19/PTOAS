@@ -37,6 +37,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Target/Cpp/CppEmitter.h"
+#include "mlir/Transforms/Passes.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/FileSystem.h" // [Fix] Required for OF_None
@@ -2040,6 +2041,7 @@ static LogicalResult runVMISemanticPipeline(OwningOpRef<ModuleOp> &module) {
   pm.addPass(pto::createPTOValidateVMILayoutIRPass());
   pm.addPass(pto::createVMIToVPTOPass());
   pm.addPass(pto::createVPTONormalizeEquivalentVcvtPass());
+  pm.addPass(createLoopInvariantCodeMotionPass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
   if (failed(applyConfiguredPassManagerCLOptions(pm,
