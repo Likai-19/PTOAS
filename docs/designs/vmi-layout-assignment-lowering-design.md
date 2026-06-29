@@ -558,6 +558,13 @@ dense store:
   requests contiguous source
   if the stored value is assigned deinterleaved, baseline assignment inserts
   ensure_layout at the store use
+
+two-way interleaved memory ops:
+  `pto.vmi.deinterleave_load` produces two dense logical streams and requests
+  contiguous layouts for both results
+  `pto.vmi.interleave_store` consumes two dense logical streams and requests
+  contiguous layouts for both inputs
+  the deinterleave/interleave memory pattern is op semantics, not a VMI layout
 ```
 
 ### 5.2 Baseline Group Layout Requests

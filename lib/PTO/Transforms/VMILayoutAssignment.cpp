@@ -1206,6 +1206,12 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
+      if (auto load = dyn_cast<VMIDeinterleaveLoadOp>(op)) {
+        if (failed(setNaturalLayout(load.getLow(), getContiguousLayout(), op)) ||
+            failed(setNaturalLayout(load.getHigh(), getContiguousLayout(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
       if (auto load = dyn_cast<VMIMaskedLoadOp>(op)) {
         requestDataUse(load.getPassthruMutable(), getContiguousLayout());
         if (failed(
@@ -1260,6 +1266,11 @@ struct LayoutSolver {
       }
       if (auto store = dyn_cast<VMIStoreOp>(op)) {
         requestDataUse(store.getValueMutable(), getContiguousLayout());
+        return WalkResult::advance();
+      }
+      if (auto store = dyn_cast<VMIInterleaveStoreOp>(op)) {
+        requestDataUse(store.getLowMutable(), getContiguousLayout());
+        requestDataUse(store.getHighMutable(), getContiguousLayout());
         return WalkResult::advance();
       }
       if (auto store = dyn_cast<VMIGroupStoreOp>(op)) {

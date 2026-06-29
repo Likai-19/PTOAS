@@ -52,6 +52,9 @@ using namespace mlir::pto;
 
 namespace {
 
+std::optional<std::string> getX2MemoryDistToken(Type elementType,
+                                                StringRef prefix);
+
 bool isVMIType(Type type) { return isa<VMIVRegType, VMIMaskType>(type); }
 
 bool containsVMIType(Type type) {
@@ -1163,6 +1166,40 @@ checkSupportedLoadShape(const VMITargetCapabilityRegistry &capabilities,
               "; fallback decision: " + accessPlan.fallbackDecision.reason);
 }
 
+LogicalResult checkSupportedDeinterleaveLoadShape(
+    const VMITargetCapabilityRegistry &capabilities,
+    VMIDeinterleaveLoadOp op, std::string *reason) {
+  auto fail = [&](const Twine &message) -> LogicalResult {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  auto lowType = cast<VMIVRegType>(op.getLow().getType());
+  auto highType = cast<VMIVRegType>(op.getHigh().getType());
+  VMILayoutAttr lowLayout = lowType.getLayoutAttr();
+  VMILayoutAttr highLayout = highType.getLayoutAttr();
+  if (!lowLayout || !highLayout || !lowLayout.isContiguous() ||
+      !highLayout.isContiguous())
+    return fail("requires assigned contiguous low/high result layouts");
+  if (lowType.getElementCount() != highType.getElementCount() ||
+      lowType.getElementType() != highType.getElementType())
+    return fail("requires matching low/high result shape and element type");
+  if (!getX2MemoryDistToken(lowType.getElementType(), "DINTLV"))
+    return fail("requires 8/16/32-bit element type for vldsx2 DINTLV");
+
+  VMIMemoryAccessPlan accessPlan = buildReadAccessPlan(
+      capabilities, op.getSource(), op.getSource().getType(), lowType,
+      getConstantIndexValue(op.getOffset()), VMIMemoryValidMaskKind::AllTrue);
+  if (!accessPlan.targetCapability.isSupported())
+    return fail(accessPlan.targetCapability.reason);
+
+  std::string fullChunkReason;
+  if (failed(checkFullDataPhysicalChunks(lowType, &fullChunkReason)))
+    return fail(Twine("requires full physical chunks; ") + fullChunkReason);
+  return success();
+}
+
 LogicalResult
 checkSupportedStoreShape(const VMITargetCapabilityRegistry &capabilities,
                          VMIVRegType type, Value destination,
@@ -1204,6 +1241,43 @@ checkSupportedStoreShape(const VMITargetCapabilityRegistry &capabilities,
                     "deinterleaved layout that can materialize to contiguous; "
                     "value ") +
               fullChunkReason + ", materialization " + materializationReason);
+}
+
+LogicalResult checkSupportedInterleaveStoreShape(
+    const VMITargetCapabilityRegistry &capabilities,
+    VMIInterleaveStoreOp op, std::string *reason) {
+  auto fail = [&](const Twine &message) -> LogicalResult {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  auto lowType = cast<VMIVRegType>(op.getLow().getType());
+  auto highType = cast<VMIVRegType>(op.getHigh().getType());
+  VMILayoutAttr lowLayout = lowType.getLayoutAttr();
+  VMILayoutAttr highLayout = highType.getLayoutAttr();
+  if (!lowLayout || !highLayout || !lowLayout.isContiguous() ||
+      !highLayout.isContiguous())
+    return fail("requires assigned contiguous low/high input layouts");
+  if (lowType.getElementCount() != highType.getElementCount() ||
+      lowType.getElementType() != highType.getElementType())
+    return fail("requires matching low/high input shape and element type");
+  if (!getX2MemoryDistToken(lowType.getElementType(), "INTLV"))
+    return fail("requires 8/16/32-bit element type for vstsx2 INTLV");
+
+  VMIMemoryAccessPlan accessPlan =
+      buildWriteAccessPlan(capabilities, op.getDestination(),
+                           op.getDestination().getType(), lowType,
+                           VMIMemoryWriteMaskKind::AllTrue);
+  if (!accessPlan.targetCapability.isSupported())
+    return fail(accessPlan.targetCapability.reason);
+  if (failed(checkSupportedMaskableVReg(capabilities, lowType, reason)))
+    return failure();
+
+  std::string fullChunkReason;
+  if (failed(checkFullDataPhysicalChunks(lowType, &fullChunkReason)))
+    return fail(Twine("requires full physical chunks; ") + fullChunkReason);
+  return success();
 }
 
 FailureOr<int64_t> getGroupSizeFromNumGroups(VMIVRegType type,
@@ -4142,6 +4216,73 @@ struct OneToNVMILoadOpPattern : OneToNOpConversionPattern<VMILoadOp> {
   }
 };
 
+struct OneToNVMIDeinterleaveLoadOpPattern
+    : OneToNOpConversionPattern<VMIDeinterleaveLoadOp> {
+  using OneToNOpConversionPattern<
+      VMIDeinterleaveLoadOp>::OneToNOpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(VMIDeinterleaveLoadOp op, OpAdaptor adaptor,
+                  OneToNPatternRewriter &rewriter) const override {
+    auto lowVMIType = cast<VMIVRegType>(op.getLow().getType());
+    FailureOr<Value> source =
+        getSingleValue(op, adaptor.getSource(),
+                       "deinterleave_load source must convert to one value",
+                       rewriter);
+    FailureOr<Value> offset =
+        getSingleValue(op, adaptor.getOffset(),
+                       "deinterleave_load offset must convert to one value",
+                       rewriter);
+    if (failed(source) || failed(offset))
+      return failure();
+
+    FailureOr<int64_t> lanesPerPart =
+        getDataLanesPerPart(lowVMIType.getElementType());
+    if (failed(lanesPerPart))
+      return rewriter.notifyMatchFailure(
+          op, "deinterleave_load requires known physical lanes per part");
+
+    std::optional<std::string> dist =
+        getX2MemoryDistToken(lowVMIType.getElementType(), "DINTLV");
+    if (!dist)
+      return rewriter.notifyMatchFailure(
+          op, "deinterleave_load requires vldsx2 DINTLV element support");
+
+    TypeRange lowTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    TypeRange highTypes = adaptor.getResultMapping().getConvertedTypes(1);
+    if (lowTypes.size() != highTypes.size())
+      return rewriter.notifyMatchFailure(
+          op, "deinterleave_load requires matching low/high physical arity");
+
+    SmallVector<Value> lows;
+    SmallVector<Value> highs;
+    lows.reserve(lowTypes.size());
+    highs.reserve(highTypes.size());
+    for (size_t index = 0, e = lowTypes.size(); index < e; ++index) {
+      Type lowType = lowTypes[index];
+      Type highType = highTypes[index];
+      if (lowType != highType)
+        return rewriter.notifyMatchFailure(
+            op, "deinterleave_load requires matching low/high physical types");
+      Value chunkOffset = createChunkOffset(
+          op.getLoc(), *offset, static_cast<int64_t>(index) * 2 * *lanesPerPart,
+          rewriter);
+      auto load = rewriter.create<Vldsx2Op>(
+          op.getLoc(), lowType, highType, *source, chunkOffset,
+          rewriter.getStringAttr(*dist));
+      lows.push_back(load.getLow());
+      highs.push_back(load.getHigh());
+    }
+
+    SmallVector<Value> results;
+    results.reserve(lows.size() + highs.size());
+    results.append(lows);
+    results.append(highs);
+    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    return success();
+  }
+};
+
 struct OneToNVMIGroupLoadOpPattern : OneToNOpConversionPattern<VMIGroupLoadOp> {
   using OneToNOpConversionPattern<VMIGroupLoadOp>::OneToNOpConversionPattern;
 
@@ -4744,6 +4885,72 @@ struct OneToNVMIStoreOpPattern : OneToNOpConversionPattern<VMIStoreOp> {
       rewriter.create<VstsOp>(op.getLoc(),
                               /*updated_base=*/Type{}, value, *destination,
                               chunkOffset, /*dist=*/nullptr, *mask);
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct OneToNVMIInterleaveStoreOpPattern
+    : OneToNOpConversionPattern<VMIInterleaveStoreOp> {
+  using OneToNOpConversionPattern<
+      VMIInterleaveStoreOp>::OneToNOpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(VMIInterleaveStoreOp op, OpAdaptor adaptor,
+                  OneToNPatternRewriter &rewriter) const override {
+    auto lowVMIType = cast<VMIVRegType>(op.getLow().getType());
+    FailureOr<int64_t> lanesPerPart =
+        getDataLanesPerPart(lowVMIType.getElementType());
+    if (failed(lanesPerPart))
+      return rewriter.notifyMatchFailure(
+          op, "interleave_store requires known physical lanes per part");
+
+    std::optional<std::string> dist =
+        getX2MemoryDistToken(lowVMIType.getElementType(), "INTLV");
+    if (!dist)
+      return rewriter.notifyMatchFailure(
+          op, "interleave_store requires vstsx2 INTLV element support");
+
+    FailureOr<Value> destination =
+        getSingleValue(op, adaptor.getDestination(),
+                       "interleave_store destination must convert to one value",
+                       rewriter);
+    FailureOr<Value> offset =
+        getSingleValue(op, adaptor.getOffset(),
+                       "interleave_store offset must convert to one value",
+                       rewriter);
+    if (failed(destination) || failed(offset))
+      return failure();
+
+    ValueRange lowParts = adaptor.getLow();
+    ValueRange highParts = adaptor.getHigh();
+    if (lowParts.size() != highParts.size())
+      return rewriter.notifyMatchFailure(
+          op, "interleave_store requires matching low/high physical arity");
+
+    for (size_t index = 0, e = lowParts.size(); index < e; ++index) {
+      Value low = lowParts[index];
+      Value high = highParts[index];
+      if (low.getType() != high.getType())
+        return rewriter.notifyMatchFailure(
+            op, "interleave_store requires matching low/high physical types");
+      auto vregType = dyn_cast<VRegType>(low.getType());
+      if (!vregType)
+        return rewriter.notifyMatchFailure(
+            op, "interleave_store value must be vreg");
+      FailureOr<Value> mask =
+          createAllTrueMaskForVReg(op.getLoc(), vregType, rewriter);
+      if (failed(mask))
+        return rewriter.notifyMatchFailure(
+            op, "unsupported element type for interleave_store mask");
+      Value chunkOffset = createChunkOffset(
+          op.getLoc(), *offset, static_cast<int64_t>(index) * 2 * *lanesPerPart,
+          rewriter);
+      rewriter.create<Vstsx2Op>(op.getLoc(), low, high, *destination,
+                                chunkOffset, rewriter.getStringAttr(*dist),
+                                *mask);
     }
 
     rewriter.eraseOp(op);
@@ -7671,12 +7878,13 @@ void populateVMIOneToNConversionPatterns(
       OneToNVMIMaskBinaryOpPattern<VMIMaskOrOp, PorOp>,
       OneToNVMIMaskBinaryOpPattern<VMIMaskXOrOp, PxorOp>,
       OneToNVMIMaskUnaryOpPattern<VMIMaskNotOp, PnotOp>, OneToNVMILoadOpPattern,
-      OneToNVMIGroupLoadOpPattern, OneToNVMIGroupSlotLoadOpPattern,
-      OneToNVMIStrideLoadOpPattern,
+      OneToNVMIDeinterleaveLoadOpPattern, OneToNVMIGroupLoadOpPattern,
+      OneToNVMIGroupSlotLoadOpPattern, OneToNVMIStrideLoadOpPattern,
       OneToNVMIMaskedLoadOpPattern, OneToNVMIGatherOpPattern,
       OneToNVMIExpandLoadOpPattern, OneToNVMIStoreOpPattern,
-      OneToNVMIGroupStoreOpPattern, OneToNVMIMaskedStoreOpPattern,
-      OneToNVMIStrideStoreOpPattern, OneToNVMIScatterOpPattern,
+      OneToNVMIInterleaveStoreOpPattern, OneToNVMIGroupStoreOpPattern,
+      OneToNVMIMaskedStoreOpPattern, OneToNVMIStrideStoreOpPattern,
+      OneToNVMIScatterOpPattern,
       OneToNVMIBinaryOpPattern<VMIAddFOp, VaddOp>,
       OneToNVMIBinaryOpPattern<VMIAddIOp, VaddOp>,
       OneToNVMIBinaryOpPattern<VMISubFOp, VsubOp>,
@@ -8454,6 +8662,19 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
           op, "pto.vmi.load", cast<VMIVRegType>(load.getResult().getType()),
           load.getSource(), getConstantIndexValue(load.getOffset()));
     }
+    if (auto load = dyn_cast<VMIDeinterleaveLoadOp>(op)) {
+      std::string reason;
+      if (succeeded(
+              checkSupportedDeinterleaveLoadShape(capabilities, load, &reason)))
+        return WalkResult::advance();
+      load.emitError()
+          << kVMIDiagUnsupportedPrefix
+          << "pto.vmi.deinterleave_load lowers through pto.vldsx2 only for "
+             "matching contiguous full low/high result chunks with a supported "
+             "UB source and 8/16/32-bit element type ("
+          << reason << ")";
+      return WalkResult::interrupt();
+    }
     if (auto load = dyn_cast<VMIStrideLoadOp>(op)) {
       std::string reason;
       if (succeeded(checkSupportedStrideLoadShape(capabilities, load, &reason)))
@@ -8547,6 +8768,19 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
           << "pto.vmi.store requires an 8/16/32-bit predicate-maskable "
              "element type and either full physical chunks or contiguous "
              "tail-store layout, with UB-backed destination ("
+          << reason << ")";
+      return WalkResult::interrupt();
+    }
+    if (auto store = dyn_cast<VMIInterleaveStoreOp>(op)) {
+      std::string reason;
+      if (succeeded(
+              checkSupportedInterleaveStoreShape(capabilities, store, &reason)))
+        return WalkResult::advance();
+      store.emitError()
+          << kVMIDiagUnsupportedPrefix
+          << "pto.vmi.interleave_store lowers through pto.vstsx2 only for "
+             "matching contiguous full low/high input chunks with a supported "
+             "UB destination and 8/16/32-bit element type ("
           << reason << ")";
       return WalkResult::interrupt();
     }

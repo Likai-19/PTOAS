@@ -339,6 +339,17 @@ static LogicalResult verifyMemoryElementMatches(Operation *op, Type memoryType,
   return success();
 }
 
+static LogicalResult verifyContiguousIfLayoutAssigned(Operation *op,
+                                                      VMIVRegType type,
+                                                      StringRef role) {
+  VMILayoutAttr layout = type.getLayoutAttr();
+  if (layout && !layout.isContiguous())
+    return op->emitOpError()
+           << "requires layout-assigned " << role
+           << " to use #pto.vmi.layout<contiguous>";
+  return success();
+}
+
 static bool isPackedByteGroupStore(Type memoryType, VMIVRegType dataType) {
   Type memoryElementType = getMemoryElementType(memoryType);
   if (!memoryElementType)
@@ -1522,6 +1533,30 @@ void VMILoadOp::getEffects(
   effects.emplace_back(MemoryEffects::Read::get(), &getSourceMutable());
 }
 
+LogicalResult VMIDeinterleaveLoadOp::verify() {
+  auto lowType = cast<VMIVRegType>(getLow().getType());
+  auto highType = cast<VMIVRegType>(getHigh().getType());
+  if (failed(verifyAllSameVRegShapeAndLayout(getOperation(),
+                                             {lowType, highType},
+                                             /*requireSameElement=*/true)))
+    return failure();
+  if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
+                                        lowType, "source")))
+    return failure();
+  if (failed(verifyContiguousIfLayoutAssigned(getOperation(), lowType,
+                                              "low result")) ||
+      failed(verifyContiguousIfLayoutAssigned(getOperation(), highType,
+                                              "high result")))
+    return failure();
+  return success();
+}
+
+void VMIDeinterleaveLoadOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getSourceMutable());
+}
+
 LogicalResult VMIGroupLoadOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
@@ -1649,6 +1684,31 @@ LogicalResult VMIStoreOp::verify() {
 }
 
 void VMIStoreOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(), &getDestinationMutable());
+}
+
+LogicalResult VMIInterleaveStoreOp::verify() {
+  auto lowType = cast<VMIVRegType>(getLow().getType());
+  auto highType = cast<VMIVRegType>(getHigh().getType());
+  if (failed(verifyAllSameVRegShapeAndLayout(getOperation(),
+                                             {lowType, highType},
+                                             /*requireSameElement=*/true)))
+    return failure();
+  if (failed(verifyMemoryElementMatches(getOperation(),
+                                        getDestination().getType(), lowType,
+                                        "destination")))
+    return failure();
+  if (failed(verifyContiguousIfLayoutAssigned(getOperation(), lowType,
+                                              "low input")) ||
+      failed(verifyContiguousIfLayoutAssigned(getOperation(), highType,
+                                              "high input")))
+    return failure();
+  return success();
+}
+
+void VMIInterleaveStoreOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Write::get(), &getDestinationMutable());
