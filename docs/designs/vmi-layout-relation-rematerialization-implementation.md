@@ -260,8 +260,6 @@ Use a pipeline with fold after remat:
 ```text
 vmi-layout-assignment
   -> canonicalize/cse
-  -> vmi-layout-fold
-  -> canonicalize/cse
   -> vmi-layout-rematerialize
   -> canonicalize/cse
   -> vmi-layout-fold
