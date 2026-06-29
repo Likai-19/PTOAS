@@ -476,6 +476,50 @@ FailureOr<VMICastLayoutFact> VMILayoutSupport::getPreferredCastLayoutFact(
   return fail("supports only 8/16-bit <-> 32-bit dense cast layout facts");
 }
 
+FailureOr<VMILayoutAttr>
+VMILayoutSupport::getWidenSourceLayoutForResultLayout(
+    VMIVRegType sourceType, VMIVRegType resultType,
+    VMILayoutAttr requestedResultLayout, std::string *reason) const {
+  auto fail = [&](const Twine &message) -> FailureOr<VMILayoutAttr> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  if (!requestedResultLayout)
+    return fail("requires requested result layout");
+  if (sourceType.getElementCount() != resultType.getElementCount())
+    return fail("requires source/result lane count to match");
+  if (requestedResultLayout.isGroupSlots())
+    return fail("dense widen relation does not support group_slots layout");
+  if (!requestedResultLayout.isContiguous() &&
+      (!requestedResultLayout.isDeinterleaved() ||
+       requestedResultLayout.getBlockElems() != 1))
+    return fail("requires contiguous or deinterleaved result layout with "
+                "block_elems=1");
+
+  FailureOr<VMICastLayoutFact> fact =
+      getPreferredCastLayoutFact(sourceType, resultType, reason);
+  if (failed(fact) || (fact->kind != VMICastLayoutKind::Widen2x &&
+                       fact->kind != VMICastLayoutKind::Widen4x))
+    return fail("requires supported 8/16-bit to 32-bit widen cast");
+
+  int64_t resultFactor = requestedResultLayout.isDeinterleaved()
+                             ? requestedResultLayout.getFactor()
+                             : 1;
+  if (resultFactor % fact->factor != 0)
+    return fail("requested result layout factor is not divisible by widen "
+                "factor");
+
+  int64_t sourceFactor = resultFactor / fact->factor;
+  if (sourceFactor == 1)
+    return VMILayoutAttr::getContiguous(sourceType.getContext());
+  if (sourceFactor == 2 || sourceFactor == 4)
+    return VMILayoutAttr::getDeinterleaved(sourceType.getContext(),
+                                          sourceFactor, /*blockElems=*/1);
+  return fail("derived source layout factor is unsupported");
+}
+
 FailureOr<VMIContiguousStoreSupport>
 VMILayoutSupport::getContiguousStoreSupport(VMIVRegType valueType,
                                             std::string *reason) const {
@@ -1252,10 +1296,13 @@ VMILayoutSupport::getExtFSupport(VMIExtFOp op, std::string *reason) const {
       failed(resultArity))
     return fail("requires assigned source/result layouts and computable "
                 "physical arity");
-  if (!sourceLayout.isContiguous() || !resultLayout.isDeinterleaved() ||
+  if (!resultLayout.isDeinterleaved() || resultLayout.getBlockElems() != 1 ||
+      !(sourceLayout.isContiguous() ||
+        (sourceLayout.isDeinterleaved() &&
+         sourceLayout.getBlockElems() == 1)) ||
       !resultType.getElementType().isF32())
-    return fail("requires contiguous source layout and deinterleaved f32 "
-                "result layout");
+    return fail("requires contiguous or deinterleaved source layout and "
+                "deinterleaved f32 result layout with block_elems=1");
 
   FailureOr<VMICastLayoutFact> fact =
       getPreferredCastLayoutFact(sourceType, resultType, reason);
@@ -1264,17 +1311,19 @@ VMILayoutSupport::getExtFSupport(VMIExtFOp op, std::string *reason) const {
     return fail("unsupported extf source element width, result factor, or "
                 "physical arity");
 
-  if (fact->kind == VMICastLayoutKind::Widen2x &&
-      resultLayout.getFactor() == fact->factor &&
-      *resultArity == fact->factor * *sourceArity)
+  int64_t sourceFactor =
+      sourceLayout.isDeinterleaved() ? sourceLayout.getFactor() : 1;
+  if (resultLayout.getFactor() != sourceFactor * fact->factor ||
+      *resultArity != fact->factor * *sourceArity)
+    return fail("unsupported extf source/result layout factor or physical "
+                "arity");
+
+  if (fact->kind == VMICastLayoutKind::Widen2x)
     return VMIExtFSupport{VMIExtFSupportKind::ContiguousF16ToDeinterleaved2F32};
-  if (fact->kind == VMICastLayoutKind::Widen4x &&
-      resultLayout.getFactor() == fact->factor &&
-      *resultArity == fact->factor * *sourceArity)
+  if (fact->kind == VMICastLayoutKind::Widen4x)
     return VMIExtFSupport{VMIExtFSupportKind::ContiguousF8ToDeinterleaved4F32};
 
-  return fail("unsupported extf source element width, result factor, or "
-              "physical arity");
+  return fail("unsupported extf source element width");
 }
 
 template <typename OpT>
@@ -1324,11 +1373,14 @@ static FailureOr<VMIExtISupport> getExtISupportImpl(OpT op,
                 "16-bit");
   }
 
-  if (!sourceLayout.isContiguous() || !resultLayout.isDeinterleaved() ||
+  if (!resultLayout.isDeinterleaved() || resultLayout.getBlockElems() != 1 ||
+      !(sourceLayout.isContiguous() ||
+        (sourceLayout.isDeinterleaved() &&
+         sourceLayout.getBlockElems() == 1)) ||
       !isa<IntegerType>(sourceType.getElementType()) ||
       !isa<IntegerType>(resultType.getElementType()))
-    return fail("requires contiguous integer source layout and deinterleaved "
-                "integer result layout");
+    return fail("requires contiguous or deinterleaved integer source layout "
+                "and deinterleaved integer result layout with block_elems=1");
 
   FailureOr<VMICastLayoutFact> fact =
       VMILayoutSupport().getPreferredCastLayoutFact(sourceType, resultType,
@@ -1338,17 +1390,19 @@ static FailureOr<VMIExtISupport> getExtISupportImpl(OpT op,
     return fail("unsupported integer extension source/result element width, "
                 "result factor, or physical arity");
 
-  if (fact->kind == VMICastLayoutKind::Widen2x &&
-      resultLayout.getFactor() == fact->factor &&
-      *resultArity == fact->factor * *sourceArity)
+  int64_t sourceFactor =
+      sourceLayout.isDeinterleaved() ? sourceLayout.getFactor() : 1;
+  if (resultLayout.getFactor() != sourceFactor * fact->factor ||
+      *resultArity != fact->factor * *sourceArity)
+    return fail("unsupported integer extension source/result layout factor or "
+                "physical arity");
+
+  if (fact->kind == VMICastLayoutKind::Widen2x)
     return VMIExtISupport{VMIExtISupportKind::ContiguousI16ToDeinterleaved2I32};
-  if (fact->kind == VMICastLayoutKind::Widen4x &&
-      resultLayout.getFactor() == fact->factor &&
-      *resultArity == fact->factor * *sourceArity)
+  if (fact->kind == VMICastLayoutKind::Widen4x)
     return VMIExtISupport{VMIExtISupportKind::ContiguousI8ToDeinterleaved4I32};
 
-  return fail("unsupported integer extension source/result element width, "
-              "result factor, or physical arity");
+  return fail("unsupported integer extension source/result element width");
 }
 
 FailureOr<VMIExtISupport>

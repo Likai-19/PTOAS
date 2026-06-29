@@ -15,6 +15,8 @@ VMI surface IR
   -> canonicalize/cse
   -> vmi-layout-rematerialize       // optional optimization
   -> canonicalize/cse
+  -> vmi-layout-fold      // optional optimization over remat-exposed helpers
+  -> canonicalize/cse
   -> vmi-layout-sink-materialization // optional optimization
   -> canonicalize/cse
   -> optional later layout optimization passes

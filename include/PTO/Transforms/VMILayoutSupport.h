@@ -251,6 +251,12 @@ public:
   getPreferredCastLayoutFact(VMIVRegType sourceType, VMIVRegType resultType,
                              std::string *reason = nullptr) const;
 
+  FailureOr<VMILayoutAttr>
+  getWidenSourceLayoutForResultLayout(VMIVRegType sourceType,
+                                      VMIVRegType resultType,
+                                      VMILayoutAttr requestedResultLayout,
+                                      std::string *reason = nullptr) const;
+
   FailureOr<VMIGroupSlotLoadSupport>
   getGroupSlotLoadSupport(const VMITargetCapabilityRegistry &capabilities,
                           VMIGroupSlotLoadOp op,
