@@ -23,7 +23,7 @@ module attributes {pto.target_arch = "a5"} {
       return
     }
 
-    func.func @vmi_ptoas_cli_fold_consumers_pipeline(
+    func.func @vmi_ptoas_cli_fold_pipeline(
         %src: !pto.ptr<f16, ub>,
         %dst: !pto.ptr<f32, ub>,
         %offset: index) {
@@ -47,7 +47,7 @@ module attributes {pto.target_arch = "a5"} {
 // CHECK-NOT: !pto.vmi.
 // CHECK-NOT: unrealized_conversion_cast
 
-// CHECK-LABEL: func.func @vmi_ptoas_cli_fold_consumers_pipeline
+// CHECK-LABEL: func.func @vmi_ptoas_cli_fold_pipeline
 // CHECK: pto.vlds
 // CHECK: pto.vcvt {{.*}} {part = "EVEN"}
 // CHECK: pto.vcvt {{.*}} {part = "ODD"}

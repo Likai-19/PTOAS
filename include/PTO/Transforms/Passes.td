@@ -932,16 +932,16 @@ def VMILayoutAssignment : Pass<"vmi-layout-assignment", "ModuleOp"> {
                            "mlir::scf::SCFDialect"];
 }
 
-def VMILayoutFoldConsumers : Pass<"vmi-layout-fold-consumers", "ModuleOp"> {
-  let summary = "Fold VMI layout materialization into layout-aware consumers";
+def VMILayoutFold : Pass<"vmi-layout-fold", "ModuleOp"> {
+  let summary = "Fold VMI layout materializations";
   let description = [{
-    Optimizes legal layout-assigned VMI IR by replacing selected use-site
-    ensure_layout consumers with consumers that can directly lower from the
-    source layout while preserving the same logical effect. The pass does not
-    choose layouts by inspecting producer/user context for vmi-to-vpto; it only
-    rewrites explicit helper IR into an equivalent local-consumer form.
+    Optimizes legal layout-assigned VMI IR by folding selected ensure_layout
+    helpers into layout-aware producers or consumers while preserving the same
+    logical effect. The pass does not choose layouts by inspecting arbitrary
+    producer/user context for vmi-to-vpto; it only rewrites explicit helper IR
+    into equivalent local forms.
   }];
-  let constructor = "mlir::pto::createVMILayoutFoldConsumersPass()";
+  let constructor = "mlir::pto::createVMILayoutFoldPass()";
   let dependentDialects = ["mlir::cf::ControlFlowDialect",
                            "mlir::func::FuncDialect",
                            "mlir::pto::PTODialect",

@@ -6,11 +6,11 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-layout-fold-consumers | FileCheck %s --check-prefix=FOLD
-// RUN: pto-test-opt %s -vmi-layout-fold-consumers -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+// RUN: pto-test-opt %s -vmi-layout-fold | FileCheck %s --check-prefix=FOLD
+// RUN: pto-test-opt %s -vmi-layout-fold -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
 
 module {
-  func.func @vmi_layout_fold_consumers_store_deint4(
+  func.func @vmi_layout_fold_store_deint4(
       %value: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>,
       %dst: !pto.ptr<f32, ub>,
       %offset: index) {
@@ -23,7 +23,7 @@ module {
     return
   }
 
-  func.func @vmi_layout_fold_consumers_masked_store_deint4(
+  func.func @vmi_layout_fold_masked_store_deint4(
       %value: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>,
       %mask: !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4>>,
       %dst: !pto.ptr<f32, ub>,
@@ -42,7 +42,7 @@ module {
   }
 }
 
-// FOLD-LABEL: func.func @vmi_layout_fold_consumers_store_deint4(
+// FOLD-LABEL: func.func @vmi_layout_fold_store_deint4(
 // FOLD-SAME: %[[VALUE:.*]]: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
 // FOLD-NOT: pto.vmi.ensure_layout
 // FOLD: pto.vmi.store %[[VALUE]]
@@ -50,7 +50,7 @@ module {
 // FOLD-NOT: pto.vmi.ensure_layout
 // FOLD: return
 
-// FOLD-LABEL: func.func @vmi_layout_fold_consumers_masked_store_deint4(
+// FOLD-LABEL: func.func @vmi_layout_fold_masked_store_deint4(
 // FOLD-SAME: %[[VALUE:.*]]: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
 // FOLD-SAME: %[[MASK:.*]]: !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4>>
 // FOLD-NOT: pto.vmi.ensure_layout
@@ -63,7 +63,7 @@ module {
 // FOLD-NOT: pto.vmi.ensure_mask_layout
 // FOLD: return
 
-// LOWER-LABEL: func.func @vmi_layout_fold_consumers_store_deint4(
+// LOWER-LABEL: func.func @vmi_layout_fold_store_deint4(
 // LOWER: pto.vintlv
 // LOWER: pto.vintlv
 // LOWER: pto.vintlv
@@ -73,7 +73,7 @@ module {
 // LOWER: pto.vsts
 // LOWER: pto.vsts
 
-// LOWER-LABEL: func.func @vmi_layout_fold_consumers_masked_store_deint4(
+// LOWER-LABEL: func.func @vmi_layout_fold_masked_store_deint4(
 // LOWER: pto.vintlv
 // LOWER: pto.vintlv
 // LOWER: pto.vintlv

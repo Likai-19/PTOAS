@@ -11,7 +11,7 @@ VMI surface IR
   -> pto-validate-vmi-ir
   -> vmi-layout-assignment          // hard legalization baseline
   -> canonicalize/cse
-  -> vmi-layout-fold-consumers      // optional optimization
+  -> vmi-layout-fold      // optional optimization
   -> canonicalize/cse
   -> vmi-layout-rematerialize       // optional optimization
   -> canonicalize/cse

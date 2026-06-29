@@ -1,0 +1,62 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-layout-fold | FileCheck %s --check-prefix=FOLD
+// RUN: pto-test-opt %s -vmi-layout-fold -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+
+module {
+  func.func @vmi_layout_fold_load_all_ensures(
+      %src: !pto.ptr<f32, ub>, %off: index)
+      -> (!pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>) {
+    %load = pto.vmi.load %src[%off]
+        : !pto.ptr<f32, ub>
+        -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+    %split0 = pto.vmi.ensure_layout %load
+        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+    %split1 = pto.vmi.ensure_layout %load
+        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+    return %split0, %split1
+        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+  }
+
+  func.func @vmi_layout_fold_load_keeps_mixed_use(
+      %src: !pto.ptr<f32, ub>, %off: index)
+      -> (!pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>) {
+    %load = pto.vmi.load %src[%off]
+        : !pto.ptr<f32, ub>
+        -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+    %split = pto.vmi.ensure_layout %load
+        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+    return %load, %split
+        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+  }
+}
+
+// FOLD-LABEL: func.func @vmi_layout_fold_load_all_ensures(
+// FOLD: %[[LOAD:.*]] = pto.vmi.load
+// FOLD-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+// FOLD-NOT: pto.vmi.ensure_layout
+// FOLD: return %[[LOAD]], %[[LOAD]]
+
+// FOLD-LABEL: func.func @vmi_layout_fold_load_keeps_mixed_use(
+// FOLD: %[[MIXED_LOAD:.*]] = pto.vmi.load
+// FOLD-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+// FOLD: %[[SPLIT:.*]] = pto.vmi.ensure_layout %[[MIXED_LOAD]]
+// FOLD: return %[[MIXED_LOAD]], %[[SPLIT]]
+
+// LOWER-LABEL: func.func @vmi_layout_fold_load_all_ensures(
+// LOWER: %[[LOW:.*]], %[[HIGH:.*]] = pto.vldsx2
+// LOWER-SAME: "DINTLV_B32"
+// LOWER: return %[[LOW]], %[[HIGH]], %[[LOW]], %[[HIGH]]

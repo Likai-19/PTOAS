@@ -178,7 +178,7 @@ group-slot control-flow/function boundary
 pto-validate-vmi-ir
   -> vmi-layout-assignment
   -> canonicalize/cse
-  -> vmi-layout-fold-consumers
+  -> vmi-layout-fold
   -> canonicalize/cse
   -> vmi-layout-rematerialize
   -> canonicalize/cse
@@ -488,7 +488,7 @@ pto.vmi.store %y, %out0      // wants contiguous
 
 一个 SSA value 只能属于一个 data layout 等价类。若两个 use 不能共同满足，
 baseline assignment 保留一个等价类 layout，并在不匹配 use 前插
-`ensure_layout`。后续 `vmi-layout-fold-consumers`、`vmi-layout-rematerialize`
+`ensure_layout`。后续 `vmi-layout-fold`、`vmi-layout-rematerialize`
 和 `vmi-layout-sink-materialization` 可以在显式 helper op 上做优化，但
 `vmi-to-vpto` 不读取隐藏 plan 或 sibling user。
 
@@ -526,7 +526,7 @@ body，当前需要显式 ABI materialization 设计，因此 layout assignment 
 这个阶段之后，IR 不再依赖隐藏 plan；后续 pass 和 `vmi-to-vpto` 都只读取 type
 上的 layout 和显式 `ensure_*` helper。
 
-### 3.3 `vmi-layout-fold-consumers`
+### 3.3 `vmi-layout-fold`
 
 当 consumer 可以直接保持同样的外部效果时，把显式 materialization 折进
 consumer。

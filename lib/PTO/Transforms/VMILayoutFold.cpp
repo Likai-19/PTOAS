@@ -8,7 +8,7 @@
 // FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
 // for the full text of the License.
 
-//===- VMILayoutFoldConsumers.cpp - Fold VMI layout consumers ------------===//
+//===- VMILayoutFold.cpp - Fold VMI layout materializations --------------===//
 //===----------------------------------------------------------------------===//
 
 #include "PTO/IR/PTO.h"
@@ -27,7 +27,7 @@
 
 namespace mlir {
 namespace pto {
-#define GEN_PASS_DEF_VMILAYOUTFOLDCONSUMERS
+#define GEN_PASS_DEF_VMILAYOUTFOLD
 #include "PTO/Transforms/Passes.h.inc"
 } // namespace pto
 } // namespace mlir
@@ -36,6 +36,57 @@ using namespace mlir;
 using namespace mlir::pto;
 
 namespace {
+
+static bool hasSameDataShapeAndElementType(VMIVRegType lhs, VMIVRegType rhs) {
+  return lhs && rhs && lhs.getElementCount() == rhs.getElementCount() &&
+         lhs.getElementType() == rhs.getElementType();
+}
+
+static bool isFoldableLoadEnsure(VMIEnsureLayoutOp ensure) {
+  auto load = ensure.getSource().getDefiningOp<VMILoadOp>();
+  if (!load)
+    return false;
+
+  auto sourceType = dyn_cast<VMIVRegType>(ensure.getSource().getType());
+  auto resultType = dyn_cast<VMIVRegType>(ensure.getResult().getType());
+  if (!hasSameDataShapeAndElementType(sourceType, resultType))
+    return false;
+
+  VMILayoutSupport supports;
+  return succeeded(supports.canMaterializeDataLayout(sourceType, resultType));
+}
+
+static void tryFoldLoadEnsures(
+    VMILoadOp load, SmallVectorImpl<VMIEnsureLayoutOp> &maybeDeadEnsures) {
+  auto sourceType = dyn_cast<VMIVRegType>(load.getResult().getType());
+  if (!sourceType)
+    return;
+
+  VMIVRegType targetType;
+  SmallVector<VMIEnsureLayoutOp> ensures;
+  for (OpOperand &use : load.getResult().getUses()) {
+    auto ensure = dyn_cast<VMIEnsureLayoutOp>(use.getOwner());
+    if (!ensure || use.getOperandNumber() != 0 || !isFoldableLoadEnsure(ensure))
+      return;
+
+    auto resultType = cast<VMIVRegType>(ensure.getResult().getType());
+    if (!targetType) {
+      targetType = resultType;
+    } else if (targetType != resultType) {
+      return;
+    }
+    ensures.push_back(ensure);
+  }
+
+  if (ensures.empty() || targetType == sourceType)
+    return;
+
+  load.getResult().setType(targetType);
+  for (VMIEnsureLayoutOp ensure : ensures) {
+    ensure.getResult().replaceAllUsesWith(load.getResult());
+    maybeDeadEnsures.push_back(ensure);
+  }
+}
 
 static bool isFoldableStoreEnsure(VMIEnsureLayoutOp ensure) {
   auto sourceType = dyn_cast<VMIVRegType>(ensure.getSource().getType());
@@ -94,15 +145,18 @@ static void tryFoldEnsureLayoutIntoMaskedStore(
   maybeDeadMaskEnsures.push_back(maskEnsure);
 }
 
-struct VMILayoutFoldConsumersPass
-    : public mlir::pto::impl::VMILayoutFoldConsumersBase<
-          VMILayoutFoldConsumersPass> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VMILayoutFoldConsumersPass)
+struct VMILayoutFoldPass
+    : public mlir::pto::impl::VMILayoutFoldBase<VMILayoutFoldPass> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VMILayoutFoldPass)
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
     SmallVector<VMIEnsureLayoutOp> maybeDeadEnsures;
     SmallVector<VMIEnsureMaskLayoutOp> maybeDeadMaskEnsures;
+
+    module.walk([&](VMILoadOp load) {
+      tryFoldLoadEnsures(load, maybeDeadEnsures);
+    });
 
     module.walk([&](Operation *op) {
       if (auto store = dyn_cast<VMIStoreOp>(op))
@@ -126,6 +180,6 @@ struct VMILayoutFoldConsumersPass
 
 } // namespace
 
-std::unique_ptr<Pass> mlir::pto::createVMILayoutFoldConsumersPass() {
-  return std::make_unique<VMILayoutFoldConsumersPass>();
+std::unique_ptr<Pass> mlir::pto::createVMILayoutFoldPass() {
+  return std::make_unique<VMILayoutFoldPass>();
 }
