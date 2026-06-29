@@ -437,7 +437,8 @@ FailureOr<VMICastLayoutFact> VMILayoutSupport::getPreferredCastLayoutFact(
   fact.sourceBits = sourceBits;
   fact.resultBits = resultBits;
 
-  if (resultBits == 32 && sourceBits == 16) {
+  if ((sourceBits == 8 || sourceBits == 16) &&
+      resultBits == sourceBits * 2) {
     fact.kind = VMICastLayoutKind::Widen2x;
     fact.factor = 2;
     fact.sourceLayout = VMILayoutAttr::getContiguous(ctx);
@@ -473,7 +474,8 @@ FailureOr<VMICastLayoutFact> VMILayoutSupport::getPreferredCastLayoutFact(
     return fact;
   }
 
-  return fail("supports only 8/16-bit <-> 32-bit dense cast layout facts");
+  return fail("supports only 8/16-bit integer widening and 32-bit integer "
+              "narrowing dense cast layout facts");
 }
 
 FailureOr<VMILayoutAttr>
