@@ -36,9 +36,9 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
       %x = pto.vmi.load %ub_src[%c0] : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
       %sum = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8, reassoc}
           : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred>
-          -> !pto.vmi.vreg<256xf32>
+          -> !pto.vmi.vreg<8xf32>
       pto.vmi.group_store %sum, %ub_sum[%c0], %c1 {num_groups = 8}
-          : !pto.vmi.vreg<256xf32>, !pto.ptr<f32, ub>
+          : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
       pto.vmi.store %x, %ub_copy[%c0]
           : !pto.vmi.vreg<256xf32>, !pto.ptr<f32, ub>
     }
