@@ -289,6 +289,12 @@ deinterleaved=2, block_elems=8
 are different layouts.  They cannot be treated as compatible because `F` is the
 same.
 
+See `vmi-lane-stride-generalization-design.md` for the planned extension that
+allows dense layouts to carry `lane_stride` as an additional lane-map field.
+That extension keeps dense lane stride separate from the existing group-slot
+carrier lowering use case.  Non-zero lane phase is left as a future extension
+and is not required for the first dense-stride optimization.
+
 ### 2.2 Group-Slot Layouts
 
 ```text

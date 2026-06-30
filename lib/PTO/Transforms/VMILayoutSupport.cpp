@@ -71,6 +71,57 @@ static bool hasX2MemoryDistToken(Type elementType) {
   return elementBits == 8 || elementBits == 16 || elementBits == 32;
 }
 
+static bool hasDenseLaneStride2PackedStore(Type elementType) {
+  unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
+  return elementBits == 8 || elementBits == 16 || elementBits == 32;
+}
+
+static bool hasDenseLaneStride4PackedStore(Type elementType) {
+  unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
+  return elementBits == 8;
+}
+
+static bool hasDenseLaneStridePackUnpackElement(Type elementType,
+                                                int64_t laneStride) {
+  unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
+  if (elementBits == 0 || (!isa<IntegerType>(elementType) &&
+                           !isa<FloatType>(elementType)))
+    return false;
+  if (laneStride == 2)
+    return elementBits == 8 || elementBits == 16;
+  if (laneStride == 4)
+    return elementBits == 8;
+  return false;
+}
+
+static std::optional<StringRef>
+getDenseLaneStrideMaskedStoreMaskGranularity(VMIVRegType valueType) {
+  VMILayoutAttr layout = valueType.getLayoutAttr();
+  if (!layout || !layout.isContiguous())
+    return std::nullopt;
+  unsigned elementBits = pto::getPTOStorageElemBitWidth(valueType.getElementType());
+  if (layout.getLaneStride() == 2 && elementBits == 8)
+    return StringRef("b16");
+  if (layout.getLaneStride() == 2 && elementBits == 16)
+    return StringRef("b32");
+  if (layout.getLaneStride() == 4 && elementBits == 8)
+    return StringRef("b32");
+  return std::nullopt;
+}
+
+static StringRef getMaskGranularityForElementBits(unsigned elementBits) {
+  switch (elementBits) {
+  case 8:
+    return "b8";
+  case 16:
+    return "b16";
+  case 32:
+    return "b32";
+  default:
+    return "";
+  }
+}
+
 static std::optional<int64_t> getConstantIndexValue(Value value) {
   if (auto constant = value.getDefiningOp<arith::ConstantIndexOp>())
     return constant.value();
@@ -123,8 +174,19 @@ static FailureOr<int64_t> getVMITypeChunksInPart(Type type, int64_t part) {
       part < 0 || part >= *factor)
     return failure();
 
+  VMILayoutAttr layout;
+  if (auto vregType = dyn_cast<VMIVRegType>(type))
+    layout = vregType.getLayoutAttr();
+  else if (auto maskType = dyn_cast<VMIMaskType>(type))
+    layout = maskType.getLayoutAttr();
+  if (!layout)
+    return failure();
+
   int64_t logicalLanesInPart = (*elementCount + *factor - 1 - part) / *factor;
-  return ceilDivNonNegative(logicalLanesInPart, *lanesPerPart);
+  int64_t laneStride = layout.isDense() ? layout.getLaneStride() : 1;
+  int64_t physicalLanes =
+      logicalLanesInPart == 0 ? 0 : (logicalLanesInPart - 1) * laneStride + 1;
+  return ceilDivNonNegative(physicalLanes, *lanesPerPart);
 }
 
 static LogicalResult checkFullVMIPhysicalChunks(Type type,
@@ -181,7 +243,7 @@ getContiguousMaterializationPartCount(Type type, std::string *reason) {
 
   if (!layout)
     return fail("requires assigned layout");
-  if (layout.isContiguous())
+  if (layout.isContiguous() && layout.getLaneStride() == 1)
     return *arity;
   if (!layout.isDeinterleaved() ||
       (layout.getFactor() != 2 && layout.getFactor() != 4))
@@ -328,14 +390,17 @@ getLayoutMaterializationSupport(VMILayoutAttr sourceLayout,
     return VMILayoutMaterializationSupport{
         VMILayoutMaterializationSupportKind::Identity};
   if (sourceLayout.isContiguous() && resultLayout.isDeinterleaved() &&
+      sourceLayout.getLaneStride() == 1 && resultLayout.getLaneStride() == 1 &&
       (resultLayout.getFactor() == 2 || resultLayout.getFactor() == 4))
     return VMILayoutMaterializationSupport{
         VMILayoutMaterializationSupportKind::ContiguousToDeinterleaved};
   if (sourceLayout.isDeinterleaved() && resultLayout.isContiguous() &&
+      sourceLayout.getLaneStride() == 1 && resultLayout.getLaneStride() == 1 &&
       (sourceLayout.getFactor() == 2 || sourceLayout.getFactor() == 4))
     return VMILayoutMaterializationSupport{
         VMILayoutMaterializationSupportKind::DeinterleavedToContiguous};
   if (sourceLayout.isDeinterleaved() && resultLayout.isDeinterleaved() &&
+      sourceLayout.getLaneStride() == 1 && resultLayout.getLaneStride() == 1 &&
       (sourceLayout.getFactor() == 2 || sourceLayout.getFactor() == 4) &&
       (resultLayout.getFactor() == 2 || resultLayout.getFactor() == 4))
     return VMILayoutMaterializationSupport{
@@ -507,6 +572,11 @@ VMILayoutSupport::getWidenSourceLayoutForResultLayout(
                        fact->kind != VMICastLayoutKind::Widen4x))
     return fail("requires supported 8/16-bit to 32-bit widen cast");
 
+  if (requestedResultLayout.isContiguous()) {
+    return VMILayoutAttr::getContiguous(sourceType.getContext(),
+                                        /*laneStride=*/fact->factor);
+  }
+
   int64_t resultFactor = requestedResultLayout.isDeinterleaved()
                              ? requestedResultLayout.getFactor()
                              : 1;
@@ -536,11 +606,27 @@ VMILayoutSupport::getContiguousStoreSupport(VMIVRegType valueType,
   VMILayoutAttr layout = valueType.getLayoutAttr();
   if (!layout)
     return fail("requires assigned value layout");
-  if (layout.isContiguous())
+  if (layout.isContiguous() && layout.getLaneStride() == 1)
     return VMIContiguousStoreSupport{
         VMIContiguousStoreSupportKind::ContiguousVsts};
+  if (layout.isContiguous() && layout.getLaneStride() == 2) {
+    if (!hasDenseLaneStride2PackedStore(valueType.getElementType()))
+      return fail("requires 8/16/32-bit element type for dense lane_stride=2 "
+                  "packed store");
+    return VMIContiguousStoreSupport{
+        VMIContiguousStoreSupportKind::LaneStride2PackedVsts};
+  }
+  if (layout.isContiguous() && layout.getLaneStride() == 4) {
+    if (!hasDenseLaneStride4PackedStore(valueType.getElementType()))
+      return fail("requires 8-bit element type for dense lane_stride=4 "
+                  "packed store");
+    return VMIContiguousStoreSupport{
+        VMIContiguousStoreSupportKind::LaneStride4PackedVsts};
+  }
   if (!layout.isDeinterleaved())
     return fail("requires contiguous or deinterleaved value layout");
+  if (layout.getLaneStride() != 1)
+    return fail("deinterleaved packed store requires lane_stride=1");
   if (layout.getBlockElems() != 1)
     return fail("requires block_elems=1 deinterleaved value layout");
   if (failed(checkFullDataPhysicalChunks(valueType, reason)))
@@ -581,6 +667,60 @@ LogicalResult VMILayoutSupport::canFoldContiguousStoreMaterialization(
   return success();
 }
 
+LogicalResult VMILayoutSupport::canFoldContiguousMaskedStoreMaterialization(
+    VMIVRegType sourceType, VMIMaskType maskSourceType,
+    VMIVRegType resultType, VMIMaskType maskResultType,
+    std::string *reason) const {
+  if (sourceType.getElementType() != resultType.getElementType())
+    return failWithReason("source/result element types must match", reason);
+  if (sourceType.getElementCount() != resultType.getElementCount())
+    return failWithReason("source/result element counts must match", reason);
+  if (maskSourceType.getElementCount() != sourceType.getElementCount() ||
+      maskResultType.getElementCount() != resultType.getElementCount())
+    return failWithReason("value/mask element counts must match", reason);
+  if (maskSourceType.getGranularity() != maskResultType.getGranularity())
+    return failWithReason("mask layout fold cannot change granularity", reason);
+
+  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  VMILayoutAttr maskSourceLayout = maskSourceType.getLayoutAttr();
+  VMILayoutAttr maskResultLayout = maskResultType.getLayoutAttr();
+  if (!sourceLayout || !resultLayout || !maskSourceLayout || !maskResultLayout)
+    return failWithReason("requires assigned value/mask layouts", reason);
+  if (!resultLayout.isContiguous() || !maskResultLayout.isContiguous())
+    return failWithReason("result value/mask layouts must be contiguous",
+                          reason);
+  if (sourceLayout != maskSourceLayout)
+    return failWithReason("source value/mask layouts must match", reason);
+
+  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
+  FailureOr<int64_t> maskArity = getVMIPhysicalArity(maskSourceType);
+  if (failed(sourceArity) || failed(maskArity) || *sourceArity != *maskArity)
+    return failWithReason("source value/mask physical arity must match",
+                          reason);
+
+  if (!sourceLayout.hasDenseLaneStride())
+    return canFoldContiguousStoreMaterialization(sourceType, resultType,
+                                                 reason);
+
+  std::optional<StringRef> packedGranularity =
+      getDenseLaneStrideMaskedStoreMaskGranularity(sourceType);
+  if (!packedGranularity)
+    return failWithReason("dense lane_stride masked store supports only "
+                          "LS=2 b8/b16 and LS=4 b8 compact masks",
+                          reason);
+
+  unsigned elementBits = pto::getPTOStorageElemBitWidth(sourceType.getElementType());
+  StringRef expectedSourceGranularity =
+      getMaskGranularityForElementBits(elementBits);
+  if (expectedSourceGranularity.empty() ||
+      maskSourceType.getGranularity() != expectedSourceGranularity)
+    return failWithReason("mask granularity must match source element width",
+                          reason);
+
+  return success();
+}
+
 FailureOr<VMILayoutMaterializationSupport>
 VMILayoutSupport::getDataLayoutMaterializationSupport(
     VMIVRegType sourceType, VMIVRegType resultType, std::string *reason) const {
@@ -600,12 +740,51 @@ VMILayoutSupport::getDataLayoutMaterializationSupport(
   VMILayoutAttr resultLayout = resultType.getLayoutAttr();
   FailureOr<VMILayoutMaterializationSupport> support =
       getLayoutMaterializationSupport(sourceLayout, resultLayout, reason);
-  if (failed(support))
-    return failure();
-  if (failed(checkLayoutMaterializationShape(
-          sourceType, resultType, sourceLayout, resultLayout, reason)))
-    return failure();
-  return support;
+  if (succeeded(support)) {
+    if (failed(checkLayoutMaterializationShape(
+            sourceType, resultType, sourceLayout, resultLayout, reason)))
+      return failure();
+    return support;
+  }
+
+  if (!sourceLayout || !resultLayout)
+    return fail("requires assigned source/result layouts");
+
+  if (sourceLayout.isContiguous() && sourceLayout.getLaneStride() == 1 &&
+      resultLayout.isContiguous() && resultLayout.getLaneStride() != 1) {
+    FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
+    FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
+    if (failed(sourceArity) || failed(resultArity))
+      return fail("requires computable source/result physical arity");
+    if (*sourceArity != *resultArity)
+      return fail("dense lane_stride register materialization currently "
+                  "requires source and result to have the same physical arity");
+    if (!hasDenseLaneStridePackUnpackElement(sourceType.getElementType(),
+                                             resultLayout.getLaneStride()))
+      return fail("requires bitcastable 8/16-bit element type for dense "
+                  "lane_stride register unpack materialization");
+    return VMILayoutMaterializationSupport{
+        VMILayoutMaterializationSupportKind::ContiguousToLaneStrideViaUnpack};
+  }
+
+  if (sourceLayout.isContiguous() && sourceLayout.getLaneStride() != 1 &&
+      resultLayout.isContiguous() && resultLayout.getLaneStride() == 1) {
+    FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
+    FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
+    if (failed(sourceArity) || failed(resultArity))
+      return fail("requires computable source/result physical arity");
+    if (*sourceArity != *resultArity)
+      return fail("dense lane_stride register materialization currently "
+                  "requires source and result to have the same physical arity");
+    if (!hasDenseLaneStridePackUnpackElement(sourceType.getElementType(),
+                                             sourceLayout.getLaneStride()))
+      return fail("requires bitcastable 8/16-bit element type for dense "
+                  "lane_stride register pack materialization");
+    return VMILayoutMaterializationSupport{
+        VMILayoutMaterializationSupportKind::LaneStrideToContiguousViaPack};
+  }
+
+  return failure();
 }
 
 LogicalResult VMILayoutSupport::canMaterializeDataLayout(
@@ -1255,9 +1434,8 @@ VMILayoutSupport::getTruncFSupport(VMITruncFOp op, std::string *reason) const {
     return VMITruncFSupport{VMITruncFSupportKind::GroupSlots1F32ToF16};
   }
 
-  if (!sourceLayout.isDeinterleaved() || !resultLayout.isContiguous() ||
-      !sourceType.getElementType().isF32())
-    return fail("requires f32 deinterleaved source and contiguous result");
+  if (!sourceType.getElementType().isF32())
+    return fail("requires f32 source");
 
   FailureOr<VMICastLayoutFact> fact =
       getPreferredCastLayoutFact(sourceType, resultType, reason);
@@ -1265,6 +1443,23 @@ VMILayoutSupport::getTruncFSupport(VMITruncFOp op, std::string *reason) const {
                        fact->kind != VMICastLayoutKind::Narrow4x))
     return fail("unsupported deinterleaved truncf factor, arity, or result "
                 "element width");
+
+  if (sourceLayout.isContiguous() && sourceLayout.getLaneStride() == 1 &&
+      resultLayout.isContiguous() &&
+      resultLayout.getLaneStride() == fact->factor &&
+      *sourceArity == *resultArity) {
+    if (fact->kind == VMICastLayoutKind::Narrow2x)
+      return VMITruncFSupport{
+          VMITruncFSupportKind::ContiguousF32ToLaneStrideF16};
+    if (fact->kind == VMICastLayoutKind::Narrow4x)
+      return VMITruncFSupport{
+          VMITruncFSupportKind::ContiguousF32ToLaneStrideF8};
+  }
+
+  if (!sourceLayout.isDeinterleaved() || !resultLayout.isContiguous() ||
+      resultLayout.getLaneStride() != 1)
+    return fail("requires f32 deinterleaved source and contiguous result, or "
+                "contiguous source and lane_stride narrowing result");
 
   if (fact->kind == VMICastLayoutKind::Narrow2x &&
       sourceLayout.getFactor() == fact->factor &&
@@ -1299,13 +1494,6 @@ VMILayoutSupport::getExtFSupport(VMIExtFOp op, std::string *reason) const {
       failed(resultArity))
     return fail("requires assigned source/result layouts and computable "
                 "physical arity");
-  if (!resultLayout.isDeinterleaved() || resultLayout.getBlockElems() != 1 ||
-      !(sourceLayout.isContiguous() ||
-        (sourceLayout.isDeinterleaved() &&
-         sourceLayout.getBlockElems() == 1)) ||
-      !resultType.getElementType().isF32())
-    return fail("requires contiguous or deinterleaved source layout and "
-                "deinterleaved f32 result layout with block_elems=1");
 
   FailureOr<VMICastLayoutFact> fact =
       getPreferredCastLayoutFact(sourceType, resultType, reason);
@@ -1313,6 +1501,28 @@ VMILayoutSupport::getExtFSupport(VMIExtFOp op, std::string *reason) const {
                        fact->kind != VMICastLayoutKind::Widen4x))
     return fail("unsupported extf source element width, result factor, or "
                 "physical arity");
+
+  if (sourceLayout.isContiguous() &&
+      sourceLayout.getLaneStride() == fact->factor &&
+      resultLayout.isContiguous() && resultLayout.getLaneStride() == 1 &&
+      *sourceArity == *resultArity && resultType.getElementType().isF32()) {
+    if (fact->kind == VMICastLayoutKind::Widen2x)
+      return VMIExtFSupport{
+          VMIExtFSupportKind::ContiguousF16ToDeinterleaved2F32};
+    if (fact->kind == VMICastLayoutKind::Widen4x)
+      return VMIExtFSupport{
+          VMIExtFSupportKind::ContiguousF8ToDeinterleaved4F32};
+  }
+
+  if (!resultLayout.isDeinterleaved() || resultLayout.getBlockElems() != 1 ||
+      resultLayout.getLaneStride() != 1 ||
+      !(sourceLayout.isContiguous() ||
+        (sourceLayout.isDeinterleaved() &&
+         sourceLayout.getBlockElems() == 1 &&
+         sourceLayout.getLaneStride() == 1)) ||
+      !resultType.getElementType().isF32())
+    return fail("requires contiguous or deinterleaved source layout and "
+                "deinterleaved f32 result layout with block_elems=1");
 
   int64_t sourceFactor =
       sourceLayout.isDeinterleaved() ? sourceLayout.getFactor() : 1;
@@ -1349,6 +1559,10 @@ static FailureOr<VMIExtISupport> getExtISupportImpl(OpT op,
     return fail("requires assigned source/result layouts and computable "
                 "physical arity");
 
+  FailureOr<VMICastLayoutFact> fact =
+      VMILayoutSupport().getPreferredCastLayoutFact(sourceType, resultType,
+                                                    reason);
+
   if (sourceLayout.isGroupSlots() && resultLayout.isGroupSlots()) {
     if (!isa<IntegerType>(sourceType.getElementType()) ||
         !isa<IntegerType>(resultType.getElementType()))
@@ -1376,18 +1590,34 @@ static FailureOr<VMIExtISupport> getExtISupportImpl(OpT op,
                 "16-bit");
   }
 
+  if (succeeded(fact) &&
+      (fact->kind == VMICastLayoutKind::Widen2x ||
+       fact->kind == VMICastLayoutKind::Widen4x) &&
+      sourceLayout.isContiguous() &&
+      sourceLayout.getLaneStride() == fact->factor &&
+      resultLayout.isContiguous() && resultLayout.getLaneStride() == 1 &&
+      *sourceArity == *resultArity &&
+      isa<IntegerType>(sourceType.getElementType()) &&
+      isa<IntegerType>(resultType.getElementType())) {
+    if (fact->kind == VMICastLayoutKind::Widen2x)
+      return VMIExtISupport{
+          VMIExtISupportKind::ContiguousI16ToDeinterleaved2I32};
+    if (fact->kind == VMICastLayoutKind::Widen4x)
+      return VMIExtISupport{
+          VMIExtISupportKind::ContiguousI8ToDeinterleaved4I32};
+  }
+
   if (!resultLayout.isDeinterleaved() || resultLayout.getBlockElems() != 1 ||
+      resultLayout.getLaneStride() != 1 ||
       !(sourceLayout.isContiguous() ||
         (sourceLayout.isDeinterleaved() &&
-         sourceLayout.getBlockElems() == 1)) ||
+         sourceLayout.getBlockElems() == 1 &&
+         sourceLayout.getLaneStride() == 1)) ||
       !isa<IntegerType>(sourceType.getElementType()) ||
       !isa<IntegerType>(resultType.getElementType()))
     return fail("requires contiguous or deinterleaved integer source layout "
                 "and deinterleaved integer result layout with block_elems=1");
 
-  FailureOr<VMICastLayoutFact> fact =
-      VMILayoutSupport().getPreferredCastLayoutFact(sourceType, resultType,
-                                                    reason);
   if (failed(fact) || (fact->kind != VMICastLayoutKind::Widen2x &&
                        fact->kind != VMICastLayoutKind::Widen4x))
     return fail("unsupported integer extension source/result element width, "
@@ -1468,11 +1698,31 @@ VMILayoutSupport::getTruncISupport(VMITruncIOp op, std::string *reason) const {
                 "requires unsigned i8 result");
 
   if (!sourceLayout.isDeinterleaved() || sourceLayout.getBlockElems() != 1 ||
-      !(resultLayout.isContiguous() ||
+      !((resultLayout.isContiguous() && resultLayout.getLaneStride() == 1) ||
         (resultLayout.isDeinterleaved() &&
-         resultLayout.getBlockElems() == 1)))
-    return fail("requires integer deinterleaved source and contiguous or "
-                "deinterleaved integer result with block_elems=1");
+         resultLayout.getBlockElems() == 1 &&
+         resultLayout.getLaneStride() == 1)))
+    if (!(sourceLayout.isContiguous() && sourceLayout.getLaneStride() == 1 &&
+          resultLayout.isContiguous() &&
+          resultLayout.getLaneStride() == fact->factor))
+      return fail("requires integer deinterleaved source and contiguous or "
+                  "deinterleaved integer result with block_elems=1, or "
+                  "contiguous source and lane_stride narrowing result");
+
+  if (sourceLayout.isContiguous() && sourceLayout.getLaneStride() == 1 &&
+      resultLayout.isContiguous() &&
+      resultLayout.getLaneStride() == fact->factor &&
+      *sourceArity == *resultArity) {
+    if (resultBits == 8 &&
+        !cast<IntegerType>(resultType.getElementType()).isUnsigned())
+      return fail("8-bit integer narrowing requires unsigned i8 result");
+    if (fact->kind == VMICastLayoutKind::Narrow2x)
+      return VMITruncISupport{
+          VMITruncISupportKind::ContiguousI32ToLaneStrideI16};
+    if (fact->kind == VMICastLayoutKind::Narrow4x)
+      return VMITruncISupport{
+          VMITruncISupportKind::ContiguousI32ToLaneStrideI8};
+  }
 
   int64_t resultFactor =
       resultLayout.isDeinterleaved() ? resultLayout.getFactor() : 1;

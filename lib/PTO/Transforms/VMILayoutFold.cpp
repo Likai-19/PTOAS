@@ -49,9 +49,18 @@ static bool isLoadProducerLayout(VMIVRegType type) {
   VMILayoutAttr layout = type.getLayoutAttr();
   if (!layout)
     return false;
-  if (layout.isContiguous())
+  if (layout.isContiguous() && layout.getLaneStride() == 1)
     return true;
+  if (layout.isContiguous() && layout.getLaneStride() == 2) {
+    unsigned elementBits = pto::getPTOStorageElemBitWidth(type.getElementType());
+    return elementBits == 8 || elementBits == 16 || elementBits == 32;
+  }
+  if (layout.isContiguous() && layout.getLaneStride() == 4) {
+    unsigned elementBits = pto::getPTOStorageElemBitWidth(type.getElementType());
+    return elementBits == 8;
+  }
   if (!layout.isDeinterleaved() || layout.getBlockElems() != 1 ||
+      layout.getLaneStride() != 1 ||
       (layout.getFactor() != 2 && layout.getFactor() != 4))
     return false;
   unsigned elementBits = pto::getPTOStorageElemBitWidth(type.getElementType());
@@ -164,9 +173,12 @@ static void tryFoldEnsureLayoutIntoMaskedStore(
   if (sourceLayout != maskSourceLayout || !maskResultLayout.isContiguous())
     return;
 
-  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-  FailureOr<int64_t> maskArity = getVMIPhysicalArity(maskSourceType);
-  if (failed(sourceArity) || failed(maskArity) || *sourceArity != *maskArity)
+  auto resultType = dyn_cast<VMIVRegType>(ensure.getResult().getType());
+  if (!resultType)
+    return;
+  VMILayoutSupport supports;
+  if (failed(supports.canFoldContiguousMaskedStoreMaterialization(
+          sourceType, maskSourceType, resultType, maskResultType)))
     return;
 
   store.getValueMutable().set(ensure.getSource());

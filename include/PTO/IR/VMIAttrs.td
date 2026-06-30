@@ -18,16 +18,19 @@ def VMILayoutAttr : PTO_Attr<"VMILayout", "vmi.layout"> {
     StringRefParameter<"layout kind">:$kind,
     "int64_t":$factor,
     "int64_t":$blockElems,
-    "int64_t":$slots
+    "int64_t":$slots,
+    "int64_t":$laneStride
   );
   let hasCustomAssemblyFormat = 1;
   let genVerifyDecl = 1;
 
   let extraClassDeclaration = [{
-    static VMILayoutAttr getContiguous(::mlir::MLIRContext *context);
+    static VMILayoutAttr getContiguous(::mlir::MLIRContext *context,
+                                       int64_t laneStride = 1);
     static VMILayoutAttr getDeinterleaved(::mlir::MLIRContext *context,
                                           int64_t factor,
-                                          int64_t blockElems = 1);
+                                          int64_t blockElems = 1,
+                                          int64_t laneStride = 1);
     static VMILayoutAttr getGroupSlots(::mlir::MLIRContext *context,
                                        int64_t numGroups,
                                        int64_t slots = 0,
@@ -36,13 +39,15 @@ def VMILayoutAttr : PTO_Attr<"VMILayout", "vmi.layout"> {
     bool isContiguous() const { return getKind() == "contiguous"; }
     bool isDeinterleaved() const { return getKind() == "deinterleaved"; }
     bool isGroupSlots() const { return getKind() == "num_groups"; }
+    bool isDense() const { return isContiguous() || isDeinterleaved(); }
     int64_t getNumGroups() const { return getFactor(); }
-    bool hasLaneStride() const {
-      return isGroupSlots() && getBlockElems() != 1;
+    bool hasDenseLaneStride() const {
+      return isDense() && getLaneStride() != 1;
     }
-    int64_t getLaneStride() const {
-      return isGroupSlots() ? getBlockElems() : 1;
+    bool hasGroupSlotLaneStride() const {
+      return isGroupSlots() && getLaneStride() != 1;
     }
+    bool hasLaneStride() const { return getLaneStride() != 1; }
   }];
 }
 

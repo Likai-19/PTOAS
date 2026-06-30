@@ -25,6 +25,8 @@ class VMITargetCapabilityRegistry;
 
 enum class VMIContiguousStoreSupportKind {
   ContiguousVsts,
+  LaneStride2PackedVsts,
+  LaneStride4PackedVsts,
   Deinterleaved2Vstsx2,
   DeinterleavedMaterializeThenVsts,
 };
@@ -39,6 +41,8 @@ enum class VMILayoutMaterializationSupportKind {
   ContiguousToDeinterleaved,
   DeinterleavedToContiguous,
   DeinterleavedToDeinterleavedViaContiguous,
+  ContiguousToLaneStrideViaUnpack,
+  LaneStrideToContiguousViaPack,
 };
 
 struct VMILayoutMaterializationSupport {
@@ -152,6 +156,8 @@ struct VMIGroupBroadcastLoadSupport {
 enum class VMITruncFSupportKind {
   Deinterleaved2F32ToContiguousF16,
   Deinterleaved4F32ToContiguousF8,
+  ContiguousF32ToLaneStrideF16,
+  ContiguousF32ToLaneStrideF8,
   GroupSlots1F32ToF16,
 };
 
@@ -173,6 +179,8 @@ struct VMIExtFSupport {
 enum class VMITruncISupportKind {
   Deinterleaved2I32ToContiguousI16,
   Deinterleaved4I32ToContiguousI8,
+  ContiguousI32ToLaneStrideI16,
+  ContiguousI32ToLaneStrideI8,
   GroupSlots1I32ToNarrow,
 };
 
@@ -219,6 +227,10 @@ public:
   canFoldContiguousStoreMaterialization(VMIVRegType sourceType,
                                         VMIVRegType resultType,
                                         std::string *reason = nullptr) const;
+  LogicalResult canFoldContiguousMaskedStoreMaterialization(
+      VMIVRegType sourceType, VMIMaskType maskSourceType,
+      VMIVRegType resultType, VMIMaskType maskResultType,
+      std::string *reason = nullptr) const;
 
   FailureOr<VMILayoutMaterializationSupport>
   getDataLayoutMaterializationSupport(VMIVRegType sourceType,

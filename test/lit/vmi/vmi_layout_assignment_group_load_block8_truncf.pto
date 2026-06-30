@@ -38,9 +38,9 @@ module {
 // CHECK: pto.vsldb
 // CHECK: pto.vcgadd
 // CHECK: pto.vintlv
-// CHECK: pto.vdintlv
-// CHECK: pto.vcvt
-// CHECK: pto.vsts
+// CHECK-NOT: pto.vdintlv
+// CHECK: pto.vcvt {{.*}} {part = "EVEN", rnd = "R", sat = "SAT"}
+// CHECK: pto.vsts {{.*}} {dist = "PK_B32"}
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
 // CHECK-NOT: unrealized_conversion_cast

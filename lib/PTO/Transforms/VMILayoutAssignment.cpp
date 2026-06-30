@@ -426,6 +426,26 @@ struct LayoutSolver {
     return getContiguousLayout();
   }
 
+  VMILayoutAttr getPreferredDenseStoreUseLayout(Value value) {
+    auto type = dyn_cast<VMIVRegType>(value.getType());
+    if (!type)
+      return getContiguousLayout();
+
+    VMILayoutAttr layout = getExplicitDataLayout(value);
+    if (!layout || !layout.hasDenseLaneStride())
+      layout = type.getLayoutAttr();
+    if (!layout || !layout.hasDenseLaneStride())
+      return getContiguousLayout();
+
+    auto candidateType =
+        VMIVRegType::get(ctx, type.getElementCount(), type.getElementType(),
+                         layout);
+    VMILayoutSupport supports;
+    if (succeeded(supports.getContiguousStoreSupport(candidateType)))
+      return layout;
+    return getContiguousLayout();
+  }
+
   VMILayoutAttr getDataLayout(Value value) {
     unsigned id = addDataValue(value);
     if (id == ~0u)
@@ -441,6 +461,13 @@ struct LayoutSolver {
     if (id == ~0u)
       return {};
     return dataNodes[find(id)].naturalLayout;
+  }
+
+  bool hasMaskedStoreUse(Value value) {
+    for (OpOperand &use : value.getUses())
+      if (isa<VMIMaskedStoreOp>(use.getOwner()) && use.getOperandNumber() == 0)
+        return true;
+    return false;
   }
 
   bool hasCompatibleTruncFUseForGroupReduce(Value value, int64_t groupSize) {
@@ -1251,11 +1278,22 @@ struct LayoutSolver {
             return WalkResult::interrupt();
           return WalkResult::advance();
         }
-        if (succeeded(fact) && (fact->kind == VMICastLayoutKind::Narrow2x ||
-                                fact->kind == VMICastLayoutKind::Narrow4x))
+        if (succeeded(fact) && hasMaskedStoreUse(truncf.getResult()) &&
+            (fact->kind == VMICastLayoutKind::Narrow2x ||
+             fact->kind == VMICastLayoutKind::Narrow4x)) {
           requestDataUse(truncf.getSourceMutable(), fact->sourceLayout);
-        VMILayoutAttr resultLayout =
-            succeeded(fact) ? fact->resultLayout : getContiguousLayout();
+          if (failed(setNaturalLayout(truncf.getResult(), fact->resultLayout,
+                                      op)))
+            return WalkResult::interrupt();
+          return WalkResult::advance();
+        }
+        VMILayoutAttr resultLayout = getContiguousLayout();
+        if (succeeded(fact) && (fact->kind == VMICastLayoutKind::Narrow2x ||
+                                fact->kind == VMICastLayoutKind::Narrow4x)) {
+          requestDataUse(truncf.getSourceMutable(), getContiguousLayout());
+          resultLayout =
+              VMILayoutAttr::getContiguous(ctx, /*laneStride=*/fact->factor);
+        }
         if (failed(setNaturalLayout(truncf.getResult(), resultLayout, op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -1282,11 +1320,22 @@ struct LayoutSolver {
             return WalkResult::interrupt();
           return WalkResult::advance();
         }
-        if (succeeded(fact) && (fact->kind == VMICastLayoutKind::Narrow2x ||
-                                fact->kind == VMICastLayoutKind::Narrow4x))
+        if (succeeded(fact) && hasMaskedStoreUse(trunci.getResult()) &&
+            (fact->kind == VMICastLayoutKind::Narrow2x ||
+             fact->kind == VMICastLayoutKind::Narrow4x)) {
           requestDataUse(trunci.getSourceMutable(), fact->sourceLayout);
-        VMILayoutAttr resultLayout =
-            succeeded(fact) ? fact->resultLayout : getContiguousLayout();
+          if (failed(setNaturalLayout(trunci.getResult(), fact->resultLayout,
+                                      op)))
+            return WalkResult::interrupt();
+          return WalkResult::advance();
+        }
+        VMILayoutAttr resultLayout = getContiguousLayout();
+        if (succeeded(fact) && (fact->kind == VMICastLayoutKind::Narrow2x ||
+                                fact->kind == VMICastLayoutKind::Narrow4x)) {
+          requestDataUse(trunci.getSourceMutable(), getContiguousLayout());
+          resultLayout =
+              VMILayoutAttr::getContiguous(ctx, /*laneStride=*/fact->factor);
+        }
         if (failed(setNaturalLayout(trunci.getResult(), resultLayout, op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -1362,7 +1411,8 @@ struct LayoutSolver {
         return WalkResult::advance();
       }
       if (auto store = dyn_cast<VMIStoreOp>(op)) {
-        requestDataUse(store.getValueMutable(), getContiguousLayout());
+        requestDataUse(store.getValueMutable(),
+                       getPreferredDenseStoreUseLayout(store.getValue()));
         return WalkResult::advance();
       }
       if (auto store = dyn_cast<VMIInterleaveStoreOp>(op)) {

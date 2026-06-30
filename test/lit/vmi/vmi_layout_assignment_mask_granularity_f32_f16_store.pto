@@ -56,7 +56,6 @@ module {
 // LOWER: pto.vor
 // LOWER: pto.ppack
 // LOWER: pto.ppack
-// LOWER: pto.por
 // LOWER: pto.vsts
 // LOWER-NOT: pto.vmi.
 // LOWER-NOT: !pto.vmi.
