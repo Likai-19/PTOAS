@@ -16,7 +16,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.load requires full physical chunks without padding lanes or a statically safe full-read footprint
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.load direct lowering requires a supported memory source
 // CHECK-SAME: source is GM-backed
 // CHECK-SAME: requires UB-backed memory
 

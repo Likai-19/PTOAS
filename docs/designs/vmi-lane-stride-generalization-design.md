@@ -399,18 +399,71 @@ op's assigned result layout is fixed.
 
 The preferred direction for this optimization is not "notice the input is
 already strided".  The conversion op can be the layout-entry point and compute a
-single preferred layout fact for the current op instance:
+single preferred layout fact for the current op instance.  The choice must be
+arity-driven, not special-cased by a spelling such as `64xf32`.
+
+For source/result logical lane count `N`, let:
+
+```text
+natural result layout:
+  source dense factor F, lane_stride 1
+  result dense factor F * W, lane_stride 1
+
+compact result layout:
+  result keeps source dense factor F and uses lane_stride 1
+  source uses lane_stride W inside the same dense factor F
+```
+
+The self-preferred widening rule is:
+
+```text
+if physical_arity(compact result) < physical_arity(natural result)
+   and target supports the required source lane_stride relation:
+  choose compact result and request source lane_stride=W
+else:
+  choose natural result deinterleaved by W
+```
+
+For ordinary contiguous `f16 -> f32` this gives:
+
+```text
+64xf32:
+  compact arity = 1
+  natural deinterleaved=2 arity = 2
+  choose source lane_stride=2, result contiguous
+
+128xf32:
+  compact arity = 2
+  natural deinterleaved=2 arity = 2
+  choose natural result deinterleaved=2
+
+256xf32:
+  compact arity = 4
+  natural deinterleaved=2 arity = 4
+  choose natural result deinterleaved=2
+```
+
+If the source is already deinterleaved by `F`, the natural result factor is
+`F * W`.  For example, `deinterleaved=2 f16 -> f32` naturally produces
+`deinterleaved=4 f32`.
+
+The same arity rule applies to other widening ratios and types.  For example,
+`ui8 -> ui32` has `W=4`; a lane-stride source is preferred only when the
+contiguous result has fewer physical chunks than the natural
+`deinterleaved=4` result and the target supports the `lane_stride=4` relation.
+
+The two layout facts are therefore:
 
 ```text
 baseline fact:
   source contiguous
   result deinterleaved=W
-  cost: W conversion parts
+  arity: physical_arity(result deinterleaved=W)
 
 lane-stride fact:
   source lane_stride=W
   result contiguous
-  hardware conversion parts: one
+  arity: physical_arity(result contiguous)
   source layout request: explicit
 ```
 
@@ -428,9 +481,9 @@ assignment model.
 
 ### 4.4 Narrowing Conversion
 
-Narrowing is the inverse relation.  If source element width is `W` times the
-result element width, a single hardware narrowing part can produce a
-phase-zero strided result when:
+Narrowing uses the same arity-driven idea in the opposite direction.  If source
+element width is `W` times the result element width, a single hardware narrowing
+part can produce a phase-zero strided result when:
 
 ```text
 result lane_stride = source lane_stride * W
@@ -445,6 +498,66 @@ i32 -> i16/i8
 ui32 -> ui16/ui8
 ui16 -> ui8
 ```
+
+The natural narrowing relation is the inverse of natural widening:
+
+```text
+source dense factor F * W, lane_stride 1
+result dense factor F, lane_stride 1
+```
+
+The compact-store-oriented relation is:
+
+```text
+source keeps dense factor F and lane_stride 1
+result keeps dense factor F and uses lane_stride W
+```
+
+Narrowing has the same candidate family as widening.  The arity comparison is
+made on the source side, because the compact relation keeps the source
+contiguous while the natural relation may require a deinterleaved source.
+
+The self-preferred narrowing rule is:
+
+```text
+if physical_arity(compact contiguous source)
+     < physical_arity(natural deinterleaved source)
+   and physical_arity(compact source) == physical_arity(strided result)
+   and target supports the source-contiguous/result-lane_stride relation:
+  choose source contiguous, result lane_stride=W
+else:
+  choose natural deinterleaved-source to contiguous-result relation
+```
+
+Use-site requests may still select the strided relation when a later consumer
+can directly consume it:
+
+```text
+if a consumer requests result lane_stride=W
+   and target supports source-contiguous/result-lane_stride narrowing:
+  request source contiguous
+  set or rematerialize result lane_stride=W
+```
+
+For ordinary `f32 -> f16`:
+
+```text
+64xf32 -> 64xf16:
+  natural source deinterleaved=2 arity = 2
+  compact source contiguous arity = 1
+  choose source contiguous, result lane_stride=2
+
+128xf32 -> 128xf16:
+  natural source deinterleaved=2 arity = 2
+  compact source contiguous arity = 2
+  choose natural source deinterleaved=2, result contiguous
+```
+
+So trunc should not blindly create a lane-stride result for every narrowing.
+It should apply the same arity/support checks as ext.  A consumer may still
+request a strided result when that layout is useful, such as an unmasked compact
+store lowered with `PK`/`PK4`.  For masked stores, the value and mask must share
+the same lane map before a direct packed masked store is legal.
 
 The exact supported parts are target-op dependent. The layout assignment layer
 should ask the op support interface whether a given source/result layout pair is
@@ -589,6 +702,11 @@ store:
   consumes contiguous f32 directly
 ```
 
+Assignment chooses the lane-stride plan for this shape because the contiguous
+`64xf32` result uses one physical chunk while the natural deinterleaved result
+uses two physical chunks.  This decision is made by the cast arity rule, not by
+a pattern that names `64xf32` directly.
+
 The load side then has two concrete outcomes:
 
 ```text
@@ -600,7 +718,7 @@ accepted direct load fold:
 no direct load fold:
   keep the explicit source ensure_layout
   lower it through register pack/unpack if that materialization is supported
-  otherwise keep the baseline contiguous-source/deinterleaved-result relation
+  otherwise validation rejects the unsupported assigned relation
 ```
 
 This case proves that `extf` can be the layout-entry point, while `load` support
@@ -665,8 +783,9 @@ consumer then needs contiguous -> deinterleaved=2 materialization
 ```
 
 The baseline plan should win.  A lane-stride fact is not useful when it creates a
-layout the consumer does not want; for full chunks it may not reduce the
-conversion count either.
+layout the consumer does not want.  The cast arity rule also does not prefer
+lane_stride here: `128xf32` contiguous and `128xf32 deinterleaved=2` both use
+two physical chunks.
 
 ### 6.4 One Ext Result Feeding Store And Reduce
 
