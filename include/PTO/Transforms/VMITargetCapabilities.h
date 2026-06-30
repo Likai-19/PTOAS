@@ -180,13 +180,17 @@ public:
           "requires assigned source/result layouts");
     if (sourceLayout == resultLayout)
       return VMICapabilityResult::supported();
-    if (sourceLayout.isContiguous() && resultLayout.isDeinterleaved() &&
+    if (sourceLayout.isContiguous() && sourceLayout.getLaneStride() == 1 &&
+        resultLayout.isDeinterleaved() && resultLayout.getLaneStride() == 1 &&
         (resultLayout.getFactor() == 2 || resultLayout.getFactor() == 4))
       return VMICapabilityResult::supported();
-    if (sourceLayout.isDeinterleaved() && resultLayout.isContiguous() &&
+    if (sourceLayout.isDeinterleaved() && sourceLayout.getLaneStride() == 1 &&
+        resultLayout.isContiguous() && resultLayout.getLaneStride() == 1 &&
         (sourceLayout.getFactor() == 2 || sourceLayout.getFactor() == 4))
       return VMICapabilityResult::supported();
     if (sourceLayout.isDeinterleaved() && resultLayout.isDeinterleaved() &&
+        sourceLayout.getLaneStride() == 1 &&
+        resultLayout.getLaneStride() == 1 &&
         (sourceLayout.getFactor() == 2 || sourceLayout.getFactor() == 4) &&
         (resultLayout.getFactor() == 2 || resultLayout.getFactor() == 4))
       return VMICapabilityResult::supported();

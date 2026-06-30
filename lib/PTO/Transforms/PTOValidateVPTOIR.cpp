@@ -483,6 +483,16 @@ private:
         return VPTOMaskGranularity::B32;
       return std::nullopt;
     }
+    if (dist == "PK_B64") {
+      if (width == 32)
+        return VPTOMaskGranularity::B32;
+      return std::nullopt;
+    }
+    if (dist == "PK4_B32") {
+      if (width == 8)
+        return VPTOMaskGranularity::B32;
+      return std::nullopt;
+    }
     if (dist == "MRG4CHN_B8") {
       if (width == 8)
         return VPTOMaskGranularity::B32;
