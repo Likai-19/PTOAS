@@ -167,7 +167,7 @@ static FailureOr<int64_t> getLayoutBlockElems(Type type) {
 static FailureOr<Type> getVMIPhysicalElementType(VMIVRegType type) {
   Type elementType = type.getElementType();
   VMILayoutAttr layout = type.getLayoutAttr();
-  if (!layout || !layout.hasLaneStride())
+  if (!layout || !layout.hasGroupSlotLaneStride())
     return elementType;
 
   auto integerType = dyn_cast<IntegerType>(elementType);
@@ -193,6 +193,13 @@ static FailureOr<int64_t> getPhysicalLanesPerPart(Type type) {
   if (auto maskType = dyn_cast<VMIMaskType>(type))
     return getMaskLanesPerPart(maskType.getGranularity());
   return failure();
+}
+
+static FailureOr<int64_t> getDenseLaneStride(Type type) {
+  FailureOr<VMILayoutAttr> layout = getAssignedVMILayout(type);
+  if (failed(layout))
+    return failure();
+  return (*layout).isDense() ? (*layout).getLaneStride() : 1;
 }
 
 static int64_t getMaskGranularityBitWidth(StringRef granularity) {
@@ -463,21 +470,24 @@ static int64_t getDenseLogicalLanesInPart(int64_t elementCount, int64_t factor,
 
 } // namespace
 
-VMILayoutAttr VMILayoutAttr::getContiguous(MLIRContext *context) {
-  return VMILayoutAttr::get(context, "contiguous", 1, 1, 0);
+VMILayoutAttr VMILayoutAttr::getContiguous(MLIRContext *context,
+                                           int64_t laneStride) {
+  return VMILayoutAttr::get(context, "contiguous", 1, 1, 0, laneStride);
 }
 
 VMILayoutAttr VMILayoutAttr::getDeinterleaved(MLIRContext *context,
                                               int64_t factor,
-                                              int64_t blockElems) {
-  return VMILayoutAttr::get(context, "deinterleaved", factor, blockElems, 0);
+                                              int64_t blockElems,
+                                              int64_t laneStride) {
+  return VMILayoutAttr::get(context, "deinterleaved", factor, blockElems, 0,
+                            laneStride);
 }
 
 VMILayoutAttr VMILayoutAttr::getGroupSlots(MLIRContext *context,
                                            int64_t numGroups, int64_t slots,
                                            int64_t laneStride) {
-  return VMILayoutAttr::get(context, "num_groups", numGroups, laneStride,
-                            slots);
+  return VMILayoutAttr::get(context, "num_groups", numGroups, 1, slots,
+                            laneStride);
 }
 
 Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
@@ -486,22 +496,39 @@ Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
   int64_t factor = 1;
   int64_t blockElems = 1;
   int64_t slots = 0;
+  int64_t laneStride = 1;
 
   if (failed(parser.parseLess()) || failed(parser.parseKeyword(&kind)))
     return {};
 
   if (kind == "contiguous") {
     factor = 1;
+    while (succeeded(parser.parseOptionalComma())) {
+      StringRef field;
+      if (failed(parser.parseKeyword(&field)) || failed(parser.parseEqual()) ||
+          field != "lane_stride" || failed(parser.parseInteger(laneStride))) {
+        parser.emitError(parser.getCurrentLocation(),
+                         "expected 'lane_stride = <integer>'");
+        return {};
+      }
+    }
   } else if (kind == "deinterleaved") {
     if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor)))
       return {};
-    if (succeeded(parser.parseOptionalComma())) {
+    while (succeeded(parser.parseOptionalComma())) {
       StringRef field;
-      if (failed(parser.parseKeyword(&field)) || field != "block_elems" ||
-          failed(parser.parseEqual()) ||
-          failed(parser.parseInteger(blockElems))) {
+      if (failed(parser.parseKeyword(&field)) || failed(parser.parseEqual()))
+        return {};
+      if (field == "block_elems") {
+        if (failed(parser.parseInteger(blockElems)))
+          return {};
+      } else if (field == "lane_stride") {
+        if (failed(parser.parseInteger(laneStride)))
+          return {};
+      } else {
         parser.emitError(parser.getCurrentLocation(),
-                         "expected 'block_elems = <integer>'");
+                         "expected 'block_elems = <integer>' or "
+                         "'lane_stride = <integer>'");
         return {};
       }
     }
@@ -516,7 +543,7 @@ Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
         if (failed(parser.parseInteger(slots)))
           return {};
       } else if (field == "lane_stride") {
-        if (failed(parser.parseInteger(blockElems)))
+        if (failed(parser.parseInteger(laneStride)))
           return {};
       } else {
         parser.emitError(parser.getCurrentLocation(),
@@ -536,21 +563,27 @@ Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
     return {};
 
   return parser.getChecked<VMILayoutAttr>(loc, parser.getContext(), kind,
-                                          factor, blockElems, slots);
+                                          factor, blockElems, slots,
+                                          laneStride);
 }
 
 void VMILayoutAttr::print(AsmPrinter &printer) const {
   printer << "<" << getKind();
-  if (isDeinterleaved()) {
+  if (isContiguous()) {
+    if (getLaneStride() != 1)
+      printer << ", lane_stride = " << getLaneStride();
+  } else if (isDeinterleaved()) {
     printer << " = " << getFactor();
     if (getBlockElems() != 1)
       printer << ", block_elems = " << getBlockElems();
+    if (getLaneStride() != 1)
+      printer << ", lane_stride = " << getLaneStride();
   } else if (isGroupSlots()) {
     printer << " = " << getFactor();
     if (getSlots() != 0)
       printer << ", slots = " << getSlots();
-    if (getBlockElems() != 1)
-      printer << ", lane_stride = " << getBlockElems();
+    if (getLaneStride() != 1)
+      printer << ", lane_stride = " << getLaneStride();
   }
   printer << ">";
 }
@@ -558,7 +591,11 @@ void VMILayoutAttr::print(AsmPrinter &printer) const {
 LogicalResult
 VMILayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                       StringRef kind, int64_t factor, int64_t blockElems,
-                      int64_t slots) {
+                      int64_t slots, int64_t laneStride) {
+  if (laneStride <= 0)
+    return emitError() << "#pto.vmi.layout<" << kind
+                       << "> requires lane_stride to be positive";
+
   if (kind == "contiguous") {
     if (factor != 1 || blockElems != 1 || slots != 0)
       return emitError()
@@ -585,9 +622,9 @@ VMILayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
     if (factor <= 0)
       return emitError() << "#pto.vmi.layout<num_groups = " << factor
                          << "> requires num_groups to be positive";
-    if (blockElems <= 0)
+    if (blockElems != 1)
       return emitError() << "#pto.vmi.layout<num_groups = " << factor
-                         << "> requires lane_stride to be positive";
+                         << "> requires block_elems to be omitted";
     if (slots < 0)
       return emitError() << "#pto.vmi.layout<num_groups = " << factor
                          << ", slots = " << slots
@@ -2028,11 +2065,14 @@ FailureOr<int64_t> mlir::pto::getVMIPhysicalArity(Type type) {
   int64_t factor = (*layout).isDeinterleaved() ? (*layout).getFactor() : 1;
   int64_t blockElems =
       (*layout).isDeinterleaved() ? (*layout).getBlockElems() : 1;
+  int64_t laneStride = (*layout).isDense() ? (*layout).getLaneStride() : 1;
   int64_t arity = 0;
   for (int64_t part = 0; part < factor; ++part) {
     int64_t lanesInPart =
         getDenseLogicalLanesInPart(*elementCount, factor, blockElems, part);
-    arity += divideCeilNonNegative(lanesInPart, *lanesPerPart);
+    int64_t requiredPhysicalLanes =
+        lanesInPart == 0 ? 0 : (lanesInPart - 1) * laneStride + 1;
+    arity += divideCeilNonNegative(requiredPhysicalLanes, *lanesPerPart);
   }
   return arity;
 }
@@ -2042,9 +2082,10 @@ mlir::pto::mapLogicalLaneToPhysical(Type type, int64_t logicalLane) {
   FailureOr<int64_t> elementCount = getVMIElementCount(type);
   FailureOr<int64_t> factor = getLayoutFactor(type);
   FailureOr<int64_t> blockElems = getLayoutBlockElems(type);
+  FailureOr<int64_t> laneStride = getDenseLaneStride(type);
   FailureOr<int64_t> lanesPerPart = getPhysicalLanesPerPart(type);
   if (failed(elementCount) || failed(factor) || failed(blockElems) ||
-      failed(lanesPerPart))
+      failed(laneStride) || failed(lanesPerPart))
     return failure();
   if (logicalLane < 0 || logicalLane >= *elementCount)
     return failure();
@@ -2064,8 +2105,9 @@ mlir::pto::mapLogicalLaneToPhysical(Type type, int64_t logicalLane) {
       *elementCount, *factor, *blockElems, logicalLane, part);
   if (!indexInPart)
     return failure();
-  return VMIPhysicalLane{part, *indexInPart / *lanesPerPart,
-                         *indexInPart % *lanesPerPart};
+  int64_t physicalIndex = *indexInPart * *laneStride;
+  return VMIPhysicalLane{part, physicalIndex / *lanesPerPart,
+                         physicalIndex % *lanesPerPart};
 }
 
 FailureOr<int64_t> mlir::pto::mapPhysicalLaneToLogical(Type type, int64_t part,
@@ -2074,9 +2116,10 @@ FailureOr<int64_t> mlir::pto::mapPhysicalLaneToLogical(Type type, int64_t part,
   FailureOr<int64_t> elementCount = getVMIElementCount(type);
   FailureOr<int64_t> factor = getLayoutFactor(type);
   FailureOr<int64_t> blockElems = getLayoutBlockElems(type);
+  FailureOr<int64_t> laneStride = getDenseLaneStride(type);
   FailureOr<int64_t> lanesPerPart = getPhysicalLanesPerPart(type);
   if (failed(elementCount) || failed(factor) || failed(blockElems) ||
-      failed(lanesPerPart))
+      failed(laneStride) || failed(lanesPerPart))
     return failure();
   if (part < 0 || part >= *factor || chunk < 0 || lane < 0 ||
       lane >= *lanesPerPart)
@@ -2094,7 +2137,10 @@ FailureOr<int64_t> mlir::pto::mapPhysicalLaneToLogical(Type type, int64_t part,
     return logicalLane;
   }
 
-  int64_t indexInPart = chunk * *lanesPerPart + lane;
+  int64_t physicalIndexInPart = chunk * *lanesPerPart + lane;
+  if (physicalIndexInPart % *laneStride != 0)
+    return failure();
+  int64_t indexInPart = physicalIndexInPart / *laneStride;
   std::optional<int64_t> logicalLane = mapDensePartIndexToLogicalLane(
       *elementCount, *factor, *blockElems, part, indexInPart);
   if (!logicalLane)
@@ -2107,9 +2153,10 @@ FailureOr<bool> mlir::pto::isPaddingLane(Type type, int64_t part, int64_t chunk,
   FailureOr<int64_t> elementCount = getVMIElementCount(type);
   FailureOr<int64_t> factor = getLayoutFactor(type);
   FailureOr<int64_t> blockElems = getLayoutBlockElems(type);
+  FailureOr<int64_t> laneStride = getDenseLaneStride(type);
   FailureOr<int64_t> lanesPerPart = getPhysicalLanesPerPart(type);
   if (failed(elementCount) || failed(factor) || failed(blockElems) ||
-      failed(lanesPerPart))
+      failed(laneStride) || failed(lanesPerPart))
     return failure();
   if (part < 0 || part >= *factor || chunk < 0 || lane < 0 ||
       lane >= *lanesPerPart)
@@ -2128,6 +2175,9 @@ FailureOr<bool> mlir::pto::isPaddingLane(Type type, int64_t part, int64_t chunk,
 
   int64_t lanesInPart =
       getDenseLogicalLanesInPart(*elementCount, *factor, *blockElems, part);
-  int64_t indexInPart = chunk * *lanesPerPart + lane;
+  int64_t physicalIndexInPart = chunk * *lanesPerPart + lane;
+  if (physicalIndexInPart % *laneStride != 0)
+    return true;
+  int64_t indexInPart = physicalIndexInPart / *laneStride;
   return indexInPart >= lanesInPart;
 }

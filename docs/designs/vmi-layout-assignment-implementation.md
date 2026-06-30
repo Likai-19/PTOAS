@@ -268,6 +268,12 @@ slot placement from producer or consumer context.
 regular gap between stored group slots.  It is used for carrier-style packed
 stores such as `ui8` group slots lowered through b32 `PK4_B32`.
 
+The current implementation treats this as a group-slot property.  The dense
+generalization is tracked separately in
+`vmi-lane-stride-generalization-implementation.md`; it requires splitting dense
+lane-map stride from group-slot carrier packing before `lane_stride` can be used
+on `contiguous` or `deinterleaved` layouts.
+
 ### 3.2 VMI Types
 
 Surface:
@@ -544,7 +550,8 @@ Implementation-relevant layout facts:
 dense store:
   requests contiguous source.  If the value is assigned deinterleaved,
   assignment inserts ensure_layout at the store use.  A later optimization may
-  fold ensure_layout + store into a layout-aware store lowering.
+  fold ensure_layout + store into a layout-aware VMI store.  `vmi-to-vpto`
+  later lowers that explicit store contract.
 
 data/mask helper materialization:
   identity conversions are always legal.

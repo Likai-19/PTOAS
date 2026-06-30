@@ -41,8 +41,10 @@ module {
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
 // ASSIGN: %[[Y32:.*]] = pto.vmi.mulf %[[X32]], %[[SCALE]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
-// ASSIGN: %[[Y8:.*]] = pto.vmi.truncf %[[Y32]]
-// ASSIGN-SAME: -> !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[Y32_CONTIG:.*]] = pto.vmi.ensure_layout %[[Y32]]
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[Y8:.*]] = pto.vmi.truncf %[[Y32_CONTIG]]
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous, lane_stride = 4>>
 // ASSIGN: pto.vmi.store %[[Y8]]
 
 // LOWER-LABEL: func.func @vmi_layout_assignment_f8_compute_f8(
@@ -51,11 +53,11 @@ module {
 // LOWER-COUNT-4: pto.vdup
 // LOWER-COUNT-4: pto.vmul
 // LOWER: pto.vcvt {{.*}} {part = "P0", rnd = "R", sat = "SAT"}
-// LOWER: pto.vcvt {{.*}} {part = "P1", rnd = "R", sat = "SAT"}
-// LOWER: pto.vcvt {{.*}} {part = "P2", rnd = "R", sat = "SAT"}
-// LOWER: pto.vcvt {{.*}} {part = "P3", rnd = "R", sat = "SAT"}
-// LOWER-COUNT-3: pto.vor
-// LOWER: pto.vsts
+// LOWER-NOT: part = "P1"
+// LOWER-NOT: part = "P2"
+// LOWER-NOT: part = "P3"
+// LOWER-NOT: pto.vor
+// LOWER: pto.vsts {{.*}} {dist = "PK4_B32"}
 // LOWER-NOT: pto.vmi.
 // LOWER-NOT: !pto.vmi.
 // LOWER-NOT: unrealized_conversion_cast
