@@ -1990,8 +1990,10 @@ vmi.store source layout deinterleaved=2:
 Do not generalize this to `deinterleaved=4` unless the two-level dist composition is proven against the ISA. The
 fallback for `deinterleaved=4` remains generic layout materialization plus ordinary memory ops.
 
-Partial/tail load-style memory is legal only when the lowering can prove the full physical read footprint is safe. The
-current direct path supports this limited proof:
+Direct `vmi.load` is lowered as full VPTO physical reads when the source memory kind/layout is supported and the
+element type has a known physical lane width, even for non-full logical vectors. Masked/expand/gather read-style
+operations still require the lowering to prove that the full physical read footprint is safe, or to use a future
+true masked/non-faulting fallback. The current proof handles:
 
 ```text
 source is a statically shaped memref
@@ -1999,9 +2001,10 @@ offset is a constant non-negative index
 offset + physical_arity(result) * lanes_per_physical_part <= static memref element count
 ```
 
-When this proof holds, `vmi.load` may still issue full `pto.vlds` chunks. The extra padding lanes are
-not logical VMI lanes and must remain unobservable through later VMI materialization rules. Pointer sources, dynamic
-offsets, dynamic memrefs, and insufficient static footprints remain unsupported:
+When this proof holds, masked/expand read-style operations may still issue full `pto.vlds` chunks. The extra padding
+lanes are not logical VMI lanes and must remain unobservable through later VMI materialization rules. Pointer sources,
+dynamic offsets, dynamic memrefs, and insufficient static footprints remain unsupported for those stricter read-style
+operations:
 
 ```text
 VMI-UNSUPPORTED: pto.vmi.<load-op> requires full physical chunks without padding lanes or a statically safe full-read
@@ -3559,7 +3562,7 @@ Unsupported diagnostics:
   non-splat pto.vmi.constant:
     VMI-UNSUPPORTED: non-splat pto.vmi.constant requires a vreg immediate or scratch materialization plan
 
-  partial/tail pto.vmi.load:
+  unsupported partial/tail masked/expand read-style op:
     VMI-UNSUPPORTED: pto.vmi.<memory-op> requires full physical chunks without padding lanes or a statically safe
     full-read footprint (...; safe-read proof failed: ...)
   GM-backed direct pto.vmi.load/masked_load/expand_load:
@@ -3987,9 +3990,10 @@ Slice 4 完成条件：
 2. `f8 -> f32 -> add -> store` lowers with deinterleaved=4 and stores contiguous logical order.
    Covered by vmi_to_vpto_e2e_widen_add_store.pto.
 3. Non-full memory physical arity and valid lane map are tested.
-   Covered by vmi_to_vpto_load_nonfull_invalid.pto, vmi_to_vpto_store_deint_invalid.pto,
+   Covered by vmi_to_vpto_load_nonfull.pto, vmi_to_vpto_load_nonfull_memref.pto,
+   vmi_to_vpto_store_deint_invalid.pto,
    vmi_to_vpto_load_safe_tail_memref.pto,
-   vmi_to_vpto_load_safe_tail_memref_negative_offset_invalid.pto,
+   vmi_to_vpto_load_safe_tail_memref_negative_offset.pto,
    vmi_to_vpto_masked_load_safe_tail_memref.pto,
    vmi_to_vpto_masked_load_safe_tail_memref_negative_offset_invalid.pto,
    vmi_to_vpto_expand_load_all_active.pto,
@@ -4042,10 +4046,12 @@ Slice 4 完成条件：
 
 ## 7. Slice 5: Memory Padding
 
-The Slice 4 direct path may lower full-footprint `load/store` when the
-physical memory footprint is statically safe. Do not lower any partial,
-padded, or out-of-bounds read-like operation as a plain `pto.vlds` until a
-richer access plan proves it is safe.
+The Slice 4 direct path lowers `pto.vmi.load` through plain `pto.vlds` when the
+memory source itself is supported and the element type has a known physical lane
+width. This includes non-full logical vectors; the operation is treated as a
+direct full physical read of the selected VPTO chunk(s). Masked/expand/gather
+read-like operations still use the richer access plan because their masks or
+lane maps carry additional semantic constraints.
 
 Implement an internal `VMIMemoryAccessPlan`:
 
@@ -4084,15 +4090,14 @@ currently routed through the plan:
   stable gather masked-load option
     covered by vmi_to_vpto_stable_gather_masked_load_todo_invalid.pto
     currently emits a TODO diagnostic instead of lowering through VGATHER2
-  direct pto.vmi.load partial/tail safe full-read proof
+  direct pto.vmi.load source/layout capability check for full physical reads
   pto.vmi.masked_load partial/tail safe full-read proof
   pto.vmi.expand_load static all-active safe full-read proof
-  VMI-to-VPTO rewrite match guard for load full-or-safe reads
+  VMI-to-VPTO rewrite match guard for supported direct load sources
   pto.vmi.store direct write target decision with all-true writeMask kind
   pto.vmi.masked_store direct write target decision with explicit writeMask kind
-  unsafe partial/tail read fallback decision as RequiredUnavailable diagnostic
-    covered by vmi_to_vpto_load_nonfull_invalid.pto,
-    vmi_to_vpto_masked_load_nonfull_invalid.pto, and
+  unsafe masked/expand partial/tail read fallback decision as RequiredUnavailable diagnostic
+    covered by vmi_to_vpto_masked_load_nonfull_invalid.pto and
     vmi_to_vpto_expand_load_all_active_negative_offset_invalid.pto
 
 currently not implemented by the plan:
