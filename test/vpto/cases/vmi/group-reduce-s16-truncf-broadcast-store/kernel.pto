@@ -35,11 +35,11 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
       %x = pto.vmi.load %ub_src[%c0] : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
       %sum32 = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8, reassoc}
           : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
-          -> !pto.vmi.vreg<128xf32>
+          -> !pto.vmi.vreg<8xf32>
       %sum16 = pto.vmi.truncf %sum32
-          : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xf16>
       %rows = pto.vmi.group_broadcast %sum16 {num_groups = 8}
-          : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf16>
+          : !pto.vmi.vreg<8xf16> -> !pto.vmi.vreg<128xf16>
       pto.vmi.store %rows, %ub_dst[%c0] : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>
     }
 

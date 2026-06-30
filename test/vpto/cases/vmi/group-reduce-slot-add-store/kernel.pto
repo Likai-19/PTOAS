@@ -48,28 +48,28 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
       %mask16 = pto.vmi.create_mask %c128 : index -> !pto.vmi.mask<128xpred>
       %x16 = pto.vmi.load %ub_src16[%c0] : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
       %rhs16 = pto.vmi.group_slot_load %ub_rhs[%c0], %c1 {num_groups = 8}
-          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<8xf32>
       %sum16 = pto.vmi.group_reduce_addf %x16, %mask16 {num_groups = 8, reassoc}
           : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
-          -> !pto.vmi.vreg<128xf32>
+          -> !pto.vmi.vreg<8xf32>
       %out16 = pto.vmi.addf %sum16, %rhs16
-          : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
-          -> !pto.vmi.vreg<128xf32>
+          : !pto.vmi.vreg<8xf32>, !pto.vmi.vreg<8xf32>
+          -> !pto.vmi.vreg<8xf32>
       pto.vmi.group_store %out16, %ub_dst16[%c0], %c1 {num_groups = 8}
-          : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
+          : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
 
       %mask32 = pto.vmi.create_mask %c256 : index -> !pto.vmi.mask<256xpred>
       %x32 = pto.vmi.load %ub_src32[%c0] : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
       %rhs32 = pto.vmi.group_slot_load %ub_rhs[%c0], %c1 {num_groups = 8}
-          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<8xf32>
       %sum32 = pto.vmi.group_reduce_addf %x32, %mask32 {num_groups = 8, reassoc}
           : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred>
-          -> !pto.vmi.vreg<256xf32>
+          -> !pto.vmi.vreg<8xf32>
       %out32 = pto.vmi.addf %sum32, %rhs32
-          : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
-          -> !pto.vmi.vreg<256xf32>
+          : !pto.vmi.vreg<8xf32>, !pto.vmi.vreg<8xf32>
+          -> !pto.vmi.vreg<8xf32>
       pto.vmi.group_store %out32, %ub_dst32[%c0], %c1 {num_groups = 8}
-          : !pto.vmi.vreg<256xf32>, !pto.ptr<f32, ub>
+          : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
     }
 
     pto.set_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]

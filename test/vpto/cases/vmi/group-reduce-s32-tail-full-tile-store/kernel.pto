@@ -37,9 +37,9 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
           : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
       %sum = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8, reassoc}
           : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred>
-          -> !pto.vmi.vreg<256xf32>
+          -> !pto.vmi.vreg<8xf32>
       pto.vmi.group_store %sum, %ub_dst[%c0], %c1 {num_groups = 8}
-          : !pto.vmi.vreg<256xf32>, !pto.ptr<f32, ub>
+          : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
     }
 
     pto.set_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
