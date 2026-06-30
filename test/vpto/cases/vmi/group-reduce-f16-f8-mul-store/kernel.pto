@@ -47,13 +47,13 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
           : !pto.vmi.vreg<512xf16> -> !pto.vmi.vreg<512xf32>
       %sum = pto.vmi.group_reduce_addf %src_f16_f32, %mask {num_groups = 2, reassoc}
           : !pto.vmi.vreg<512xf32>, !pto.vmi.mask<512xpred>
-          -> !pto.vmi.vreg<512xf32>
+          -> !pto.vmi.vreg<2xf32>
       %src_f8 = pto.vmi.group_load %ub_f8[%c0], %c320 {num_groups = 2}
           : !pto.ptr<f8E4M3FN, ub> -> !pto.vmi.vreg<512xf8E4M3FN>
       %src_f8_f32 = pto.vmi.extf %src_f8
           : !pto.vmi.vreg<512xf8E4M3FN> -> !pto.vmi.vreg<512xf32>
       %sum_vec = pto.vmi.group_broadcast %sum {num_groups = 2}
-          : !pto.vmi.vreg<512xf32> -> !pto.vmi.vreg<512xf32>
+          : !pto.vmi.vreg<2xf32> -> !pto.vmi.vreg<512xf32>
       %out = pto.vmi.mulf %sum_vec, %src_f8_f32
           : !pto.vmi.vreg<512xf32>, !pto.vmi.vreg<512xf32> -> !pto.vmi.vreg<512xf32>
       pto.vmi.group_store %out, %ub_dst[%c0], %c320 {num_groups = 2}
