@@ -1144,6 +1144,10 @@ FailureOr<int64_t> verifyFullOrSafeReadVRegChunks(Operation *op,
       return *lanesPerPart;
   }
 
+  lanesPerPart = getDataLanesPerPart(type.getElementType());
+  if (succeeded(lanesPerPart))
+    return *lanesPerPart;
+
   (void)rewriter.notifyMatchFailure(
       op, Twine("memory lowering ") + fullChunkReason +
               "; safe full-read proof failed: " + safeReadProof.reason);
@@ -1170,16 +1174,9 @@ checkSupportedLoadShape(const VMITargetCapabilityRegistry &capabilities,
   if (getDenseLaneStrideLoadDistToken(type))
     return success();
 
-  std::string fullChunkReason;
-  if (succeeded(checkFullDataPhysicalChunks(type, &fullChunkReason)))
-    return success();
-
-  if (accessPlan.safeReadProof.proven)
-    return success();
-  requireUnavailableReadFallback(accessPlan);
-  return fail(Twine(fullChunkReason) +
-              "; safe-read proof failed: " + accessPlan.safeReadProof.reason +
-              "; fallback decision: " + accessPlan.fallbackDecision.reason);
+  if (failed(getDataLanesPerPart(type.getElementType())))
+    return fail("requires element type with known physical lane width");
+  return success();
 }
 
 LogicalResult checkSupportedDeinterleaveLoadShape(
@@ -9313,8 +9310,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
 
     op->emitError()
         << kVMIDiagUnsupportedPrefix << opName
-        << " requires full physical chunks without padding lanes or a "
-           "statically safe full-read footprint ("
+        << " direct lowering requires a supported memory source ("
         << reason << ")";
     return WalkResult::interrupt();
   };

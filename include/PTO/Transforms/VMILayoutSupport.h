@@ -36,6 +36,17 @@ struct VMIContiguousStoreSupport {
       VMIContiguousStoreSupportKind::ContiguousVsts;
 };
 
+enum class VMIContiguousLoadSupportKind {
+  ContiguousVlds,
+  LaneStride2UnpackedVlds,
+  LaneStride4UnpackedVlds,
+};
+
+struct VMIContiguousLoadSupport {
+  VMIContiguousLoadSupportKind kind =
+      VMIContiguousLoadSupportKind::ContiguousVlds;
+};
+
 enum class VMILayoutMaterializationSupportKind {
   Identity,
   ContiguousToDeinterleaved,
@@ -222,6 +233,10 @@ public:
   FailureOr<VMIContiguousStoreSupport>
   getContiguousStoreSupport(VMIVRegType valueType,
                             std::string *reason = nullptr) const;
+
+  FailureOr<VMIContiguousLoadSupport>
+  getContiguousLoadSupport(VMIVRegType resultType,
+                           std::string *reason = nullptr) const;
 
   LogicalResult
   canFoldContiguousStoreMaterialization(VMIVRegType sourceType,

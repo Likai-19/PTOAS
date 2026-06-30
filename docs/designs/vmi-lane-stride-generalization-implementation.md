@@ -42,18 +42,19 @@ Current stage status:
 | Dense layout attrs | Supported | Dense contiguous/deinterleaved layouts carry `lane_stride`; group-slot carrier layout remains separate. |
 | Direct compact load/store | Supported for selected phase-zero maps | LS=2 b8/b16/b32 through `UNPK_B8/B16/B32` and `PK_B16/B32/B64`; LS=4 b8 through `UNPK4` and `PK4_B32`. |
 | Load/store layout folds | Supported with one-load/one-store preservation | `load -> ensure_layout(lane_stride)` rewrites the original load layout when all uses agree; `ensure_layout(lane_stride -> contiguous) -> store` lets the VMI store consume the lane-stride value. |
-| Dense widening ext | Supported | Source lane_stride=W can lower to a single `vcvt` part when the cast relation matches. |
-| Dense narrowing trunc | Supported for ordinary dense store paths | Source contiguous, result lane_stride=W, then direct compact store when supported. |
+| Dense widening ext | Supported | `getPreferredCastLayoutFact` chooses the arity-reducing source `lane_stride=W` / result contiguous relation when it beats the natural deinterleaved result; otherwise it keeps the natural relation. |
+| Dense narrowing trunc | Supported for dense natural paths | `getPreferredCastLayoutFact` uses the same arity rule in the inverse direction, so trunc keeps the natural deinterleaved-source / contiguous-result relation unless a compact relation actually reduces arity. |
 | Masked compact store | Partially supported | Legal only when value and mask have the same lane map and the mask can be compacted for the selected store dist. |
 | Masked trunc tail | Not optimized yet | Keep the existing legal path until mask lane-stride assignment/materialization is available. |
 | Register fallback | Partially supported | Only same-physical-arity contiguous `<->` lane_stride paths with legal pack/unpack carriers.  Arity-changing fallback is not in scope for this stage. |
 | Group broadcast load | Supported only through specific strategies | `group_broadcast_load` remains a VMI semantic; E2B is one strategy with exact shape/layout constraints. |
 
 Remaining design/implementation work from this discussion is intentionally
-limited to two areas:
+limited to these areas:
 
 | Area | Work to settle | Required proof before enabling |
 |---|---|---|
+| Cast assignment | Keep `getPreferredCastLayoutFact` as the single op-local preferred relation helper, but make it shape-aware: compute the natural relation, compute the compact lane-stride relation, and select compact only when physical arity improves. | `64xf16 -> 64xf32` chooses source `lane_stride=2` and result contiguous; `128/256xf16 -> f32` keep natural `deinterleaved=2`; dense trunc keeps the natural relation unless compact arity wins. |
 | Masked store | Let `masked_store` request the same lane map for value and mask, or keep the existing legal path when the mask cannot be assigned/rematerialized into that lane map. | No path may lower a lane-stride value with a stale contiguous user mask; lowering must compact the assigned mask into the packed-store predicate. |
 | Group broadcast load | Keep `group_broadcast_load` as a VMI logical operation and make E2B only one support/lowering strategy selected by shape, element width, stride, and assigned result layout. | A failed E2B match must mean "this lowering strategy is unavailable", not "the VMI op is invalid" unless no fallback strategy is registered. |
 
@@ -204,55 +205,26 @@ and mask, assignment must keep masked-tail narrowing on an existing legal path
 instead of choosing a lane-stride trunc result solely because the store could
 otherwise use `PK`.
 
-Concrete implementation plan for lane-stride `masked_store`:
+Current-stage implementation:
 
 ```text
 lib/PTO/Transforms/VMILayoutAssignment.cpp
 
-1. Replace the current VMIMaskedStoreOp consumer request:
-     requestDataUse(value, contiguous)
-     requestMaskUse(mask, contiguous, elementGranularity)
+VMIMaskedStoreOp keeps the existing conservative request:
+  requestDataUse(value, contiguous)
+  requestMaskUse(mask, contiguous, elementGranularity)
 
-   with a helper:
-     getPreferredMaskedStoreUseRequest(store)
-       -> optional {valueLayout, maskLayout, maskGranularity}
-
-2. The helper must be support-query driven:
-     candidateValueLayout = getPreferredDenseStoreUseLayout(store.value)
-     if candidateValueLayout is not dense lane_stride:
-       return none
-
-     sourceValueType = value type with candidateValueLayout
-     resultValueType = value type with contiguous layout
-     sourceMaskType  = mask type with:
-       elementCount = value lanes
-       granularity  = getMaskGranularityForElement(value element type)
-       layout       = candidateValueLayout
-     resultMaskType = same mask granularity with contiguous layout
-
-     require:
-       canFoldContiguousMaskedStoreMaterialization(
-           sourceValueType, sourceMaskType,
-           resultValueType, resultMaskType)
-
-     return {candidateValueLayout, candidateValueLayout, maskGranularity}
-
-3. The store request becomes:
-     if helper returns a request:
-       requestDataUse(store.value, request.valueLayout)
-       requestMaskUse(store.mask, request.maskLayout, request.maskGranularity)
-     else:
-       requestDataUse(store.value, contiguous)
-       requestMaskUse(store.mask, contiguous, elementGranularity)
-
-4. Replace the coarse hasMaskedStoreUse(trunc.result) guard with a support
-   predicate.  A trunc result should stay on the conservative path only when a
-   masked_store use cannot request the same lane_stride value/mask layout.
-   Do not make trunc inspect mask producers directly; masked_store remains the
-   consumer that owns the joint value/mask request.
+trunc assignment does not inspect masked_store users and does not preserve a
+special masked-store guard.  It records the source/result relation returned by
+getPreferredCastLayoutFact.  If that conflicts with a masked_store contiguous
+request, normal assignment conflict handling inserts the required
+ensure_layout.
 ```
 
-The intended dataflow after assignment is:
+Future lane-stride `masked_store` support must be added as an explicit
+consumer-owned extension, not as a trunc special case.  The future dataflow must
+prove that value and mask share the same lane map before a packed masked store
+is legal:
 
 ```text
 %n = vmi.trunc* %wide
@@ -264,18 +236,8 @@ The intended dataflow after assignment is:
 vmi.masked_store %n, %dst[%off], %m_ls
 ```
 
-or, if the mask producer can already produce the requested lane map:
-
-```text
-%m_ls = mask producer result
-     : !vmi.mask<..., layout = contiguous, lane_stride = W>
-
-vmi.masked_store %n, %dst[%off], %m_ls
-```
-
-The assignment pass does not emit VPTO predicate compaction.  It only creates
-the local VMI proof that value and mask have the same lane map.  Existing later
-stages then do the mechanical work:
+That future extension would need the same local VMI proof before lowering can do
+the mechanical predicate compaction:
 
 ```text
 vmi-layout-fold:
@@ -289,25 +251,9 @@ vmi-to-vpto:
   emits vsts PK_B16/PK_B32/PK4_B32 as selected by value element width/layout
 ```
 
-Required masked-store tests:
+Future negative tests should cover the fallback:
 
 ```text
-assignment positive:
-  truncf/trunci -> masked_store where value LS=2 b16 or LS=4 b8 is supported
-  CHECK value result layout is lane_stride
-  CHECK mask use is requested as the same lane_stride, with ensure_mask_layout
-  when the original mask is contiguous
-
-fold positive:
-  ensure_layout(value lane_stride -> contiguous) and
-  ensure_mask_layout(mask lane_stride -> contiguous) feeding masked_store
-  CHECK masked_store consumes the lane_stride value/mask directly
-
-lowering positive:
-  lane_stride value + same-lane-map mask feeding masked_store
-  CHECK mask compaction uses punpack
-  CHECK store dist is PK_B32 for b16 LS=2 and PK4_B32 for b8 LS=4
-
 fallback:
   mask cannot be assigned/materialized to the candidate lane_stride
   CHECK masked_store keeps contiguous value/mask request
@@ -439,8 +385,12 @@ pto-validate-vmi-ir:
 vmi-layout-assignment:
   assign explicit dense layouts, including lane_stride, on VMI value types
   use op support queries to choose local cast relations:
-    widening can request source lane_stride=W and result contiguous
-    narrowing can request source contiguous and result lane_stride=W
+    widening compares natural deinterleaved result arity with compact
+      contiguous result arity; when compact wins, request source lane_stride=W
+      and set result contiguous
+    narrowing supports the inverse relation; when arity or a supported consumer
+      request chooses a strided result, request source contiguous and set result
+      lane_stride=W
   keep unsupported or conflicting uses legal by inserting ensure_layout
   serialize all decisions as type attrs or helper ops
   do not clone producers, fold memory ops, or solve a global cost problem
@@ -554,10 +504,11 @@ lib/PTO/Transforms/VMILayoutSupport.cpp
     LaneStrideToContiguousViaPack
     LaneStrideToLaneStrideViaContiguous, only if needed
   update getPreferredCastLayoutFact:
-    baseline facts remain contiguous <-> deinterleaved
-    add optional preferred dense lane-stride fact from the conversion ratio W
-    and the target single-part cast support; do not inspect source producers
-    here
+    keep an internal baseline natural relation for dense widening/narrowing
+    compute the compact lane-stride relation from the same conversion ratio
+    select compact only when source/result physical arities match and the
+    relevant arity is strictly smaller than the baseline relation
+    use the returned source/result layouts for both ext and trunc assignment
   update getWidenSourceLayoutForResultLayout for dense lane_stride result/source
   update getContiguousStoreSupport and canFoldContiguousStoreMaterialization for
     LS=2 b8/b16/b32 -> PK_B16/B32/B64
@@ -574,8 +525,8 @@ lib/PTO/Transforms/VMILayoutAssignment.cpp
 lib/PTO/Transforms/VMILayoutRematerialize.cpp
   allow cheap producers to be cloned with dense lane_stride result types when
   VMILayoutSupport says the producer can directly create that lane map
-  keep ordinary load/group_load/masked_load blocked until a safe-read proof is
-  added for the specific direct UNPK lowering
+  keep ordinary load/group_load/masked_load cloning blocked until a safe-read
+  proof is added for the specific rematerialized memory operation
 
 lib/PTO/Transforms/VMILayoutFold.cpp
   add producer-side fold for load -> ensure_layout:
@@ -692,7 +643,8 @@ or lower the resulting explicit IR, but should not solve the same rewrite again.
 | Direct load produces requested lane map | `load(contiguous) -> ensure_layout(lane_stride=2)` | `vmi-layout-fold` rewrites the original load result layout when UNPK support exists | Remat must not clone this load without safe-read proof |
 | Direct store consumes lane map | `ensure_layout(lane_stride -> contiguous) -> store` | `vmi-layout-fold` rewrites the VMI store to consume the lane_stride source directly when direct compact-store support exists | `vmi-to-vpto` emits the actual `vsts PK/PK4` |
 | Cheap producer can produce target layout | `broadcast -> ensure_layout(lane_stride=2)` | `vmi-layout-rematerialize` rebuilds broadcast with lane-stride result | Fold does not rebuild arbitrary producers |
-| Widening ext can move materialization to cheap source | `ext -> ensure_layout(contiguous)` with source broadcast/load-fold case | `vmi-layout-rematerialize` rebuilds ext with required source lane stride | Assignment only creates the helper; fold only handles the load subcase |
+| Cast chooses arity-reducing relation | `64xf16 -> 64xf32` or a supported narrowing with smaller strided result | `vmi-layout-assignment` chooses the cast source/result layout relation | Remat only handles later use-site requests; fold only handles adjacent load/store helpers |
+| Cast can move materialization to cheap source | `ext/trunc -> ensure_layout(requested layout)` with source broadcast/load-fold case | `vmi-layout-rematerialize` rebuilds the cast with the requested relation | Assignment may already choose the self-preferred relation; fold only handles the load/store subcase |
 | Layout-transparent op has ensured operands | `ensure(a), ensure(b) -> add` | `vmi-layout-sink-materialization` sinks matching helpers to the result | Remat handles the opposite shape `add -> ensure` |
 | Surviving supported helper | `ensure_layout(contiguous <-> lane_stride)` after optimizations | `vmi-to-vpto` lowers to register pack/unpack | Earlier passes are allowed to leave it explicit |
 | Unsupported helper or layout | `lane_stride=4 b16 compact store` | `pto-validate-vmi-layout-ir` rejects before lowering | `vmi-to-vpto` should not invent a repair |
@@ -959,13 +911,18 @@ elementwise:
   all dense operands/results must use identical dense layout key
 
 extf/extui/extsi:
-  source/result layouts must satisfy a widening relation
+  source/result layouts must satisfy a widening relation.  Assignment chooses
+  between the natural deinterleaved relation and the compact-result
+  lane-stride-source relation by comparing physical arity, not by matching a
+  concrete lane count such as 64.
 
 truncf/trunci:
-  dense narrowing may request source contiguous and result lane_stride=W, where
-  W is the storage-width narrowing factor; masked-store consumers stay on the
-  existing legal deinterleaved-to-contiguous path until mask lane-stride
-  assignment/materialization is available
+  source/result layouts must satisfy a narrowing relation.  Assignment uses the
+  inverse relation conservatively: keep the natural deinterleaved-source to
+  contiguous-result relation unless arity or a supported consumer request
+  selects a strided result relation.  Masked-store consumers may only use the
+  strided result relation when the value and mask can be assigned/materialized
+  to the same lane map.
 
 broadcast/group_broadcast:
   result may use a dense layout only when the materialization lowering has an
@@ -984,15 +941,69 @@ store:
 Assignment should still insert `ensure_layout` for incompatible use-local
 requests. Rematerialization/fold can later remove it.
 
-### 4.1 Current Framework Fit
+### 4.1 Cast Relation Helper Shape
+
+Keep `getPreferredCastLayoutFact` as the assignment entry point for dense
+widening and narrowing casts, but make the helper return the actual preferred
+source/result relation for the current shape.  Internally it first builds the
+natural relation:
+
+```text
+widen:
+  source contiguous
+  result deinterleaved=W
+
+narrow:
+  source deinterleaved=W
+  result contiguous
+```
+
+Then it computes the compact relation:
+
+```text
+widen:
+  source contiguous, lane_stride=W
+  result contiguous
+
+narrow:
+  source contiguous
+  result contiguous, lane_stride=W
+```
+
+The compact relation is selected only when its source/result physical arities
+match and it strictly reduces the relevant baseline arity:
+
+```text
+widen:
+  physical_arity(compact result) < physical_arity(natural result)
+
+narrow:
+  physical_arity(compact source) < physical_arity(natural source)
+```
+
+If the compact relation does not win, the helper returns the natural relation.
+`vmi-layout-assignment` calls this helper for `extf/extui/extsi` and
+`truncf/trunci`, requests the returned source layout, and records the returned
+result layout.
+
+The support query must validate the returned pair before assignment commits it:
+
+```text
+supportsExtRelation(sourceTypeWithLayout, resultTypeWithLayout)
+supportsTruncRelation(sourceTypeWithLayout, resultTypeWithLayout)
+```
+
+The validation step is a legality check, not a second optimizer.
+
+### 4.2 Current Framework Fit
 
 The existing assignment pass already has use-site requests. For example,
 `pto.vmi.store` requests a contiguous source operand, and assignment can insert
 `ensure_layout` when the stored value is assigned another layout.
 
 The dense-stride `ext` optimization should keep the same model: the cast op is
-the layout-entry point and stores one preferred source/result relation.  The
-current preferred relation is:
+the layout-entry point and stores one preferred source/result relation.  The old
+preferred relation was:
 
 ```text
 extf:
@@ -1000,8 +1011,8 @@ extf:
   set result deinterleaved=W
 ```
 
-The current stage keeps the existing single-preference framework
-and let `ext` choose one fact for the current op:
+The current stage keeps the existing single-preference framework and lets
+`ext` choose one fact for the current op:
 
 ```text
 baseline fact:
@@ -1018,14 +1029,19 @@ The `ext` support query chooses between these facts from op-local information:
 ```text
 conversion ratio W
 target support for one selected hardware conversion part
-requested or preferred result layout for the current op instance
+physical arity of the natural result layout
+physical arity of the compact contiguous result layout
+requested result layout when a consumer materialization/remat path provides one
 ```
 
-It does not inspect the defining source producer.  If it selects the
-lane-stride fact and the source is not already in that layout, assignment inserts
-an explicit source `ensure_layout`.  Later passes either discharge that helper by
-rematerializing/folding a concrete producer, lower it with a registered
-pack/unpack materializer, or let validation reject the unsupported relation.
+It does not inspect the defining source producer.  If compact result arity is
+strictly smaller than natural result arity and the target supports the
+single-part relation, it selects the lane-stride fact.  If it selects the
+lane-stride fact and the source is not already in that layout, assignment
+inserts an explicit source `ensure_layout`.  Later passes either discharge that
+helper by rematerializing/folding a concrete producer, lower it with a
+registered pack/unpack materializer, or let validation reject the unsupported
+relation.
 
 ## 5. Widening Conversion Lowering
 
@@ -1078,19 +1094,31 @@ chooses one immediately:
 baseline fact:
   source contiguous
   result deinterleaved=W
-  lowering cost = W conversion parts
+  natural result arity = physical_arity(result deinterleaved=W)
 
 lane-stride fact:
   result contiguous
   source same dense shape with lane_stride = W
-  lowering cost = one conversion part
+  compact result arity = physical_arity(result contiguous)
 ```
 
-For example, for `f16 -> f32`, the `extf` op can prefer
-`source lane_stride=2 -> result contiguous` when the target has a single EVEN
-conversion for that relation.  The source producer is handled by the explicit
-source `ensure_layout` and later fold/rematerialization; it is not part of the
-cast support query.
+Assignment uses this deterministic rule:
+
+```text
+if compact result arity < natural result arity
+   and the lane-stride fact is supported:
+  choose lane-stride fact
+else:
+  choose baseline fact
+```
+
+For example, for `f16 -> f32`, the `extf` op chooses
+`source lane_stride=2 -> result contiguous` for `64xf32`, because the compact
+result has one physical chunk while the natural `deinterleaved=2` result has two
+physical chunks.  For `128xf32` and `256xf32`, both layouts have the same result
+arity, so assignment chooses the natural `deinterleaved=2` result.  The source
+producer is handled by the explicit source `ensure_layout` and later
+fold/rematerialization; it is not part of the cast support query.
 
 Current contiguous widening remains a separate legal relation:
 
@@ -1102,9 +1130,9 @@ result deinterleaved=W, lane_stride=1
 Implementation steps:
 
 1. Factor conversion ratio calculation by storage bit width.
-2. Add helper that computes baseline conversion count.
-3. Add helper that computes lane-stride conversion count and required source
-   layout.
+2. Add helper that computes the natural result layout and its physical arity.
+3. Add helper that computes the compact result layout, required source
+   lane-stride layout, and compact result physical arity.
 4. Teach `VMIToVPTO` conversion lowering to emit only the selected hardware
    part when the relation is single-part.
 5. Keep existing multi-part lowering for contiguous-to-deinterleaved cases.
@@ -1139,13 +1167,54 @@ result lane_stride = source lane_stride * W
 hardwarePart = 0 for the current stage
 ```
 
+The narrowing assignment relation is the inverse of widening, but it must not
+blindly choose a lane-stride result.  Build two facts:
+
+```text
+baseline fact:
+  source deinterleaved=W
+  result contiguous
+  natural result arity = physical_arity(result contiguous)
+
+lane-stride fact:
+  source contiguous
+  result contiguous, lane_stride=W
+  strided result arity = physical_arity(result lane_stride=W)
+```
+
+Then choose a strided result only when it is justified:
+
+```text
+if strided result arity < natural result arity
+   and the lane-stride fact is supported:
+  choose lane-stride fact
+else if a consumer/requested result layout is the strided result
+        and the lane-stride fact is supported:
+  choose or rematerialize lane-stride fact
+else:
+  choose baseline fact
+```
+
+This keeps trunc symmetric with ext while avoiding the earlier mistake of
+producing lane_stride solely because the operation is a narrowing cast.  A
+consumer may still request or preserve a strided result.  For example, an
+ordinary store with direct `PK` support can consume a supported lane-stride
+result, and rematerialization/fold may keep that relation.  A masked store may
+do so only when the mask can be assigned/materialized to the same lane map.
+
 Implementation steps:
 
-1. Share ratio and lane-map helpers with widening.
-2. Add support query for valid narrowing layout pairs.
-3. Lower single-part narrowing directly when the target has a part-selecting
+1. Share ratio, dense-factor, lane-map, and physical-arity helpers with
+   widening.
+2. Add helper that computes the natural source/result relation and result
+   arity.
+3. Add helper that computes the strided-result relation and result arity.
+4. Add support query for valid narrowing layout pairs.
+5. Teach assignment/rematerialization to select the strided fact for explicit
+   result requests, direct compact-store consumers, or true arity reductions.
+6. Lower single-part narrowing directly when the target has a part-selecting
    narrow instruction.
-4. Preserve existing deinterleaved-to-contiguous narrowing for the packed full
+7. Preserve existing deinterleaved-to-contiguous narrowing for the packed full
    result case.
 
 This is the same family as the recently discussed `d4 -> c -> d2 -> vcvt -> c`
@@ -1201,8 +1270,8 @@ mask:
   VMIConstantMaskOp
 
 special rewrite:
-  selected VMITruncIOp through a source ensure_layout when the cast relation is
-  a supported narrowing relation
+  selected VMITruncFOp / VMITruncIOp through source/result ensure_layout when
+  the cast relation is a supported narrowing relation
 ```
 
 Not included as cheap producers in the current pass:
@@ -1222,7 +1291,9 @@ Relationship between cheap producers and dense `lane_stride`:
 ```text
 assignment:
   creates the target layout request explicitly, usually as ensure_layout(... ->
-  lane_stride) or as a cast source/result relation
+  lane_stride) or as a cast source/result relation.  For casts, assignment may
+  itself choose the arity-reducing lane-stride relation; remat only reacts to
+  later use-site layout requests.
 
 rematerialize:
   does not choose lane_stride as a preference
@@ -1254,9 +1325,19 @@ widening ext:
   remat then inserts/uses source ensure_layout and rebuilds ext with the
   requested result layout
 
-trunci special rewrite:
+narrowing trunc:
+  add getNarrowSourceLayoutForResultLayout or an equivalent relation helper.
+  For a requested result lane_stride=R and narrowing ratio W, derive the source
+  layout that can produce that result with a selected hardware part:
+    result lane_stride=W, W=2 -> source contiguous
+    result lane_stride=R, W=2 -> source lane_stride=R/W when divisible
+  remat then inserts/uses source ensure_layout and rebuilds trunc with the
+  requested result layout
+
+trunc source-ensure rewrite:
   extend the existing source-ensure rewrite to recognize lane_stride narrowing
-  relations, not only deinterleaved narrowing relations
+  relations for VMITruncFOp and VMITruncIOp, not only deinterleaved narrowing
+  relations
 
 mask producers:
   only participate after mask layout support defines the corresponding
@@ -1283,15 +1364,16 @@ ext as the single selected conversion part.  It is still driven by the explicit
 layout request; remat does not inspect sibling consumers or choose lane_stride by
 itself.
 
-Do lane-stride ext rematerialization only in these cases:
+Do lane-stride cast rematerialization only in these cases:
 
 ```text
 required shape:
-  ext result is followed by ensure_layout to a requested dense result layout
-  widening ratio W > 1
-  the requested result lane_stride is R, where contiguous means R=1
-  source lane_stride = R * W is supported
-  ext with that source layout can lower as one selected conversion part
+  cast result is followed by ensure_layout to a requested dense result layout
+  widening or narrowing ratio W > 1
+  the requested source/result layout pair is accepted by the cast relation
+  helper
+  the cast with that source/result layout can lower as one selected conversion
+  part or the existing multi-part relation
 
 acceptance/safety gate:
   the source-side lane_stride request must be discharged by a concrete local
@@ -1306,8 +1388,8 @@ acceptance/safety gate:
     concrete producer cases is reached
 
 do not apply:
-  result consumer already accepts the natural ext layout
-  source lane_stride = R * W is unsupported
+  result consumer already accepts the natural cast layout
+  requested cast layout relation is unsupported
   source is an ordinary load with other incompatible consumers and no safe-read
   proof to clone it
   the rewrite only moves an expensive materialization from result side to source
@@ -1331,6 +1413,15 @@ load -> ensure_layout(lane_stride=W) -> ext -> store
 elementwise cheap chain -> ext -> ensure_layout(contiguous)
   remat/sink the chain to lane_stride=W only when the chain reaches a concrete
   cheap producer or direct load-fold case
+
+trunc -> ensure_layout(lane_stride=W) -> compact store
+  remat/rebuild trunc with the requested lane_stride result when the source
+  layout relation is supported
+  store fold may then consume the lane_stride result directly
+
+trunc -> ensure_layout(lane_stride=W) -> masked_store
+  only accepted after mask layout assignment can provide the same lane map for
+  the predicate; otherwise keep the conservative contiguous masked-store path
 ```
 
 ## 8. Broadcast And E2B Interaction
@@ -1522,6 +1613,10 @@ bf16 lane_stride=2 -> f32 contiguous follows the same relation
 ui8 lane_stride=2 -> ui16 contiguous follows W=2
 ui8 lane_stride=4 -> ui32 contiguous follows W=4 when target supports it
 contiguous f16 -> deinterleaved=2 f32 still emits EVEN + ODD
+f32 contiguous -> f16 lane_stride=2 emits the selected narrowing part when the
+assigned relation is supported
+f32 deinterleaved=2 -> f16 contiguous keeps the existing packed full-result
+narrowing relation
 ui16 lane_stride=2 -> contiguous can materialize with vpack 32->16 carrier path
 ui8 lane_stride=4 -> contiguous can materialize with two vpack stages
 ```
@@ -1529,8 +1624,14 @@ ui8 lane_stride=4 -> contiguous can materialize with two vpack stages
 Assignment/rematerialization:
 
 ```text
-extf records a strided dense source relation for a supported single-part
-widening conversion
+extf records a strided dense source relation when compact result arity is
+smaller than natural result arity
+extf 64xf16 -> 64xf32 chooses source lane_stride=2, result contiguous
+extf 128xf16 -> 128xf32 chooses result deinterleaved=2
+extf 256xf16 -> 256xf32 chooses result deinterleaved=2
+truncf records a strided result relation only when the conservative
+self-preference/support rule or a supported consumer request selects it; it
+does not choose lane_stride solely because the op narrows
 layout-transparent op propagates the same strided layout through operands/result
 ensure_layout is folded when source and target lane maps match
 rematerialization clones a cheap broadcast for two different dense layouts
@@ -1562,8 +1663,12 @@ Negative tests:
 
 ```text
 assigned ext layout pair where LS % W != 0 and no multi-part relation exists
+assigned trunc layout pair where result lane_stride is not compatible with the
+narrowing ratio
 ordinary dense op with mismatched lane_stride operands
 store consuming strided dense layout without a supported store/materialization
+masked_store consuming lane_stride value with a stale contiguous user mask is
+rejected or kept on the conservative contiguous path
 ```
 
 ## 10. Suggested Patch Order
@@ -1572,8 +1677,10 @@ store consuming strided dense layout without a supported store/materialization
 2. Split dense lane-map physicalization from group-slot carrier packing.
 3. Update physical arity/unpack helpers for dense lane stride.
 4. Extend support queries and assignment layout keys.
-5. Implement widening single-part relation and tests.
-6. Implement narrowing relation and tests.
+5. Implement widening arity-driven self-preference, single-part relation, and
+   tests.
+6. Implement narrowing inverse relation support, consumer-request handling, and
+   tests.
 7. Teach rematerialization/fold about exact dense lane-map equality.
 8. Add broadcast/E2B recognition improvements that consume assigned lane maps.
 

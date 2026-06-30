@@ -71,6 +71,16 @@ static bool hasX2MemoryDistToken(Type elementType) {
   return elementBits == 8 || elementBits == 16 || elementBits == 32;
 }
 
+static bool hasDenseLaneStride2UnpackedLoad(Type elementType) {
+  unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
+  return elementBits == 8 || elementBits == 16 || elementBits == 32;
+}
+
+static bool hasDenseLaneStride4UnpackedLoad(Type elementType) {
+  unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
+  return elementBits == 8;
+}
+
 static bool hasDenseLaneStride2PackedStore(Type elementType) {
   unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
   return elementBits == 8 || elementBits == 16 || elementBits == 32;
@@ -479,8 +489,9 @@ VMILayoutSupport::getPreferredGroupReduceLayoutFact(VMIVRegType sourceType,
               "2*VLaneElems, 4*VLaneElems, or full physical chunk multiples");
 }
 
-FailureOr<VMICastLayoutFact> VMILayoutSupport::getPreferredCastLayoutFact(
-    VMIVRegType sourceType, VMIVRegType resultType, std::string *reason) const {
+static FailureOr<VMICastLayoutFact>
+getBaselineCastLayoutFact(VMIVRegType sourceType, VMIVRegType resultType,
+                          std::string *reason) {
   auto fail = [&](const Twine &message) -> FailureOr<VMICastLayoutFact> {
     if (reason)
       *reason = message.str();
@@ -544,6 +555,69 @@ FailureOr<VMICastLayoutFact> VMILayoutSupport::getPreferredCastLayoutFact(
               "narrowing dense cast layout facts");
 }
 
+FailureOr<VMICastLayoutFact> VMILayoutSupport::getPreferredCastLayoutFact(
+    VMIVRegType sourceType, VMIVRegType resultType, std::string *reason) const {
+  FailureOr<VMICastLayoutFact> baseline =
+      getBaselineCastLayoutFact(sourceType, resultType, reason);
+  if (failed(baseline))
+    return baseline;
+
+  bool isWiden = baseline->kind == VMICastLayoutKind::Widen2x ||
+                 baseline->kind == VMICastLayoutKind::Widen4x;
+  bool isNarrow = baseline->kind == VMICastLayoutKind::Narrow2x ||
+                  baseline->kind == VMICastLayoutKind::Narrow4x;
+  if (!isWiden && !isNarrow)
+    return baseline;
+
+  MLIRContext *ctx = sourceType.getContext();
+  VMILayoutAttr compactSourceLayout = isWiden
+                                          ? VMILayoutAttr::getContiguous(
+                                                ctx, baseline->factor)
+                                          : VMILayoutAttr::getContiguous(ctx);
+  VMILayoutAttr compactResultLayout = isWiden
+                                          ? VMILayoutAttr::getContiguous(ctx)
+                                          : VMILayoutAttr::getContiguous(
+                                                ctx, baseline->factor);
+  VMIVRegType compactSourceType =
+      VMIVRegType::get(ctx, sourceType.getElementCount(),
+                       sourceType.getElementType(), compactSourceLayout);
+  VMIVRegType compactResultType =
+      VMIVRegType::get(ctx, resultType.getElementCount(),
+                       resultType.getElementType(), compactResultLayout);
+  FailureOr<int64_t> compactSourceArity =
+      getVMIPhysicalArity(compactSourceType);
+  FailureOr<int64_t> compactResultArity =
+      getVMIPhysicalArity(compactResultType);
+  if (failed(compactSourceArity) || failed(compactResultArity) ||
+      *compactSourceArity != *compactResultArity)
+    return baseline;
+
+  if (isWiden) {
+    VMIVRegType baselineResultType =
+        VMIVRegType::get(ctx, resultType.getElementCount(),
+                         resultType.getElementType(), baseline->resultLayout);
+    FailureOr<int64_t> baselineResultArity =
+        getVMIPhysicalArity(baselineResultType);
+    if (failed(baselineResultArity) ||
+        *compactResultArity >= *baselineResultArity)
+      return baseline;
+  } else {
+    VMIVRegType baselineSourceType =
+        VMIVRegType::get(ctx, sourceType.getElementCount(),
+                         sourceType.getElementType(), baseline->sourceLayout);
+    FailureOr<int64_t> baselineSourceArity =
+        getVMIPhysicalArity(baselineSourceType);
+    if (failed(baselineSourceArity) ||
+        *compactSourceArity >= *baselineSourceArity)
+      return baseline;
+  }
+
+  VMICastLayoutFact compact = *baseline;
+  compact.sourceLayout = compactSourceLayout;
+  compact.resultLayout = compactResultLayout;
+  return compact;
+}
+
 FailureOr<VMILayoutAttr>
 VMILayoutSupport::getWidenSourceLayoutForResultLayout(
     VMIVRegType sourceType, VMIVRegType resultType,
@@ -591,6 +665,40 @@ VMILayoutSupport::getWidenSourceLayoutForResultLayout(
     return VMILayoutAttr::getDeinterleaved(sourceType.getContext(),
                                           sourceFactor, /*blockElems=*/1);
   return fail("derived source layout factor is unsupported");
+}
+
+FailureOr<VMIContiguousLoadSupport>
+VMILayoutSupport::getContiguousLoadSupport(VMIVRegType resultType,
+                                           std::string *reason) const {
+  auto fail = [&](const Twine &message) -> FailureOr<VMIContiguousLoadSupport> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  VMILayoutAttr layout = resultType.getLayoutAttr();
+  if (!layout)
+    return fail("requires assigned result layout");
+  if (!layout.isContiguous())
+    return fail("requires contiguous result layout");
+  if (layout.getLaneStride() == 1)
+    return VMIContiguousLoadSupport{
+        VMIContiguousLoadSupportKind::ContiguousVlds};
+  if (layout.getLaneStride() == 2) {
+    if (!hasDenseLaneStride2UnpackedLoad(resultType.getElementType()))
+      return fail("requires 8/16/32-bit element type for dense lane_stride=2 "
+                  "unpacked load");
+    return VMIContiguousLoadSupport{
+        VMIContiguousLoadSupportKind::LaneStride2UnpackedVlds};
+  }
+  if (layout.getLaneStride() == 4) {
+    if (!hasDenseLaneStride4UnpackedLoad(resultType.getElementType()))
+      return fail("requires 8-bit element type for dense lane_stride=4 "
+                  "unpacked load");
+    return VMIContiguousLoadSupport{
+        VMIContiguousLoadSupportKind::LaneStride4UnpackedVlds};
+  }
+  return fail("requires lane_stride 1, 2, or 4 for contiguous load");
 }
 
 FailureOr<VMIContiguousStoreSupport>

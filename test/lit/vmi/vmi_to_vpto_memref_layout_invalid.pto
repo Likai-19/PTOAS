@@ -19,7 +19,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.load requires full physical chunks without padding lanes or a statically safe full-read footprint
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.load direct lowering requires a supported memory source
 // CHECK-SAME: source memref layout is non-identity
 // CHECK-SAME: contiguous identity lane-to-address maps
 
@@ -37,7 +37,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.load requires full physical chunks without padding lanes or a statically safe full-read footprint
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.load direct lowering requires a supported memory source
 // CHECK-SAME: source memref layout is non-identity
 // CHECK-SAME: contiguous identity lane-to-address maps
 // CHECK-SAME: memref.subview requires normalized base/offset/stride lane-to-address planning
