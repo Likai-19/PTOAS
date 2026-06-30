@@ -1,6 +1,6 @@
 ---
 name: pto-gym-vpto-validation
-description: Run PTO-Gym validation from this PTOAS repo. Use when the user asks to run PTO-Gym SIM or board validation from the current source tree. Always force PTOAS onto the VPTO LLVM path instead of relying on the repo default backend.
+description: Run bundled PTO-Gym exercise/validation cases. Use when the user explicitly asks for PTO-Gym, 3rdparty/PTO-Gym, or the PTO-Gym validation scripts. Always force PTOAS onto the VPTO path instead of relying on the repo default backend.
 ---
 
 # PTO-Gym VPTO Validation
@@ -8,20 +8,20 @@ description: Run PTO-Gym validation from this PTOAS repo. Use when the user asks
 Use this skill when the task is specifically about:
 - running `3rdparty/PTO-Gym/examples/pto/scripts/run_host_vpto_validation.sh`
 - running `3rdparty/PTO-Gym/examples/pto/scripts/run_host_vpto_validation_parallel.sh`
-- validating PTO-Gym cases from this PTOAS source tree
+- validating bundled PTO-Gym exercise cases
 
 ## Required Rule
 
 When PTO-Gym is run from this repo, do not rely on the default PTOAS backend.
 
 Always pass PTOAS flags that force the VPTO LLVM path.
-The current `ptoas` CLI spellings in this repo are `--pto-backend=vpto` and
-`--vpto-emit-hivm-llvm`; do not shorten `--pto-backend` to `--backend`.
+The current `ptoas` CLI spelling in this repo is `--pto-backend=vpto`; do not
+shorten `--pto-backend` to `--backend`.
 
 Use:
 
 ```bash
-PTOAS_FLAGS='--pto-backend=vpto --vpto-emit-hivm-llvm --pto-arch a5'
+PTOAS_FLAGS='--pto-backend=vpto --pto-arch a5'
 ```
 
 If the caller already provides `PTOAS_FLAGS`, make sure these options are still
@@ -44,7 +44,7 @@ Typical simulator environment:
 source /home/mouliangyu/.local/ascend/beta.2/cann-9.0.0-beta.2/set_env.sh
 export ASCEND_HOME_PATH=/home/mouliangyu/.local/ascend/beta.2/cann-9.0.0-beta.2
 export PTOAS_BIN=$PWD/build/tools/ptoas/ptoas
-export PTOAS_FLAGS='--pto-backend=vpto --vpto-emit-hivm-llvm --pto-arch a5'
+export PTOAS_FLAGS='--pto-backend=vpto --pto-arch a5'
 ```
 
 ## Canonical Commands
