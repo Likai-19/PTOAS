@@ -27,4 +27,4 @@ module {
   }
 }
 
-// CHECK: VMI-LAYOUT-CONTRACT: conflicting natural layouts #pto.vmi.layout<deinterleaved = 2> and #pto.vmi.layout<contiguous>
+// CHECK: VMI-LAYOUT-CONTRACT: conflicting natural layouts #pto.vmi.layout<deinterleaved = 2> and #pto.vmi.layout<deinterleaved = 4>
