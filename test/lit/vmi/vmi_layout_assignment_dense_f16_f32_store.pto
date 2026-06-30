@@ -23,6 +23,19 @@ module {
     return
   }
 
+  func.func @vmi_layout_assignment_multichunk_f16_to_f32_store(
+      %src: !pto.ptr<f16, ub>,
+      %dst: !pto.ptr<f32, ub>,
+      %off: index) {
+    %x16 = pto.vmi.load %src[%off]
+        : !pto.ptr<f16, ub> -> !pto.vmi.vreg<256xf16>
+    %x32 = pto.vmi.extf %x16
+        : !pto.vmi.vreg<256xf16> -> !pto.vmi.vreg<256xf32>
+    pto.vmi.store %x32, %dst[%off]
+        : !pto.vmi.vreg<256xf32>, !pto.ptr<f32, ub>
+    return
+  }
+
   func.func @vmi_layout_assignment_compact_f16_to_f32_store(
       %src: !pto.ptr<f16, ub>,
       %dst: !pto.ptr<f32, ub>,
@@ -65,6 +78,19 @@ module {
         : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>
     return
   }
+
+  func.func @vmi_layout_assignment_multichunk_f32_to_f16_store(
+      %src: !pto.ptr<f32, ub>,
+      %dst: !pto.ptr<f16, ub>,
+      %off: index) {
+    %x32 = pto.vmi.load %src[%off]
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
+    %x16 = pto.vmi.truncf %x32
+        : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf16>
+    pto.vmi.store %x16, %dst[%off]
+        : !pto.vmi.vreg<256xf16>, !pto.ptr<f16, ub>
+    return
+  }
 }
 
 // ASSIGN-LABEL: func.func @vmi_layout_assignment_dense_f16_to_f32_store(
@@ -86,6 +112,16 @@ module {
 // LOWER-NOT: pto.vmi.
 // LOWER-NOT: !pto.vmi.
 // LOWER-NOT: unrealized_conversion_cast
+
+// ASSIGN-LABEL: func.func @vmi_layout_assignment_multichunk_f16_to_f32_store(
+// ASSIGN: %[[X16:.*]] = pto.vmi.load
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[X32:.*]] = pto.vmi.extf %[[X16]]
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
+// ASSIGN: %[[DENSE:.*]] = pto.vmi.ensure_layout %[[X32]]
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>
+// ASSIGN: pto.vmi.store %[[DENSE]]
+// ASSIGN-SAME: !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>, !pto.ptr<f32, ub>
 
 // ASSIGN-LABEL: func.func @vmi_layout_assignment_compact_f16_to_f32_store(
 // ASSIGN: %[[X16:.*]] = pto.vmi.load
@@ -129,6 +165,15 @@ module {
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
 // ASSIGN: pto.vmi.store %[[X16]]
 // ASSIGN-SAME: !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>, !pto.ptr<f16, ub>
+
+// ASSIGN-LABEL: func.func @vmi_layout_assignment_multichunk_f32_to_f16_store(
+// ASSIGN: %[[X32:.*]] = pto.vmi.load
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
+// ASSIGN-NOT: pto.vmi.ensure_layout
+// ASSIGN: %[[X16:.*]] = pto.vmi.truncf %[[X32]]
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
+// ASSIGN: pto.vmi.store %[[X16]]
+// ASSIGN-SAME: !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>, !pto.ptr<f16, ub>
 
 // LOWER-LABEL: func.func @vmi_layout_assignment_dense_f32_to_f16_store(
 // LOWER: pto.vldsx2 {{.*}} "DINTLV_B32"

@@ -48,14 +48,10 @@ module attributes {pto.target_arch = "a5"} {
 // CHECK-NOT: unrealized_conversion_cast
 
 // CHECK-LABEL: func.func @vmi_ptoas_cli_fold_pipeline
-// CHECK: pto.vlds {{.*}} {dist = "UNPK_B16"}
-// CHECK: pto.vlds {{.*}} {dist = "UNPK_B16"}
+// CHECK: pto.vlds
 // CHECK: pto.vcvt {{.*}} {part = "EVEN"}
-// CHECK: pto.vcvt {{.*}} {part = "EVEN"}
-// CHECK-NOT: part = "ODD"
-// CHECK-NOT: pto.vintlv
-// CHECK: pto.vsts
-// CHECK: pto.vsts
+// CHECK: pto.vcvt {{.*}} {part = "ODD"}
+// CHECK: pto.vstsx2
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
 // CHECK-NOT: unrealized_conversion_cast

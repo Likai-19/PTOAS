@@ -593,21 +593,33 @@ FailureOr<VMICastLayoutFact> VMILayoutSupport::getPreferredCastLayoutFact(
     return baseline;
 
   if (isWiden) {
+    VMIVRegType baselineSourceType =
+        VMIVRegType::get(ctx, sourceType.getElementCount(),
+                         sourceType.getElementType(), baseline->sourceLayout);
     VMIVRegType baselineResultType =
         VMIVRegType::get(ctx, resultType.getElementCount(),
                          resultType.getElementType(), baseline->resultLayout);
+    FailureOr<int64_t> baselineSourceArity =
+        getVMIPhysicalArity(baselineSourceType);
     FailureOr<int64_t> baselineResultArity =
         getVMIPhysicalArity(baselineResultType);
-    if (failed(baselineResultArity) ||
+    if (failed(baselineSourceArity) || failed(baselineResultArity) ||
+        *compactSourceArity > *baselineSourceArity ||
         *compactResultArity >= *baselineResultArity)
       return baseline;
   } else {
     VMIVRegType baselineSourceType =
         VMIVRegType::get(ctx, sourceType.getElementCount(),
                          sourceType.getElementType(), baseline->sourceLayout);
+    VMIVRegType baselineResultType =
+        VMIVRegType::get(ctx, resultType.getElementCount(),
+                         resultType.getElementType(), baseline->resultLayout);
     FailureOr<int64_t> baselineSourceArity =
         getVMIPhysicalArity(baselineSourceType);
-    if (failed(baselineSourceArity) ||
+    FailureOr<int64_t> baselineResultArity =
+        getVMIPhysicalArity(baselineResultType);
+    if (failed(baselineSourceArity) || failed(baselineResultArity) ||
+        *compactResultArity > *baselineResultArity ||
         *compactSourceArity >= *baselineSourceArity)
       return baseline;
   }
@@ -647,6 +659,11 @@ VMILayoutSupport::getWidenSourceLayoutForResultLayout(
     return fail("requires supported 8/16-bit to 32-bit widen cast");
 
   if (requestedResultLayout.isContiguous()) {
+    if (!fact->resultLayout.isContiguous() ||
+        fact->resultLayout.getLaneStride() !=
+            requestedResultLayout.getLaneStride())
+      return fail("requested contiguous result layout is not the natural "
+                  "compact widen result layout");
     return VMILayoutAttr::getContiguous(sourceType.getContext(),
                                         /*laneStride=*/fact->factor);
   }
