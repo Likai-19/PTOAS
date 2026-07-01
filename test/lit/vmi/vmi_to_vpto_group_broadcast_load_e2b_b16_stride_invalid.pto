@@ -21,5 +21,5 @@ module {
 }
 
 // CHECK: VMI-UNSUPPORTED:
-// CHECK: pto.vmi.group_broadcast_load currently lowers through E2B
-// CHECK: E2B lowering requires constant unit source_group_stride
+// CHECK: pto.vmi.group_broadcast_load requires either the E2B packet form
+// CHECK: fallback lowering requires constant unit source_group_stride

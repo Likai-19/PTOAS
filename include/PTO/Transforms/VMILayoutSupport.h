@@ -157,6 +157,7 @@ struct VMIGroupBroadcastSupport {
 
 enum class VMIGroupBroadcastLoadSupportKind {
   E2BVlds,
+  SlotLoadThenBroadcast,
 };
 
 struct VMIGroupBroadcastLoadSupport {
