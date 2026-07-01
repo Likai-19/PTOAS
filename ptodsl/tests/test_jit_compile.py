@@ -3850,6 +3850,32 @@ def main() -> None:
             "--enable-insert-sync" in source_ptoas_cmd,
             "source-backed native build should still pass explicit/effective insert-sync to ptoas",
         )
+        ptoas_cmds.clear()
+        vmi_mlir_text = (
+            'module attributes {pto.target_arch = "a5"} {\n'
+            '  module attributes {pto.backend = "vpto", pto.kernel_kind = #pto.kernel_kind<vector>, pto.target_arch = "a5"} {\n'
+            "    func.func @vmi_probe(%arg0: !pto.ptr<f32, ub>) {\n"
+            '      %c0 = arith.constant 0 : index\n'
+            '      %x = pto.vmi.load %arg0[%c0] : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>\n'
+            "      return\n"
+            "    }\n"
+            "  }\n"
+            "}\n"
+        )
+        mlir_path.write_text(vmi_mlir_text, encoding="utf-8")
+        with mock.patch.object(native_build_runtime, "resolve_ptoas_binary", return_value=Path("/tmp/fake-ptoas")), mock.patch.object(
+            native_build_runtime, "_run", side_effect=fake_run_ptoas_cmd
+        ):
+            native_build_runtime._run_ptoas(
+                mlir_path,
+                kernel_object,
+                target_arch="a5",
+            )
+        expect(len(ptoas_cmds) == 1, "native build should issue exactly one ptoas command for VMI MLIR")
+        expect(
+            "--enable-vmi" in ptoas_cmds[0],
+            "native build should auto-enable the VMI semantic pipeline when the MLIR contains VMI ops",
+        )
     expect("valid=?" not in default_text, "default alloc_tile() should keep full static valid-shape when valid_shape= is omitted")
     auto_mode_violation = expect_raises(
         RuntimeError,
