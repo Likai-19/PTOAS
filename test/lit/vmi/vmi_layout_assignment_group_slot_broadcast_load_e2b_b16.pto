@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
+// RUN: pto-test-opt %s -vmi-pre-assignment-combine -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
 
 module {
   func.func @vmi_layout_assignment_group_slot_broadcast_load_e2b_b16(

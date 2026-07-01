@@ -1392,25 +1392,13 @@ VMILayoutSupport::getGroupBroadcastLoadSupport(
            .isSupported())
     return fail("requires supported direct memory source");
   if (!isa<PtrType>(op.getSource().getType()))
-    return fail("requires !pto.ptr source for E2B lowering");
+    return fail("requires !pto.ptr source");
 
   unsigned elementBits =
       pto::getPTOStorageElemBitWidth(resultType.getElementType());
-  if (elementBits != 16 && elementBits != 32)
-    return fail("E2B lowering currently supports only 16-bit and 32-bit "
-                "element types");
-  int64_t directGroupSize = 256 / elementBits;
-
   VMILayoutAttr layout = resultType.getLayoutAttr();
   if (!layout)
-    return fail("E2B lowering requires assigned result layout");
-  bool contiguousPacketLayout = layout.isContiguous();
-  bool splitPacketLayout = layout.isDeinterleaved() && layout.getFactor() == 2 &&
-                           layout.getBlockElems() == 1;
-  if (!contiguousPacketLayout && !splitPacketLayout)
-    return fail("E2B lowering requires contiguous result layout for "
-                "direct group size or deinterleaved=2, block_elems=1 "
-                "result layout for split group size");
+    return fail("requires assigned result layout");
 
   std::string fullChunkReason;
   if (failed(checkFullDataPhysicalChunks(resultType, &fullChunkReason)))
@@ -1419,27 +1407,51 @@ VMILayoutSupport::getGroupBroadcastLoadSupport(
 
   FailureOr<int64_t> lanesPerPart =
       getDataLanesPerPart(resultType.getElementType());
-  if (failed(lanesPerPart) || *lanesPerPart != (2048 / elementBits))
-    return fail("E2B lowering requires one full 256-byte vreg per physical "
-                "part");
+  if (failed(lanesPerPart))
+    return fail("requires known result lanes per physical part");
 
   int64_t groupSize = resultType.getElementCount() / numGroups;
-  if (contiguousPacketLayout && groupSize != directGroupSize)
-    return fail("E2B contiguous lowering requires logical group size matching "
-                "the element-width direct packet size");
-  if (splitPacketLayout && groupSize != 2 * directGroupSize)
-    return fail("E2B deinterleaved=2 lowering requires logical group size "
-                "matching the element-width split packet size");
-  if (numGroups % 8 != 0)
-    return fail("E2B lowering requires num_groups to be a multiple of 8");
-
   std::optional<int64_t> stride =
       getConstantIndexValue(op.getSourceGroupStride());
-  if (!stride || *stride != 1)
-    return fail("E2B lowering requires constant unit source_group_stride");
 
+  bool contiguousPacketLayout = layout.isContiguous();
+  bool splitPacketLayout = layout.isDeinterleaved() && layout.getFactor() == 2 &&
+                           layout.getBlockElems() == 1;
+  if ((elementBits == 16 || elementBits == 32) &&
+      *lanesPerPart == static_cast<int64_t>(2048 / elementBits) &&
+      (contiguousPacketLayout || splitPacketLayout) && numGroups % 8 == 0 &&
+      stride && *stride == 1) {
+    int64_t directGroupSize = 256 / elementBits;
+    if ((contiguousPacketLayout && groupSize == directGroupSize) ||
+        (splitPacketLayout && groupSize == 2 * directGroupSize))
+      return VMIGroupBroadcastLoadSupport{
+          VMIGroupBroadcastLoadSupportKind::E2BVlds};
+  }
+
+  if (elementBits == 0 || 256 % elementBits != 0)
+    return fail("fallback lowering requires an 8/16/32-bit element type");
+  int64_t alignedStrideElems = 256 / elementBits;
+  int64_t slots = 0;
+  if (stride && *stride == 1)
+    slots = 8;
+  else if (stride && *stride > 0 && *stride % alignedStrideElems == 0)
+    slots = 1;
+  else
+    return fail(Twine("fallback lowering requires constant unit "
+                      "source_group_stride for packed slots or constant "
+                      "positive source_group_stride divisible by ") +
+                Twine(alignedStrideElems) + " elements for lane-0 slots");
+
+  auto sourceType = VMIVRegType::get(
+      resultType.getContext(), numGroups, resultType.getElementType(),
+      VMILayoutAttr::getGroupSlots(resultType.getContext(), numGroups, slots));
+  std::string broadcastReason;
+  if (failed(getGroupBroadcastSupport(capabilities, sourceType, resultType,
+                                      numGroups, &broadcastReason)))
+    return fail(Twine("fallback broadcast is unsupported; ") +
+                broadcastReason);
   return VMIGroupBroadcastLoadSupport{
-      VMIGroupBroadcastLoadSupportKind::E2BVlds};
+      VMIGroupBroadcastLoadSupportKind::SlotLoadThenBroadcast};
 }
 
 FailureOr<VMIGroupBroadcastSupport> VMILayoutSupport::getGroupBroadcastSupport(
