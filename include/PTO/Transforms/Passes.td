@@ -917,6 +917,24 @@ def PTOValidateVMILayoutIR
                            "mlir::scf::SCFDialect"];
 }
 
+def VMIPreAssignmentCombine
+    : Pass<"vmi-pre-assignment-combine", "ModuleOp"> {
+  let summary = "Combine VMI operations before layout assignment";
+  let description = [{
+    Performs VMI-level structural combines before VMI layout assignment. This
+    keeps layout assignment focused on choosing and materializing layouts while
+    still exposing direct semantic operations to the later layout and lowering
+    passes.
+
+    The pass currently rewrites the semantic pattern
+    `group_broadcast(group_slot_load(...))` into the equivalent
+    `group_broadcast_load` operation.
+  }];
+  let constructor = "mlir::pto::createVMIPreAssignmentCombinePass()";
+  let dependentDialects = ["mlir::func::FuncDialect",
+                           "mlir::pto::PTODialect"];
+}
+
 def VMILayoutAssignment : Pass<"vmi-layout-assignment", "ModuleOp"> {
   let summary = "Assign concrete VMI layouts and mask granularities";
   let description = [{

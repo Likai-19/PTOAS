@@ -4824,6 +4824,402 @@ struct OneToNVMIGroupLoadOpPattern : OneToNOpConversionPattern<VMIGroupLoadOp> {
   }
 };
 
+static LogicalResult lowerGroupSlotLoadParts(
+    Operation *op, Value source, Value offset, Value sourceGroupStride,
+    VMIVRegType resultVMIType, TypeRange resultTypes, int64_t numGroups,
+    OneToNPatternRewriter &rewriter, SmallVectorImpl<Value> &results) {
+  VMILayoutAttr layout = resultVMIType.getLayoutAttr();
+  if (!layout || !layout.isGroupSlots() || layout.getSlots() <= 0)
+    return rewriter.notifyMatchFailure(
+        op, "group_slot_load requires explicit group_slots layout");
+  if (!isa<PtrType>(source.getType()))
+    return rewriter.notifyMatchFailure(op,
+                                       "group_slot_load requires !pto.ptr source");
+
+  int64_t slots = layout.getSlots();
+  int64_t expectedArity = ceilDivNonNegative(numGroups, slots);
+  if (static_cast<int64_t>(resultTypes.size()) != expectedArity)
+    return rewriter.notifyMatchFailure(op, "group_slot_load arity mismatch");
+
+  auto makeI16 = [&](int64_t value) -> Value {
+    return rewriter.create<arith::ConstantIntOp>(op->getLoc(), value, 16);
+  };
+  Value zeroI16 = makeI16(0);
+  auto makePtr = [&](Value elementOffset) -> Value {
+    return rewriter
+        .create<AddPtrOp>(op->getLoc(), source.getType(), source,
+                          elementOffset)
+        .getResult();
+  };
+
+  results.reserve(results.size() + resultTypes.size());
+
+  if (slots == 8) {
+    std::optional<int64_t> stride = getConstantIndexValue(sourceGroupStride);
+    if (!stride || *stride != 1)
+      return rewriter.notifyMatchFailure(
+          op, "slots=8 group_slot_load requires constant unit stride");
+    for (auto [chunk, resultType] : llvm::enumerate(resultTypes)) {
+      auto vregType = dyn_cast<VRegType>(resultType);
+      if (!vregType)
+        return rewriter.notifyMatchFailure(op,
+                                           "group_slot_load result must be vreg");
+      FailureOr<MaskType> maskType =
+          getMaskTypeForVReg(vregType, rewriter.getContext());
+      if (failed(maskType))
+        return rewriter.notifyMatchFailure(
+            op, "unsupported element type for group_slot_load mask");
+      int64_t groupBegin = static_cast<int64_t>(chunk) * slots;
+      int64_t activeGroups = std::min<int64_t>(slots, numGroups - groupBegin);
+      if (activeGroups <= 0)
+        return rewriter.notifyMatchFailure(
+            op, "slots=8 group_slot_load has no active groups for chunk");
+      std::string pattern = (Twine("PAT_VL") + Twine(activeGroups)).str();
+      FailureOr<Value> slotMask =
+          createPrefixMask(op->getLoc(), *maskType, pattern, rewriter);
+      if (failed(slotMask))
+        return rewriter.notifyMatchFailure(
+            op, "failed to create slots=8 group_slot_load mask");
+      Value groupOffset =
+          createChunkOffset(op->getLoc(), offset, groupBegin, rewriter);
+      Value slotBase = makePtr(groupOffset);
+      results.push_back(rewriter
+                            .create<VsldbOp>(op->getLoc(), vregType, slotBase,
+                                             zeroI16, zeroI16, *slotMask)
+                            .getResult());
+    }
+    return success();
+  }
+
+  if (slots != 1)
+    return rewriter.notifyMatchFailure(
+        op, "group_slot_load supports only slots=8 or slots=1");
+  unsigned elementBits =
+      pto::getPTOStorageElemBitWidth(resultVMIType.getElementType());
+  if (elementBits == 0 || 256 % elementBits != 0)
+    return rewriter.notifyMatchFailure(
+        op, "slots=1 group_slot_load requires supported element width");
+  int64_t alignedStrideElems = 256 / elementBits;
+  std::optional<int64_t> constantStride =
+      getConstantIndexValue(sourceGroupStride);
+  if (!constantStride || *constantStride <= 0 ||
+      *constantStride % alignedStrideElems != 0)
+    return rewriter.notifyMatchFailure(
+        op, Twine("slots=1 group_slot_load requires constant positive "
+                  "source_group_stride divisible by ") +
+                Twine(alignedStrideElems) +
+                " elements for 32B lane-0 vsldb alignment");
+
+  for (auto [group, resultType] : llvm::enumerate(resultTypes)) {
+    auto vregType = dyn_cast<VRegType>(resultType);
+    if (!vregType)
+      return rewriter.notifyMatchFailure(op,
+                                         "group_slot_load result must be vreg");
+    FailureOr<MaskType> maskType =
+        getMaskTypeForVReg(vregType, rewriter.getContext());
+    if (failed(maskType))
+      return rewriter.notifyMatchFailure(
+          op, "unsupported element type for group_slot_load mask");
+    FailureOr<Value> oneBlockMask =
+        createPrefixMask(op->getLoc(), *maskType, "PAT_VL1", rewriter);
+    if (failed(oneBlockMask))
+      return rewriter.notifyMatchFailure(op,
+                                         "failed to create group_slot_load mask");
+    Value groupOffset = offset;
+    if (group != 0) {
+      Value groupIndex =
+          rewriter.create<arith::ConstantIndexOp>(op->getLoc(), group);
+      Value rowOffset =
+          rewriter
+              .create<arith::MulIOp>(op->getLoc(), sourceGroupStride,
+                                     groupIndex)
+              .getResult();
+      groupOffset =
+          rewriter.create<arith::AddIOp>(op->getLoc(), groupOffset, rowOffset)
+              .getResult();
+    }
+    Value slotBase = makePtr(groupOffset);
+    results.push_back(rewriter
+                          .create<VsldbOp>(op->getLoc(), vregType, slotBase,
+                                           zeroI16, zeroI16, *oneBlockMask)
+                          .getResult());
+  }
+  return success();
+}
+
+static LogicalResult lowerGroupBroadcastParts(
+    Operation *op, ValueRange sourceParts, VMIVRegType sourceVMIType,
+    VMIVRegType resultVMIType, TypeRange resultTypes, int64_t numGroups,
+    OneToNPatternRewriter &rewriter, SmallVectorImpl<Value> &results) {
+  FailureOr<int64_t> groupSize =
+      getGroupSizeFromNumGroups(resultVMIType, numGroups);
+  if (failed(groupSize))
+    return rewriter.notifyMatchFailure(
+        op, "group_broadcast requires num_groups to evenly divide lane count");
+  int64_t lanesPerPart = 0;
+  int64_t groupCount = 0;
+  if (failed(checkFullGroupSlotSourceShape(op, sourceVMIType, *groupSize,
+                                           numGroups, &lanesPerPart,
+                                           &groupCount, rewriter)))
+    return failure();
+  int64_t resultLayoutFactor = 0;
+  int64_t resultGroupCount = 0;
+  if (failed(checkFullGroupBroadcastResultShape(
+          op, resultVMIType, *groupSize, lanesPerPart, &resultLayoutFactor,
+          &resultGroupCount, rewriter)))
+    return failure();
+  if (resultGroupCount != groupCount)
+    return rewriter.notifyMatchFailure(
+        op, "group_broadcast requires matching source/result group slots");
+
+  if (sourceParts.empty() || resultTypes.empty())
+    return rewriter.notifyMatchFailure(op, "group_broadcast arity mismatch");
+
+  auto firstSourceType = dyn_cast<VRegType>(sourceParts.front().getType());
+  if (!firstSourceType)
+    return rewriter.notifyMatchFailure(op,
+                                       "group_broadcast source must be vreg");
+  unsigned indexBits =
+      pto::getPTOStorageElemBitWidth(firstSourceType.getElementType());
+  if (indexBits != 8 && indexBits != 16 && indexBits != 32)
+    return rewriter.notifyMatchFailure(
+        op, "group_broadcast requires 8/16/32-bit index elements");
+  auto indexElementType = IntegerType::get(rewriter.getContext(), indexBits);
+  auto indexType =
+      VRegType::get(rewriter.getContext(), firstSourceType.getElementCount(),
+                    indexElementType);
+  FailureOr<Value> allMask =
+      createAllTrueMaskForVReg(op->getLoc(), firstSourceType, rewriter);
+  if (failed(allMask))
+    return rewriter.notifyMatchFailure(
+        op, "failed to create group_broadcast all mask");
+  VMILayoutAttr resultLayout = resultVMIType.getLayoutAttr();
+  VMILayoutAttr sourceLayout = sourceVMIType.getLayoutAttr();
+  int64_t selectionGroupSize = *groupSize;
+  if (resultLayoutFactor != 1 && resultLayout &&
+      resultLayout.isDeinterleaved() && resultLayout.getBlockElems() > 1 &&
+      *groupSize < lanesPerPart)
+    selectionGroupSize = resultLayout.getBlockElems();
+  auto resolveLargeGroupSource = [&](int64_t group, int64_t chunksPerGroup,
+                                     int64_t &sourceChunk,
+                                     int64_t &baseGroupSlot) {
+    int64_t slots = sourceLayout.getSlots();
+    if (slots > 0) {
+      sourceChunk = group / slots;
+      baseGroupSlot = group % slots;
+      return;
+    }
+    sourceChunk = group * chunksPerGroup;
+    baseGroupSlot = 0;
+  };
+
+  results.clear();
+  results.resize(resultTypes.size());
+  for (auto [flatIndex, resultType] : llvm::enumerate(resultTypes)) {
+    auto resultVRegType = dyn_cast<VRegType>(resultType);
+    if (!resultVRegType || resultVRegType != firstSourceType)
+      return rewriter.notifyMatchFailure(
+          op, "group_broadcast requires uniform physical vreg types");
+    int64_t sourceChunk = flatIndex;
+    int64_t baseGroupSlot = 0;
+    Value mappedGroupSlotIndex;
+    if (resultLayoutFactor == 1) {
+      if (*groupSize >= lanesPerPart) {
+        int64_t chunksPerGroup = *groupSize / lanesPerPart;
+        int64_t group = flatIndex / chunksPerGroup;
+        resolveLargeGroupSource(group, chunksPerGroup, sourceChunk,
+                                baseGroupSlot);
+      } else {
+        VMILayoutAttr sourceLayout = sourceVMIType.getLayoutAttr();
+        int64_t slots = sourceLayout.getSlots();
+        if (slots <= 0) {
+          if (sourceParts.empty() ||
+              groupCount % static_cast<int64_t>(sourceParts.size()) != 0)
+            return rewriter.notifyMatchFailure(
+                op, "group_broadcast small-group source requires explicit "
+                    "group_slots slots or derivable legacy slot count");
+          slots = groupCount / sourceParts.size();
+        }
+        int64_t groupsPerResultChunk = lanesPerPart / *groupSize;
+        int64_t firstGroup = flatIndex * groupsPerResultChunk;
+        sourceChunk = firstGroup / slots;
+        baseGroupSlot = firstGroup % slots;
+      }
+    } else {
+      bool blockFragmentSmallGroup =
+          resultLayout && resultLayout.isDeinterleaved() &&
+          resultLayout.getBlockElems() > 1 && *groupSize < lanesPerPart;
+      bool deinterleavedSmallGroup =
+          resultLayout && resultLayout.isDeinterleaved() &&
+          resultLayout.getBlockElems() == 1 && *groupSize < lanesPerPart;
+      if (blockFragmentSmallGroup) {
+        int64_t runningFlatIndex = 0;
+        bool found = false;
+        for (int64_t part = 0; part < resultLayoutFactor && !found; ++part) {
+          FailureOr<int64_t> chunks = getDataChunksInPart(resultVMIType, part);
+          if (failed(chunks))
+            return rewriter.notifyMatchFailure(
+                op, "group_broadcast failed to enumerate result chunks");
+          for (int64_t chunk = 0; chunk < *chunks;
+               ++chunk, ++runningFlatIndex) {
+            if (runningFlatIndex != static_cast<int64_t>(flatIndex))
+              continue;
+            int64_t groupsPerResultChunk =
+                lanesPerPart / resultLayout.getBlockElems();
+            int64_t firstGroup = chunk * groupsPerResultChunk;
+            int64_t slots = sourceLayout.getSlots();
+            if (slots <= 0) {
+              if (sourceParts.empty() ||
+                  groupCount % static_cast<int64_t>(sourceParts.size()) != 0)
+                return rewriter.notifyMatchFailure(
+                    op,
+                    "group_broadcast block-fragment source requires explicit "
+                    "group_slots slots or derivable legacy slot count");
+              slots = groupCount / sourceParts.size();
+            }
+            sourceChunk = firstGroup / slots;
+            baseGroupSlot = firstGroup % slots;
+            found = true;
+            break;
+          }
+        }
+        if (!found)
+          return rewriter.notifyMatchFailure(
+              op, "group_broadcast result chunk index is out of range");
+      } else if (deinterleavedSmallGroup) {
+        int64_t runningFlatIndex = 0;
+        bool found = false;
+        for (int64_t part = 0; part < resultLayoutFactor && !found; ++part) {
+          FailureOr<int64_t> chunks = getDataChunksInPart(resultVMIType, part);
+          if (failed(chunks))
+            return rewriter.notifyMatchFailure(
+                op, "group_broadcast failed to enumerate result chunks");
+          for (int64_t chunk = 0; chunk < *chunks;
+               ++chunk, ++runningFlatIndex) {
+            if (runningFlatIndex != static_cast<int64_t>(flatIndex))
+              continue;
+            int64_t slots = sourceLayout.getSlots();
+            if (slots <= 0) {
+              if (sourceParts.empty() ||
+                  groupCount % static_cast<int64_t>(sourceParts.size()) != 0)
+                return rewriter.notifyMatchFailure(
+                    op, "group_broadcast deinterleaved small-group source "
+                        "requires explicit group_slots slots or derivable "
+                        "legacy slot count");
+              slots = groupCount / sourceParts.size();
+            }
+            FailureOr<Value> index = createMappedGroupSlotIndexVector(
+                op->getLoc(), resultVMIType, part, chunk, indexType,
+                *groupSize, slots, sourceChunk, rewriter);
+            if (failed(index))
+              return rewriter.notifyMatchFailure(
+                  op,
+                  "failed to create group_broadcast mapped group-slot index "
+                  "vector");
+            mappedGroupSlotIndex = *index;
+            found = true;
+            break;
+          }
+        }
+        if (!found)
+          return rewriter.notifyMatchFailure(
+              op, "group_broadcast result chunk index is out of range");
+      } else {
+        int64_t runningFlatIndex = 0;
+        bool found = false;
+        for (int64_t part = 0; part < resultLayoutFactor && !found; ++part) {
+          FailureOr<int64_t> chunks = getDataChunksInPart(resultVMIType, part);
+          if (failed(chunks))
+            return rewriter.notifyMatchFailure(
+                op, "group_broadcast failed to enumerate result chunks");
+          for (int64_t chunk = 0; chunk < *chunks;
+               ++chunk, ++runningFlatIndex) {
+            if (runningFlatIndex != static_cast<int64_t>(flatIndex))
+              continue;
+            FailureOr<int64_t> firstLogical =
+                mapPhysicalLaneToLogical(resultVMIType, part, chunk, 0);
+            FailureOr<int64_t> lastLogical = mapPhysicalLaneToLogical(
+                resultVMIType, part, chunk, lanesPerPart - 1);
+            if (failed(firstLogical) || failed(lastLogical))
+              return rewriter.notifyMatchFailure(
+                  op, "group_broadcast failed to map result chunk lanes");
+            int64_t firstGroup = *firstLogical / *groupSize;
+            int64_t lastGroup = *lastLogical / *groupSize;
+            if (firstGroup != lastGroup)
+              return rewriter.notifyMatchFailure(
+                  op, "group_broadcast result chunk crosses logical groups");
+            int64_t chunksPerGroup = *groupSize / lanesPerPart;
+            resolveLargeGroupSource(firstGroup, chunksPerGroup, sourceChunk,
+                                    baseGroupSlot);
+            found = true;
+            break;
+          }
+        }
+        if (!found)
+          return rewriter.notifyMatchFailure(
+              op, "group_broadcast result chunk index is out of range");
+      }
+    }
+    if (*groupSize >= lanesPerPart) {
+      if (sourceChunk < 0 ||
+          sourceChunk >= static_cast<int64_t>(sourceParts.size()))
+        return rewriter.notifyMatchFailure(
+            op, "group_broadcast source chunk is out of range");
+      if (sourceLayout.getSlots() > 1) {
+        FailureOr<Value> groupSlotIndex = createGroupSlotIndexVector(
+            op->getLoc(), indexType, selectionGroupSize, baseGroupSlot,
+            rewriter);
+        if (failed(groupSlotIndex))
+          return rewriter.notifyMatchFailure(
+              op, "failed to create group_broadcast group-slot index vector");
+        results[flatIndex] =
+            rewriter
+                .create<VselrOp>(op->getLoc(), resultType,
+                                 sourceParts[sourceChunk], *groupSlotIndex)
+                .getResult();
+      } else {
+        results[flatIndex] =
+            rewriter
+                .create<VdupOp>(op->getLoc(), resultType,
+                                sourceParts[sourceChunk], *allMask,
+                                rewriter.getStringAttr("LOWEST"))
+                .getResult();
+      }
+    } else {
+      bool blockFragmentSmallGroup = resultLayout &&
+                                     resultLayout.isDeinterleaved() &&
+                                     resultLayout.getBlockElems() > 1;
+      bool deinterleavedSmallGroup = resultLayout &&
+                                     resultLayout.isDeinterleaved() &&
+                                     resultLayout.getBlockElems() == 1;
+      if (resultLayoutFactor != 1 && !blockFragmentSmallGroup &&
+          !deinterleavedSmallGroup)
+        return rewriter.notifyMatchFailure(
+            op, "group_broadcast small-group deinterleaved result is not "
+                "supported");
+      if (sourceChunk < 0 ||
+          sourceChunk >= static_cast<int64_t>(sourceParts.size()))
+        return rewriter.notifyMatchFailure(
+            op, "group_broadcast source chunk is out of range");
+      FailureOr<Value> groupSlotIndex =
+          mappedGroupSlotIndex
+              ? FailureOr<Value>(mappedGroupSlotIndex)
+              : createGroupSlotIndexVector(op->getLoc(), indexType,
+                                           selectionGroupSize, baseGroupSlot,
+                                           rewriter);
+      if (failed(groupSlotIndex))
+        return rewriter.notifyMatchFailure(
+            op, "failed to create group_broadcast group-slot index vector");
+      results[flatIndex] =
+          rewriter
+              .create<VselrOp>(op->getLoc(), resultType,
+                               sourceParts[sourceChunk], *groupSlotIndex)
+              .getResult();
+    }
+  }
+  return success();
+}
+
 struct OneToNVMIGroupSlotLoadOpPattern
     : OneToNOpConversionPattern<VMIGroupSlotLoadOp> {
   using OneToNOpConversionPattern<
@@ -4850,123 +5246,15 @@ struct OneToNVMIGroupSlotLoadOpPattern
         rewriter);
     if (failed(source) || failed(offset) || failed(sourceGroupStride))
       return failure();
-    if (!isa<PtrType>((*source).getType()))
-      return rewriter.notifyMatchFailure(
-          op, "group_slot_load requires !pto.ptr source");
 
     TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
     int64_t numGroups = op.getNumGroupsAttr().getInt();
-    int64_t slots = layout.getSlots();
-    int64_t expectedArity = ceilDivNonNegative(numGroups, slots);
-    if (static_cast<int64_t>(resultTypes.size()) != expectedArity)
-      return rewriter.notifyMatchFailure(op, "group_slot_load arity mismatch");
-
-    auto makeI16 = [&](int64_t value) -> Value {
-      return rewriter.create<arith::ConstantIntOp>(op.getLoc(), value, 16);
-    };
-    Value zeroI16 = makeI16(0);
-    auto makePtr = [&](Value elementOffset) -> Value {
-      return rewriter
-          .create<AddPtrOp>(op.getLoc(), (*source).getType(), *source,
-                            elementOffset)
-          .getResult();
-    };
 
     SmallVector<Value> results;
-    results.reserve(resultTypes.size());
-
-    if (slots == 8) {
-      std::optional<int64_t> stride =
-          getConstantIndexValue(op.getSourceGroupStride());
-      if (!stride || *stride != 1)
-        return rewriter.notifyMatchFailure(
-            op, "slots=8 group_slot_load requires constant unit stride");
-      for (auto [chunk, resultType] : llvm::enumerate(resultTypes)) {
-        auto vregType = dyn_cast<VRegType>(resultType);
-        if (!vregType)
-          return rewriter.notifyMatchFailure(
-              op, "group_slot_load result must be vreg");
-        FailureOr<MaskType> maskType =
-            getMaskTypeForVReg(vregType, rewriter.getContext());
-        if (failed(maskType))
-          return rewriter.notifyMatchFailure(
-              op, "unsupported element type for group_slot_load mask");
-        int64_t groupBegin = static_cast<int64_t>(chunk) * slots;
-        int64_t activeGroups = std::min<int64_t>(slots, numGroups - groupBegin);
-        if (activeGroups <= 0)
-          return rewriter.notifyMatchFailure(
-              op, "slots=8 group_slot_load has no active groups for chunk");
-        std::string pattern = (Twine("PAT_VL") + Twine(activeGroups)).str();
-        FailureOr<Value> slotMask =
-            createPrefixMask(op.getLoc(), *maskType, pattern, rewriter);
-        if (failed(slotMask))
-          return rewriter.notifyMatchFailure(
-              op, "failed to create slots=8 group_slot_load mask");
-        Value groupOffset =
-            createChunkOffset(op.getLoc(), *offset, groupBegin, rewriter);
-        Value slotBase = makePtr(groupOffset);
-        results.push_back(rewriter
-                              .create<VsldbOp>(op.getLoc(), vregType, slotBase,
-                                               zeroI16, zeroI16, *slotMask)
-                              .getResult());
-      }
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
-      return success();
-    }
-
-    if (slots != 1)
-      return rewriter.notifyMatchFailure(
-          op, "group_slot_load supports only slots=8 or slots=1");
-    unsigned elementBits =
-        pto::getPTOStorageElemBitWidth(resultVMIType.getElementType());
-    if (elementBits == 0 || 256 % elementBits != 0)
-      return rewriter.notifyMatchFailure(
-          op, "slots=1 group_slot_load requires supported element width");
-    int64_t alignedStrideElems = 256 / elementBits;
-    std::optional<int64_t> constantStride =
-        getConstantIndexValue(op.getSourceGroupStride());
-    if (!constantStride || *constantStride <= 0 ||
-        *constantStride % alignedStrideElems != 0)
-      return rewriter.notifyMatchFailure(
-          op, Twine("slots=1 group_slot_load requires constant positive "
-                    "source_group_stride divisible by ") +
-                  Twine(alignedStrideElems) +
-                  " elements for 32B lane-0 vsldb alignment");
-
-    for (auto [group, resultType] : llvm::enumerate(resultTypes)) {
-      auto vregType = dyn_cast<VRegType>(resultType);
-      if (!vregType)
-        return rewriter.notifyMatchFailure(
-            op, "group_slot_load result must be vreg");
-      FailureOr<MaskType> maskType =
-          getMaskTypeForVReg(vregType, rewriter.getContext());
-      if (failed(maskType))
-        return rewriter.notifyMatchFailure(
-            op, "unsupported element type for group_slot_load mask");
-      FailureOr<Value> oneBlockMask =
-          createPrefixMask(op.getLoc(), *maskType, "PAT_VL1", rewriter);
-      if (failed(oneBlockMask))
-        return rewriter.notifyMatchFailure(
-            op, "failed to create group_slot_load mask");
-      Value groupOffset = *offset;
-      if (group != 0) {
-        Value groupIndex =
-            rewriter.create<arith::ConstantIndexOp>(op.getLoc(), group);
-        Value rowOffset = rewriter
-                              .create<arith::MulIOp>(
-                                  op.getLoc(), *sourceGroupStride, groupIndex)
-                              .getResult();
-        groupOffset =
-            rewriter.create<arith::AddIOp>(op.getLoc(), groupOffset, rowOffset)
-                .getResult();
-      }
-      Value slotBase = makePtr(groupOffset);
-      results.push_back(rewriter
-                            .create<VsldbOp>(op.getLoc(), vregType, slotBase,
-                                             zeroI16, zeroI16, *oneBlockMask)
-                            .getResult());
-    }
-
+    if (failed(lowerGroupSlotLoadParts(op, *source, *offset, *sourceGroupStride,
+                                       resultVMIType, resultTypes, numGroups,
+                                       rewriter, results)))
+      return failure();
     rewriter.replaceOp(op, results, adaptor.getResultMapping());
     return success();
   }
@@ -5858,13 +6146,87 @@ struct OneToNVMIMaskedStoreOpPattern
 
 struct OneToNVMIGroupBroadcastLoadOpPattern
     : OneToNOpConversionPattern<VMIGroupBroadcastLoadOp> {
-  using OneToNOpConversionPattern<
-      VMIGroupBroadcastLoadOp>::OneToNOpConversionPattern;
+  OneToNVMIGroupBroadcastLoadOpPattern(
+      TypeConverter &typeConverter, MLIRContext *context,
+      const VMITargetCapabilityRegistry &capabilities)
+      : OneToNOpConversionPattern<VMIGroupBroadcastLoadOp>(typeConverter,
+                                                           context),
+        capabilities(capabilities) {}
 
   LogicalResult
   matchAndRewrite(VMIGroupBroadcastLoadOp op, OpAdaptor adaptor,
                   OneToNPatternRewriter &rewriter) const override {
     auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
+    int64_t numGroups = op.getNumGroupsAttr().getInt();
+    FailureOr<Value> source =
+        getSingleValue(op, adaptor.getSource(),
+                       "group_broadcast_load source must convert to one value",
+                       rewriter);
+    FailureOr<Value> offset =
+        getSingleValue(op, adaptor.getOffset(),
+                       "group_broadcast_load offset must convert to one value",
+                       rewriter);
+    FailureOr<Value> sourceGroupStride = getSingleValue(
+        op, adaptor.getSourceGroupStride(),
+        "group_broadcast_load source_group_stride must convert to one value",
+        rewriter);
+    if (failed(source) || failed(offset) || failed(sourceGroupStride))
+      return failure();
+
+    VMILayoutSupport supports;
+    std::string supportReason;
+    FailureOr<VMIGroupBroadcastLoadSupport> support =
+        supports.getGroupBroadcastLoadSupport(capabilities, op, &supportReason);
+    if (failed(support))
+      return rewriter.notifyMatchFailure(
+          op, Twine("group_broadcast_load has no registered support: ") +
+                  supportReason);
+
+    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    if (support->kind ==
+        VMIGroupBroadcastLoadSupportKind::SlotLoadThenBroadcast) {
+      std::optional<int64_t> stride =
+          getConstantIndexValue(op.getSourceGroupStride());
+      int64_t slots = (stride && *stride == 1) ? 8 : 1;
+      auto sourceVMIType = VMIVRegType::get(
+          rewriter.getContext(), numGroups, resultVMIType.getElementType(),
+          VMILayoutAttr::getGroupSlots(rewriter.getContext(), numGroups,
+                                       slots));
+
+      FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceVMIType);
+      FailureOr<Type> sourceElementType =
+          getVMIVRegPhysicalElementType(sourceVMIType);
+      if (failed(sourceArity) || failed(sourceElementType))
+        return rewriter.notifyMatchFailure(
+            op, "group_broadcast_load fallback cannot derive physical types");
+
+      SmallVector<Type> sourceTypes;
+      sourceTypes.reserve(*sourceArity);
+      FailureOr<int64_t> sourceLanesPerPart =
+          getDataLanesPerPart(*sourceElementType);
+      if (failed(sourceLanesPerPart))
+        return rewriter.notifyMatchFailure(
+            op, "group_broadcast_load fallback cannot derive source lanes");
+      for (int64_t i = 0; i < *sourceArity; ++i)
+        sourceTypes.push_back(VRegType::get(rewriter.getContext(),
+                                            *sourceLanesPerPart,
+                                            *sourceElementType));
+
+      SmallVector<Value> sourceParts;
+      if (failed(lowerGroupSlotLoadParts(
+              op, *source, *offset, *sourceGroupStride, sourceVMIType,
+              sourceTypes, numGroups, rewriter, sourceParts)))
+        return failure();
+
+      SmallVector<Value> results;
+      if (failed(lowerGroupBroadcastParts(op, sourceParts, sourceVMIType,
+                                          resultVMIType, resultTypes,
+                                          numGroups, rewriter, results)))
+        return failure();
+      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      return success();
+    }
+
     VMILayoutAttr layout = resultVMIType.getLayoutAttr();
     bool contiguousPacketLayout = layout && layout.isContiguous();
     bool splitPacketLayout = layout && layout.isDeinterleaved() &&
@@ -5886,7 +6248,6 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
     int64_t directGroupSize = 256 / elementBits;
     StringRef e2bDist = elementBits == 16 ? "E2B_B16" : "E2B_B32";
 
-    int64_t numGroups = op.getNumGroupsAttr().getInt();
     if (numGroups <= 0 || resultVMIType.getElementCount() % numGroups != 0)
       return rewriter.notifyMatchFailure(
           op, "group_broadcast_load requires valid num_groups");
@@ -5911,21 +6272,10 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
           op, "group_broadcast_load E2B lowering requires constant unit "
               "source_group_stride");
 
-    FailureOr<Value> source =
-        getSingleValue(op, adaptor.getSource(),
-                       "group_broadcast_load source must convert to one value",
-                       rewriter);
-    FailureOr<Value> offset =
-        getSingleValue(op, adaptor.getOffset(),
-                       "group_broadcast_load offset must convert to one value",
-                       rewriter);
-    if (failed(source) || failed(offset))
-      return failure();
     if (!isa<PtrType>((*source).getType()))
       return rewriter.notifyMatchFailure(
           op, "group_broadcast_load E2B lowering requires !pto.ptr source");
 
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
     FailureOr<int64_t> chunksPerPart = getDataChunksInPart(resultVMIType, 0);
     if (failed(chunksPerPart) || *chunksPerPart <= 0)
       return rewriter.notifyMatchFailure(
@@ -5980,6 +6330,9 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
     rewriter.replaceOp(op, results, adaptor.getResultMapping());
     return success();
   }
+
+private:
+  const VMITargetCapabilityRegistry &capabilities;
 };
 
 struct OneToNVMIStrideLoadOpPattern
@@ -8624,9 +8977,8 @@ void populateVMIOneToNConversionPatterns(
       OneToNVMIMaskBinaryOpPattern<VMIMaskXOrOp, PxorOp>,
       OneToNVMIMaskUnaryOpPattern<VMIMaskNotOp, PnotOp>, OneToNVMILoadOpPattern,
       OneToNVMIDeinterleaveLoadOpPattern, OneToNVMIGroupLoadOpPattern,
-      OneToNVMIGroupSlotLoadOpPattern, OneToNVMIGroupBroadcastLoadOpPattern,
-      OneToNVMIStrideLoadOpPattern, OneToNVMIMaskedLoadOpPattern,
-      OneToNVMIGatherOpPattern,
+      OneToNVMIGroupSlotLoadOpPattern, OneToNVMIStrideLoadOpPattern,
+      OneToNVMIMaskedLoadOpPattern, OneToNVMIGatherOpPattern,
       OneToNVMIExpandLoadOpPattern, OneToNVMIStoreOpPattern,
       OneToNVMIInterleaveStoreOpPattern, OneToNVMIGroupStoreOpPattern,
       OneToNVMIMaskedStoreOpPattern, OneToNVMIStrideStoreOpPattern,
@@ -8666,6 +9018,8 @@ void populateVMIOneToNConversionPatterns(
       OneToNVMISIToFPOpPattern, OneToNVMIBitcastOpPattern,
       OneToNVMIChannelSplitOpPattern, OneToNVMIChannelMergeOpPattern,
       OneToNVMIShuffleOpPattern>(typeConverter, patterns.getContext());
+  patterns.add<OneToNVMIGroupBroadcastLoadOpPattern>(
+      typeConverter, patterns.getContext(), capabilities);
   patterns.add<
       OneToNVMIGroupReduceOpPattern<VMIGroupReduceAddFOp, VcgaddOp, VaddOp>,
       OneToNVMIGroupReduceOpPattern<VMIGroupReduceAddIOp, VcgaddOp, VaddOp>,
@@ -9464,11 +9818,10 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
         return WalkResult::advance();
       load.emitError()
           << kVMIDiagUnsupportedPrefix
-          << "pto.vmi.group_broadcast_load currently lowers through E2B "
-             "only for b16/b32 contiguous direct group size or "
-             "deinterleaved=2/block_elems=1 split group size full result "
-             "chunks, num_groups multiple of 8, unit source_group_stride, "
-             "and supported UB pointer source ("
+          << "pto.vmi.group_broadcast_load requires either the E2B packet "
+             "form for b16/b32 direct or split group size, or the generic "
+             "group-slot-load then group-broadcast fallback with supported UB "
+             "pointer source and source_group_stride ("
           << reason << ")";
       return WalkResult::interrupt();
     }

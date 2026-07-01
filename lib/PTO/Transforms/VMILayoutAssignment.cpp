@@ -326,7 +326,7 @@ struct LayoutSolver {
       return existing;
 
     if (!isE2BGroupBroadcastLoadCandidate(op))
-      return getContiguousLayout();
+      return {};
     int64_t numGroups = op.getNumGroupsAttr().getInt();
     int64_t groupSize = type.getElementCount() / numGroups;
     int64_t directGroupSize = 256 / getElementBitWidth(type.getElementType());
@@ -546,7 +546,8 @@ struct LayoutSolver {
                VMISubIOp, VMIMulFOp, VMIMulIOp, VMIFmaOp, VMIDivFOp, VMIMinFOp,
                VMIMaxFOp, VMINegFOp, VMIAbsFOp, VMIAbsIOp, VMISqrtOp, VMIExpOp,
                VMILnOp, VMIReluOp, VMIFPToSIOp, VMIAndIOp, VMIOrIOp, VMIXOrIOp,
-               VMIShLIOp, VMIShRUIOp, VMINotOp, VMISelectOp, VMIBitcastOp>(op);
+               VMIShLIOp, VMIShRUIOp, VMINotOp, VMISelectOp, VMIBitcastOp,
+               VMIGroupBroadcastLoadOp>(op);
   }
 
   bool canGroupBroadcastProduceLayout(VMIGroupBroadcastOp broadcast,
@@ -559,6 +560,37 @@ struct LayoutSolver {
     auto assignedSourceType = VMIVRegType::get(
         ctx, sourceType.getElementCount(), sourceType.getElementType(),
         getPreferredGroupSlotsLayout(sourceType, numGroups));
+    auto assignedResultType =
+        VMIVRegType::get(ctx, resultType.getElementCount(),
+                         resultType.getElementType(), resultLayout);
+    VMILayoutSupport supports;
+    return succeeded(supports.getGroupBroadcastSupport(
+        capabilities, assignedSourceType, assignedResultType, numGroups));
+  }
+
+  bool canGroupBroadcastLoadProduceLayout(VMIGroupBroadcastLoadOp load,
+                                          VMILayoutAttr resultLayout) {
+    if (!resultLayout)
+      return false;
+    auto resultType = cast<VMIVRegType>(load.getResult().getType());
+    int64_t numGroups = load.getNumGroupsAttr().getInt();
+    unsigned elementBits = getElementBitWidth(resultType.getElementType());
+    if (elementBits == 0 || 256 % elementBits != 0)
+      return false;
+    std::optional<int64_t> stride =
+        getConstantIndexValue(load.getSourceGroupStride());
+    int64_t alignedStrideElems = 256 / elementBits;
+    int64_t slots = 0;
+    if (stride && *stride == 1)
+      slots = 8;
+    else if (stride && *stride > 0 && *stride % alignedStrideElems == 0)
+      slots = 1;
+    else
+      return false;
+
+    auto assignedSourceType =
+        VMIVRegType::get(ctx, numGroups, resultType.getElementType(),
+                         VMILayoutAttr::getGroupSlots(ctx, numGroups, slots));
     auto assignedResultType =
         VMIVRegType::get(ctx, resultType.getElementCount(),
                          resultType.getElementType(), resultLayout);
@@ -581,6 +613,11 @@ struct LayoutSolver {
             !canGroupBroadcastProduceLayout(broadcast, requestedLayout))
           return false;
       }
+      if (auto load = node.value.getDefiningOp<VMIGroupBroadcastLoadOp>()) {
+        if (node.value == load.getResult() &&
+            !canGroupBroadcastLoadProduceLayout(load, requestedLayout))
+          return false;
+      }
     }
     return true;
   }
@@ -588,7 +625,10 @@ struct LayoutSolver {
   bool isUnsupportedGroupBroadcastResultForLayout(Value value,
                                                   VMILayoutAttr layout) {
     auto broadcast = value.getDefiningOp<VMIGroupBroadcastOp>();
-    return broadcast && !canGroupBroadcastProduceLayout(broadcast, layout);
+    if (broadcast)
+      return !canGroupBroadcastProduceLayout(broadcast, layout);
+    auto load = value.getDefiningOp<VMIGroupBroadcastLoadOp>();
+    return load && !canGroupBroadcastLoadProduceLayout(load, layout);
   }
 
   LogicalResult constrainElementwiseBinary(OpOperand &lhs, OpOperand &rhs,
@@ -700,109 +740,6 @@ struct LayoutSolver {
             addMaskValue(arg);
           }
     });
-    return success();
-  }
-
-  bool shouldCommuteTruncFAfterGroupBroadcast(VMIGroupBroadcastOp broadcast) {
-    auto truncf = broadcast.getSource().getDefiningOp<VMITruncFOp>();
-    if (!truncf)
-      return false;
-
-    auto truncSourceType = dyn_cast<VMIVRegType>(truncf.getSource().getType());
-    auto truncResultType = dyn_cast<VMIVRegType>(truncf.getResult().getType());
-    auto broadcastResultType =
-        dyn_cast<VMIVRegType>(broadcast.getResult().getType());
-    if (!truncSourceType || !truncResultType || !broadcastResultType)
-      return false;
-    if (truncSourceType.getElementCount() !=
-            truncResultType.getElementCount() ||
-        truncResultType.getElementCount() !=
-            broadcastResultType.getElementCount())
-      return false;
-
-    VMILayoutAttr sourceLayout = truncSourceType.getLayoutAttr();
-    bool sourceIsGroupSlotValue =
-        (sourceLayout && sourceLayout.isGroupSlots()) ||
-        truncf.getSource().getDefiningOp<VMIGroupReduceAddFOp>() ||
-        truncf.getSource().getDefiningOp<VMIGroupReduceMaxFOp>() ||
-        truncf.getSource().getDefiningOp<VMIGroupSlotLoadOp>();
-    if (!sourceIsGroupSlotValue)
-      return false;
-
-    unsigned sourceBits = getElementBitWidth(truncSourceType.getElementType());
-    unsigned resultBits = getElementBitWidth(truncResultType.getElementType());
-    return truncSourceType.getElementType().isF32() && sourceBits > resultBits;
-  }
-
-  LogicalResult commuteTruncFAfterGroupBroadcast() {
-    SmallVector<VMIGroupBroadcastOp> broadcasts;
-    module.walk([&](VMIGroupBroadcastOp broadcast) {
-      if (shouldCommuteTruncFAfterGroupBroadcast(broadcast))
-        broadcasts.push_back(broadcast);
-    });
-
-    OpBuilder builder(ctx);
-    for (VMIGroupBroadcastOp broadcast : broadcasts) {
-      auto truncf = broadcast.getSource().getDefiningOp<VMITruncFOp>();
-      if (!truncf)
-        continue;
-
-      auto truncSourceType = cast<VMIVRegType>(truncf.getSource().getType());
-      auto broadcastResultType =
-          cast<VMIVRegType>(broadcast.getResult().getType());
-      auto wideBroadcastType =
-          VMIVRegType::get(ctx, broadcastResultType.getElementCount(),
-                           truncSourceType.getElementType(),
-                           broadcastResultType.getLayoutAttr());
-
-      builder.setInsertionPoint(broadcast);
-      auto wideBroadcast = builder.create<VMIGroupBroadcastOp>(
-          broadcast.getLoc(), wideBroadcastType, truncf.getSource(),
-          broadcast.getNumGroupsAttr());
-      auto narrow = builder.create<VMITruncFOp>(
-          broadcast.getLoc(), broadcastResultType, wideBroadcast.getResult());
-      broadcast.getResult().replaceAllUsesWith(narrow.getResult());
-      broadcast.erase();
-      if (truncf->use_empty())
-        truncf.erase();
-    }
-    return success();
-  }
-
-  LogicalResult fuseGroupSlotBroadcastLoads() {
-    SmallVector<VMIGroupBroadcastOp> broadcasts;
-    module.walk([&](VMIGroupBroadcastOp broadcast) {
-      auto load = broadcast.getSource().getDefiningOp<VMIGroupSlotLoadOp>();
-      if (!load || !load.getResult().hasOneUse())
-        return;
-      if (load.getNumGroupsAttr().getInt() !=
-          broadcast.getNumGroupsAttr().getInt())
-        return;
-
-      if (!isE2BGroupBroadcastLoadCandidate(
-              cast<VMIVRegType>(broadcast.getResult().getType()),
-              load.getSource().getType(), load.getSourceGroupStride(),
-              broadcast.getNumGroupsAttr().getInt()))
-        return;
-      broadcasts.push_back(broadcast);
-    });
-
-    OpBuilder builder(ctx);
-    for (VMIGroupBroadcastOp broadcast : broadcasts) {
-      auto load = broadcast.getSource().getDefiningOp<VMIGroupSlotLoadOp>();
-      if (!load)
-        continue;
-
-      builder.setInsertionPoint(broadcast);
-      auto fused = builder.create<VMIGroupBroadcastLoadOp>(
-          broadcast.getLoc(), broadcast.getResult().getType(),
-          load.getSource(), load.getOffset(), load.getSourceGroupStride(),
-          broadcast.getNumGroupsAttr());
-      broadcast.getResult().replaceAllUsesWith(fused.getResult());
-      broadcast.erase();
-      if (load->use_empty())
-        load.erase();
-    }
     return success();
   }
 
@@ -2030,10 +1967,6 @@ struct LayoutSolver {
   }
 
   LogicalResult run() {
-    if (failed(fuseGroupSlotBroadcastLoads()))
-      return failure();
-    if (failed(commuteTruncFAfterGroupBroadcast()))
-      return failure();
     if (failed(collect()))
       return failure();
     if (failed(addConstraints()))
