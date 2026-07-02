@@ -201,10 +201,11 @@ LogicalResult verifyVMIToVPTOInputTypes(Operation *op) {
     if (failed(verifyLayoutAssignedVMITypeTree(op, type)))
       return failure();
   if (auto func = dyn_cast<func::FuncOp>(op)) {
-    for (Type type : func.getFunctionType().getInputs())
+    FunctionType functionType = func.getFunctionType();
+    for (Type type : functionType.getInputs())
       if (failed(verifyLayoutAssignedVMITypeTree(op, type)))
         return failure();
-    for (Type type : func.getFunctionType().getResults())
+    for (Type type : functionType.getResults())
       if (failed(verifyLayoutAssignedVMITypeTree(op, type)))
         return failure();
   }
@@ -7938,21 +7939,31 @@ struct OneToNVMITruncFOpPattern : OneToNOpConversionPattern<VMITruncFOp> {
       return success();
     }
 
-    ArrayRef<StringRef> parts;
+    ArrayRef<StringRef> allParts;
     int64_t factor = 0;
-    if (resultBits == 16 && sourceParts.size() == 2 * resultTypes.size()) {
+    if (resultBits == 16) {
       static constexpr StringRef kEvenOddParts[] = {"EVEN", "ODD"};
-      parts = kEvenOddParts;
+      allParts = kEvenOddParts;
       factor = 2;
-    } else if (resultBits == 8 &&
-               sourceParts.size() == 4 * resultTypes.size()) {
+    } else if (resultBits == 8) {
       static constexpr StringRef kPacked4Parts[] = {"P0", "P1", "P2", "P3"};
-      parts = kPacked4Parts;
+      allParts = kPacked4Parts;
       factor = 4;
     } else {
       return rewriter.notifyMatchFailure(
           op, "unsupported physical truncf source/result width relation");
     }
+
+    int64_t resultLaneStride =
+        resultLayout && resultLayout.isContiguous() ? resultLayout.getLaneStride()
+                                                    : 1;
+    if (resultLaneStride <= 0 || factor % resultLaneStride != 0)
+      return rewriter.notifyMatchFailure(
+          op, "unsupported physical truncf result lane stride");
+    int64_t sourceFactor = factor / resultLaneStride;
+    if (sourceParts.size() != sourceFactor * resultTypes.size())
+      return rewriter.notifyMatchFailure(
+          op, "unsupported physical truncf source/result arity relation");
 
     FailureOr<Value> sourceMask =
         createAllTrueMaskForVReg(op.getLoc(), sourceType0, rewriter);
@@ -7972,15 +7983,16 @@ struct OneToNVMITruncFOpPattern : OneToNOpConversionPattern<VMITruncFOp> {
             op, "failed to build truncf result mask");
 
       SmallVector<Value> partials;
-      partials.reserve(parts.size());
-      for (int64_t partIndex = 0; partIndex < factor; ++partIndex) {
+      partials.reserve(sourceFactor);
+      for (int64_t partIndex = 0; partIndex < sourceFactor; ++partIndex) {
         Value sourcePart =
             sourceParts[partIndex * resultTypes.size() + chunkIndex];
         partials.push_back(
             rewriter
                 .create<VcvtOp>(op.getLoc(), resultType, sourcePart,
                                 *sourceMask, rnd, sat,
-                                rewriter.getStringAttr(parts[partIndex]))
+                                rewriter.getStringAttr(
+                                    allParts[partIndex * resultLaneStride]))
                 .getResult());
       }
 
@@ -10315,8 +10327,8 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
       truncf.emitError()
           << kVMIDiagUnsupportedPrefix
           << "pto.vmi.truncf supports only f32 deinterleaved=2 source parts "
-             "to one contiguous f16 result chunk or f32 deinterleaved=4 "
-             "source parts to one contiguous fp8-like result chunk, or f32 "
+             "to dense f16 results, f32 source layouts whose factor times the "
+             "result lane_stride matches the fp8-like narrowing factor, or f32 "
              "group_slots(num_groups=G, slots=1) to f16 "
              "group_slots(num_groups=G, slots=1) ("
           << reason << ")";
