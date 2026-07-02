@@ -1948,7 +1948,8 @@ struct LayoutSolver {
         for (Value operand : it->second)
           results.push_back(operand.getType());
       } else {
-        for (Type type : func.getFunctionType().getResults()) {
+        FunctionType functionType = func.getFunctionType();
+        for (Type type : functionType.getResults()) {
           if (auto vregType = dyn_cast<VMIVRegType>(type)) {
             results.push_back(VMIVRegType::get(ctx, vregType.getElementCount(),
                                                vregType.getElementType(),
