@@ -19,5 +19,5 @@ module {
 }
 
 // CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.truncf supports only f32 deinterleaved=2 source parts
-// CHECK-SAME: one contiguous f16 result chunk
-// CHECK-SAME: f32 deinterleaved=4 source parts to one contiguous fp8-like result chunk
+// CHECK-SAME: dense f16 results
+// CHECK-SAME: f32 source layouts whose factor times the result lane_stride matches the fp8-like narrowing factor

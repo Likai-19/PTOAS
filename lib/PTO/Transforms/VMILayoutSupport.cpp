@@ -607,7 +607,8 @@ FailureOr<VMICastLayoutFact> VMILayoutSupport::getPreferredCastLayoutFact(
         *compactSourceArity > *baselineSourceArity ||
         *compactResultArity >= *baselineResultArity)
       return baseline;
-  } else {
+  } else if (!sourceType.getElementType().isF32() ||
+             !isa<FloatType>(resultType.getElementType())) {
     VMIVRegType baselineSourceType =
         VMIVRegType::get(ctx, sourceType.getElementCount(),
                          sourceType.getElementType(), baseline->sourceLayout);
@@ -622,6 +623,61 @@ FailureOr<VMICastLayoutFact> VMILayoutSupport::getPreferredCastLayoutFact(
         *compactResultArity > *baselineResultArity ||
         *compactSourceArity >= *baselineSourceArity)
       return baseline;
+  } else {
+    VMICastLayoutFact best = *baseline;
+    VMIVRegType baselineSourceType =
+        VMIVRegType::get(ctx, sourceType.getElementCount(),
+                         sourceType.getElementType(), baseline->sourceLayout);
+    VMIVRegType baselineResultType =
+        VMIVRegType::get(ctx, resultType.getElementCount(),
+                         resultType.getElementType(), baseline->resultLayout);
+    FailureOr<int64_t> bestSourceArity = getVMIPhysicalArity(baselineSourceType);
+    FailureOr<int64_t> bestResultArity = getVMIPhysicalArity(baselineResultType);
+    if (failed(bestSourceArity) || failed(bestResultArity))
+      return baseline;
+    int64_t bestCost = *bestSourceArity + *bestResultArity;
+
+    for (int64_t sourceFactor = 1; sourceFactor <= baseline->factor;
+         sourceFactor *= 2) {
+      if (baseline->factor % sourceFactor != 0)
+        continue;
+      int64_t resultLaneStride = baseline->factor / sourceFactor;
+      if (resultLaneStride != 1 &&
+          !hasDenseLaneStridePackUnpackElement(resultType.getElementType(),
+                                               resultLaneStride))
+        continue;
+
+      VMILayoutAttr sourceLayout =
+          sourceFactor == 1
+              ? VMILayoutAttr::getContiguous(ctx)
+              : VMILayoutAttr::getDeinterleaved(ctx, sourceFactor,
+                                                /*blockElems=*/1);
+      VMILayoutAttr resultLayout =
+          VMILayoutAttr::getContiguous(ctx, resultLaneStride);
+      VMIVRegType candidateSourceType =
+          VMIVRegType::get(ctx, sourceType.getElementCount(),
+                           sourceType.getElementType(), sourceLayout);
+      VMIVRegType candidateResultType =
+          VMIVRegType::get(ctx, resultType.getElementCount(),
+                           resultType.getElementType(), resultLayout);
+      FailureOr<int64_t> candidateSourceArity =
+          getVMIPhysicalArity(candidateSourceType);
+      FailureOr<int64_t> candidateResultArity =
+          getVMIPhysicalArity(candidateResultType);
+      if (failed(candidateSourceArity) || failed(candidateResultArity) ||
+          *candidateSourceArity != sourceFactor * *candidateResultArity)
+        continue;
+
+      int64_t candidateCost = *candidateSourceArity + *candidateResultArity;
+      if (candidateCost >= bestCost)
+        continue;
+
+      best = *baseline;
+      best.sourceLayout = sourceLayout;
+      best.resultLayout = resultLayout;
+      bestCost = candidateCost;
+    }
+    return best;
   }
 
   VMICastLayoutFact compact = *baseline;
@@ -1581,16 +1637,24 @@ VMILayoutSupport::getTruncFSupport(VMITruncFOp op, std::string *reason) const {
     return fail("unsupported deinterleaved truncf factor, arity, or result "
                 "element width");
 
-  if (sourceLayout.isContiguous() && sourceLayout.getLaneStride() == 1 &&
-      resultLayout.isContiguous() &&
-      resultLayout.getLaneStride() == fact->factor &&
-      *sourceArity == *resultArity) {
+  int64_t sourceFactor =
+      sourceLayout.isDeinterleaved() ? sourceLayout.getFactor() : 1;
+  if (((sourceLayout.isContiguous() && sourceLayout.getLaneStride() == 1) ||
+       (sourceLayout.isDeinterleaved() && sourceLayout.getBlockElems() == 1 &&
+        sourceLayout.getLaneStride() == 1)) &&
+      resultLayout.isContiguous() && resultLayout.getLaneStride() > 0 &&
+      sourceFactor * resultLayout.getLaneStride() == fact->factor &&
+      *sourceArity == sourceFactor * *resultArity) {
     if (fact->kind == VMICastLayoutKind::Narrow2x)
       return VMITruncFSupport{
-          VMITruncFSupportKind::ContiguousF32ToLaneStrideF16};
+          resultLayout.getLaneStride() == 1
+              ? VMITruncFSupportKind::Deinterleaved2F32ToContiguousF16
+              : VMITruncFSupportKind::ContiguousF32ToLaneStrideF16};
     if (fact->kind == VMICastLayoutKind::Narrow4x)
       return VMITruncFSupport{
-          VMITruncFSupportKind::ContiguousF32ToLaneStrideF8};
+          resultLayout.getLaneStride() == 1
+              ? VMITruncFSupportKind::Deinterleaved4F32ToContiguousF8
+              : VMITruncFSupportKind::ContiguousF32ToLaneStrideF8};
   }
 
   if (!sourceLayout.isDeinterleaved() || !resultLayout.isContiguous() ||
