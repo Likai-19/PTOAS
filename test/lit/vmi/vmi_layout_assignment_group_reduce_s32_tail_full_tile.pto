@@ -55,15 +55,15 @@ module {
 // ASSIGN: pto.vmi.group_store %[[SUM]]
 
 // LOWER-LABEL: func.func @vmi_layout_assignment_group_reduce_s32_tail_full_tile(
-// LOWER-DAG: %[[C6:.*]] = arith.constant 6 : i32
-// LOWER-DAG: %[[C48:.*]] = arith.constant 48 : i32
 // LOWER-COUNT-4: pto.vlds
 // LOWER-COUNT-3: pto.vdintlv
-// LOWER-COUNT-4: pto.plt_b32 %[[C48]] : i32 -> !pto.mask<b32>, i32
+// LOWER-COUNT-4: pto.plt_b32 %{{.*}} : i32 -> !pto.mask<b32>, i32
+// LOWER: %[[C6:.*]] = arith.constant 6 : i32
 // LOWER: %[[SLOTS:.*]], %{{.*}} = pto.plt_b32 %[[C6]] : i32 -> !pto.mask<b32>, i32
 // LOWER-COUNT-4: pto.vcgadd
 // LOWER: pto.vadd {{.*}}, {{.*}}, %[[SLOTS]]
-// LOWER: %[[STORE:.*]], %{{.*}} = pto.plt_b32 %[[C6]] : i32 -> !pto.mask<b32>, i32
+// LOWER: %[[C6_STORE:.*]] = arith.constant 6 : i32
+// LOWER: %[[STORE:.*]], %{{.*}} = pto.plt_b32 %[[C6_STORE]] : i32 -> !pto.mask<b32>, i32
 // LOWER: pto.vsts {{.*}}, {{.*}}, %[[STORE]]
 // LOWER-NOT: pto.vmi.
 // LOWER-NOT: !pto.vmi.

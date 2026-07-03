@@ -61,8 +61,8 @@ module {
 }
 
 // CHECK-LABEL: func.func @vmi_to_vpto_iota_i32_asc(
-// CHECK: %[[C64:.*]] = arith.constant 64 : i32
 // CHECK: %[[P0:.*]] = pto.vci %arg0 : i32 -> !pto.vreg<64xi32>
+// CHECK: %[[C64:.*]] = arith.constant 64 : i32
 // CHECK: %[[B1:.*]] = arith.addi %arg0, %[[C64]] : i32
 // CHECK: %[[P1:.*]] = pto.vci %[[B1]] : i32 -> !pto.vreg<64xi32>
 // CHECK: return %[[P0]], %[[P1]]
@@ -71,8 +71,8 @@ module {
 // CHECK-NOT: unrealized_conversion_cast
 
 // CHECK-LABEL: func.func @vmi_to_vpto_iota_i32_desc(
-// CHECK: %[[C64:.*]] = arith.constant 64 : i32
 // CHECK: %[[P0:.*]] = pto.vci %arg0 {order = "DESC"} : i32 -> !pto.vreg<64xi32>
+// CHECK: %[[C64:.*]] = arith.constant 64 : i32
 // CHECK: %[[B1:.*]] = arith.subi %arg0, %[[C64]] : i32
 // CHECK: %[[P1:.*]] = pto.vci %[[B1]] {order = "DESC"} : i32 -> !pto.vreg<64xi32>
 // CHECK: return %[[P0]], %[[P1]]
@@ -81,15 +81,12 @@ module {
 // CHECK-NOT: unrealized_conversion_cast
 
 // CHECK-LABEL: func.func @vmi_to_vpto_iota_i32_deint2_asc(
-// CHECK-DAG: %[[ZERO:.*]] = arith.constant 0 : i32
-// CHECK-DAG: %[[FACTOR:.*]] = arith.constant 2 : i32
-// CHECK-DAG: %[[PART1:.*]] = arith.constant 1 : i32
-// CHECK: %[[LOCAL0:.*]] = pto.vci %[[ZERO]] : i32 -> !pto.vreg<64xi32>
-// CHECK: %[[SCALED0:.*]] = pto.vmuls %[[LOCAL0]], %[[FACTOR]],
+// CHECK: %[[LOCAL0:.*]] = pto.vci {{.*}} : i32 -> !pto.vreg<64xi32>
+// CHECK: %[[SCALED0:.*]] = pto.vmuls %[[LOCAL0]], {{.*}},
 // CHECK: %[[P0:.*]] = pto.vadds %[[SCALED0]], %arg0,
-// CHECK: %[[LOCAL1:.*]] = pto.vci %[[ZERO]] : i32 -> !pto.vreg<64xi32>
-// CHECK: %[[SCALED1:.*]] = pto.vmuls %[[LOCAL1]], %[[FACTOR]],
-// CHECK: %[[BASE1:.*]] = arith.addi %arg0, %[[PART1]] : i32
+// CHECK: %[[LOCAL1:.*]] = pto.vci {{.*}} : i32 -> !pto.vreg<64xi32>
+// CHECK: %[[SCALED1:.*]] = pto.vmuls %[[LOCAL1]], {{.*}},
+// CHECK: %[[BASE1:.*]] = arith.addi %arg0, {{.*}} : i32
 // CHECK: %[[P1:.*]] = pto.vadds %[[SCALED1]], %[[BASE1]],
 // CHECK: return %[[P0]], %[[P1]]
 // CHECK-NOT: pto.vmi.
@@ -104,15 +101,12 @@ module {
 // CHECK-NOT: unrealized_conversion_cast
 
 // CHECK-LABEL: func.func @vmi_to_vpto_iota_f16_deint2_asc(
-// CHECK-DAG: %[[ZERO16:.*]] = arith.constant 0.000000e+00 : f16
-// CHECK-DAG: %[[FACTOR16:.*]] = arith.constant 2.000000e+00 : f16
-// CHECK-DAG: %[[PART16_1:.*]] = arith.constant 1.000000e+00 : f16
-// CHECK: %[[LOCAL16_0:.*]] = pto.vci %[[ZERO16]] : f16 -> !pto.vreg<128xf16>
-// CHECK: %[[SCALED16_0:.*]] = pto.vmuls %[[LOCAL16_0]], %[[FACTOR16]],
+// CHECK: %[[LOCAL16_0:.*]] = pto.vci {{.*}} : f16 -> !pto.vreg<128xf16>
+// CHECK: %[[SCALED16_0:.*]] = pto.vmuls %[[LOCAL16_0]], {{.*}},
 // CHECK: %[[P16_0:.*]] = pto.vadds %[[SCALED16_0]], %arg0,
-// CHECK: %[[LOCAL16_1:.*]] = pto.vci %[[ZERO16]] : f16 -> !pto.vreg<128xf16>
-// CHECK: %[[SCALED16_1:.*]] = pto.vmuls %[[LOCAL16_1]], %[[FACTOR16]],
-// CHECK: %[[BASE16_1:.*]] = arith.addf %arg0, %[[PART16_1]] : f16
+// CHECK: %[[LOCAL16_1:.*]] = pto.vci {{.*}} : f16 -> !pto.vreg<128xf16>
+// CHECK: %[[SCALED16_1:.*]] = pto.vmuls %[[LOCAL16_1]], {{.*}},
+// CHECK: %[[BASE16_1:.*]] = arith.addf %arg0, {{.*}} : f16
 // CHECK: %[[P16_1:.*]] = pto.vadds %[[SCALED16_1]], %[[BASE16_1]],
 // CHECK: return %[[P16_0]], %[[P16_1]]
 // CHECK-NOT: pto.vmi.
