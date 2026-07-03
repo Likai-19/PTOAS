@@ -25,7 +25,6 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"
-#include "mlir/Dialect/Func/Transforms/OneToNFuncConversions.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/Patterns.h"
@@ -33,11 +32,11 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "mlir/Transforms/OneToNTypeConversion.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
+#include <cassert>
 #include <type_traits>
 
 namespace mlir {
@@ -229,21 +228,20 @@ LogicalResult verifyVMIToVPTOInputIR(ModuleOp module) {
   return failure(result.wasInterrupted());
 }
 
-static std::optional<Value> materializeVPTOToVMI(OpBuilder &builder,
-                                                 Type resultType,
-                                                 ValueRange inputs,
-                                                 Location loc) {
+static Value materializeVPTOToVMI(OpBuilder &builder, Type resultType,
+                                  ValueRange inputs, Location loc) {
   if (!isVMIType(resultType))
-    return std::nullopt;
+    return {};
   return builder.create<VMIPackOp>(loc, resultType, inputs).getResult();
 }
 
-static std::optional<SmallVector<Value>>
-materializeVMIToVPTO(OpBuilder &builder, TypeRange resultTypes, Value input,
-                     Location loc) {
-  if (!isVMIType(input.getType()))
-    return std::nullopt;
-  auto unpackOp = builder.create<VMIUnpackOp>(loc, resultTypes, input);
+static SmallVector<Value> materializeVMIToVPTO(OpBuilder &builder,
+                                               TypeRange resultTypes,
+                                               ValueRange inputs,
+                                               Location loc) {
+  if (inputs.size() != 1 || !isVMIType(inputs.front().getType()))
+    return {};
+  auto unpackOp = builder.create<VMIUnpackOp>(loc, resultTypes, inputs.front());
   return SmallVector<Value>(unpackOp->getResults());
 }
 
@@ -266,7 +264,7 @@ static FailureOr<Type> getVMIVRegPhysicalElementType(VMIVRegType type) {
   return IntegerType::get(type.getContext(), physicalBits);
 }
 
-class VMIToVPTOTypeConverter final : public OneToNTypeConverter {
+class VMIToVPTOTypeConverter final : public TypeConverter {
 public:
   VMIToVPTOTypeConverter() {
     addConversion([](Type type) { return type; });
@@ -297,10 +295,94 @@ public:
           return success();
         });
     TypeConverter::addSourceMaterialization(materializeVPTOToVMI);
-    TypeConverter::addArgumentMaterialization(materializeVPTOToVMI);
-    OneToNTypeConverter::addTargetMaterialization(materializeVMIToVPTO);
+    TypeConverter::addTargetMaterialization(materializeVMIToVPTO);
   }
 };
+
+FailureOr<SmallVector<Type>>
+getConvertedResultTypes(Operation *op, unsigned resultIndex,
+                        const TypeConverter &typeConverter) {
+  if (resultIndex >= op->getNumResults())
+    return failure();
+  SmallVector<Type> resultTypes;
+  if (failed(typeConverter.convertType(op->getResult(resultIndex).getType(),
+                                       resultTypes)))
+    return failure();
+  return resultTypes;
+}
+
+FailureOr<SmallVector<Type>>
+getConvertedResultTypes(Operation *op, const TypeConverter &typeConverter) {
+  SmallVector<Type> resultTypes;
+  if (failed(typeConverter.convertTypes(op->getResultTypes(), resultTypes)))
+    return failure();
+  return resultTypes;
+}
+
+void replaceOpWithFlatConvertedValues(
+    ConversionPatternRewriter &rewriter, Operation *op, ValueRange flatValues,
+    const TypeConverter &typeConverter) {
+  SmallVector<SmallVector<Value>> replacements;
+  replacements.reserve(op->getNumResults());
+
+  auto valueIt = flatValues.begin();
+  for (OpResult result : op->getResults()) {
+    SmallVector<Type> convertedTypes;
+    LogicalResult converted =
+        typeConverter.convertType(result.getType(), convertedTypes);
+    assert(succeeded(converted) && "expected converted result types");
+    (void)converted;
+    assert(std::distance(valueIt, flatValues.end()) >=
+               static_cast<ptrdiff_t>(convertedTypes.size()) &&
+           "not enough replacement values for converted results");
+    replacements.emplace_back(valueIt, valueIt + convertedTypes.size());
+    valueIt += convertedTypes.size();
+  }
+  assert(valueIt == flatValues.end() &&
+         "too many replacement values for converted results");
+
+  rewriter.replaceOpWithMultiple(op, std::move(replacements));
+}
+
+SmallVector<Value>
+flattenOneToNOperands(ArrayRef<ValueRange> operands) {
+  SmallVector<Value> flat;
+  for (ValueRange operand : operands)
+    llvm::append_range(flat, operand);
+  return flat;
+}
+
+bool isIdentityOneToNValueMapping(ValueRange originalValues,
+                                  ArrayRef<ValueRange> convertedValues) {
+  if (originalValues.size() != convertedValues.size())
+    return false;
+  for (auto [original, converted] :
+       llvm::zip_equal(originalValues, convertedValues)) {
+    if (converted.size() != 1 || converted.front() != original)
+      return false;
+  }
+  return true;
+}
+
+TypeRange getConvertedSignatureTypes(
+    const TypeConverter::SignatureConversion &conversion,
+    unsigned originalIndex) {
+  TypeRange convertedTypes = conversion.getConvertedTypes();
+  if (auto mapping = conversion.getInputMapping(originalIndex))
+    return convertedTypes.slice(mapping->inputNo, mapping->size);
+  return {};
+}
+
+bool hasNonIdentitySignatureConversion(
+    TypeRange originalTypes,
+    const TypeConverter::SignatureConversion &conversion) {
+  for (auto [index, originalType] : llvm::enumerate(originalTypes)) {
+    TypeRange convertedTypes = getConvertedSignatureTypes(conversion, index);
+    if (convertedTypes.size() != 1 || convertedTypes.front() != originalType)
+      return true;
+  }
+  return false;
+}
 
 FailureOr<Value> createAllTrueMaskForVReg(Location loc, VRegType vregType,
                                           PatternRewriter &rewriter) {
@@ -2965,34 +3047,35 @@ LogicalResult checkSupportedComparePredicate(Operation *op,
             "and signed integer forms slt/sle/sgt/sge";
 }
 
-struct OneToNVMIUnpackOpPattern : OneToNOpConversionPattern<VMIUnpackOp> {
-  using OneToNOpConversionPattern<VMIUnpackOp>::OneToNOpConversionPattern;
+struct OneToNVMIUnpackOpPattern : OpConversionPattern<VMIUnpackOp> {
+  using OpConversionPattern<VMIUnpackOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIUnpackOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIUnpackOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     ValueRange sourceParts = adaptor.getSource();
     if (sourceParts.size() != op->getNumResults())
       return rewriter.notifyMatchFailure(
           op, "converted source part count must match unpack results");
-    rewriter.replaceOp(op, sourceParts, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, sourceParts,
+                                     *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMIPackOpPattern : OneToNOpConversionPattern<VMIPackOp> {
-  using OneToNOpConversionPattern<VMIPackOp>::OneToNOpConversionPattern;
+struct OneToNVMIPackOpPattern : OpConversionPattern<VMIPackOp> {
+  using OpConversionPattern<VMIPackOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIPackOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIPackOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     FailureOr<int64_t> arity = getVMIPhysicalArity(op.getResult().getType());
-    if (failed(arity) ||
-        static_cast<int64_t>(adaptor.getFlatOperands().size()) != *arity)
+    SmallVector<Value> flatOperands = flattenOneToNOperands(adaptor.getOperands());
+    if (failed(arity) || static_cast<int64_t>(flatOperands.size()) != *arity)
       return rewriter.notifyMatchFailure(
           op, "pack part count must match converted VMI result arity");
-    rewriter.replaceOp(op, adaptor.getFlatOperands(),
-                       adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, flatOperands,
+                                     *this->getTypeConverter());
     return success();
   }
 };
@@ -3762,12 +3845,12 @@ FailureOr<SmallVector<Value>> materializeMaskGranularityConversion(
 }
 
 struct OneToNVMIEnsureLayoutOpPattern
-    : OneToNOpConversionPattern<VMIEnsureLayoutOp> {
-  using OneToNOpConversionPattern<VMIEnsureLayoutOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIEnsureLayoutOp> {
+  using OpConversionPattern<VMIEnsureLayoutOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIEnsureLayoutOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIEnsureLayoutOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto sourceType = cast<VMIVRegType>(op.getSource().getType());
     auto resultType = cast<VMIVRegType>(op.getResult().getType());
     VMILayoutSupport supports;
@@ -3785,24 +3868,28 @@ struct OneToNVMIEnsureLayoutOpPattern
           op, "ensure_layout requires assigned source/result layouts");
 
     ValueRange sourceParts = adaptor.getSource();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     FailureOr<SmallVector<Value>> results = materializeDataLayoutConversion(
         op, sourceParts, resultTypes, sourceLayout, resultLayout, rewriter);
     if (failed(results))
       return failure();
-    rewriter.replaceOp(op, *results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, *results, *this->getTypeConverter());
     return success();
   }
 };
 
 struct OneToNVMIEnsureMaskLayoutOpPattern
-    : OneToNOpConversionPattern<VMIEnsureMaskLayoutOp> {
-  using OneToNOpConversionPattern<
-      VMIEnsureMaskLayoutOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIEnsureMaskLayoutOp> {
+  using OpConversionPattern<
+      VMIEnsureMaskLayoutOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIEnsureMaskLayoutOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIEnsureMaskLayoutOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto sourceType = cast<VMIMaskType>(op.getSource().getType());
     auto resultType = cast<VMIMaskType>(op.getResult().getType());
     VMILayoutSupport supports;
@@ -3820,28 +3907,32 @@ struct OneToNVMIEnsureMaskLayoutOpPattern
     VMILayoutAttr resultLayout = resultType.getLayoutAttr();
 
     ValueRange sourceParts = adaptor.getSource();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     FailureOr<SmallVector<Value>> results = materializeMaskLayoutConversion(
         op, sourceParts, resultTypes, sourceLayout, resultLayout, rewriter);
     if (failed(results))
       return failure();
-    rewriter.replaceOp(op, *results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, *results, *this->getTypeConverter());
     return success();
   }
 };
 
 struct OneToNVMIEnsureMaskGranularityOpPattern
-    : OneToNOpConversionPattern<VMIEnsureMaskGranularityOp> {
+    : OpConversionPattern<VMIEnsureMaskGranularityOp> {
   OneToNVMIEnsureMaskGranularityOpPattern(
       TypeConverter &typeConverter, MLIRContext *context,
       const VMITargetCapabilityRegistry &capabilities)
-      : OneToNOpConversionPattern<VMIEnsureMaskGranularityOp>(typeConverter,
+      : OpConversionPattern<VMIEnsureMaskGranularityOp>(typeConverter,
                                                               context),
         capabilities(capabilities) {}
 
   LogicalResult
-  matchAndRewrite(VMIEnsureMaskGranularityOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIEnsureMaskGranularityOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto sourceType = cast<VMIMaskType>(op.getSource().getType());
     auto resultType = cast<VMIMaskType>(op.getResult().getType());
     VMILayoutSupport supports;
@@ -3857,7 +3948,11 @@ struct OneToNVMIEnsureMaskGranularityOpPattern
           op, "mask granularity helper cannot also change layout");
 
     ValueRange sourceParts = adaptor.getSource();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (sourceType.getGranularity() != resultType.getGranularity()) {
       FailureOr<SmallVector<Value>> results =
           materializeMaskGranularityConversion(
@@ -3871,14 +3966,14 @@ struct OneToNVMIEnsureMaskGranularityOpPattern
         if (result.getType() != type)
           return rewriter.notifyMatchFailure(
               op, "mask granularity result type mismatch");
-      rewriter.replaceOp(op, *results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, *results, *this->getTypeConverter());
       return success();
     }
 
     if (failed(verifyIdentityPartForwarding(op, sourceParts, resultTypes,
                                             rewriter)))
       return failure();
-    rewriter.replaceOp(op, sourceParts, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, sourceParts, *this->getTypeConverter());
     return success();
   }
 
@@ -3886,19 +3981,27 @@ private:
   const VMITargetCapabilityRegistry &capabilities;
 };
 
-struct OneToNVMIBroadcastOpPattern : OneToNOpConversionPattern<VMIBroadcastOp> {
-  using OneToNOpConversionPattern<VMIBroadcastOp>::OneToNOpConversionPattern;
+struct OneToNVMIBroadcastOpPattern : OpConversionPattern<VMIBroadcastOp> {
+  using OpConversionPattern<VMIBroadcastOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIBroadcastOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIBroadcastOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     ValueRange inputParts = adaptor.getValue();
     if (inputParts.size() != 1)
       return rewriter.notifyMatchFailure(
           op, "broadcast input must convert to one value");
     bool inputIsVReg = isa<VMIVRegType>(op.getValue().getType());
 
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+
+    if (failed(maybe_resultTypes))
+
+      return failure();
+
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     SmallVector<Value> results;
     results.reserve(resultTypes.size());
     for (Type resultType : resultTypes) {
@@ -3918,7 +4021,7 @@ struct OneToNVMIBroadcastOpPattern : OneToNOpConversionPattern<VMIBroadcastOp> {
                             .getResult());
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
@@ -4022,12 +4125,12 @@ FailureOr<Value> createIotaDeinterleavedChunk(Location loc, Type resultType,
       .getResult();
 }
 
-struct OneToNVMIIotaOpPattern : OneToNOpConversionPattern<VMIIotaOp> {
-  using OneToNOpConversionPattern<VMIIotaOp>::OneToNOpConversionPattern;
+struct OneToNVMIIotaOpPattern : OpConversionPattern<VMIIotaOp> {
+  using OpConversionPattern<VMIIotaOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIIotaOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIIotaOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
     VMILayoutAttr layout = resultVMIType.getLayoutAttr();
     if (!layout)
@@ -4044,7 +4147,15 @@ struct OneToNVMIIotaOpPattern : OneToNOpConversionPattern<VMIIotaOp> {
     if (failed(base))
       return failure();
 
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+
+    if (failed(maybe_resultTypes))
+
+      return failure();
+
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     SmallVector<Value> results;
     results.reserve(resultTypes.size());
 
@@ -4061,7 +4172,7 @@ struct OneToNVMIIotaOpPattern : OneToNOpConversionPattern<VMIIotaOp> {
               op, "failed to materialize contiguous iota chunk");
         results.push_back(*result);
       }
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -4084,17 +4195,17 @@ struct OneToNVMIIotaOpPattern : OneToNOpConversionPattern<VMIIotaOp> {
       }
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMIConstantOpPattern : OneToNOpConversionPattern<VMIConstantOp> {
-  using OneToNOpConversionPattern<VMIConstantOp>::OneToNOpConversionPattern;
+struct OneToNVMIConstantOpPattern : OpConversionPattern<VMIConstantOp> {
+  using OpConversionPattern<VMIConstantOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIConstantOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIConstantOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto denseAttr = dyn_cast<DenseElementsAttr>(op.getValue());
     if (!denseAttr || !denseAttr.isSplat())
       return rewriter.notifyMatchFailure(
@@ -4105,7 +4216,11 @@ struct OneToNVMIConstantOpPattern : OneToNOpConversionPattern<VMIConstantOp> {
 
     Value scalar =
         rewriter.create<arith::ConstantOp>(op.getLoc(), splatAttr).getResult();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     SmallVector<Value> results;
     results.reserve(resultTypes.size());
     for (Type resultType : resultTypes) {
@@ -4124,19 +4239,23 @@ struct OneToNVMIConstantOpPattern : OneToNOpConversionPattern<VMIConstantOp> {
                             .getResult());
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
 struct OneToNVMIConstantMaskOpPattern
-    : OneToNOpConversionPattern<VMIConstantMaskOp> {
-  using OneToNOpConversionPattern<VMIConstantMaskOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIConstantMaskOp> {
+  using OpConversionPattern<VMIConstantMaskOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIConstantMaskOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+  matchAndRewrite(VMIConstantMaskOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     std::string reason;
     FailureOr<SmallVector<ConstantMaskChunkMaterialization>> materializations =
         computeConstantMaskMaterialization(op, &reason);
@@ -4165,18 +4284,18 @@ struct OneToNVMIConstantMaskOpPattern
     if (results.size() != resultTypes.size())
       return rewriter.notifyMatchFailure(
           op, "constant_mask physical result count mismatch");
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
 struct OneToNVMICreateMaskOpPattern
-    : OneToNOpConversionPattern<VMICreateMaskOp> {
-  using OneToNOpConversionPattern<VMICreateMaskOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMICreateMaskOp> {
+  using OpConversionPattern<VMICreateMaskOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMICreateMaskOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMICreateMaskOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto activeConstant =
         op.getActiveLanes().getDefiningOp<arith::ConstantOp>();
     auto resultVMIType = cast<VMIMaskType>(op.getResult().getType());
@@ -4198,7 +4317,15 @@ struct OneToNVMICreateMaskOpPattern
       if (failed(active))
         return failure();
 
-      TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+      FailureOr<SmallVector<Type>> maybe_resultTypes =
+
+          getConvertedResultTypes(op, 0, *this->getTypeConverter());
+
+      if (failed(maybe_resultTypes))
+
+        return failure();
+
+      SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
       int64_t factor = layout.isDeinterleaved() ? layout.getFactor() : 1;
       if (resultTypes.size() % factor != 0)
         return rewriter.notifyMatchFailure(
@@ -4230,7 +4357,7 @@ struct OneToNVMICreateMaskOpPattern
         }
       }
 
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -4245,7 +4372,15 @@ struct OneToNVMICreateMaskOpPattern
     if (activeLanes > resultVMIType.getElementCount())
       activeLanes = resultVMIType.getElementCount();
 
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+
+    if (failed(maybe_resultTypes))
+
+      return failure();
+
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     int64_t factor = layout.isDeinterleaved() ? layout.getFactor() : 1;
     SmallVector<Value> results;
     results.reserve(resultTypes.size());
@@ -4308,20 +4443,24 @@ struct OneToNVMICreateMaskOpPattern
     if (results.size() != resultTypes.size())
       return rewriter.notifyMatchFailure(
           op, "create_mask physical result count mismatch");
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
 struct OneToNVMICreateGroupMaskOpPattern
-    : OneToNOpConversionPattern<VMICreateGroupMaskOp> {
-  using OneToNOpConversionPattern<
-      VMICreateGroupMaskOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMICreateGroupMaskOp> {
+  using OpConversionPattern<
+      VMICreateGroupMaskOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMICreateGroupMaskOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+  matchAndRewrite(VMICreateGroupMaskOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     auto resultVMIType = cast<VMIMaskType>(op.getResult().getType());
     VMILayoutAttr resultLayout = resultVMIType.getLayoutAttr();
     if (resultLayout && resultLayout.isDeinterleaved() &&
@@ -4385,7 +4524,7 @@ struct OneToNVMICreateGroupMaskOpPattern
           rewriter);
       if (failed(results))
         return failure();
-      rewriter.replaceOp(op, *results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, *results, *this->getTypeConverter());
       return success();
     }
 
@@ -4403,7 +4542,7 @@ struct OneToNVMICreateGroupMaskOpPattern
                                                 resultTypes, rewriter);
       if (failed(results))
         return failure();
-      rewriter.replaceOp(op, *results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, *results, *this->getTypeConverter());
       return success();
     }
 
@@ -4436,17 +4575,17 @@ struct OneToNVMICreateGroupMaskOpPattern
     if (results.size() != resultTypes.size())
       return rewriter.notifyMatchFailure(
           op, "create_group_mask physical result count mismatch");
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMILoadOpPattern : OneToNOpConversionPattern<VMILoadOp> {
-  using OneToNOpConversionPattern<VMILoadOp>::OneToNOpConversionPattern;
+struct OneToNVMILoadOpPattern : OpConversionPattern<VMILoadOp> {
+  using OpConversionPattern<VMILoadOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMILoadOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMILoadOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
     FailureOr<Value> source =
         getSingleValue(op, adaptor.getSource(),
@@ -4456,7 +4595,11 @@ struct OneToNVMILoadOpPattern : OneToNOpConversionPattern<VMILoadOp> {
                        "load offset must convert to one value", rewriter);
     if (failed(source) || failed(offset))
       return failure();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     VMILayoutAttr resultLayout = resultVMIType.getLayoutAttr();
     if (std::optional<std::string> dist =
             getDenseLaneStrideLoadDistToken(resultVMIType)) {
@@ -4481,7 +4624,7 @@ struct OneToNVMILoadOpPattern : OneToNOpConversionPattern<VMILoadOp> {
               op, "failed to compute lane_stride load active lanes");
         semanticOffset += *activeLanes;
       }
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -4518,7 +4661,7 @@ struct OneToNVMILoadOpPattern : OneToNOpConversionPattern<VMILoadOp> {
         results.reserve(resultTypes.size());
         results.append(lows);
         results.append(highs);
-        rewriter.replaceOp(op, results, adaptor.getResultMapping());
+        replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
         return success();
       }
     }
@@ -4577,7 +4720,7 @@ struct OneToNVMILoadOpPattern : OneToNOpConversionPattern<VMILoadOp> {
         results.append(part1);
         results.append(part2);
         results.append(part3);
-        rewriter.replaceOp(op, results, adaptor.getResultMapping());
+        replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
         return success();
       }
     }
@@ -4605,19 +4748,19 @@ struct OneToNVMILoadOpPattern : OneToNOpConversionPattern<VMILoadOp> {
     if (failed(results))
       return failure();
 
-    rewriter.replaceOp(op, *results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, *results, *this->getTypeConverter());
     return success();
   }
 };
 
 struct OneToNVMIDeinterleaveLoadOpPattern
-    : OneToNOpConversionPattern<VMIDeinterleaveLoadOp> {
-  using OneToNOpConversionPattern<
-      VMIDeinterleaveLoadOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIDeinterleaveLoadOp> {
+  using OpConversionPattern<
+      VMIDeinterleaveLoadOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIDeinterleaveLoadOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIDeinterleaveLoadOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto lowVMIType = cast<VMIVRegType>(op.getLow().getType());
     FailureOr<Value> source =
         getSingleValue(op, adaptor.getSource(),
@@ -4642,8 +4785,20 @@ struct OneToNVMIDeinterleaveLoadOpPattern
       return rewriter.notifyMatchFailure(
           op, "deinterleave_load requires vldsx2 DINTLV element support");
 
-    TypeRange lowTypes = adaptor.getResultMapping().getConvertedTypes(0);
-    TypeRange highTypes = adaptor.getResultMapping().getConvertedTypes(1);
+    FailureOr<SmallVector<Type>> maybe_lowTypes =
+
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+
+    if (failed(maybe_lowTypes))
+
+      return failure();
+
+    SmallVector<Type> lowTypes = std::move(*maybe_lowTypes);
+    FailureOr<SmallVector<Type>> maybe_highTypes =
+        getConvertedResultTypes(op, 1, *this->getTypeConverter());
+    if (failed(maybe_highTypes))
+      return failure();
+    SmallVector<Type> highTypes = std::move(*maybe_highTypes);
     if (lowTypes.size() != highTypes.size())
       return rewriter.notifyMatchFailure(
           op, "deinterleave_load requires matching low/high physical arity");
@@ -4672,17 +4827,17 @@ struct OneToNVMIDeinterleaveLoadOpPattern
     results.reserve(lows.size() + highs.size());
     results.append(lows);
     results.append(highs);
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMIGroupLoadOpPattern : OneToNOpConversionPattern<VMIGroupLoadOp> {
-  using OneToNOpConversionPattern<VMIGroupLoadOp>::OneToNOpConversionPattern;
+struct OneToNVMIGroupLoadOpPattern : OpConversionPattern<VMIGroupLoadOp> {
+  using OpConversionPattern<VMIGroupLoadOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIGroupLoadOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIGroupLoadOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
     FailureOr<Value> source =
         getSingleValue(op, adaptor.getSource(),
@@ -4723,7 +4878,15 @@ struct OneToNVMIGroupLoadOpPattern : OneToNOpConversionPattern<VMIGroupLoadOp> {
         return rewriter.notifyMatchFailure(
             op, "block8 group_load requires !pto.ptr source");
 
-      TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+      FailureOr<SmallVector<Type>> maybe_resultTypes =
+
+          getConvertedResultTypes(op, 0, *this->getTypeConverter());
+
+      if (failed(maybe_resultTypes))
+
+        return failure();
+
+      SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
       int64_t factor = resultLayout.getFactor();
       FailureOr<int64_t> chunksPerPart = getDataChunksInPart(resultVMIType, 0);
       if (failed(chunksPerPart) || *chunksPerPart <= 0)
@@ -4779,7 +4942,7 @@ struct OneToNVMIGroupLoadOpPattern : OneToNOpConversionPattern<VMIGroupLoadOp> {
         }
       }
 
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -4796,7 +4959,15 @@ struct OneToNVMIGroupLoadOpPattern : OneToNOpConversionPattern<VMIGroupLoadOp> {
                                               &chunksPerGroup, rewriter)))
       return failure();
 
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+
+    if (failed(maybe_resultTypes))
+
+      return failure();
+
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (static_cast<int64_t>(resultTypes.size()) != groupCount * chunksPerGroup)
       return rewriter.notifyMatchFailure(op, "group_load arity mismatch");
 
@@ -4820,7 +4991,7 @@ struct OneToNVMIGroupLoadOpPattern : OneToNOpConversionPattern<VMIGroupLoadOp> {
                             .getResult());
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
@@ -4828,7 +4999,7 @@ struct OneToNVMIGroupLoadOpPattern : OneToNOpConversionPattern<VMIGroupLoadOp> {
 static LogicalResult lowerGroupSlotLoadParts(
     Operation *op, Value source, Value offset, Value sourceGroupStride,
     VMIVRegType resultVMIType, TypeRange resultTypes, int64_t numGroups,
-    OneToNPatternRewriter &rewriter, SmallVectorImpl<Value> &results) {
+    ConversionPatternRewriter &rewriter, SmallVectorImpl<Value> &results) {
   VMILayoutAttr layout = resultVMIType.getLayoutAttr();
   if (!layout || !layout.isGroupSlots() || layout.getSlots() <= 0)
     return rewriter.notifyMatchFailure(
@@ -4951,7 +5122,7 @@ static LogicalResult lowerGroupSlotLoadParts(
 static LogicalResult lowerGroupBroadcastParts(
     Operation *op, ValueRange sourceParts, VMIVRegType sourceVMIType,
     VMIVRegType resultVMIType, TypeRange resultTypes, int64_t numGroups,
-    OneToNPatternRewriter &rewriter, SmallVectorImpl<Value> &results) {
+    ConversionPatternRewriter &rewriter, SmallVectorImpl<Value> &results) {
   FailureOr<int64_t> groupSize =
       getGroupSizeFromNumGroups(resultVMIType, numGroups);
   if (failed(groupSize))
@@ -5222,13 +5393,13 @@ static LogicalResult lowerGroupBroadcastParts(
 }
 
 struct OneToNVMIGroupSlotLoadOpPattern
-    : OneToNOpConversionPattern<VMIGroupSlotLoadOp> {
-  using OneToNOpConversionPattern<
-      VMIGroupSlotLoadOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIGroupSlotLoadOp> {
+  using OpConversionPattern<
+      VMIGroupSlotLoadOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIGroupSlotLoadOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIGroupSlotLoadOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
     VMILayoutAttr layout = resultVMIType.getLayoutAttr();
     if (!layout || !layout.isGroupSlots() || layout.getSlots() <= 0)
@@ -5248,7 +5419,15 @@ struct OneToNVMIGroupSlotLoadOpPattern
     if (failed(source) || failed(offset) || failed(sourceGroupStride))
       return failure();
 
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+
+    if (failed(maybe_resultTypes))
+
+      return failure();
+
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     int64_t numGroups = op.getNumGroupsAttr().getInt();
 
     SmallVector<Value> results;
@@ -5256,18 +5435,18 @@ struct OneToNVMIGroupSlotLoadOpPattern
                                        resultVMIType, resultTypes, numGroups,
                                        rewriter, results)))
       return failure();
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
 struct OneToNVMIMaskedLoadOpPattern
-    : OneToNOpConversionPattern<VMIMaskedLoadOp> {
-  using OneToNOpConversionPattern<VMIMaskedLoadOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIMaskedLoadOp> {
+  using OpConversionPattern<VMIMaskedLoadOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIMaskedLoadOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIMaskedLoadOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
     FailureOr<Value> source = getSingleValue(
         op, adaptor.getSource(), "masked_load source must convert to one value",
@@ -5285,7 +5464,11 @@ struct OneToNVMIMaskedLoadOpPattern
 
     ValueRange maskParts = adaptor.getMask();
     ValueRange passthruParts = adaptor.getPassthru();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (maskParts.size() != passthruParts.size() ||
         passthruParts.size() != resultTypes.size())
       return rewriter.notifyMatchFailure(op,
@@ -5315,17 +5498,17 @@ struct OneToNVMIMaskedLoadOpPattern
               .getResult());
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMIGatherOpPattern : OneToNOpConversionPattern<VMIGatherOp> {
-  using OneToNOpConversionPattern<VMIGatherOp>::OneToNOpConversionPattern;
+struct OneToNVMIGatherOpPattern : OpConversionPattern<VMIGatherOp> {
+  using OpConversionPattern<VMIGatherOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIGatherOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIGatherOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     FailureOr<Value> source =
         getSingleValue(op, adaptor.getSource(),
                        "gather source must convert to one value", rewriter);
@@ -5335,7 +5518,11 @@ struct OneToNVMIGatherOpPattern : OneToNOpConversionPattern<VMIGatherOp> {
     ValueRange indicesParts = adaptor.getIndices();
     ValueRange maskParts = adaptor.getMask();
     ValueRange passthruParts = adaptor.getPassthru();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (indicesParts.size() != maskParts.size() ||
         indicesParts.size() != passthruParts.size() ||
         indicesParts.size() != resultTypes.size())
@@ -5367,18 +5554,18 @@ struct OneToNVMIGatherOpPattern : OneToNOpConversionPattern<VMIGatherOp> {
               .getResult());
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
 struct OneToNVMIExpandLoadOpPattern
-    : OneToNOpConversionPattern<VMIExpandLoadOp> {
-  using OneToNOpConversionPattern<VMIExpandLoadOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIExpandLoadOp> {
+  using OpConversionPattern<VMIExpandLoadOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIExpandLoadOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIExpandLoadOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
     FailureOr<Value> source = getSingleValue(
         op, adaptor.getSource(), "expand_load source must convert to one value",
@@ -5389,7 +5576,15 @@ struct OneToNVMIExpandLoadOpPattern
     if (failed(source) || failed(offset))
       return failure();
 
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+
+    if (failed(maybe_resultTypes))
+
+      return failure();
+
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (isStaticAllActiveMask(op.getMask(), resultVMIType.getElementCount())) {
       FailureOr<int64_t> lanesPerPart = verifyFullOrSafeReadVRegChunks(
           op, resultVMIType, (*source).getType(), *offset, rewriter);
@@ -5412,7 +5607,7 @@ struct OneToNVMIExpandLoadOpPattern
                               .getResult());
       }
 
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -5465,18 +5660,18 @@ struct OneToNVMIExpandLoadOpPattern
                        .create<VselOp>(op.getLoc(), resultType, gathered,
                                        passthruParts.front(), maskParts.front())
                        .getResult();
-    rewriter.replaceOp(op, SmallVector<Value>{result},
-                       adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, SmallVector<Value>{result},
+                                     *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMIStoreOpPattern : OneToNOpConversionPattern<VMIStoreOp> {
-  using OneToNOpConversionPattern<VMIStoreOp>::OneToNOpConversionPattern;
+struct OneToNVMIStoreOpPattern : OpConversionPattern<VMIStoreOp> {
+  using OpConversionPattern<VMIStoreOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIStoreOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIStoreOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto valueVMIType = cast<VMIVRegType>(op.getValue().getType());
     FailureOr<int64_t> lanesPerPart =
         getDataLanesPerPart(valueVMIType.getElementType());
@@ -5612,13 +5807,13 @@ struct OneToNVMIStoreOpPattern : OneToNOpConversionPattern<VMIStoreOp> {
 };
 
 struct OneToNVMIInterleaveStoreOpPattern
-    : OneToNOpConversionPattern<VMIInterleaveStoreOp> {
-  using OneToNOpConversionPattern<
-      VMIInterleaveStoreOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIInterleaveStoreOp> {
+  using OpConversionPattern<
+      VMIInterleaveStoreOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIInterleaveStoreOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIInterleaveStoreOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto lowVMIType = cast<VMIVRegType>(op.getLow().getType());
     FailureOr<int64_t> lanesPerPart =
         getDataLanesPerPart(lowVMIType.getElementType());
@@ -5678,12 +5873,12 @@ struct OneToNVMIInterleaveStoreOpPattern
 };
 
 struct OneToNVMIGroupStoreOpPattern
-    : OneToNOpConversionPattern<VMIGroupStoreOp> {
-  using OneToNOpConversionPattern<VMIGroupStoreOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIGroupStoreOp> {
+  using OpConversionPattern<VMIGroupStoreOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIGroupStoreOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIGroupStoreOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto valueVMIType = cast<VMIVRegType>(op.getValue().getType());
     VMILayoutAttr layout = valueVMIType.getLayoutAttr();
 
@@ -6018,12 +6213,12 @@ struct OneToNVMIGroupStoreOpPattern
 };
 
 struct OneToNVMIMaskedStoreOpPattern
-    : OneToNOpConversionPattern<VMIMaskedStoreOp> {
-  using OneToNOpConversionPattern<VMIMaskedStoreOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIMaskedStoreOp> {
+  using OpConversionPattern<VMIMaskedStoreOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIMaskedStoreOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIMaskedStoreOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto valueVMIType = cast<VMIVRegType>(op.getValue().getType());
     FailureOr<int64_t> lanesPerPart =
         getDataLanesPerPart(valueVMIType.getElementType());
@@ -6146,17 +6341,17 @@ struct OneToNVMIMaskedStoreOpPattern
 };
 
 struct OneToNVMIGroupBroadcastLoadOpPattern
-    : OneToNOpConversionPattern<VMIGroupBroadcastLoadOp> {
+    : OpConversionPattern<VMIGroupBroadcastLoadOp> {
   OneToNVMIGroupBroadcastLoadOpPattern(
       TypeConverter &typeConverter, MLIRContext *context,
       const VMITargetCapabilityRegistry &capabilities)
-      : OneToNOpConversionPattern<VMIGroupBroadcastLoadOp>(typeConverter,
+      : OpConversionPattern<VMIGroupBroadcastLoadOp>(typeConverter,
                                                            context),
         capabilities(capabilities) {}
 
   LogicalResult
-  matchAndRewrite(VMIGroupBroadcastLoadOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIGroupBroadcastLoadOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
     int64_t numGroups = op.getNumGroupsAttr().getInt();
     FailureOr<Value> source =
@@ -6183,7 +6378,15 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
           op, Twine("group_broadcast_load has no registered support: ") +
                   supportReason);
 
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+
+    if (failed(maybe_resultTypes))
+
+      return failure();
+
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (support->kind ==
         VMIGroupBroadcastLoadSupportKind::SlotLoadThenBroadcast) {
       std::optional<int64_t> stride =
@@ -6224,7 +6427,7 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
                                           resultVMIType, resultTypes,
                                           numGroups, rewriter, results)))
         return failure();
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -6328,7 +6531,7 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
       }
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 
@@ -6337,12 +6540,12 @@ private:
 };
 
 struct OneToNVMIStrideLoadOpPattern
-    : OneToNOpConversionPattern<VMIStrideLoadOp> {
-  using OneToNOpConversionPattern<VMIStrideLoadOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIStrideLoadOp> {
+  using OpConversionPattern<VMIStrideLoadOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIStrideLoadOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIStrideLoadOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     FailureOr<Value> source = getSingleValue(
         op, adaptor.getSource(), "stride_load source must convert to one value",
         rewriter);
@@ -6360,7 +6563,11 @@ struct OneToNVMIStrideLoadOpPattern
       return failure();
 
     ValueRange maskParts = adaptor.getMask();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (resultTypes.size() != 1 || maskParts.size() != 1)
       return rewriter.notifyMatchFailure(
           op, "stride_load supports one physical result/mask chunk");
@@ -6378,19 +6585,19 @@ struct OneToNVMIStrideLoadOpPattern
             .create<VsldbOp>(op.getLoc(), resultType, base, *blockStride,
                              *repeatStride, maskParts.front())
             .getResult();
-    rewriter.replaceOp(op, SmallVector<Value>{loaded},
-                       adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, SmallVector<Value>{loaded},
+                                     *this->getTypeConverter());
     return success();
   }
 };
 
 struct OneToNVMIStrideStoreOpPattern
-    : OneToNOpConversionPattern<VMIStrideStoreOp> {
-  using OneToNOpConversionPattern<VMIStrideStoreOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIStrideStoreOp> {
+  using OpConversionPattern<VMIStrideStoreOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIStrideStoreOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIStrideStoreOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     FailureOr<Value> destination = getSingleValue(
         op, adaptor.getDestination(),
         "stride_store destination must convert to one value", rewriter);
@@ -6429,12 +6636,12 @@ struct OneToNVMIStrideStoreOpPattern
   }
 };
 
-struct OneToNVMIScatterOpPattern : OneToNOpConversionPattern<VMIScatterOp> {
-  using OneToNOpConversionPattern<VMIScatterOp>::OneToNOpConversionPattern;
+struct OneToNVMIScatterOpPattern : OpConversionPattern<VMIScatterOp> {
+  using OpConversionPattern<VMIScatterOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIScatterOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIScatterOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     FailureOr<Value> destination = getSingleValue(
         op, adaptor.getDestination(),
         "scatter destination must convert to one value", rewriter);
@@ -6465,16 +6672,20 @@ struct OneToNVMIScatterOpPattern : OneToNOpConversionPattern<VMIScatterOp> {
 
 
 template <typename SourceOp, typename TargetOp>
-struct OneToNVMIBinaryOpPattern : OneToNOpConversionPattern<SourceOp> {
-  using OneToNOpConversionPattern<SourceOp>::OneToNOpConversionPattern;
+struct OneToNVMIBinaryOpPattern : OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
       SourceOp op,
-      typename OneToNOpConversionPattern<SourceOp>::OpAdaptor adaptor,
-      OneToNPatternRewriter &rewriter) const override {
+      typename OpConversionPattern<SourceOp>::OneToNOpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
     ValueRange lhsParts = adaptor.getLhs();
     ValueRange rhsParts = adaptor.getRhs();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (lhsParts.size() != rhsParts.size() ||
         lhsParts.size() != resultTypes.size())
       return rewriter.notifyMatchFailure(op, "physical binary arity mismatch");
@@ -6498,21 +6709,25 @@ struct OneToNVMIBinaryOpPattern : OneToNOpConversionPattern<SourceOp> {
               .getResult());
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMIFmaOpPattern : OneToNOpConversionPattern<VMIFmaOp> {
-  using OneToNOpConversionPattern<VMIFmaOp>::OneToNOpConversionPattern;
+struct OneToNVMIFmaOpPattern : OpConversionPattern<VMIFmaOp> {
+  using OpConversionPattern<VMIFmaOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIFmaOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIFmaOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     ValueRange lhsParts = adaptor.getLhs();
     ValueRange rhsParts = adaptor.getRhs();
     ValueRange accParts = adaptor.getAcc();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (lhsParts.size() != rhsParts.size() ||
         lhsParts.size() != accParts.size() ||
         lhsParts.size() != resultTypes.size())
@@ -6538,21 +6753,25 @@ struct OneToNVMIFmaOpPattern : OneToNOpConversionPattern<VMIFmaOp> {
               .getResult());
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
 template <typename SourceOp, typename TargetOp>
-struct OneToNVMIUnaryOpPattern : OneToNOpConversionPattern<SourceOp> {
-  using OneToNOpConversionPattern<SourceOp>::OneToNOpConversionPattern;
+struct OneToNVMIUnaryOpPattern : OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
       SourceOp op,
-      typename OneToNOpConversionPattern<SourceOp>::OpAdaptor adaptor,
-      OneToNPatternRewriter &rewriter) const override {
+      typename OpConversionPattern<SourceOp>::OneToNOpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
     ValueRange sourceParts = adaptor.getSource();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (sourceParts.size() != resultTypes.size())
       return rewriter.notifyMatchFailure(op, "physical unary arity mismatch");
 
@@ -6574,22 +6793,26 @@ struct OneToNVMIUnaryOpPattern : OneToNOpConversionPattern<SourceOp> {
               .getResult());
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
 template <typename SourceOp, typename TargetOp>
-struct OneToNVMIMaskBinaryOpPattern : OneToNOpConversionPattern<SourceOp> {
-  using OneToNOpConversionPattern<SourceOp>::OneToNOpConversionPattern;
+struct OneToNVMIMaskBinaryOpPattern : OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
       SourceOp op,
-      typename OneToNOpConversionPattern<SourceOp>::OpAdaptor adaptor,
-      OneToNPatternRewriter &rewriter) const override {
+      typename OpConversionPattern<SourceOp>::OneToNOpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
     ValueRange lhsParts = adaptor.getLhs();
     ValueRange rhsParts = adaptor.getRhs();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (lhsParts.size() != rhsParts.size() ||
         lhsParts.size() != resultTypes.size())
       return rewriter.notifyMatchFailure(op,
@@ -6615,21 +6838,25 @@ struct OneToNVMIMaskBinaryOpPattern : OneToNOpConversionPattern<SourceOp> {
               .getResult());
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
 template <typename SourceOp, typename TargetOp>
-struct OneToNVMIMaskUnaryOpPattern : OneToNOpConversionPattern<SourceOp> {
-  using OneToNOpConversionPattern<SourceOp>::OneToNOpConversionPattern;
+struct OneToNVMIMaskUnaryOpPattern : OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
       SourceOp op,
-      typename OneToNOpConversionPattern<SourceOp>::OpAdaptor adaptor,
-      OneToNPatternRewriter &rewriter) const override {
+      typename OpConversionPattern<SourceOp>::OneToNOpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
     ValueRange sourceParts = adaptor.getSource();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (sourceParts.size() != resultTypes.size())
       return rewriter.notifyMatchFailure(op,
                                          "physical mask unary arity mismatch");
@@ -6652,19 +6879,19 @@ struct OneToNVMIMaskUnaryOpPattern : OneToNOpConversionPattern<SourceOp> {
               .getResult());
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
 template <typename SourceOp>
-struct OneToNVMICmpOpPattern : OneToNOpConversionPattern<SourceOp> {
-  using OneToNOpConversionPattern<SourceOp>::OneToNOpConversionPattern;
+struct OneToNVMICmpOpPattern : OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
       SourceOp op,
-      typename OneToNOpConversionPattern<SourceOp>::OpAdaptor adaptor,
-      OneToNPatternRewriter &rewriter) const override {
+      typename OpConversionPattern<SourceOp>::OneToNOpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
     std::optional<StringRef> cmpMode = getVPTOCmpMode(op.getPredicate());
     if (!cmpMode)
       return op.emitOpError()
@@ -6677,7 +6904,11 @@ struct OneToNVMICmpOpPattern : OneToNOpConversionPattern<SourceOp> {
 
     ValueRange lhsParts = adaptor.getLhs();
     ValueRange rhsParts = adaptor.getRhs();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (lhsParts.size() != rhsParts.size() ||
         lhsParts.size() != resultTypes.size())
       return rewriter.notifyMatchFailure(op, "physical cmp arity mismatch");
@@ -6703,21 +6934,25 @@ struct OneToNVMICmpOpPattern : OneToNOpConversionPattern<SourceOp> {
                             .getResult());
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMISelectOpPattern : OneToNOpConversionPattern<VMISelectOp> {
-  using OneToNOpConversionPattern<VMISelectOp>::OneToNOpConversionPattern;
+struct OneToNVMISelectOpPattern : OpConversionPattern<VMISelectOp> {
+  using OpConversionPattern<VMISelectOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMISelectOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMISelectOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     ValueRange maskParts = adaptor.getMask();
     ValueRange trueParts = adaptor.getTrueValue();
     ValueRange falseParts = adaptor.getFalseValue();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (maskParts.size() != trueParts.size() ||
         trueParts.size() != falseParts.size() ||
         trueParts.size() != resultTypes.size())
@@ -6737,21 +6972,25 @@ struct OneToNVMISelectOpPattern : OneToNOpConversionPattern<VMISelectOp> {
                             .getResult());
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
 struct OneToNVMIActivePrefixIndexOpPattern
-    : OneToNOpConversionPattern<VMIActivePrefixIndexOp> {
-  using OneToNOpConversionPattern<
-      VMIActivePrefixIndexOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIActivePrefixIndexOp> {
+  using OpConversionPattern<
+      VMIActivePrefixIndexOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIActivePrefixIndexOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIActivePrefixIndexOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     ValueRange maskParts = adaptor.getMask();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (maskParts.size() != 1 || resultTypes.size() != 1)
       return rewriter.notifyMatchFailure(
           op, "active_prefix_index supports only one physical part");
@@ -6784,21 +7023,25 @@ struct OneToNVMIActivePrefixIndexOpPattern
                        .create<VusqzOp>(op.getLoc(), resultType, carrier,
                                         maskParts.front())
                        .getResult();
-    rewriter.replaceOp(op, SmallVector<Value>{result},
-                       adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, SmallVector<Value>{result},
+                                     *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMICompressOpPattern : OneToNOpConversionPattern<VMICompressOp> {
-  using OneToNOpConversionPattern<VMICompressOp>::OneToNOpConversionPattern;
+struct OneToNVMICompressOpPattern : OpConversionPattern<VMICompressOp> {
+  using OpConversionPattern<VMICompressOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMICompressOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMICompressOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     ValueRange sourceParts = adaptor.getSource();
     ValueRange maskParts = adaptor.getMask();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (sourceParts.size() != 1 || maskParts.size() != 1 ||
         resultTypes.size() != 1)
       return rewriter.notifyMatchFailure(
@@ -6814,20 +7057,20 @@ struct OneToNVMICompressOpPattern : OneToNOpConversionPattern<VMICompressOp> {
                        .create<VsqzOp>(op.getLoc(), resultType,
                                        sourceParts.front(), maskParts.front())
                        .getResult();
-    rewriter.replaceOp(op, SmallVector<Value>{result},
-                       adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, SmallVector<Value>{result},
+                                     *this->getTypeConverter());
     return success();
   }
 };
 
 struct OneToNVMICompressStoreOpPattern
-    : OneToNOpConversionPattern<VMICompressStoreOp> {
-  using OneToNOpConversionPattern<
-      VMICompressStoreOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMICompressStoreOp> {
+  using OpConversionPattern<
+      VMICompressStoreOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMICompressStoreOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMICompressStoreOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     FailureOr<Value> destination = getSingleValue(
         op, adaptor.getDestination(),
         "compress_store destination must convert to one value", rewriter);
@@ -6871,16 +7114,20 @@ struct OneToNVMICompressStoreOpPattern
 };
 
 struct OneToNVMIReduceAddIOpPattern
-    : OneToNOpConversionPattern<VMIReduceAddIOp> {
-  using OneToNOpConversionPattern<VMIReduceAddIOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIReduceAddIOp> {
+  using OpConversionPattern<VMIReduceAddIOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIReduceAddIOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIReduceAddIOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     ValueRange sourceParts = adaptor.getSource();
     ValueRange initParts = adaptor.getInit();
     ValueRange maskParts = adaptor.getMask();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (sourceParts.empty() || sourceParts.size() != maskParts.size() ||
         initParts.size() != 1 || resultTypes.size() != 1)
       return rewriter.notifyMatchFailure(
@@ -6924,23 +7171,28 @@ struct OneToNVMIReduceAddIOpPattern
                         .getResult();
     }
 
-    rewriter.replaceOp(op, SmallVector<Value>{accumulator},
-                       adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(
+            rewriter, op, SmallVector<Value>{accumulator},
+            *this->getTypeConverter());
     return success();
   }
 };
 
 struct OneToNVMIReduceAddFOpPattern
-    : OneToNOpConversionPattern<VMIReduceAddFOp> {
-  using OneToNOpConversionPattern<VMIReduceAddFOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIReduceAddFOp> {
+  using OpConversionPattern<VMIReduceAddFOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIReduceAddFOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIReduceAddFOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     ValueRange sourceParts = adaptor.getSource();
     ValueRange initParts = adaptor.getInit();
     ValueRange maskParts = adaptor.getMask();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (sourceParts.empty() || sourceParts.size() != maskParts.size() ||
         initParts.size() != 1 || resultTypes.size() != 1)
       return rewriter.notifyMatchFailure(
@@ -6984,29 +7236,34 @@ struct OneToNVMIReduceAddFOpPattern
                         .getResult();
     }
 
-    rewriter.replaceOp(op, SmallVector<Value>{accumulator},
-                       adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(
+            rewriter, op, SmallVector<Value>{accumulator},
+            *this->getTypeConverter());
     return success();
   }
 };
 
 template <typename OpTy, typename GroupReduceOpTy, typename CombineOpTy>
-struct OneToNVMIGroupReduceOpPattern : OneToNOpConversionPattern<OpTy> {
+struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
   OneToNVMIGroupReduceOpPattern(TypeConverter &typeConverter,
                                 MLIRContext *context,
                                 const VMITargetCapabilityRegistry &capabilities)
-      : OneToNOpConversionPattern<OpTy>(typeConverter, context),
+      : OpConversionPattern<OpTy>(typeConverter, context),
         capabilities(capabilities) {}
 
   LogicalResult
   matchAndRewrite(OpTy op,
-                  typename OneToNOpConversionPattern<OpTy>::OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+                  typename OpConversionPattern<OpTy>::OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto sourceVMIType = cast<VMIVRegType>(op.getSource().getType());
     auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
     ValueRange sourceParts = adaptor.getSource();
     ValueRange maskParts = adaptor.getMask();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
 
     VMILayoutSupport supports;
     std::string supportReason;
@@ -7053,7 +7310,7 @@ struct OneToNVMIGroupReduceOpPattern : OneToNOpConversionPattern<OpTy> {
                               .getResult());
       }
 
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -7109,7 +7366,7 @@ struct OneToNVMIGroupReduceOpPattern : OneToNOpConversionPattern<OpTy> {
                               .getResult());
       }
 
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -7172,7 +7429,7 @@ struct OneToNVMIGroupReduceOpPattern : OneToNOpConversionPattern<OpTy> {
                               .getResult());
       }
 
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -7264,7 +7521,7 @@ struct OneToNVMIGroupReduceOpPattern : OneToNOpConversionPattern<OpTy> {
               .getResult();
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 
@@ -7297,13 +7554,13 @@ private:
 };
 
 struct OneToNVMIGroupBroadcastOpPattern
-    : OneToNOpConversionPattern<VMIGroupBroadcastOp> {
-  using OneToNOpConversionPattern<
-      VMIGroupBroadcastOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIGroupBroadcastOp> {
+  using OpConversionPattern<
+      VMIGroupBroadcastOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIGroupBroadcastOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIGroupBroadcastOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto sourceVMIType = cast<VMIVRegType>(op.getSource().getType());
     auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
     FailureOr<int64_t> groupSize = getGroupSizeFromNumGroups(
@@ -7329,7 +7586,11 @@ struct OneToNVMIGroupBroadcastOpPattern
           op, "group_broadcast requires matching source/result group slots");
 
     ValueRange sourceParts = adaptor.getSource();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (sourceParts.empty() || resultTypes.empty())
       return rewriter.notifyMatchFailure(op, "group_broadcast arity mismatch");
 
@@ -7579,17 +7840,17 @@ struct OneToNVMIGroupBroadcastOpPattern
       }
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMIDhistOpPattern : OneToNOpConversionPattern<VMIDhistOp> {
-  using OneToNOpConversionPattern<VMIDhistOp>::OneToNOpConversionPattern;
+struct OneToNVMIDhistOpPattern : OpConversionPattern<VMIDhistOp> {
+  using OpConversionPattern<VMIDhistOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIDhistOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIDhistOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     ValueRange accParts = adaptor.getAcc();
     ValueRange sourceParts = adaptor.getSource();
     ValueRange maskParts = adaptor.getMask();
@@ -7645,24 +7906,28 @@ struct OneToNVMIDhistOpPattern : OneToNOpConversionPattern<VMIDhistOp> {
                .getResult();
     }
 
-    rewriter.replaceOp(op, SmallVector<Value>{lo, hi},
-                       adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, SmallVector<Value>{lo, hi},
+                                     *this->getTypeConverter());
     return success();
   }
 };
 
 template <typename SourceOp, typename ChunkReduceOp, typename CombineOp>
-struct OneToNVMIReduceMinMaxFOpPattern : OneToNOpConversionPattern<SourceOp> {
-  using OneToNOpConversionPattern<SourceOp>::OneToNOpConversionPattern;
+struct OneToNVMIReduceMinMaxFOpPattern : OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
       SourceOp op,
-      typename OneToNOpConversionPattern<SourceOp>::OpAdaptor adaptor,
-      OneToNPatternRewriter &rewriter) const override {
+      typename OpConversionPattern<SourceOp>::OneToNOpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
     ValueRange sourceParts = adaptor.getSource();
     ValueRange initParts = adaptor.getInit();
     ValueRange maskParts = adaptor.getMask();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (sourceParts.empty() || sourceParts.size() != maskParts.size() ||
         initParts.size() != 1 || resultTypes.size() != 1)
       return rewriter.notifyMatchFailure(
@@ -7706,22 +7971,27 @@ struct OneToNVMIReduceMinMaxFOpPattern : OneToNOpConversionPattern<SourceOp> {
                         .getResult();
     }
 
-    rewriter.replaceOp(op, SmallVector<Value>{accumulator},
-                       adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(
+            rewriter, op, SmallVector<Value>{accumulator},
+            *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMIExtFOpPattern : OneToNOpConversionPattern<VMIExtFOp> {
-  using OneToNOpConversionPattern<VMIExtFOp>::OneToNOpConversionPattern;
+struct OneToNVMIExtFOpPattern : OpConversionPattern<VMIExtFOp> {
+  using OpConversionPattern<VMIExtFOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIExtFOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIExtFOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto sourceVMIType = cast<VMIVRegType>(op.getSource().getType());
     auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
     ValueRange sourceParts = adaptor.getSource();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (sourceParts.empty())
       return rewriter.notifyMatchFailure(
           op, "extf requires at least one physical source chunk");
@@ -7774,7 +8044,7 @@ struct OneToNVMIExtFOpPattern : OneToNOpConversionPattern<VMIExtFOp> {
                                               rewriter.getStringAttr(part))
                               .getResult());
       }
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -7814,21 +8084,25 @@ struct OneToNVMIExtFOpPattern : OneToNOpConversionPattern<VMIExtFOp> {
       }
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMITruncFOpPattern : OneToNOpConversionPattern<VMITruncFOp> {
-  using OneToNOpConversionPattern<VMITruncFOp>::OneToNOpConversionPattern;
+struct OneToNVMITruncFOpPattern : OpConversionPattern<VMITruncFOp> {
+  using OpConversionPattern<VMITruncFOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMITruncFOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMITruncFOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto sourceVMIType = cast<VMIVRegType>(op.getSource().getType());
     auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
     ValueRange sourceParts = adaptor.getSource();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
 
     VMILayoutAttr sourceLayout = sourceVMIType.getLayoutAttr();
     VMILayoutAttr resultLayout = resultVMIType.getLayoutAttr();
@@ -7869,7 +8143,7 @@ struct OneToNVMITruncFOpPattern : OneToNOpConversionPattern<VMITruncFOp> {
                                               even)
                               .getResult());
       }
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -7935,7 +8209,7 @@ struct OneToNVMITruncFOpPattern : OneToNOpConversionPattern<VMITruncFOp> {
                                 *sourceMask, rnd, sat, partAttr)
                 .getResult());
       }
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -8005,23 +8279,27 @@ struct OneToNVMITruncFOpPattern : OneToNOpConversionPattern<VMITruncFOp> {
       results.push_back(merged);
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
 template <typename OpT>
-struct OneToNVMIExtIOpPattern : OneToNOpConversionPattern<OpT> {
-  using OneToNOpConversionPattern<OpT>::OneToNOpConversionPattern;
+struct OneToNVMIExtIOpPattern : OpConversionPattern<OpT> {
+  using OpConversionPattern<OpT>::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(OpT op,
-                  typename OneToNOpConversionPattern<OpT>::OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+                  typename OpConversionPattern<OpT>::OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto sourceVMIType = cast<VMIVRegType>(op.getSource().getType());
     auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
     ValueRange sourceParts = adaptor.getSource();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (sourceParts.empty())
       return rewriter.notifyMatchFailure(
           op, "integer extension requires at least one physical source chunk");
@@ -8151,7 +8429,7 @@ struct OneToNVMIExtIOpPattern : OneToNOpConversionPattern<OpT> {
         results.push_back(assembled);
       }
 
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -8198,7 +8476,7 @@ struct OneToNVMIExtIOpPattern : OneToNOpConversionPattern<OpT> {
                                 rewriter.getStringAttr(part))
                 .getResult());
       }
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -8241,21 +8519,25 @@ struct OneToNVMIExtIOpPattern : OneToNOpConversionPattern<OpT> {
       }
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMITruncIOpPattern : OneToNOpConversionPattern<VMITruncIOp> {
-  using OneToNOpConversionPattern<VMITruncIOp>::OneToNOpConversionPattern;
+struct OneToNVMITruncIOpPattern : OpConversionPattern<VMITruncIOp> {
+  using OpConversionPattern<VMITruncIOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMITruncIOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMITruncIOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto sourceVMIType = cast<VMIVRegType>(op.getSource().getType());
     auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
     ValueRange sourceParts = adaptor.getSource();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
 
     VMILayoutAttr sourceLayout = sourceVMIType.getLayoutAttr();
     VMILayoutAttr resultLayout = resultVMIType.getLayoutAttr();
@@ -8327,7 +8609,7 @@ struct OneToNVMITruncIOpPattern : OneToNOpConversionPattern<VMITruncIOp> {
                                               /*rnd=*/nullptr, sat, part)
                               .getResult());
       }
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -8386,7 +8668,7 @@ struct OneToNVMITruncIOpPattern : OneToNOpConversionPattern<VMITruncIOp> {
                                 *sourceMask, /*rnd=*/nullptr, sat, part)
                 .getResult());
       }
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -8441,19 +8723,23 @@ struct OneToNVMITruncIOpPattern : OneToNOpConversionPattern<VMITruncIOp> {
       results.push_back(merged);
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMIFPToSIOpPattern : OneToNOpConversionPattern<VMIFPToSIOp> {
-  using OneToNOpConversionPattern<VMIFPToSIOp>::OneToNOpConversionPattern;
+struct OneToNVMIFPToSIOpPattern : OpConversionPattern<VMIFPToSIOp> {
+  using OpConversionPattern<VMIFPToSIOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIFPToSIOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIFPToSIOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     ValueRange sourceParts = adaptor.getSource();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (sourceParts.size() != resultTypes.size())
       return rewriter.notifyMatchFailure(
           op, "fptosi physical source/result arity mismatch");
@@ -8485,19 +8771,23 @@ struct OneToNVMIFPToSIOpPattern : OneToNOpConversionPattern<VMIFPToSIOp> {
                             .getResult());
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMISIToFPOpPattern : OneToNOpConversionPattern<VMISIToFPOp> {
-  using OneToNOpConversionPattern<VMISIToFPOp>::OneToNOpConversionPattern;
+struct OneToNVMISIToFPOpPattern : OpConversionPattern<VMISIToFPOp> {
+  using OpConversionPattern<VMISIToFPOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMISIToFPOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMISIToFPOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     ValueRange sourceParts = adaptor.getSource();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (sourceParts.size() != resultTypes.size())
       return rewriter.notifyMatchFailure(
           op, "sitofp physical source/result arity mismatch");
@@ -8527,19 +8817,23 @@ struct OneToNVMISIToFPOpPattern : OneToNOpConversionPattern<VMISIToFPOp> {
                             .getResult());
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMIBitcastOpPattern : OneToNOpConversionPattern<VMIBitcastOp> {
-  using OneToNOpConversionPattern<VMIBitcastOp>::OneToNOpConversionPattern;
+struct OneToNVMIBitcastOpPattern : OpConversionPattern<VMIBitcastOp> {
+  using OpConversionPattern<VMIBitcastOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIBitcastOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIBitcastOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     ValueRange sourceParts = adaptor.getSource();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (sourceParts.size() != resultTypes.size())
       return rewriter.notifyMatchFailure(op, "physical bitcast arity mismatch");
 
@@ -8555,18 +8849,18 @@ struct OneToNVMIBitcastOpPattern : OneToNOpConversionPattern<VMIBitcastOp> {
               .getResult());
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
 struct OneToNVMIChannelSplitOpPattern
-    : OneToNOpConversionPattern<VMIChannelSplitOp> {
-  using OneToNOpConversionPattern<VMIChannelSplitOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIChannelSplitOp> {
+  using OpConversionPattern<VMIChannelSplitOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIChannelSplitOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIChannelSplitOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     int64_t channels = op.getNumResults();
     if (channels != 2 && channels != 4)
       return rewriter.notifyMatchFailure(
@@ -8590,25 +8884,29 @@ struct OneToNVMIChannelSplitOpPattern
             op, "channel_split requires contiguous result layouts");
     }
 
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes();
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     FailureOr<SmallVector<Value>> results =
         materializeDataLayoutConversion(op, adaptor.getSource(), resultTypes,
                                         sourceLayout, channelLayout, rewriter);
     if (failed(results))
       return failure();
 
-    rewriter.replaceOp(op, *results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, *results, *this->getTypeConverter());
     return success();
   }
 };
 
 struct OneToNVMIChannelMergeOpPattern
-    : OneToNOpConversionPattern<VMIChannelMergeOp> {
-  using OneToNOpConversionPattern<VMIChannelMergeOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<VMIChannelMergeOp> {
+  using OpConversionPattern<VMIChannelMergeOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIChannelMergeOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIChannelMergeOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     int64_t channels = op.getInputs().size();
     if (channels != 2 && channels != 4)
       return rewriter.notifyMatchFailure(
@@ -8632,26 +8930,34 @@ struct OneToNVMIChannelMergeOpPattern
           "channel_merge requires contiguous or matching deinterleaved result "
           "layout");
 
-    FailureOr<SmallVector<Value>> results = materializeDataLayoutConversion(
-        op, adaptor.getFlatOperands(),
-        adaptor.getResultMapping().getConvertedTypes(0), channelLayout,
-        resultLayout, rewriter);
+    FailureOr<SmallVector<Type>> maybeResultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybeResultTypes))
+      return failure();
+    FailureOr<SmallVector<Value>> results =
+        materializeDataLayoutConversion(
+            op, flattenOneToNOperands(adaptor.getOperands()),
+            *maybeResultTypes, channelLayout, resultLayout, rewriter);
     if (failed(results))
       return failure();
 
-    rewriter.replaceOp(op, *results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, *results, *this->getTypeConverter());
     return success();
   }
 };
 
-struct OneToNVMIShuffleOpPattern : OneToNOpConversionPattern<VMIShuffleOp> {
-  using OneToNOpConversionPattern<VMIShuffleOp>::OneToNOpConversionPattern;
+struct OneToNVMIShuffleOpPattern : OpConversionPattern<VMIShuffleOp> {
+  using OpConversionPattern<VMIShuffleOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIShuffleOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(VMIShuffleOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     ValueRange sourceParts = adaptor.getSource();
-    TypeRange resultTypes = adaptor.getResultMapping().getConvertedTypes(0);
+    FailureOr<SmallVector<Type>> maybe_resultTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybe_resultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     std::string reason;
     FailureOr<SmallVector<int64_t>> sourceFlatIndices =
         computeShuffleForwardingSourceParts(op, &reason);
@@ -8669,7 +8975,7 @@ struct OneToNVMIShuffleOpPattern : OneToNOpConversionPattern<VMIShuffleOp> {
               verifyIdentityPartForwarding(op, results, resultTypes, rewriter)))
         return failure();
 
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -8703,7 +9009,7 @@ struct OneToNVMIShuffleOpPattern : OneToNOpConversionPattern<VMIShuffleOp> {
                               .getResult());
       }
 
-      rewriter.replaceOp(op, results, adaptor.getResultMapping());
+      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
     }
 
@@ -8762,67 +9068,74 @@ struct OneToNVMIShuffleOpPattern : OneToNOpConversionPattern<VMIShuffleOp> {
                             .getResult());
     }
 
-    rewriter.replaceOp(op, results, adaptor.getResultMapping());
+    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
     return success();
   }
 };
 
-Block *convertBranchDestBlock(Block *block, OneToNPatternRewriter &rewriter,
-                              OneToNTypeConverter &typeConverter,
+Block *convertBranchDestBlock(Block *block, ConversionPatternRewriter &rewriter,
+                              const TypeConverter &typeConverter,
                               llvm::DenseMap<Block *, Block *> &converted) {
   auto [it, inserted] = converted.try_emplace(block, nullptr);
   if (!inserted)
     return it->second;
 
-  OneToNTypeMapping argMapping(block->getArgumentTypes());
-  if (failed(typeConverter.computeTypeMapping(block->getArgumentTypes(),
-                                              argMapping)) ||
-      !argMapping.hasNonIdentityConversion()) {
+  TypeConverter::SignatureConversion argMapping(block->getNumArguments());
+  if (failed(typeConverter.convertSignatureArgs(block->getArgumentTypes(),
+                                                argMapping)) ||
+      !hasNonIdentitySignatureConversion(block->getArgumentTypes(),
+                                         argMapping)) {
     it->second = block;
     return block;
   }
 
-  Block *newBlock = rewriter.applySignatureConversion(block, argMapping);
+  Block *newBlock =
+      rewriter.applySignatureConversion(block, argMapping, &typeConverter);
   it->second = newBlock;
   return newBlock;
 }
 
-struct OneToNCFBranchOpPattern : OneToNOpConversionPattern<cf::BranchOp> {
-  using OneToNOpConversionPattern<cf::BranchOp>::OneToNOpConversionPattern;
+struct OneToNCFBranchOpPattern : OpConversionPattern<cf::BranchOp> {
+  using OpConversionPattern<cf::BranchOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(cf::BranchOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
-    auto *converter = getTypeConverter<OneToNTypeConverter>();
+  matchAndRewrite(cf::BranchOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto *converter = this->getTypeConverter();
     llvm::DenseMap<Block *, Block *> convertedBlocks;
     Block *dest = convertBranchDestBlock(op.getDest(), rewriter, *converter,
                                          convertedBlocks);
+    SmallVector<Value> destOperands =
+        flattenOneToNOperands(adaptor.getDestOperands());
 
-    if (!adaptor.getOperandMapping().hasNonIdentityConversion() &&
+    if (isIdentityOneToNValueMapping(op.getDestOperands(),
+                                     adaptor.getDestOperands()) &&
         dest == op.getDest())
       return failure();
 
-    rewriter.replaceOpWithNewOp<cf::BranchOp>(op, dest,
-                                              adaptor.getFlatOperands());
+    rewriter.replaceOpWithNewOp<cf::BranchOp>(op, dest, destOperands);
     return success();
   }
 };
 
 struct OneToNCFCondBranchOpPattern
-    : OneToNOpConversionPattern<cf::CondBranchOp> {
-  using OneToNOpConversionPattern<cf::CondBranchOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<cf::CondBranchOp> {
+  using OpConversionPattern<cf::CondBranchOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(cf::CondBranchOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
-    auto *converter = getTypeConverter<OneToNTypeConverter>();
+  matchAndRewrite(cf::CondBranchOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto *converter = this->getTypeConverter();
     llvm::DenseMap<Block *, Block *> convertedBlocks;
     Block *trueDest = convertBranchDestBlock(op.getTrueDest(), rewriter,
                                              *converter, convertedBlocks);
     Block *falseDest = convertBranchDestBlock(op.getFalseDest(), rewriter,
                                               *converter, convertedBlocks);
 
-    if (!adaptor.getOperandMapping().hasNonIdentityConversion() &&
+    if (isIdentityOneToNValueMapping(op.getTrueDestOperands(),
+                                     adaptor.getTrueDestOperands()) &&
+        isIdentityOneToNValueMapping(op.getFalseDestOperands(),
+                                     adaptor.getFalseDestOperands()) &&
         trueDest == op.getTrueDest() && falseDest == op.getFalseDest())
       return failure();
 
@@ -8831,17 +9144,10 @@ struct OneToNCFCondBranchOpPattern
       return rewriter.notifyMatchFailure(
           op, "condition converted to multiple values");
 
-    SmallVector<Value> trueOperands;
-    SmallVector<Value> falseOperands;
-    ValueRange flatOperands = adaptor.getFlatOperands();
-    const OneToNTypeMapping &operandMapping = adaptor.getOperandMapping();
-    unsigned operandIndex = 1;
-    for (unsigned i = 0, e = op.getNumTrueOperands(); i < e; ++i)
-      llvm::append_range(trueOperands, operandMapping.getConvertedValues(
-                                           flatOperands, operandIndex++));
-    for (unsigned i = 0, e = op.getNumFalseOperands(); i < e; ++i)
-      llvm::append_range(falseOperands, operandMapping.getConvertedValues(
-                                            flatOperands, operandIndex++));
+    SmallVector<Value> trueOperands =
+        flattenOneToNOperands(adaptor.getTrueDestOperands());
+    SmallVector<Value> falseOperands =
+        flattenOneToNOperands(adaptor.getFalseDestOperands());
 
     rewriter.replaceOpWithNewOp<cf::CondBranchOp>(op, condition.front(),
                                                   trueDest, trueOperands,
@@ -8850,13 +9156,13 @@ struct OneToNCFCondBranchOpPattern
   }
 };
 
-struct OneToNCFSwitchOpPattern : OneToNOpConversionPattern<cf::SwitchOp> {
-  using OneToNOpConversionPattern<cf::SwitchOp>::OneToNOpConversionPattern;
+struct OneToNCFSwitchOpPattern : OpConversionPattern<cf::SwitchOp> {
+  using OpConversionPattern<cf::SwitchOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(cf::SwitchOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
-    auto *converter = getTypeConverter<OneToNTypeConverter>();
+  matchAndRewrite(cf::SwitchOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto *converter = this->getTypeConverter();
     llvm::DenseMap<Block *, Block *> convertedBlocks;
     Block *defaultDest = convertBranchDestBlock(
         op.getDefaultDestination(), rewriter, *converter, convertedBlocks);
@@ -8871,7 +9177,12 @@ struct OneToNCFSwitchOpPattern : OneToNOpConversionPattern<cf::SwitchOp> {
     for (auto [oldDest, newDest] :
          llvm::zip(op.getCaseDestinations(), caseDests))
       changed |= oldDest != newDest;
-    changed |= adaptor.getOperandMapping().hasNonIdentityConversion();
+    changed |= !isIdentityOneToNValueMapping(op.getDefaultOperands(),
+                                             adaptor.getDefaultOperands());
+    for (auto [originalOperands, convertedOperands] :
+         llvm::zip(op.getCaseOperands(), adaptor.getCaseOperands()))
+      changed |=
+          !isIdentityOneToNValueMapping(originalOperands, convertedOperands);
     if (!changed)
       return failure();
 
@@ -8883,23 +9194,12 @@ struct OneToNCFSwitchOpPattern : OneToNOpConversionPattern<cf::SwitchOp> {
     SmallVector<Value> defaultOperands;
     SmallVector<SmallVector<Value>> caseOperandStorage;
     SmallVector<ValueRange> caseOperands;
-    ValueRange flatOperands = adaptor.getFlatOperands();
-    const OneToNTypeMapping &operandMapping = adaptor.getOperandMapping();
-
-    unsigned operandIndex = 1;
-    for (unsigned i = 0, e = op.getDefaultOperands().size(); i < e; ++i)
-      llvm::append_range(defaultOperands, operandMapping.getConvertedValues(
-                                              flatOperands, operandIndex++));
+    defaultOperands = flattenOneToNOperands(adaptor.getDefaultOperands());
 
     caseOperandStorage.reserve(op.getCaseOperandSegments().size());
     caseOperands.reserve(op.getCaseOperandSegments().size());
-    for (int32_t segmentSize : op.getCaseOperandSegments()) {
-      SmallVector<Value> operands;
-      for (int32_t i = 0; i < segmentSize; ++i)
-        llvm::append_range(operands, operandMapping.getConvertedValues(
-                                         flatOperands, operandIndex++));
-      caseOperandStorage.push_back(std::move(operands));
-    }
+    for (ArrayRef<ValueRange> convertedOperands : adaptor.getCaseOperands())
+      caseOperandStorage.push_back(flattenOneToNOperands(convertedOperands));
     for (SmallVector<Value> &operands : caseOperandStorage)
       caseOperands.push_back(operands);
 
@@ -8911,17 +9211,18 @@ struct OneToNCFSwitchOpPattern : OneToNOpConversionPattern<cf::SwitchOp> {
 };
 
 struct OneToNSCFExecuteRegionOpPattern
-    : OneToNOpConversionPattern<scf::ExecuteRegionOp> {
-  using OneToNOpConversionPattern<
-      scf::ExecuteRegionOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<scf::ExecuteRegionOp> {
+  using OpConversionPattern<
+      scf::ExecuteRegionOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(scf::ExecuteRegionOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
-    SmallVector<Type> resultTypes;
-    const OneToNTypeMapping &resultMapping = adaptor.getResultMapping();
-    for (unsigned i = 0, e = op->getNumResults(); i < e; ++i)
-      llvm::append_range(resultTypes, resultMapping.getConvertedTypes(i));
+  matchAndRewrite(scf::ExecuteRegionOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    FailureOr<SmallVector<Type>> maybeResultTypes =
+        getConvertedResultTypes(op, *this->getTypeConverter());
+    if (failed(maybeResultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybeResultTypes);
     if (resultTypes == op->getResultTypes())
       return failure();
 
@@ -8930,28 +9231,30 @@ struct OneToNSCFExecuteRegionOpPattern
     newOp->setAttrs(op->getAttrs());
     rewriter.inlineRegionBefore(op.getRegion(), newOp.getRegion(),
                                 newOp.getRegion().end());
-    rewriter.replaceOp(op, newOp->getResults(), resultMapping);
+    replaceOpWithFlatConvertedValues(
+            rewriter, op, newOp->getResults(), *this->getTypeConverter());
     return success();
   }
 };
 
 struct OneToNSCFIndexSwitchOpPattern
-    : OneToNOpConversionPattern<scf::IndexSwitchOp> {
-  using OneToNOpConversionPattern<
-      scf::IndexSwitchOp>::OneToNOpConversionPattern;
+    : OpConversionPattern<scf::IndexSwitchOp> {
+  using OpConversionPattern<
+      scf::IndexSwitchOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(scf::IndexSwitchOp op, OpAdaptor adaptor,
-                  OneToNPatternRewriter &rewriter) const override {
+  matchAndRewrite(scf::IndexSwitchOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     ValueRange arg = adaptor.getArg();
     if (arg.size() != 1)
       return rewriter.notifyMatchFailure(
           op, "index_switch selector converted to multiple values");
 
-    SmallVector<Type> resultTypes;
-    const OneToNTypeMapping &resultMapping = adaptor.getResultMapping();
-    for (unsigned i = 0, e = op->getNumResults(); i < e; ++i)
-      llvm::append_range(resultTypes, resultMapping.getConvertedTypes(i));
+    FailureOr<SmallVector<Type>> maybeResultTypes =
+        getConvertedResultTypes(op, *this->getTypeConverter());
+    if (failed(maybeResultTypes))
+      return failure();
+    SmallVector<Type> resultTypes = std::move(*maybeResultTypes);
     if (resultTypes == op->getResultTypes())
       return failure();
 
@@ -8963,16 +9266,19 @@ struct OneToNSCFIndexSwitchOpPattern
     for (auto [srcRegion, dstRegion] :
          llvm::zip(op.getCaseRegions(), newOp.getCaseRegions()))
       rewriter.inlineRegionBefore(srcRegion, dstRegion, dstRegion.end());
-    rewriter.replaceOp(op, newOp->getResults(), resultMapping);
+    replaceOpWithFlatConvertedValues(
+            rewriter, op, newOp->getResults(), *this->getTypeConverter());
     return success();
   }
 };
 
-void populateVMIOneToNConversionPatterns(
+void populateVMIConversionPatterns(
     VMIToVPTOTypeConverter &typeConverter, RewritePatternSet &patterns,
     const VMITargetCapabilityRegistry &capabilities) {
-  populateFuncTypeConversionPatterns(typeConverter, patterns);
-  scf::populateSCFStructuralOneToNTypeConversions(typeConverter, patterns);
+  populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(patterns, typeConverter);
+  populateCallOpTypeConversionPattern(patterns, typeConverter);
+  populateReturnOpTypeConversionPattern(patterns, typeConverter);
+  scf::populateSCFStructuralTypeConversions(typeConverter, patterns);
   patterns.add<OneToNCFBranchOpPattern, OneToNCFCondBranchOpPattern,
                OneToNCFSwitchOpPattern>(typeConverter, patterns.getContext());
   patterns.add<OneToNSCFExecuteRegionOpPattern, OneToNSCFIndexSwitchOpPattern>(
@@ -10524,9 +10830,12 @@ struct VMIToVPTOPass : public mlir::pto::impl::VMIToVPTOBase<VMIToVPTOPass> {
     VMIToVPTOTypeConverter typeConverter;
     RewritePatternSet patterns(context);
 
-    populateVMIOneToNConversionPatterns(typeConverter, patterns, capabilities);
-    if (failed(applyPartialOneToNConversion(module, typeConverter,
-                                            std::move(patterns)))) {
+    populateVMIConversionPatterns(typeConverter, patterns, capabilities);
+    ConversionTarget target(*context);
+    target.markUnknownOpDynamicallyLegal([](Operation *op) {
+      return !isVMIOp(op) && !hasVMIType(op);
+    });
+    if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
       module.emitError() << kVMIDiagResidualOpPrefix
                          << "failed to convert all VMI ops/types to VPTO";
       signalPassFailure();

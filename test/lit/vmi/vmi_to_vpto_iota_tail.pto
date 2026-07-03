@@ -35,8 +35,8 @@ module {
 }
 
 // CHECK-LABEL: func.func @vmi_to_vpto_iota_contiguous_tail(
-// CHECK: %[[C64:.*]] = arith.constant 64 : i32
 // CHECK: %[[P0:.*]] = pto.vci %arg0 : i32 -> !pto.vreg<64xi32>
+// CHECK: %[[C64:.*]] = arith.constant 64 : i32
 // CHECK: %[[B1:.*]] = arith.addi %arg0, %[[C64]] : i32
 // CHECK: %[[P1:.*]] = pto.vci %[[B1]] : i32 -> !pto.vreg<64xi32>
 // CHECK: return %[[P0]], %[[P1]]
@@ -45,11 +45,11 @@ module {
 // CHECK-NOT: unrealized_conversion_cast
 
 // CHECK-LABEL: func.func @vmi_to_vpto_iota_deint2_tail(
-// CHECK-DAG: %[[C128:.*]] = arith.constant 128 : i32
-// CHECK-DAG: %[[C1:.*]] = arith.constant 1 : i32
-// CHECK-DAG: %[[C129:.*]] = arith.constant 129 : i32
+// CHECK: %[[C128:.*]] = arith.constant 128 : i32
 // CHECK: %[[BASE128:.*]] = arith.addi %arg0, %[[C128]] : i32
+// CHECK: %[[C1:.*]] = arith.constant 1 : i32
 // CHECK: %[[BASE1:.*]] = arith.addi %arg0, %[[C1]] : i32
+// CHECK: %[[C129:.*]] = arith.constant 129 : i32
 // CHECK: %[[BASE129:.*]] = arith.addi %arg0, %[[C129]] : i32
 // CHECK: return {{.*}}, {{.*}}, {{.*}}, {{.*}}
 // CHECK-NOT: pto.vmi.

@@ -1024,7 +1024,8 @@ def VMIToVPTO : Pass<"vmi-to-vpto", "ModuleOp"> {
   let summary = "Convert layout-assigned VMI IR to physical VPTO IR";
   let description = [{
     Converts layout-assigned VMI aggregate data/mask types to ordered physical
-    VPTO register and mask value lists using MLIR OneToNTypeConversion. This
+    VPTO register and mask value lists using MLIR native 1:N dialect conversion
+    APIs. This
     pass is responsible for VMI 1:N type conversion, structural control-flow
     and function/call signature conversion, and VMI semantic op physicalization.
   }];

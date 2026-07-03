@@ -56,10 +56,12 @@ module {
 // CHECK-NOT: unrealized_conversion_cast
 
 // CHECK-LABEL: func.func @vmi_to_vpto_expand_load_all_active_safe_tail_memref_nonzero_offset(
-// CHECK-DAG: %[[C4:.*]] = arith.constant 4 : index
-// CHECK-DAG: %[[C68:.*]] = arith.constant 68 : index
+// CHECK: %[[C4:.*]] = arith.constant 4 : index
+// CHECK: %[[TAIL:.*]], %{{.*}} = pto.plt_b32 {{.*}} : i32 -> !pto.mask<b32>, i32
 // CHECK: %[[P0:.*]] = pto.vlds %arg0[%[[C4]]] : memref<132xf32> -> !pto.vreg<64xf32>
-// CHECK: %[[P1:.*]] = pto.vlds %arg0[%[[C68]]] : memref<132xf32> -> !pto.vreg<64xf32>
+// CHECK: %[[C64:.*]] = arith.constant 64 : index
+// CHECK: %[[OFF1:.*]] = arith.addi %[[C4]], %[[C64]] : index
+// CHECK: %[[P1:.*]] = pto.vlds %arg0[%[[OFF1]]] : memref<132xf32> -> !pto.vreg<64xf32>
 // CHECK: return %[[P0]], %[[P1]]
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
