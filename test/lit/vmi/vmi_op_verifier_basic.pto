@@ -6,11 +6,11 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: ptoas --emit-pto-ir %s 2>&1 | FileCheck %s
+// RUN: pto-test-opt %s | FileCheck %s
 
 module {
   func.func @vmi_op_verifier_basic(
-      %ptr: !pto.ptr<f32>,
+      %ptr: !pto.ptr<f32, ub>,
       %layouted: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
       %mask_b16: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>,
       %mask_b32: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>)
@@ -50,12 +50,12 @@ module {
     %ext = pto.vmi.extf %broadcast16 : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
     %trunc = pto.vmi.truncf %ext : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
 
-    %loaded = pto.vmi.load %ptr[%c0] : !pto.ptr<f32> -> !pto.vmi.vreg<128xf32>
+    %loaded = pto.vmi.load %ptr[%c0] : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
     %slot_loaded = pto.vmi.group_slot_load %ptr[%c0], %c1 {num_groups = 8}
-        : !pto.ptr<f32> -> !pto.vmi.vreg<8xf32>
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<8xf32>
     pto.vmi.group_store %slot_loaded, %ptr[%c0], %c1 {num_groups = 8}
-        : !pto.vmi.vreg<8xf32>, !pto.ptr<f32>
-    pto.vmi.store %loaded, %ptr[%c0] : !pto.vmi.vreg<128xf32>, !pto.ptr<f32>
+        : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
+    pto.vmi.store %loaded, %ptr[%c0] : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
 
     %small = "pto.vmi.shuffle"(%broadcast) {
       indices = array<i64: 0, 1, 2, 3>

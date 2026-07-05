@@ -43,6 +43,10 @@ static bool hasSameDataShapeAndElementType(VMIVRegType lhs, VMIVRegType rhs) {
          lhs.getElementType() == rhs.getElementType();
 }
 
+static bool isUnitContiguousLayout(VMILayoutAttr layout) {
+  return layout && layout.isContiguous() && layout.getLaneStride() == 1;
+}
+
 static bool isLoadProducerLayout(VMIVRegType type) {
   if (!type)
     return false;
@@ -133,9 +137,14 @@ static bool isFoldableStoreEnsure(VMIEnsureLayoutOp ensure) {
   if (!sourceType || !resultType)
     return false;
 
+  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  if (!isUnitContiguousLayout(resultLayout) ||
+      isUnitContiguousLayout(sourceLayout))
+    return false;
+
   VMILayoutSupport supports;
-  return succeeded(
-      supports.canFoldContiguousStoreMaterialization(sourceType, resultType));
+  return succeeded(supports.getStoreLayoutFact(sourceType));
 }
 
 static void tryFoldEnsureLayoutIntoOperand(
@@ -165,20 +174,12 @@ static void tryFoldEnsureLayoutIntoMaskedStore(
   if (!sourceType || !maskSourceType || !maskResultType)
     return;
 
-  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
-  VMILayoutAttr maskSourceLayout = maskSourceType.getLayoutAttr();
   VMILayoutAttr maskResultLayout = maskResultType.getLayoutAttr();
-  if (!sourceLayout || !maskSourceLayout || !maskResultLayout)
-    return;
-  if (sourceLayout != maskSourceLayout || !maskResultLayout.isContiguous())
+  if (!isUnitContiguousLayout(maskResultLayout))
     return;
 
-  auto resultType = dyn_cast<VMIVRegType>(ensure.getResult().getType());
-  if (!resultType)
-    return;
   VMILayoutSupport supports;
-  if (failed(supports.canFoldContiguousMaskedStoreMaterialization(
-          sourceType, maskSourceType, resultType, maskResultType)))
+  if (failed(supports.getMaskedStoreLayoutFact(sourceType, maskSourceType)))
     return;
 
   store.getValueMutable().set(ensure.getSource());

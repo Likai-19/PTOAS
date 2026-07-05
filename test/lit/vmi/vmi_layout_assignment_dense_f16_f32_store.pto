@@ -6,8 +6,8 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
-// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+// RUN: pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
 
 module {
   func.func @vmi_layout_assignment_dense_f16_to_f32_store(
@@ -98,17 +98,15 @@ module {
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
 // ASSIGN: %[[X32:.*]] = pto.vmi.extf %[[X16]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
-// ASSIGN: %[[DENSE:.*]] = pto.vmi.ensure_layout %[[X32]]
-// ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
-// ASSIGN: pto.vmi.store %[[DENSE]]
-// ASSIGN-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>, !pto.ptr<f32, ub>
+// ASSIGN-NOT: pto.vmi.ensure_layout %[[X32]]
+// ASSIGN: pto.vmi.store %[[X32]]
+// ASSIGN-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>, !pto.ptr<f32, ub>
 
 // LOWER-LABEL: func.func @vmi_layout_assignment_dense_f16_to_f32_store(
 // LOWER: pto.vlds
 // LOWER: pto.vcvt {{.*}} {part = "EVEN"}
 // LOWER: pto.vcvt {{.*}} {part = "ODD"}
-// LOWER: pto.vintlv
-// LOWER-COUNT-2: pto.vsts
+// LOWER: pto.vstsx2
 // LOWER-NOT: pto.vmi.
 // LOWER-NOT: !pto.vmi.
 // LOWER-NOT: unrealized_conversion_cast
@@ -118,10 +116,9 @@ module {
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
 // ASSIGN: %[[X32:.*]] = pto.vmi.extf %[[X16]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
-// ASSIGN: %[[DENSE:.*]] = pto.vmi.ensure_layout %[[X32]]
-// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>
-// ASSIGN: pto.vmi.store %[[DENSE]]
-// ASSIGN-SAME: !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>, !pto.ptr<f32, ub>
+// ASSIGN-NOT: pto.vmi.ensure_layout %[[X32]]
+// ASSIGN: pto.vmi.store %[[X32]]
+// ASSIGN-SAME: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>, !pto.ptr<f32, ub>
 
 // ASSIGN-LABEL: func.func @vmi_layout_assignment_compact_f16_to_f32_store(
 // ASSIGN: %[[X16:.*]] = pto.vmi.load
@@ -143,19 +140,18 @@ module {
 
 // ASSIGN-LABEL: func.func @vmi_layout_assignment_compact_f16_to_f32_masked_store(
 // ASSIGN: %[[MASK0:.*]] = pto.vmi.create_mask
-// ASSIGN-SAME: -> !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>
+// ASSIGN-SAME: -> !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous, lane_stride = 2>>
 // ASSIGN: %[[X16:.*]] = pto.vmi.load
 // ASSIGN-SAME: -> !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous, lane_stride = 2>>
 // ASSIGN: %[[X32:.*]] = pto.vmi.extf %[[X16]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
 // ASSIGN: %[[Y16:.*]] = pto.vmi.truncf %[[X32]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous, lane_stride = 2>>
-// ASSIGN: %[[Y16C:.*]] = pto.vmi.ensure_layout %[[Y16]]
-// ASSIGN-SAME: -> !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous>>
 // ASSIGN: %[[MASK:.*]] = pto.vmi.ensure_mask_granularity %[[MASK0]]
-// ASSIGN-SAME: -> !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous>>
-// ASSIGN: pto.vmi.masked_store %[[Y16C]]
-// ASSIGN-SAME: !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous>>, !pto.ptr<f16, ub>, !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous>>
+// ASSIGN-SAME: -> !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous, lane_stride = 2>>
+// ASSIGN-NOT: pto.vmi.ensure_layout %[[Y16]]
+// ASSIGN: pto.vmi.masked_store %[[Y16]]
+// ASSIGN-SAME: !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous, lane_stride = 2>>, !pto.ptr<f16, ub>, !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous, lane_stride = 2>>
 
 // ASSIGN-LABEL: func.func @vmi_layout_assignment_dense_f32_to_f16_store(
 // ASSIGN: %[[X32:.*]] = pto.vmi.load

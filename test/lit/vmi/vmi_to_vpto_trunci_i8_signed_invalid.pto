@@ -24,6 +24,4 @@ module {
   }
 }
 
-// CHECK: VMI-UNSUPPORTED
-// CHECK: pto.vmi.trunci supports integer deinterleaved source layouts
-// CHECK: 8-bit integer narrowing requires unsigned i8 result
+// CHECK: 'pto.vcvt' op unsupported vcvt source/result element type pair

@@ -12,7 +12,7 @@ module {
   func.func @vmi_layout_gate_bitcast_support_invalid(
       %source: !pto.vmi.vreg<65xf32, #pto.vmi.layout<deinterleaved = 2>>) {
     // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.bitcast has no registered layout support
-    // CHECK-SAME: requires matching logical bit footprint in every physical chunk
+    // CHECK-SAME: width-changing bitcast layout does not match a bitcast layout table row
     // CHECK: note: see current operation: %{{.*}} = "pto.vmi.bitcast"
     %out = pto.vmi.bitcast %source
         : !pto.vmi.vreg<65xf32, #pto.vmi.layout<deinterleaved = 2>>

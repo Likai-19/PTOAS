@@ -1553,6 +1553,11 @@ test/lit/vmi/vmi_to_vpto_group_store_slots1_1pt.pto
 
 ### 3.8 `group_reduce -> truncf -> group_broadcast -> store`
 
+This case keeps the source op order by representing the `f32 -> f16` cast result
+as lane-strided group slots.  The source reduction is a packed f32 group-slot
+value in b32 lanes 0..7.  After `truncf`, the f16 values occupy even b16 lanes
+0, 2, 4, ..., 14, so the result layout is `slots = 8, lane_stride = 2`.
+
 VMI input:
 
 ```text
@@ -1564,33 +1569,51 @@ VMI input:
 pto.vmi.store %b16, %out[%off]
 ```
 
-Assigned layouts:
+Final assigned IR:
 
 ```text
-%x     : !pto.vmi.vreg<128xf32,
-           #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
-%sum32 : !pto.vmi.vreg<128xf32,
-           #pto.vmi.layout<num_groups = 8, slots = 8>>
-%sum16 : semantic value only; not materialized as a group-slot VPTO value
-%b32_dense : !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
-%b32_split : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
-%b16   : !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
+%mask = pto.vmi.create_mask %active
+  : index -> !pto.vmi.mask<128xb32,
+       #pto.vmi.layout<contiguous>>
+
+%x = pto.vmi.load %base[%off]
+  : memref<128xf32> -> !pto.vmi.vreg<128xf32,
+       #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+
+%mask_d2 = pto.vmi.ensure_mask_layout %mask
+  : !pto.vmi.mask<128xb32,
+       #pto.vmi.layout<contiguous>>
+ -> !pto.vmi.mask<128xb32,
+       #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+
+%sum32 = pto.vmi.group_reduce_addf %x, %mask_d2 {num_groups = 8}
+  : !pto.vmi.vreg<128xf32,
+       #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>,
+    !pto.vmi.mask<128xb32,
+       #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+ -> !pto.vmi.vreg<8xf32,
+       #pto.vmi.layout<num_groups = 8, slots = 8>>
+
+%sum16 = pto.vmi.truncf %sum32
+  : !pto.vmi.vreg<8xf32,
+       #pto.vmi.layout<num_groups = 8, slots = 8>>
+ -> !pto.vmi.vreg<8xf16,
+       #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+
+%b16 = pto.vmi.group_broadcast %sum16 {num_groups = 8}
+  : !pto.vmi.vreg<8xf16,
+       #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+ -> !pto.vmi.vreg<128xf16,
+       #pto.vmi.layout<contiguous>>
+
+pto.vmi.store %b16, %out[%off]
+  : !pto.vmi.vreg<128xf16,
+       #pto.vmi.layout<contiguous>>, !pto.ptr<f16, ub>
 ```
 
-This case is supported by commuting `truncf` after `group_broadcast`:
-
-```text
-group_broadcast(truncf(group_reduce(x)))
-  == truncf(group_broadcast(group_reduce(x)))
-```
-
-This avoids materializing a group-slot f16 value. Current lowering makes the
-layout transition explicit: `group_broadcast` first produces a dense contiguous
-f32 value, then `pto.vmi.ensure_layout` materializes the deinterleaved=2 f32
-view required by dense `f32 -> f16` truncation. A future direct
-`group_broadcast -> deinterleaved=2` lowering may remove that materialization,
-but the `group_broadcast` result layout must make that support path explicit rather
-than hiding it inside `truncf` lowering.
+The layout without `lane_stride = 2` is illegal: it would claim that f16 group
+results are packed in lanes 0..7, but `vcvt` produces them in lanes
+0, 2, 4, ..., 14.  No lane compaction is performed in this case.
 
 VPTO lowering result for one full 8-row tile:
 
@@ -1609,35 +1632,20 @@ VPTO lowering result for one full 8-row tile:
 %sum32_block = pto.vadd %x_lo_sum, %x_hi_sum, %sum_mask
   : !pto.vreg<64xf32>
 
-%lane_id = pto.vci %c0_i32 : i32 -> !pto.vreg<64xi32>
-%broadcast_idx_lo = compute index vector [0 repeated 16, 1 repeated 16,
-                                           2 repeated 16, 3 repeated 16]
-  : !pto.vreg<64xi32>
-%broadcast_idx_hi = compute index vector [4 repeated 16, 5 repeated 16,
-                                           6 repeated 16, 7 repeated 16]
-  : !pto.vreg<64xi32>
-
-// These vselr ops are the VPTO lowering of pto.vmi.group_broadcast for the two
-// dense contiguous f32 physical chunks.
-%b32_rows_lo = pto.vselr %sum32_block, %broadcast_idx_lo
-  : !pto.vreg<64xf32>, !pto.vreg<64xi32> -> !pto.vreg<64xf32>
-%b32_rows_hi = pto.vselr %sum32_block, %broadcast_idx_hi
-  : !pto.vreg<64xf32>, !pto.vreg<64xi32> -> !pto.vreg<64xf32>
-
-// ensure_layout contiguous -> deinterleaved=2 materializes the two f32 parity
-// inputs expected by f32 -> f16 truncation.
-%b32_even_input, %b32_odd_input = pto.vdintlv %b32_rows_lo, %b32_rows_hi
-  : !pto.vreg<64xf32>, !pto.vreg<64xf32> -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
-
-%b16_even = pto.vcvt %b32_even_input, %all_b32 {part = "EVEN", rnd = "R", sat = "SAT"}
+%sum16_block = pto.vcvt %sum32_block, %sum_mask {part = "EVEN", rnd = "R", sat = "SAT"}
   : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<128xf16>
-%b16_odd = pto.vcvt %b32_odd_input, %all_b32 {part = "ODD", rnd = "R", sat = "SAT"}
-  : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<128xf16>
+
+%broadcast_idx = compute index vector [0 repeated 16, 2 repeated 16,
+                                       4 repeated 16, 6 repeated 16,
+                                       8 repeated 16, 10 repeated 16,
+                                       12 repeated 16, 14 repeated 16]
+  : !pto.vreg<128xi16>
+
+// The index vector uses the lane_stride=2 group-slot source layout.
+%b16 = pto.vselr %sum16_block, %broadcast_idx
+  : !pto.vreg<128xf16>, !pto.vreg<128xi16> -> !pto.vreg<128xf16>
 
 %all_b16 = pto.pge_b16 "PAT_ALL"
-%b16 = pto.vor %b16_even, %b16_odd, %all_b16
-  : !pto.vreg<128xf16>
-
 pto.vsts %b16, %out[%off], %all_b16 {dist = "NORM_B16"}
   : !pto.vreg<128xf16>, !pto.ptr<f16, ub>, !pto.mask<b16>
 ```
@@ -1649,6 +1657,20 @@ for r = 0..7:
   s32 = reduce(row_r[0..15])
   s16 = truncf(s32)
   out[r * 16 + 0 .. r * 16 + 15] = splat(s16)
+```
+
+Required assignment rule:
+
+```text
+Packed `slots = 8` group-slot `truncf` may be assigned only when the narrowing
+result layout records the sub-lane gap:
+
+  f32 group_slots(G, slots=8, lane_stride=1)
+    -> f16 group_slots(G, slots=8, lane_stride=2)
+
+Consumers of lane-strided group slots, including `group_broadcast`, must select
+source lanes with `(group % slots) * lane_stride`.  They must not treat
+`slots = 8` as lanes 0..7 after width-changing casts.
 ```
 
 ### 3.9 Illegal Dense Consumer Of Group Slots

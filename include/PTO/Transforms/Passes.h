@@ -116,6 +116,7 @@ LogicalResult validateVMILayoutAssignedIR(ModuleOp module,
 std::unique_ptr<Pass> createPTOValidateVMIIRPass();
 std::unique_ptr<Pass> createPTOValidateVMILayoutIRPass();
 std::unique_ptr<Pass> createVMIPreAssignmentCombinePass();
+std::unique_ptr<Pass> createVMIMaskGranularityAssignmentPass();
 std::unique_ptr<Pass> createVMILayoutAssignmentPass();
 std::unique_ptr<Pass> createVMILayoutFoldPass();
 std::unique_ptr<Pass> createVMILayoutRematerializePass();

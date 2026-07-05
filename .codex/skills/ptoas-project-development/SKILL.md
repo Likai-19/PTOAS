@@ -9,6 +9,12 @@ description: Project development guidance for PTOAS. Use when Codex modifies PTO
 
 When changing any user-visible behavior, update every relevant layer in the same change. Treat ODS, verifiers, lowering, command-line behavior, bindings, docs, examples, and tests as one public contract.
 
+## File Orientation Before Editing
+
+Before editing any existing file, read the file's header or top-level comments first. Check whether they describe the file's purpose, structure, section boundaries, or editing constraints, and follow those constraints when making changes.
+
+When a change creates or depends on a file-level structure rule, ownership boundary, or important functional description, add or update that guidance in the file's top-level comments so future edits see it before jumping into local code.
+
 ## Layers To Keep In Sync
 
 1. ODS and dialect definitions: `include/PTO/IR/*.td`

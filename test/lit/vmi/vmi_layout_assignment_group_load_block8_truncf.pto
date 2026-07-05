@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
+// RUN: not pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto 2>&1 | FileCheck %s
 
 module {
   func.func @vmi_layout_assignment_group_load_block8_truncf(
@@ -34,15 +34,9 @@ module {
   }
 }
 
-// CHECK-LABEL: func.func @vmi_layout_assignment_group_load_block8_truncf(
-// CHECK: pto.vsldb
-// CHECK: pto.vcgadd
-// CHECK: pto.vintlv
-// CHECK: pto.vdintlv
-// CHECK: pto.vcvt {{.*}} {part = "EVEN", rnd = "R", sat = "SAT"}
-// CHECK: pto.vcvt {{.*}} {part = "ODD", rnd = "R", sat = "SAT"}
-// CHECK: pto.vor
-// CHECK: pto.vsts
-// CHECK-NOT: pto.vmi.
-// CHECK-NOT: !pto.vmi.
-// CHECK-NOT: unrealized_conversion_cast
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.truncf operand #0 has type
+// CHECK-SAME: #pto.vmi.layout<deinterleaved = 2, block_elems = 8>
+// CHECK-SAME: requires
+// CHECK-SAME: #pto.vmi.layout<deinterleaved = 2>
+// CHECK-SAME: pto.vmi.ensure_layout cannot materialize this conversion
+// CHECK: source/result layouts do not match a supported ensure_layout table row

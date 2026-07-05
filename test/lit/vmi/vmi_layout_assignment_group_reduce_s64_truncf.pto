@@ -6,8 +6,8 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
-// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+// RUN: pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
 
 module {
   func.func @vmi_layout_assignment_group_reduce_s64_truncf(
@@ -39,7 +39,7 @@ module {
 
 // LOWER-LABEL: func.func @vmi_layout_assignment_group_reduce_s64_truncf(
 // LOWER: pto.pge_b32 "PAT_VL1"
-// LOWER: pto.vcgadd
+// LOWER: pto.vcadd
 // LOWER: pto.vsel
 // LOWER: pto.pge_b32 "PAT_VL1"
 // LOWER: pto.vcvt {{.*}} {part = "EVEN", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<128xf16>

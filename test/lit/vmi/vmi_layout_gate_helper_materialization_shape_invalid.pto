@@ -12,7 +12,7 @@ module {
   func.func @vmi_layout_gate_ensure_layout_shape_invalid(
       %value: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 4>>) {
     // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.ensure_layout has no registered materialization support
-    // CHECK-SAME: requires source and result to have the same physical arity
+    // CHECK-SAME: source/result layouts do not match a supported ensure_layout table row
     %dense = pto.vmi.ensure_layout %value
         : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
@@ -26,7 +26,7 @@ module {
   func.func @vmi_layout_gate_ensure_mask_layout_shape_invalid(
       %mask: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 4>>) {
     // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.ensure_mask_layout has no registered materialization support
-    // CHECK-SAME: requires source and result to have the same physical arity
+    // CHECK-SAME: source/result mask layouts do not match a supported ensure_mask_layout table row
     %dense = pto.vmi.ensure_mask_layout %mask
         : !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
