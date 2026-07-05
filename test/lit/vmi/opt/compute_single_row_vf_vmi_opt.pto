@@ -6,14 +6,15 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
-// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --enable-vmi --emit-vpto %s | FileCheck %s --check-prefix=VPTO --implicit-check-not=pto.vmi. --implicit-check-not='!pto.vmi'
+// RUN: pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --enable-vmi --emit-vpto %s | FileCheck %s --check-prefix=VPTO --implicit-check-not=pto.vmi. --implicit-check-not='!pto.vmi' --implicit-check-not=pto.vcgmax --implicit-check-not=pto.vselr
 
 // Optimization guard for the ComputeSingleRowVF block-quant path.
 // The 128xf32 -> 128xf8 truncf should use a deinterleaved=2 f32 source and a
 // lane_stride=2 fp8 result, lowering to P0/P2 only. This keeps the output
 // physical register count unchanged while avoiding the extra f32 source parts
-// required by deinterleaved=4.
+// required by deinterleaved=4. The masked_store should preserve lane_stride and
+// lower to a PK_B16 store without vpack.
 
 module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
   func.func @ComputeSingleRowVF_fp16_vmi_opt(
@@ -84,13 +85,15 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
 // ASSIGN: %[[Q:.*]] = pto.vmi.divf {{.*}} : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>, !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>> -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
 // ASSIGN: %[[Q8:.*]] = pto.vmi.truncf %[[Q]]
 // ASSIGN-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>> -> !pto.vmi.vreg<128xf8E4M3FN, #pto.vmi.layout<contiguous, lane_stride = 2>>
-// ASSIGN: %[[STORE:.*]] = pto.vmi.ensure_layout %[[Q8]]
-// ASSIGN-SAME: !pto.vmi.vreg<128xf8E4M3FN, #pto.vmi.layout<contiguous, lane_stride = 2>> -> !pto.vmi.vreg<128xf8E4M3FN, #pto.vmi.layout<contiguous>>
-// ASSIGN: pto.vmi.masked_store %[[STORE]]
+// ASSIGN-NOT: pto.vmi.ensure_layout %[[Q8]]
+// ASSIGN: %[[MASK:.*]] = pto.vmi.ensure_mask_granularity
+// ASSIGN-SAME: -> !pto.vmi.mask<128xb8, #pto.vmi.layout<contiguous, lane_stride = 2>>
+// ASSIGN: pto.vmi.masked_store %[[Q8]], {{.*}}, %[[MASK]]
 
 // VPTO-LABEL: func.func @ComputeSingleRowVF_fp16_vmi_opt(
 // VPTO: pto.vcvt {{.*}} {part = "EVEN"}
 // VPTO: pto.vcvt {{.*}} {part = "ODD"}
+// VPTO: pto.vcmax
 // VPTO-NOT: part = "P1"
 // VPTO-NOT: part = "P3"
 // VPTO: pto.vcvt {{.*}} {part = "P0", rnd = "R", sat = "SAT"}
@@ -100,5 +103,5 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
 // VPTO-NOT: part = "P1"
 // VPTO-NOT: part = "P3"
 // VPTO: pto.vor
-// VPTO: pto.vpack
-// VPTO: pto.vsts
+// VPTO-NOT: pto.vpack
+// VPTO: pto.vsts {{.*}} {dist = "PK_B16"}

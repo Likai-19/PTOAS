@@ -6,8 +6,8 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
-// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+// RUN: pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: not pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto 2>&1 | FileCheck %s --check-prefix=LOWERERR
 
 module {
   func.func @vmi_layout_assignment_group_load_s32_stride_broadcast_reduce(
@@ -39,29 +39,21 @@ module {
 }
 
 // ASSIGN-LABEL: func.func @vmi_layout_assignment_group_load_s32_stride_broadcast_reduce(
-// ASSIGN: %[[X:.*]] = pto.vmi.group_load
+// ASSIGN: %[[RAW:.*]] = pto.vmi.group_load
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
 // ASSIGN: %[[MASK:.*]] = pto.vmi.ensure_mask_layout
 // ASSIGN-SAME: -> !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
-// ASSIGN: %[[SUM:.*]] = pto.vmi.group_reduce_addf %[[X]], %[[MASK]]
+// ASSIGN: %[[SUM:.*]] = pto.vmi.group_reduce_addf %[[RAW]], %[[MASK]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // ASSIGN: %[[B:.*]] = pto.vmi.group_broadcast %[[SUM]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
-// ASSIGN: %[[Y:.*]] = pto.vmi.mulf %[[X]], %[[B]]
+// ASSIGN: %[[Y_GROUP:.*]] = pto.vmi.mulf %[[RAW]], %[[B]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
 // ASSIGN: %[[MASK2:.*]] = pto.vmi.ensure_mask_layout
 // ASSIGN-SAME: -> !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
-// ASSIGN: %[[YSUM:.*]] = pto.vmi.group_reduce_addf %[[Y]], %[[MASK2]]
+// ASSIGN: %[[YSUM:.*]] = pto.vmi.group_reduce_addf %[[Y_GROUP]], %[[MASK2]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // ASSIGN: pto.vmi.group_store %[[YSUM]]
 
-// LOWER-LABEL: func.func @vmi_layout_assignment_group_load_s32_stride_broadcast_reduce(
-// LOWER-COUNT-4: pto.vsldb
-// LOWER-COUNT-4: pto.vcgadd
-// LOWER-COUNT-4: pto.vselr
-// LOWER-COUNT-4: pto.vmul
-// LOWER-COUNT-4: pto.vcgadd
-// LOWER: pto.vsts {{.*}} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
-// LOWER-NOT: pto.vmi.
-// LOWER-NOT: !pto.vmi.
-// LOWER-NOT: unrealized_conversion_cast
+// LOWERERR: failed to legalize operation 'pto.vmi.ensure_mask_layout'
+// LOWERERR: VMI{{-}}RESIDUAL{{-}}OP: failed to convert all VMI ops/types to VPTO

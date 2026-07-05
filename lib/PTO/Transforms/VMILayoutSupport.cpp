@@ -10,6 +10,29 @@
 
 //===- VMILayoutSupport.cpp - VMI layout support queries --------------===//
 //===----------------------------------------------------------------------===//
+//
+// This file is the central table-driven source for VMI layout support facts.
+// Keep file-level responsibilities separated as follows:
+//
+// 1. Layout pattern DSL:
+//    Define compact syntax for expressing layouts and table keys only.
+// 2. Query key derivation helpers:
+//    Extract op operands and derive normalized keys used to query the tables.
+//    Do not add new layout support facts in this section.
+// 3. Rule tables:
+//    Add legal/preferred layout relations here.  New support facts should be
+//    visible as table rows instead of being hidden in query helper branches.
+// 4. Table matching and materialization helpers:
+//    Convert table rows into facts and compare derived keys with row keys.
+//    Do not add new layout support facts in this section.
+// 5. Query implementations:
+//    Query functions should consume the tables, derive table keys, and check
+//    op-level preconditions only.  Shape/type limits that define layout support
+//    must be visible as table keys or table rows, not hidden in query branches.
+//
+// When adding a new family of support rules, first extend the shared pattern
+// DSL if needed, then add table rows, then expose them through a small query.
+// Avoid local mini-DSLs or ad-hoc support logic that duplicates table facts.
 
 #include "PTO/Transforms/VMILayoutSupport.h"
 
@@ -20,117 +43,202 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "llvm/ADT/Twine.h"
 
-#include <cassert>
-
 using namespace mlir;
 using namespace mlir::pto;
 
 namespace {
 
-static LogicalResult failWithReason(const Twine &message, std::string *reason) {
-  if (reason)
-    *reason = message.str();
-  return failure();
+//===----------------------------------------------------------------------===//
+// Layout pattern DSL
+//===----------------------------------------------------------------------===//
+
+enum class LayoutPatternKind {
+  Contiguous,
+  LaneStride,
+  Deinterleaved,
+  GroupSlots,
+};
+
+struct LayoutPattern {
+  LayoutPatternKind kind = LayoutPatternKind::Contiguous;
+  int64_t value = 1;
+  int64_t blockElems = 0;
+  int64_t laneStride = 1;
+};
+
+enum class GroupBlockPatternKind {
+  Ratio,
+  FullPartMultiple,
+};
+
+enum class GroupMemoryPatternKind {
+  Any,
+  Contiguous,
+  BlockAligned,
+};
+
+struct GroupBlockPattern {
+  GroupBlockPatternKind kind = GroupBlockPatternKind::Ratio;
+  int64_t numerator = 1;
+  int64_t denominator = 1;
+};
+
+struct GroupMemoryPattern {
+  GroupMemoryPatternKind kind = GroupMemoryPatternKind::Contiguous;
+};
+
+struct ElementBitsPattern {
+  uint64_t mask = 0;
+};
+
+struct ElementCountPattern {
+  int64_t values[32] = {};
+  int64_t count = 0;
+  bool any = false;
+};
+
+struct MaskGranularityPattern {
+  uint8_t mask = 0;
+};
+
+static constexpr uint64_t elementBitsMask(int64_t bits) {
+  return bits == 8    ? 1ull << 0
+         : bits == 16 ? 1ull << 1
+         : bits == 32 ? 1ull << 2
+         : bits == 64 ? 1ull << 3
+                      : 0;
 }
 
-static LogicalResult checkFullDataPhysicalChunks(VMIVRegType type,
-                                                 std::string *reason) {
-  FailureOr<int64_t> lanesPerPart = getDataLanesPerPart(type.getElementType());
-  if (failed(lanesPerPart))
-    return failWithReason("requires known physical lanes per part", reason);
-
-  FailureOr<int64_t> arity = getVMIPhysicalArity(type);
-  if (failed(arity))
-    return failWithReason("requires computable physical arity", reason);
-
-  VMILayoutAttr layout = type.getLayoutAttr();
-  if (!layout)
-    return failWithReason("requires assigned layout", reason);
-  int64_t factor = layout.isDeinterleaved() ? layout.getFactor() : 1;
-  if (factor <= 0 || *arity % factor != 0)
-    return failWithReason("requires arity divisible by layout factor", reason);
-
-  int64_t chunksPerPart = *arity / factor;
-  for (int64_t part = 0; part < factor; ++part) {
-    for (int64_t chunk = 0; chunk < chunksPerPart; ++chunk) {
-      for (int64_t lane = 0; lane < *lanesPerPart; ++lane) {
-        FailureOr<bool> padding = isPaddingLane(type, part, chunk, lane);
-        if (failed(padding))
-          return failWithReason("failed to map physical padding lane", reason);
-        if (*padding)
-          return failWithReason("found padding lane in physical chunk", reason);
-      }
-    }
-  }
-
-  return success();
+template <int64_t... Bits> static constexpr ElementBitsPattern bits() {
+  return {((uint64_t{0} | elementBitsMask(Bits)) | ...)};
 }
 
-static bool hasX2MemoryDistToken(Type elementType) {
+template <int64_t... Counts> static constexpr ElementCountPattern N() {
+  static_assert(sizeof...(Counts) <= 32, "too many element count patterns");
+  return {{Counts...}, static_cast<int64_t>(sizeof...(Counts)), false};
+}
+
+template <int64_t... Counts> static constexpr ElementCountPattern G() {
+  return N<Counts...>();
+}
+
+static constexpr ElementCountPattern anyN() { return {{}, 0, true}; }
+
+static constexpr MaskGranularityPattern mb8() { return {1u << 0}; }
+static constexpr MaskGranularityPattern mb16() { return {1u << 1}; }
+static constexpr MaskGranularityPattern mb32() { return {1u << 2}; }
+static constexpr MaskGranularityPattern mbAll() {
+  return {static_cast<uint8_t>((1u << 0) | (1u << 1) | (1u << 2))};
+}
+
+static bool matchesElementBitsPattern(ElementBitsPattern pattern,
+                                      int64_t bits) {
+  uint64_t mask = elementBitsMask(bits);
+  return mask != 0 && (pattern.mask & mask) != 0;
+}
+
+static bool matchesElementBitsPattern(ElementBitsPattern pattern,
+                                      Type elementType) {
   unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
-  return elementBits == 8 || elementBits == 16 || elementBits == 32;
+  return matchesElementBitsPattern(pattern, elementBits);
 }
 
-static bool hasDenseLaneStride2UnpackedLoad(Type elementType) {
-  unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
-  return elementBits == 8 || elementBits == 16 || elementBits == 32;
-}
-
-static bool hasDenseLaneStride4UnpackedLoad(Type elementType) {
-  unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
-  return elementBits == 8;
-}
-
-static bool hasDenseLaneStride2PackedStore(Type elementType) {
-  unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
-  return elementBits == 8 || elementBits == 16 || elementBits == 32;
-}
-
-static bool hasDenseLaneStride4PackedStore(Type elementType) {
-  unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
-  return elementBits == 8;
-}
-
-static bool hasDenseLaneStridePackUnpackElement(Type elementType,
-                                                int64_t laneStride) {
-  unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
-  if (elementBits == 0 || (!isa<IntegerType>(elementType) &&
-                           !isa<FloatType>(elementType)))
-    return false;
-  if (laneStride == 2)
-    return elementBits == 8 || elementBits == 16;
-  if (laneStride == 4)
-    return elementBits == 8;
+static bool matchesElementCountPattern(ElementCountPattern pattern,
+                                       int64_t count) {
+  if (pattern.any)
+    return true;
+  for (int64_t i = 0; i < pattern.count; ++i)
+    if (pattern.values[i] == count)
+      return true;
   return false;
 }
 
-static std::optional<StringRef>
-getDenseLaneStrideMaskedStoreMaskGranularity(VMIVRegType valueType) {
-  VMILayoutAttr layout = valueType.getLayoutAttr();
-  if (!layout || !layout.isContiguous())
-    return std::nullopt;
-  unsigned elementBits = pto::getPTOStorageElemBitWidth(valueType.getElementType());
-  if (layout.getLaneStride() == 2 && elementBits == 8)
-    return StringRef("b16");
-  if (layout.getLaneStride() == 2 && elementBits == 16)
-    return StringRef("b32");
-  if (layout.getLaneStride() == 4 && elementBits == 8)
-    return StringRef("b32");
-  return std::nullopt;
+static bool matchesMaskGranularityPattern(MaskGranularityPattern pattern,
+                                          StringRef granularity) {
+  uint8_t mask = granularity == "b8"    ? 1u << 0
+                 : granularity == "b16" ? 1u << 1
+                 : granularity == "b32" ? 1u << 2
+                                        : 0;
+  return mask != 0 && (pattern.mask & mask) != 0;
 }
 
-static StringRef getMaskGranularityForElementBits(unsigned elementBits) {
-  switch (elementBits) {
-  case 8:
-    return "b8";
-  case 16:
-    return "b16";
-  case 32:
-    return "b32";
-  default:
-    return "";
+static VMILayoutAttr materializeLayoutPattern(MLIRContext *ctx,
+                                              LayoutPattern pattern,
+                                              int64_t inheritedBlockElems = 1,
+                                              int64_t numGroups = 0) {
+  switch (pattern.kind) {
+  case LayoutPatternKind::Contiguous:
+    return VMILayoutAttr::getContiguous(ctx);
+  case LayoutPatternKind::LaneStride:
+    return VMILayoutAttr::getContiguous(ctx, pattern.value);
+  case LayoutPatternKind::Deinterleaved: {
+    int64_t blockElems =
+        pattern.blockElems > 0 ? pattern.blockElems : inheritedBlockElems;
+    return VMILayoutAttr::getDeinterleaved(ctx, pattern.value, blockElems);
   }
+  case LayoutPatternKind::GroupSlots:
+    return numGroups > 0
+               ? VMILayoutAttr::getGroupSlots(ctx, numGroups, pattern.value,
+                                              pattern.laneStride)
+               : VMILayoutAttr();
+  }
+  llvm_unreachable("unknown layout pattern kind");
 }
+
+static bool matchesLayoutPattern(MLIRContext *ctx, LayoutPattern pattern,
+                                 VMILayoutAttr layout, int64_t numGroups = 0) {
+  if (!layout)
+    return false;
+  int64_t inheritedBlockElems =
+      layout.isDeinterleaved() ? layout.getBlockElems() : 1;
+  return materializeLayoutPattern(ctx, pattern, inheritedBlockElems,
+                                  numGroups) == layout;
+}
+
+static constexpr LayoutPattern c() {
+  return {LayoutPatternKind::Contiguous, 1, 0, 1};
+}
+
+static constexpr LayoutPattern ls(int64_t laneStride) {
+  return {LayoutPatternKind::LaneStride, laneStride, 0, 1};
+}
+
+static constexpr LayoutPattern d(int64_t factor, int64_t blockElems = 0) {
+  return {LayoutPatternKind::Deinterleaved, factor, blockElems, 1};
+}
+
+static constexpr LayoutPattern gs(int64_t slots, int64_t laneStride = 1) {
+  return {LayoutPatternKind::GroupSlots, slots, 0, laneStride};
+}
+
+static constexpr GroupMemoryPattern memAny() {
+  return {GroupMemoryPatternKind::Any};
+}
+
+static constexpr GroupMemoryPattern memContiguous() {
+  return {GroupMemoryPatternKind::Contiguous};
+}
+
+static constexpr GroupMemoryPattern memBlockAligned() {
+  return {GroupMemoryPatternKind::BlockAligned};
+}
+
+static constexpr GroupBlockPattern gb(int64_t numerator) {
+  return {GroupBlockPatternKind::Ratio, numerator, 1};
+}
+
+static constexpr GroupBlockPattern gb(int64_t numerator, int64_t denominator) {
+  return {GroupBlockPatternKind::Ratio, numerator, denominator};
+}
+
+static constexpr GroupBlockPattern gbFull(int64_t fullPartMultiple = 1) {
+  return {GroupBlockPatternKind::FullPartMultiple, fullPartMultiple, 1};
+}
+
+//===----------------------------------------------------------------------===//
+// Query key derivation helpers.  Keep new layout facts in the rule table
+// section below; helpers in this section should only derive normalized keys.
+//===----------------------------------------------------------------------===//
 
 static std::optional<int64_t> getConstantIndexValue(Value value) {
   if (auto constant = value.getDefiningOp<arith::ConstantIndexOp>())
@@ -140,192 +248,6 @@ static std::optional<int64_t> getConstantIndexValue(Value value) {
       return constant.value();
   }
   return std::nullopt;
-}
-
-static int64_t ceilDivNonNegative(int64_t lhs, int64_t rhs) {
-  assert(lhs >= 0 && rhs > 0);
-  return (lhs + rhs - 1) / rhs;
-}
-
-static FailureOr<int64_t> getVMITypeElementCount(Type type) {
-  if (auto vregType = dyn_cast<VMIVRegType>(type))
-    return vregType.getElementCount();
-  if (auto maskType = dyn_cast<VMIMaskType>(type))
-    return maskType.getElementCount();
-  return failure();
-}
-
-static FailureOr<int64_t> getVMITypeLayoutFactor(Type type) {
-  VMILayoutAttr layout;
-  if (auto vregType = dyn_cast<VMIVRegType>(type))
-    layout = vregType.getLayoutAttr();
-  else if (auto maskType = dyn_cast<VMIMaskType>(type))
-    layout = maskType.getLayoutAttr();
-  else
-    return failure();
-  if (!layout)
-    return failure();
-  return layout.isDeinterleaved() ? layout.getFactor() : 1;
-}
-
-static FailureOr<int64_t> getVMITypeLanesPerPart(Type type) {
-  if (auto vregType = dyn_cast<VMIVRegType>(type))
-    return getDataLanesPerPart(vregType.getElementType());
-  if (auto maskType = dyn_cast<VMIMaskType>(type))
-    return getMaskLanesPerPart(maskType.getGranularity());
-  return failure();
-}
-
-static FailureOr<int64_t> getVMITypeChunksInPart(Type type, int64_t part) {
-  FailureOr<int64_t> elementCount = getVMITypeElementCount(type);
-  FailureOr<int64_t> factor = getVMITypeLayoutFactor(type);
-  FailureOr<int64_t> lanesPerPart = getVMITypeLanesPerPart(type);
-  if (failed(elementCount) || failed(factor) || failed(lanesPerPart) ||
-      part < 0 || part >= *factor)
-    return failure();
-
-  VMILayoutAttr layout;
-  if (auto vregType = dyn_cast<VMIVRegType>(type))
-    layout = vregType.getLayoutAttr();
-  else if (auto maskType = dyn_cast<VMIMaskType>(type))
-    layout = maskType.getLayoutAttr();
-  if (!layout)
-    return failure();
-
-  int64_t logicalLanesInPart = (*elementCount + *factor - 1 - part) / *factor;
-  int64_t laneStride = layout.isDense() ? layout.getLaneStride() : 1;
-  int64_t physicalLanes =
-      logicalLanesInPart == 0 ? 0 : (logicalLanesInPart - 1) * laneStride + 1;
-  return ceilDivNonNegative(physicalLanes, *lanesPerPart);
-}
-
-static LogicalResult checkFullVMIPhysicalChunks(Type type,
-                                                std::string *reason) {
-  auto fail = [&](const Twine &message) -> LogicalResult {
-    if (reason)
-      *reason = message.str();
-    return failure();
-  };
-
-  FailureOr<int64_t> factor = getVMITypeLayoutFactor(type);
-  FailureOr<int64_t> lanesPerPart = getVMITypeLanesPerPart(type);
-  if (failed(factor) || failed(lanesPerPart))
-    return fail("requires assigned layout with known physical lanes per part");
-
-  for (int64_t part = 0; part < *factor; ++part) {
-    FailureOr<int64_t> chunks = getVMITypeChunksInPart(type, part);
-    if (failed(chunks))
-      return fail("requires known physical chunks");
-    for (int64_t chunk = 0; chunk < *chunks; ++chunk) {
-      for (int64_t lane = 0; lane < *lanesPerPart; ++lane) {
-        FailureOr<bool> padding = isPaddingLane(type, part, chunk, lane);
-        if (failed(padding))
-          return fail("failed to map physical padding lane");
-        if (*padding)
-          return fail("found padding lane in physical chunk");
-      }
-    }
-  }
-
-  return success();
-}
-
-static FailureOr<int64_t>
-getContiguousMaterializationPartCount(Type type, std::string *reason) {
-  auto fail = [&](const Twine &message) -> FailureOr<int64_t> {
-    if (reason)
-      *reason = message.str();
-    return failure();
-  };
-
-  FailureOr<int64_t> arity = getVMIPhysicalArity(type);
-  FailureOr<int64_t> factor = getVMITypeLayoutFactor(type);
-  if (failed(arity) || failed(factor))
-    return fail("requires computable physical arity and assigned layout");
-
-  VMILayoutAttr layout;
-  if (auto vregType = dyn_cast<VMIVRegType>(type))
-    layout = vregType.getLayoutAttr();
-  else if (auto maskType = dyn_cast<VMIMaskType>(type))
-    layout = maskType.getLayoutAttr();
-  else
-    return fail("requires VMI data or mask type");
-
-  if (!layout)
-    return fail("requires assigned layout");
-  if (layout.isContiguous() && layout.getLaneStride() == 1)
-    return *arity;
-  if (!layout.isDeinterleaved() ||
-      (layout.getFactor() != 2 && layout.getFactor() != 4))
-    return fail("requires contiguous or deinterleaved=2/4 layout");
-
-  FailureOr<int64_t> chunksPerGroup = getVMITypeChunksInPart(type, 0);
-  if (failed(chunksPerGroup))
-    return fail("requires known physical chunks per part");
-  if (*chunksPerGroup == 0)
-    return fail("requires at least one physical chunk per part");
-
-  for (int64_t part = 1; part < *factor; ++part) {
-    FailureOr<int64_t> chunks = getVMITypeChunksInPart(type, part);
-    if (failed(chunks))
-      return fail("requires known physical chunks per part");
-    if (*chunks != *chunksPerGroup)
-      return fail("requires every deinterleaved part to have the same "
-                  "physical chunk count");
-  }
-
-  return *arity;
-}
-
-static LogicalResult checkLayoutMaterializationShape(Type sourceType,
-                                                     Type resultType,
-                                                     VMILayoutAttr sourceLayout,
-                                                     VMILayoutAttr resultLayout,
-                                                     std::string *reason) {
-  auto fail = [&](const Twine &message) -> LogicalResult {
-    if (reason)
-      *reason = message.str();
-    return failure();
-  };
-
-  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
-  if (failed(sourceArity) || failed(resultArity))
-    return fail("requires computable source/result physical arity");
-  if (*sourceArity != *resultArity)
-    return fail("requires source and result to have the same physical arity");
-
-  if (sourceLayout == resultLayout)
-    return success();
-
-  std::string sourceReason;
-  std::string resultReason;
-  LogicalResult sourceFull =
-      checkFullVMIPhysicalChunks(sourceType, &sourceReason);
-  LogicalResult resultFull =
-      checkFullVMIPhysicalChunks(resultType, &resultReason);
-  if (succeeded(sourceFull) && succeeded(resultFull))
-    return success();
-
-  std::string sourceMaterializationReason;
-  FailureOr<int64_t> sourceMaterializedParts =
-      getContiguousMaterializationPartCount(sourceType,
-                                            &sourceMaterializationReason);
-  std::string resultMaterializationReason;
-  FailureOr<int64_t> resultMaterializedParts =
-      getContiguousMaterializationPartCount(resultType,
-                                            &resultMaterializationReason);
-  if (succeeded(sourceMaterializedParts) &&
-      succeeded(resultMaterializedParts) &&
-      *sourceMaterializedParts == *sourceArity &&
-      *resultMaterializedParts == *resultArity)
-    return success();
-
-  if (failed(sourceFull))
-    return fail(Twine("source ") + sourceReason + "; source materialization " +
-                sourceMaterializationReason);
-  return fail(Twine("result ") + resultReason + "; result materialization " +
-              resultMaterializationReason);
 }
 
 static FailureOr<int64_t> getGroupSizeFromNumGroups(VMIVRegType type,
@@ -343,83 +265,535 @@ static FailureOr<int64_t> getGroupSizeFromNumGroups(VMIVRegType type,
   return type.getElementCount() / numGroups;
 }
 
-static FailureOr<int64_t> getDataLayoutFactor(VMIVRegType type) {
-  VMILayoutAttr layout = type.getLayoutAttr();
-  if (!layout)
-    return failure();
-  return layout.isDeinterleaved() ? layout.getFactor() : 1;
+//===----------------------------------------------------------------------===//
+// Rule tables
+//===----------------------------------------------------------------------===//
+
+struct EnsureLayoutPattern {
+  ElementBitsPattern elementBits;
+  ElementCountPattern elementCounts;
+  LayoutPattern sourceLayout;
+  LayoutPattern resultLayout;
+};
+
+static constexpr EnsureLayoutPattern kEnsureLayoutPatterns[] = {
+    {bits<16>(), N<256>(), c(), d(2, 1)},
+    {bits<32>(), N<128, 256>(), c(), d(2, 1)},
+    {bits<64>(), N<64, 128, 256>(), c(), d(2, 1)},
+    {bits<16>(), N<256>(), d(2, 1), c()},
+    {bits<32>(), N<128, 256>(), d(2, 1), c()},
+    {bits<64>(), N<64, 128, 256>(), d(2, 1), c()},
+
+    {bits<32>(), N<256>(), c(), d(4, 1)},
+    {bits<64>(), N<128, 256>(), c(), d(4, 1)},
+    {bits<32>(), N<256>(), d(4, 1), c()},
+    {bits<64>(), N<128, 256>(), d(4, 1), c()},
+
+    {bits<32>(), N<256, 512>(), d(2, 1), d(4, 1)},
+    {bits<64>(), N<128, 256>(), d(2, 1), d(4, 1)},
+    {bits<32>(), N<256, 512>(), d(4, 1), d(2, 1)},
+    {bits<64>(), N<128, 256>(), d(4, 1), d(2, 1)},
+
+    {bits<8>(), N<1, 2, 4, 8, 64, 128>(), c(), ls(2)},
+    {bits<16>(), N<1, 2, 4, 8, 64>(), c(), ls(2)},
+    {bits<8>(), N<1, 2, 4, 8, 64, 128>(), ls(2), c()},
+    {bits<16>(), N<1, 2, 4, 8, 64>(), ls(2), c()},
+
+    {bits<8>(), N<1, 2, 4, 8, 64>(), c(), ls(4)},
+    {bits<8>(), N<1, 2, 4, 8, 64>(), ls(4), c()},
+};
+
+struct EnsureMaskLayoutPattern {
+  MaskGranularityPattern granularity;
+  ElementCountPattern elementCounts;
+  LayoutPattern sourceLayout;
+  LayoutPattern resultLayout;
+};
+
+static constexpr EnsureMaskLayoutPattern kEnsureMaskLayoutPatterns[] = {
+    {mb16(), N<256>(), c(), d(2, 1)},
+    {mb32(), N<128, 256>(), c(), d(2, 1)},
+    {mb32(), N<128>(), c(), d(2, 8)},
+    {mb16(), N<256>(), d(2, 1), c()},
+    {mb32(), N<128, 256>(), d(2, 1), c()},
+    {mb32(), N<128>(), d(2, 8), c()},
+
+    {mb32(), N<256>(), c(), d(4, 1)},
+    {mb32(), N<256>(), c(), d(4, 8)},
+    {mb32(), N<256>(), d(4, 1), c()},
+    {mb32(), N<256>(), d(4, 8), c()},
+
+    {mb8(), N<1, 2, 4, 8, 64, 128>(), c(), ls(2)},
+    {mb16(), N<1, 2, 4, 8, 64>(), c(), ls(2)},
+    {mb32(), N<1, 2, 4, 8>(), c(), ls(2)},
+    {mb8(), N<1, 2, 4, 8, 64, 128>(), ls(2), c()},
+    {mb16(), N<1, 2, 4, 8, 64>(), ls(2), c()},
+    {mb32(), N<1, 2, 4, 8>(), ls(2), c()},
+
+    {mb8(), N<1, 2, 4, 8, 64>(), c(), ls(4)},
+    {mb16(), N<1, 2, 4, 8>(), c(), ls(4)},
+    {mb32(), N<1, 2, 4, 8>(), c(), ls(4)},
+    {mb8(), N<1, 2, 4, 8, 64>(), ls(4), c()},
+    {mb16(), N<1, 2, 4, 8>(), ls(4), c()},
+    {mb32(), N<1, 2, 4, 8>(), ls(4), c()},
+};
+
+struct GroupBlockClassPattern {
+  GroupBlockPattern block;
+  VMIGroupBlockClass blockClass;
+};
+
+static constexpr GroupBlockClassPattern kGroupBlockClassPatterns[] = {
+    {gb(1, 4), VMIGroupBlockClass::QuarterBlock},
+    {gb(1, 2), VMIGroupBlockClass::HalfBlock},
+    {gb(1), VMIGroupBlockClass::OneBlock},
+    {gb(2), VMIGroupBlockClass::TwoBlock},
+    {gb(4), VMIGroupBlockClass::FourBlock},
+    {gbFull(), VMIGroupBlockClass::FullPartMultiple},
+    {gbFull(2), VMIGroupBlockClass::FullPartMultiple},
+    {gbFull(4), VMIGroupBlockClass::FullPartMultiple},
+};
+
+struct GroupReduceLayoutPattern {
+  GroupBlockPattern block;
+  LayoutPattern sourceLayout;
+  LayoutPattern resultLayout;
+};
+
+static constexpr GroupReduceLayoutPattern kGroupReduceLayoutPatterns[] = {
+    {gb(1, 4), ls(4), gs(8)},
+    {gb(1, 2), ls(2), gs(8)},
+    {gb(1), c(), gs(8)},
+    {gb(2), d(2, 1), gs(8)},
+    {gb(2), d(2, 8), gs(8)},
+    {gb(4), d(4, 1), gs(8)},
+    {gb(4), d(4, 8), gs(8)},
+    {gbFull(), c(), gs(1)},
+    {gbFull(2), d(2, 1), gs(1)},
+    {gbFull(4), d(4, 1), gs(1)},
+};
+
+struct PreferredCastLayoutPattern {
+  ElementBitsPattern sourceBits;
+  ElementBitsPattern resultBits;
+  int64_t elementCount = 0; // 0 means the default row for this bit-width pair.
+  LayoutPattern sourceLayout;
+  LayoutPattern resultLayout;
+};
+
+struct LegalCastLayoutPattern {
+  ElementBitsPattern sourceBits;
+  ElementBitsPattern resultBits;
+  LayoutPattern sourceLayout;
+  LayoutPattern resultLayout;
+};
+
+static constexpr PreferredCastLayoutPattern kPreferredCastLayoutPatterns[] = {
+    // Exact rows override the default legal relation for small shapes where the
+    // compact lane-stride form is the natural cast layout.
+    {bits<16>(), bits<32>(), 64, ls(2), c()},
+    {bits<8>(), bits<32>(), 64, ls(4), c()},
+    {bits<32>(), bits<16>(), 64, c(), ls(2)},
+    {bits<32>(), bits<8>(), 64, c(), ls(4)},
+    {bits<32>(), bits<8>(), 128, d(2), ls(2)},
+
+    // Default rows for the storage-width cast families.
+    {bits<8>(), bits<16>(), 0, c(), d(2)},
+    {bits<16>(), bits<32>(), 0, c(), d(2)},
+    {bits<8>(), bits<32>(), 0, c(), d(4)},
+    {bits<16>(), bits<8>(), 0, d(2), c()},
+    {bits<32>(), bits<16>(), 0, d(2), c()},
+    {bits<32>(), bits<8>(), 0, d(4), c()},
+};
+
+static constexpr LegalCastLayoutPattern kLegalCastLayoutPatterns[] = {
+    // 2x widening.
+    {bits<8>(), bits<16>(), c(), d(2)},
+    {bits<8>(), bits<16>(), ls(2), c()},
+    {bits<8>(), bits<16>(), d(2), d(4)},
+    {bits<16>(), bits<32>(), c(), d(2)},
+    {bits<16>(), bits<32>(), ls(2), c()},
+    {bits<16>(), bits<32>(), d(2), d(4)},
+
+    // 2x narrowing.
+    {bits<16>(), bits<8>(), d(2), c()},
+    {bits<16>(), bits<8>(), c(), ls(2)},
+    {bits<16>(), bits<8>(), d(4), d(2)},
+    {bits<32>(), bits<16>(), d(2), c()},
+    {bits<32>(), bits<16>(), c(), ls(2)},
+    {bits<32>(), bits<16>(), d(4), d(2)},
+
+    // 4x widening/narrowing.
+    {bits<8>(), bits<32>(), c(), d(4)},
+    {bits<8>(), bits<32>(), ls(2), d(2)},
+    {bits<8>(), bits<32>(), ls(4), c()},
+    {bits<32>(), bits<8>(), d(4), c()},
+    {bits<32>(), bits<8>(), c(), ls(4)},
+    {bits<32>(), bits<8>(), d(2), ls(2)},
+
+    // Group-slot casts keep the row-local group layout.  num_groups is
+    // inherited from the anchor layout at query time.  Packed narrowing records
+    // the selected sub-lane stride on the result; widening is the inverse.
+    {bits<8>(), bits<16>(), gs(1), gs(1)},
+    {bits<8>(), bits<16>(), gs(8, 2), gs(8)},
+    {bits<16>(), bits<32>(), gs(1), gs(1)},
+    {bits<16>(), bits<32>(), gs(8, 2), gs(8)},
+    {bits<8>(), bits<32>(), gs(1), gs(1)},
+    {bits<8>(), bits<32>(), gs(8, 4), gs(8)},
+    {bits<16>(), bits<32>(), gs(8), gs(8)},
+    {bits<8>(), bits<32>(), gs(8), gs(8)},
+    {bits<16>(), bits<8>(), gs(1), gs(1)},
+    {bits<16>(), bits<8>(), gs(8), gs(8, 2)},
+    {bits<32>(), bits<16>(), gs(1), gs(1)},
+    {bits<32>(), bits<16>(), gs(8), gs(8, 2)},
+    {bits<32>(), bits<8>(), gs(1), gs(1)},
+    {bits<32>(), bits<8>(), gs(8), gs(8, 4)},
+};
+
+struct SupplementalCastLayoutPattern {
+  ElementBitsPattern sourceBits;
+  ElementBitsPattern resultBits;
+  LayoutPattern sourceLayout;
+  LayoutPattern resultLayout;
+};
+
+static constexpr SupplementalCastLayoutPattern
+    kSupplementalIntegerExtLayoutPatterns[] = {
+    {bits<8>(), bits<32>(), gs(8), gs(8)},
+    {bits<16>(), bits<32>(), gs(8), gs(8)},
+};
+
+static constexpr SupplementalCastLayoutPattern
+    kSupplementalNarrowCastLayoutPatterns[] = {
+    {bits<32>(), bits<8>(), gs(8), gs(8)},
+    {bits<32>(), bits<16>(), gs(8), gs(8)},
+};
+
+struct DenseMemoryLayoutPattern {
+  ElementBitsPattern elementBits;
+  LayoutPattern layout;
+};
+
+static constexpr DenseMemoryLayoutPattern kDenseLoadLayoutPatterns[] = {
+    {bits<8, 16, 32>(), c()},  {bits<8, 16, 32>(), ls(2)}, {bits<8>(), ls(4)},
+    {bits<8, 16, 32>(), d(2)}, {bits<8, 16, 32>(), d(4)},
+};
+
+static constexpr DenseMemoryLayoutPattern kDenseStoreLayoutPatterns[] = {
+    {bits<8, 16, 32>(), c()},
+    {bits<8, 16, 32>(), ls(2)},
+    {bits<8>(), ls(4)},
+    {bits<8, 16, 32>(), d(2, 1)},
+    {bits<8, 16, 32>(), d(4, 1)},
+};
+
+struct DenseMaskedStoreLayoutPattern {
+  ElementBitsPattern elementBits;
+  LayoutPattern valueLayout;
+  LayoutPattern maskLayout;
+};
+
+struct DenseMaskedLoadLayoutPattern {
+  ElementBitsPattern elementBits;
+  LayoutPattern resultLayout;
+  LayoutPattern maskLayout;
+  LayoutPattern passthruLayout;
+};
+
+static constexpr DenseMaskedStoreLayoutPattern
+    kDenseMaskedStoreLayoutPatterns[] = {
+        {bits<8, 16, 32>(), c(), c()},
+        {bits<8, 16>(), ls(2), ls(2)},
+        {bits<8>(), ls(4), ls(4)},
+        {bits<8, 16, 32>(), d(2, 1), d(2, 1)},
+        {bits<8, 16, 32>(), d(4, 1), d(4, 1)},
+};
+
+static constexpr DenseMaskedLoadLayoutPattern
+    kDenseMaskedLoadLayoutPatterns[] = {
+        {bits<8, 16, 32>(), c(), c(), c()},
+};
+
+struct GroupLoadLayoutPattern {
+  ElementBitsPattern elementBits;
+  GroupBlockPattern block = gb(2);
+  GroupMemoryPattern memory = memAny();
+  LayoutPattern resultLayout;
+};
+
+static constexpr GroupLoadLayoutPattern kGroupLoadLayoutPatterns[] = {
+    {bits<8, 16, 32>(), gb(1, 4), memContiguous(), c()},
+    {bits<8, 16, 32>(), gb(1, 2), memContiguous(), c()},
+    {bits<8, 16, 32>(), gb(1), memContiguous(), c()},
+    {bits<8, 16, 32>(), gb(2), memContiguous(), c()},
+    {bits<8, 16, 32>(), gb(4), memContiguous(), c()},
+    {bits<8, 16, 32>(), gbFull(), memAny(), c()},
+    {bits<32>(), gb(2), memBlockAligned(), d(2, 8)},
+    {bits<32>(), gb(4), memBlockAligned(), d(4, 8)},
+};
+
+struct GroupSlotMemoryLayoutPattern {
+  LayoutPattern layout;
+};
+
+static constexpr GroupSlotMemoryLayoutPattern kGroupSlotMemoryLayoutPatterns[] =
+    {
+        {gs(1)},
+        {gs(8)},
+        {gs(8, 2)},
+        {gs(8, 4)},
+};
+
+struct GroupBroadcastLoadLayoutPattern {
+  GroupBlockPattern block;
+  ElementBitsPattern elementBits;
+  GroupMemoryPattern memory = memContiguous();
+  LayoutPattern resultLayout;
+};
+
+static constexpr GroupBroadcastLoadLayoutPattern
+    kGroupBroadcastLoadLayoutPatterns[] = {
+        {gb(1, 4), bits<8, 16, 32>(), memContiguous(), ls(4)},
+        {gb(1, 2), bits<8, 16, 32>(), memContiguous(), ls(2)},
+        {gb(1), bits<8, 16, 32>(), memContiguous(), c()},
+        {gb(2), bits<8, 16, 32>(), memContiguous(), c()},
+        {gb(2), bits<8, 16, 32>(), memContiguous(), d(2, 1)},
+        {gb(4), bits<8, 16, 32>(), memContiguous(), c()},
+        {gb(4), bits<8, 16, 32>(), memContiguous(), d(4, 1)},
+        {gbFull(), bits<8, 16, 32>(), memContiguous(), c()},
+        {gbFull(), bits<8, 16, 32>(), memBlockAligned(), c()},
+};
+
+struct GroupBroadcastLayoutPattern {
+  GroupBlockPattern block;
+  LayoutPattern sourceLayout;
+  LayoutPattern resultLayout;
+};
+
+static constexpr GroupBroadcastLayoutPattern kGroupBroadcastLayoutPatterns[] = {
+    {gb(1, 4), gs(8), ls(4)},
+    {gb(1, 2), gs(8), ls(2)},
+    {gb(1), gs(8), c()},
+    {gb(1), gs(8, 2), c()},
+    {gb(1), gs(8, 4), c()},
+    {gb(2), gs(8), c()},
+    {gb(2), gs(8), d(2, 1)},
+    {gb(2), gs(8), d(2, 8)},
+    {gb(4), gs(8), c()},
+    {gb(4), gs(8), d(4, 1)},
+    {gb(4), gs(8), d(4, 8)},
+    {gbFull(), gs(8), c()},
+    {gbFull(), gs(1), c()},
+    {gbFull(2), gs(1), d(2, 1)},
+    {gbFull(4), gs(1), d(4, 1)},
+};
+
+struct HistogramLayoutPattern {
+  LayoutPattern accLayout;
+  LayoutPattern sourceLayout;
+  LayoutPattern maskLayout;
+  LayoutPattern resultLayout;
+};
+
+static constexpr HistogramLayoutPattern kDhistLayoutPatterns[] = {
+    {c(), c(), c(), c()},
+};
+
+struct WidthChangingBitcastLayoutPattern {
+  LayoutPattern layout;
+};
+
+static constexpr WidthChangingBitcastLayoutPattern
+    kWidthChangingBitcastLayoutPatterns[] = {
+    {c()},
+};
+
+//===----------------------------------------------------------------------===//
+// Table matching and materialization helpers
+//===----------------------------------------------------------------------===//
+
+static bool isSameGroupBlockPattern(GroupBlockPattern lhs,
+                                    GroupBlockPattern rhs) {
+  return lhs.kind == rhs.kind && lhs.numerator == rhs.numerator &&
+         lhs.denominator == rhs.denominator;
 }
 
-static FailureOr<SmallVector<int64_t>>
-getPhysicalLogicalBitFootprint(VMIVRegType type) {
-  unsigned elementBits = pto::getPTOStorageElemBitWidth(type.getElementType());
-  if (elementBits == 0)
-    return failure();
+static VMIGroupBlockClass
+getGroupBlockClassFromPattern(GroupBlockPattern pattern) {
+  for (const GroupBlockClassPattern &row : kGroupBlockClassPatterns)
+    if (isSameGroupBlockPattern(pattern, row.block))
+      return row.blockClass;
+  llvm_unreachable("unsupported group block pattern");
+}
 
-  FailureOr<int64_t> factor = getDataLayoutFactor(type);
-  FailureOr<int64_t> lanesPerPart = getDataLanesPerPart(type.getElementType());
-  FailureOr<int64_t> arity = getVMIPhysicalArity(type);
-  if (failed(factor) || failed(lanesPerPart) || failed(arity) || *factor <= 0)
-    return failure();
-
-  SmallVector<int64_t> bits;
-  bits.reserve(*arity);
-  for (int64_t part = 0; part < *factor; ++part) {
-    for (int64_t chunk = 0; chunk < *arity; ++chunk) {
-      int64_t activeLanes = 0;
-      for (int64_t lane = 0; lane < *lanesPerPart; ++lane) {
-        FailureOr<bool> padding = isPaddingLane(type, part, chunk, lane);
-        if (failed(padding))
-          return failure();
-        if (!*padding)
-          ++activeLanes;
-      }
-      if (activeLanes > 0)
-        bits.push_back(activeLanes * static_cast<int64_t>(elementBits));
-    }
+static bool matchesGroupBroadcastLoadMemoryPattern(
+    GroupMemoryPattern pattern, std::optional<int64_t> stride,
+    int64_t elementBits) {
+  switch (pattern.kind) {
+  case GroupMemoryPatternKind::Any:
+    return true;
+  case GroupMemoryPatternKind::Contiguous:
+    if (!stride)
+      return false;
+    return *stride == 1;
+  case GroupMemoryPatternKind::BlockAligned: {
+    if (!stride)
+      return false;
+    if (elementBits <= 0 || 256 % elementBits != 0)
+      return false;
+    int64_t alignedStrideElems = 256 / elementBits;
+    return *stride > 0 && *stride % alignedStrideElems == 0;
   }
-  if (static_cast<int64_t>(bits.size()) != *arity)
-    return failure();
-  return bits;
+  }
+  llvm_unreachable("unknown group memory pattern kind");
 }
 
-static FailureOr<VMILayoutMaterializationSupport>
-getLayoutMaterializationSupport(VMILayoutAttr sourceLayout,
-                                VMILayoutAttr resultLayout,
-                                std::string *reason) {
-  auto fail =
-      [&](const Twine &message) -> FailureOr<VMILayoutMaterializationSupport> {
+static bool matchesGroupLoadMemoryPattern(GroupMemoryPattern pattern,
+                                          std::optional<int64_t> rowStride,
+                                          int64_t groupSize,
+                                          int64_t elementBits) {
+  switch (pattern.kind) {
+  case GroupMemoryPatternKind::Any:
+    return true;
+  case GroupMemoryPatternKind::Contiguous:
+    return rowStride && *rowStride == groupSize;
+  case GroupMemoryPatternKind::BlockAligned: {
+    if (!rowStride || elementBits <= 0 || 256 % elementBits != 0)
+      return false;
+    int64_t alignedStrideElems = 256 / elementBits;
+    return *rowStride > 0 && *rowStride % alignedStrideElems == 0;
+  }
+  }
+  llvm_unreachable("unknown group memory pattern kind");
+}
+
+static bool isSupportedGroupSlotMemoryLayout(VMILayoutAttr layout,
+                                             int64_t numGroups) {
+  if (!layout || !layout.isGroupSlots() || layout.getNumGroups() != numGroups ||
+      layout.getSlots() <= 0)
+    return false;
+  for (const GroupSlotMemoryLayoutPattern &pattern :
+       kGroupSlotMemoryLayoutPatterns)
+    if (matchesLayoutPattern(layout.getContext(), pattern.layout, layout,
+                             numGroups))
+      return true;
+  return false;
+}
+
+static FailureOr<VMIGroupBlockClass> getGroupBlockClass(int64_t groupSize,
+                                                        int64_t vcgBlockElems) {
+  if (vcgBlockElems <= 0)
+    return failure();
+
+  for (const GroupBlockClassPattern &row : kGroupBlockClassPatterns) {
+    GroupBlockPattern block = row.block;
+    if (block.kind == GroupBlockPatternKind::FullPartMultiple) {
+      int64_t fullPartElems = 8 * vcgBlockElems;
+      if (groupSize >= fullPartElems && groupSize % fullPartElems == 0)
+        return row.blockClass;
+      continue;
+    }
+
+    int64_t numerator = vcgBlockElems * block.numerator;
+    if (block.denominator <= 0 || numerator % block.denominator != 0)
+      continue;
+    if (groupSize == numerator / block.denominator)
+      return row.blockClass;
+  }
+  return failure();
+}
+
+struct GroupLayoutKey {
+  int64_t groupSize = 0;
+  int64_t lanesPerPart = 0;
+  int64_t vcgBlockElems = 0;
+  VMIGroupBlockClass blockClass = VMIGroupBlockClass::OneBlock;
+};
+
+static bool matchesGroupBlockPattern(GroupBlockPattern pattern,
+                                     GroupLayoutKey key) {
+  if (pattern.kind == GroupBlockPatternKind::FullPartMultiple) {
+    if (pattern.numerator <= 0)
+      return false;
+    int64_t fullPartElems = key.lanesPerPart * pattern.numerator;
+    return key.groupSize >= fullPartElems &&
+           key.groupSize % fullPartElems == 0;
+  }
+
+  int64_t numerator = key.vcgBlockElems * pattern.numerator;
+  if (pattern.denominator <= 0 || numerator % pattern.denominator != 0)
+    return false;
+  return key.groupSize == numerator / pattern.denominator;
+}
+
+static FailureOr<GroupLayoutKey>
+buildGroupLayoutKey(VMIVRegType type, int64_t numGroups,
+                    const Twine &unsupportedGroupSizeReason,
+                    std::string *reason) {
+  auto fail = [&](const Twine &message) -> FailureOr<GroupLayoutKey> {
     if (reason)
       *reason = message.str();
     return failure();
   };
 
-  if (!sourceLayout || !resultLayout)
-    return fail("requires assigned source/result layouts");
-  if (sourceLayout == resultLayout)
-    return VMILayoutMaterializationSupport{
-        VMILayoutMaterializationSupportKind::Identity};
-  if (sourceLayout.isContiguous() && resultLayout.isDeinterleaved() &&
-      sourceLayout.getLaneStride() == 1 && resultLayout.getLaneStride() == 1 &&
-      (resultLayout.getFactor() == 2 || resultLayout.getFactor() == 4))
-    return VMILayoutMaterializationSupport{
-        VMILayoutMaterializationSupportKind::ContiguousToDeinterleaved};
-  if (sourceLayout.isDeinterleaved() && resultLayout.isContiguous() &&
-      sourceLayout.getLaneStride() == 1 && resultLayout.getLaneStride() == 1 &&
-      (sourceLayout.getFactor() == 2 || sourceLayout.getFactor() == 4))
-    return VMILayoutMaterializationSupport{
-        VMILayoutMaterializationSupportKind::DeinterleavedToContiguous};
-  if (sourceLayout.isDeinterleaved() && resultLayout.isDeinterleaved() &&
-      sourceLayout.getLaneStride() == 1 && resultLayout.getLaneStride() == 1 &&
-      (sourceLayout.getFactor() == 2 || sourceLayout.getFactor() == 4) &&
-      (resultLayout.getFactor() == 2 || resultLayout.getFactor() == 4))
-    return VMILayoutMaterializationSupport{
-        VMILayoutMaterializationSupportKind::
-            DeinterleavedToDeinterleavedViaContiguous};
-  return fail("unsupported source/result layout pair");
+  FailureOr<int64_t> groupSize =
+      getGroupSizeFromNumGroups(type, numGroups, reason);
+  if (failed(groupSize))
+    return failure();
+  FailureOr<int64_t> lanesPerPart = getDataLanesPerPart(type.getElementType());
+  if (failed(lanesPerPart) || *lanesPerPart % 8 != 0)
+    return fail("requires element type with known 32B VCG block width");
+
+  int64_t vcgBlockElems = *lanesPerPart / 8;
+  FailureOr<VMIGroupBlockClass> blockClass =
+      getGroupBlockClass(*groupSize, vcgBlockElems);
+  if (failed(blockClass))
+    return fail(unsupportedGroupSizeReason);
+
+  return GroupLayoutKey{*groupSize, *lanesPerPart, vcgBlockElems, *blockClass};
+}
+
+static VMIGroupReduceLayoutFact
+materializeGroupReduceLayoutFact(MLIRContext *ctx,
+                                 const GroupReduceLayoutPattern &pattern,
+                                 int64_t groupSize, int64_t lanesPerPart,
+                                 int64_t vcgBlockElems, int64_t numGroups) {
+  VMIGroupReduceLayoutFact fact;
+  fact.blockClass = getGroupBlockClassFromPattern(pattern.block);
+  fact.sourceLayout = materializeLayoutPattern(ctx, pattern.sourceLayout);
+  fact.maskLayout = fact.sourceLayout;
+  fact.resultLayout =
+      materializeLayoutPattern(ctx, pattern.resultLayout,
+                               /*inheritedBlockElems=*/1, numGroups);
+  fact.groupSize = groupSize;
+  fact.lanesPerPart = lanesPerPart;
+  fact.vcgBlockElems = vcgBlockElems;
+  return fact;
+}
+
+static VMIGroupBroadcastLayoutFact materializeGroupBroadcastLayoutFact(
+    MLIRContext *ctx, const GroupBroadcastLayoutPattern &pattern,
+    int64_t groupSize, int64_t lanesPerPart, int64_t vcgBlockElems,
+    int64_t numGroups) {
+  VMIGroupBroadcastLayoutFact fact;
+  fact.blockClass = getGroupBlockClassFromPattern(pattern.block);
+  fact.sourceLayout =
+      materializeLayoutPattern(ctx, pattern.sourceLayout,
+                               /*inheritedBlockElems=*/1, numGroups);
+  fact.resultLayout =
+      materializeLayoutPattern(ctx, pattern.resultLayout,
+                               /*inheritedBlockElems=*/1, numGroups);
+  fact.groupSize = groupSize;
+  fact.lanesPerPart = lanesPerPart;
+  fact.vcgBlockElems = vcgBlockElems;
+  return fact;
 }
 
 } // namespace
+
+//===----------------------------------------------------------------------===//
+// Query implementations
+//===----------------------------------------------------------------------===//
 
 FailureOr<VMIGroupReduceLayoutFact>
 VMILayoutSupport::getPreferredGroupReduceLayoutFact(VMIVRegType sourceType,
@@ -431,319 +805,460 @@ VMILayoutSupport::getPreferredGroupReduceLayoutFact(VMIVRegType sourceType,
     return failure();
   };
 
-  FailureOr<int64_t> groupSize =
-      getGroupSizeFromNumGroups(sourceType, numGroups, reason);
-  if (failed(groupSize))
+  FailureOr<GroupLayoutKey> key = buildGroupLayoutKey(
+      sourceType, numGroups,
+      "group_reduce layout supports group sizes of 1/4, 1/2, 1, 2, or 4 "
+      "32B VCG blocks, or full physical chunk multiples",
+      reason);
+  if (failed(key))
     return failure();
-  FailureOr<int64_t> lanesPerPart =
-      getDataLanesPerPart(sourceType.getElementType());
-  if (failed(lanesPerPart) || *lanesPerPart % 8 != 0)
-    return fail("requires element type with known physical VLane width");
+
+  for (const GroupReduceLayoutPattern &pattern : kGroupReduceLayoutPatterns) {
+    if (!matchesGroupBlockPattern(pattern.block, *key))
+      continue;
+    return materializeGroupReduceLayoutFact(sourceType.getContext(), pattern,
+                                            key->groupSize, key->lanesPerPart,
+                                            key->vcgBlockElems, numGroups);
+  }
+
+  return fail("group_reduce layout supports group sizes of 1/4, 1/2, 1, 2, "
+              "or 4 32B VCG blocks, or full physical chunk multiples");
+}
+
+FailureOr<VMIGroupReduceLayoutFact>
+VMILayoutSupport::getGroupReduceLayoutFactForLayouts(
+    VMIVRegType sourceType, VMIMaskType maskType, VMIVRegType resultType,
+    int64_t numGroups, std::string *reason) const {
+  auto fail = [&](const Twine &message) -> FailureOr<VMIGroupReduceLayoutFact> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+  VMILayoutAttr maskLayout = maskType.getLayoutAttr();
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  if (!sourceLayout || !maskLayout || !resultLayout)
+    return fail("requires assigned source, mask, and result layouts");
+
+  FailureOr<GroupLayoutKey> key = buildGroupLayoutKey(
+      sourceType, numGroups,
+      "group_reduce layout table has no row for this group size", reason);
+  if (failed(key))
+    return failure();
+
+  for (const GroupReduceLayoutPattern &pattern : kGroupReduceLayoutPatterns) {
+    if (!matchesGroupBlockPattern(pattern.block, *key))
+      continue;
+    VMIGroupReduceLayoutFact candidate = materializeGroupReduceLayoutFact(
+        sourceType.getContext(), pattern, key->groupSize, key->lanesPerPart,
+        key->vcgBlockElems, numGroups);
+    if (candidate.sourceLayout == sourceLayout &&
+        candidate.maskLayout == maskLayout &&
+        candidate.resultLayout == resultLayout)
+      return candidate;
+  }
+
+  return fail("group_reduce source/mask/result layouts do not match a legal "
+              "layout table row for the group size");
+}
+
+FailureOr<SmallVector<VMIGroupReduceLayoutFact, 4>>
+VMILayoutSupport::getGroupReduceLayoutFactsForLayout(
+    VMIVRegType sourceType, int64_t numGroups, VMIGroupReduceLayoutPort port,
+    VMILayoutAttr layout, std::string *reason) const {
+  auto fail = [&](const Twine &message)
+      -> FailureOr<SmallVector<VMIGroupReduceLayoutFact, 4>> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  if (!layout)
+    return fail("requires assigned group_reduce layout query port");
+
+  FailureOr<GroupLayoutKey> key = buildGroupLayoutKey(
+      sourceType, numGroups,
+      "group_reduce layout table has no row for this group size", reason);
+  if (failed(key))
+    return failure();
+
+  SmallVector<VMIGroupReduceLayoutFact, 4> facts;
+  for (const GroupReduceLayoutPattern &pattern : kGroupReduceLayoutPatterns) {
+    if (!matchesGroupBlockPattern(pattern.block, *key))
+      continue;
+    VMIGroupReduceLayoutFact candidate = materializeGroupReduceLayoutFact(
+        sourceType.getContext(), pattern, key->groupSize, key->lanesPerPart,
+        key->vcgBlockElems, numGroups);
+
+    VMILayoutAttr candidateLayout;
+    switch (port) {
+    case VMIGroupReduceLayoutPort::Source:
+      candidateLayout = candidate.sourceLayout;
+      break;
+    case VMIGroupReduceLayoutPort::Mask:
+      candidateLayout = candidate.maskLayout;
+      break;
+    case VMIGroupReduceLayoutPort::Result:
+      candidateLayout = candidate.resultLayout;
+      break;
+    }
+    if (candidateLayout == layout)
+      facts.push_back(candidate);
+  }
+
+  if (facts.empty())
+    return fail("group_reduce layout query port does not match a legal layout "
+                "table row for the group size");
+  return facts;
+}
+
+FailureOr<VMIGroupBroadcastLayoutFact>
+VMILayoutSupport::getGroupBroadcastLayoutFactForLayouts(
+    VMIVRegType sourceType, VMIVRegType resultType, int64_t numGroups,
+    std::string *reason) const {
+  auto fail =
+      [&](const Twine &message) -> FailureOr<VMIGroupBroadcastLayoutFact> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  if (!sourceLayout || !resultLayout)
+    return fail("requires assigned source/result layouts");
+
+  FailureOr<GroupLayoutKey> key = buildGroupLayoutKey(
+      resultType, numGroups,
+      "group_broadcast layout table has no row for this group size", reason);
+  if (failed(key))
+    return failure();
+
+  for (const GroupBroadcastLayoutPattern &pattern :
+       kGroupBroadcastLayoutPatterns) {
+    if (!matchesGroupBlockPattern(pattern.block, *key))
+      continue;
+    VMIGroupBroadcastLayoutFact candidate = materializeGroupBroadcastLayoutFact(
+        sourceType.getContext(), pattern, key->groupSize, key->lanesPerPart,
+        key->vcgBlockElems, numGroups);
+    if (candidate.sourceLayout == sourceLayout &&
+        candidate.resultLayout == resultLayout)
+      return candidate;
+  }
+
+  return fail("source/result layouts do not match a supported group_broadcast "
+              "table row");
+}
+
+FailureOr<SmallVector<VMIGroupBroadcastLayoutFact, 4>>
+VMILayoutSupport::getGroupBroadcastLayoutFactsForLayout(
+    VMIVRegType sourceType, VMIVRegType resultType, int64_t numGroups,
+    VMIGroupBroadcastLayoutPort port, VMILayoutAttr layout,
+    std::string *reason) const {
+  auto fail = [&](const Twine &message)
+      -> FailureOr<SmallVector<VMIGroupBroadcastLayoutFact, 4>> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  if (!layout)
+    return fail("requires assigned group_broadcast layout query port");
+
+  FailureOr<GroupLayoutKey> key = buildGroupLayoutKey(
+      resultType, numGroups,
+      "group_broadcast layout table has no row for this group size", reason);
+  if (failed(key))
+    return failure();
+
+  SmallVector<VMIGroupBroadcastLayoutFact, 4> facts;
+  for (const GroupBroadcastLayoutPattern &pattern :
+       kGroupBroadcastLayoutPatterns) {
+    if (!matchesGroupBlockPattern(pattern.block, *key))
+      continue;
+    VMIGroupBroadcastLayoutFact candidate = materializeGroupBroadcastLayoutFact(
+        sourceType.getContext(), pattern, key->groupSize, key->lanesPerPart,
+        key->vcgBlockElems, numGroups);
+
+    VMILayoutAttr candidateLayout;
+    switch (port) {
+    case VMIGroupBroadcastLayoutPort::Source:
+      candidateLayout = candidate.sourceLayout;
+      break;
+    case VMIGroupBroadcastLayoutPort::Result:
+      candidateLayout = candidate.resultLayout;
+      break;
+    }
+    if (candidateLayout == layout)
+      facts.push_back(candidate);
+  }
+
+  if (facts.empty())
+    return fail("group_broadcast layout query port does not match a legal "
+                "layout table row for the group size");
+  return facts;
+}
+
+FailureOr<VMIGroupBroadcastLoadLayoutFact>
+VMILayoutSupport::getGroupBroadcastLoadLayoutFact(VMIGroupBroadcastLoadOp op,
+                                                  std::string *reason) const {
+  return getGroupBroadcastLoadLayoutFact(
+      cast<VMIVRegType>(op.getResult().getType()), op.getSourceGroupStride(),
+      op.getNumGroupsAttr().getInt(), reason);
+}
+
+FailureOr<VMIGroupBroadcastLoadLayoutFact>
+VMILayoutSupport::getGroupBroadcastLoadLayoutFact(VMIVRegType resultType,
+                                                  Value sourceGroupStride,
+                                                  int64_t numGroups,
+                                                  std::string *reason) const {
+  auto fail =
+      [&](const Twine &message) -> FailureOr<VMIGroupBroadcastLoadLayoutFact> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  if (!resultLayout)
+    return fail("requires assigned result layout");
+
+  unsigned elementBits =
+      pto::getPTOStorageElemBitWidth(resultType.getElementType());
+  if (elementBits == 0)
+    return fail("group_broadcast_load requires known element bit width");
+  std::optional<int64_t> stride =
+      getConstantIndexValue(sourceGroupStride);
+
+  FailureOr<GroupLayoutKey> key = buildGroupLayoutKey(
+      resultType, numGroups,
+      "group_broadcast_load layout table has no row for this group size",
+      reason);
+  if (failed(key))
+    return failure();
+
+  for (const GroupBroadcastLoadLayoutPattern &pattern :
+       kGroupBroadcastLoadLayoutPatterns) {
+    if (!matchesGroupBlockPattern(pattern.block, *key))
+      continue;
+    if (!matchesElementBitsPattern(pattern.elementBits, elementBits))
+      continue;
+    if (!matchesGroupBroadcastLoadMemoryPattern(pattern.memory, stride,
+                                               elementBits))
+      continue;
+    if (!matchesLayoutPattern(resultType.getContext(), pattern.resultLayout,
+                              resultLayout, numGroups))
+      continue;
+    return VMIGroupBroadcastLoadLayoutFact{
+        getGroupBlockClassFromPattern(pattern.block),
+        resultLayout,
+        key->groupSize,
+        key->lanesPerPart,
+        key->vcgBlockElems,
+        static_cast<int64_t>(elementBits)};
+  }
+
+  int64_t alignedStrideElems = 256 / elementBits;
+  return fail(Twine("group_broadcast_load requires a table row for result "
+                    "layout, group size, and either constant unit "
+                    "source_group_stride or constant positive "
+                    "source_group_stride divisible by ") +
+              Twine(alignedStrideElems) + " elements");
+}
+
+static std::pair<int64_t, int64_t> getCastElementBits(VMIVRegType sourceType,
+                                                      VMIVRegType resultType) {
+  unsigned sourceBits =
+      pto::getPTOStorageElemBitWidth(sourceType.getElementType());
+  unsigned resultBits =
+      pto::getPTOStorageElemBitWidth(resultType.getElementType());
+  return std::pair<int64_t, int64_t>(sourceBits, resultBits);
+}
+
+static VMICastLayoutFact makeCastLayoutFact(int64_t sourceBits,
+                                            int64_t resultBits,
+                                            VMILayoutAttr sourceLayout,
+                                            VMILayoutAttr resultLayout) {
+  VMICastLayoutFact fact;
+  fact.sourceBits = sourceBits;
+  fact.resultBits = resultBits;
+  fact.sourceLayout = sourceLayout;
+  fact.resultLayout = resultLayout;
+  return fact;
+}
+
+FailureOr<VMICastLayoutFact> VMILayoutSupport::getPreferredCastLayoutFact(
+    VMIVRegType sourceType, VMIVRegType resultType, std::string *reason) const {
+  auto [sourceBits, resultBits] = getCastElementBits(sourceType, resultType);
+
+  const PreferredCastLayoutPattern *selected = nullptr;
+  bool selectedIsExact = false;
+  int64_t elementCount = sourceType.getElementCount();
+  for (const PreferredCastLayoutPattern &pattern :
+       kPreferredCastLayoutPatterns) {
+    if (!matchesElementBitsPattern(pattern.sourceBits, sourceBits) ||
+        !matchesElementBitsPattern(pattern.resultBits, resultBits))
+      continue;
+    bool isExact = pattern.elementCount != 0;
+    if (isExact && pattern.elementCount != elementCount)
+      continue;
+    if (!selected || (isExact && !selectedIsExact)) {
+      selected = &pattern;
+      selectedIsExact = isExact;
+      continue;
+    }
+    if (isExact == selectedIsExact) {
+      if (reason)
+        *reason = "preferred cast layout table has ambiguous matching rows";
+      return failure();
+    }
+  }
+
+  if (!selected) {
+    if (reason)
+      *reason = "requires a preferred cast layout table row";
+    return failure();
+  }
 
   MLIRContext *ctx = sourceType.getContext();
-  int64_t vlaneElems = *lanesPerPart / 8;
-  VMIGroupReduceLayoutFact fact;
-  fact.groupSize = *groupSize;
-  fact.lanesPerPart = *lanesPerPart;
-  fact.vlaneElems = vlaneElems;
+  return makeCastLayoutFact(sourceBits, resultBits,
+                            materializeLayoutPattern(ctx,
+                                                     selected->sourceLayout),
+                            materializeLayoutPattern(ctx,
+                                                     selected->resultLayout));
+}
 
-  if (*groupSize == vlaneElems) {
-    fact.kind = VMIGroupReduceLayoutKind::OneVLane;
-    fact.sourceLayout = VMILayoutAttr::getContiguous(ctx);
-    fact.maskLayout = fact.sourceLayout;
-    fact.resultLayout =
-        VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/8);
-    return fact;
+FailureOr<SmallVector<VMICastLayoutFact, 4>>
+VMILayoutSupport::getCastLayoutFactsForLayout(VMIVRegType sourceType,
+                                              VMIVRegType resultType,
+                                              VMICastLayoutPort port,
+                                              VMILayoutAttr layout,
+                                              std::string *reason) const {
+  auto fail = [&](const Twine &message)
+      -> FailureOr<SmallVector<VMICastLayoutFact, 4>> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  auto [sourceBits, resultBits] = getCastElementBits(sourceType, resultType);
+  MLIRContext *ctx = sourceType.getContext();
+  SmallVector<VMICastLayoutFact, 4> facts;
+
+  int64_t blockElems =
+      layout && layout.isDeinterleaved() ? layout.getBlockElems() : 1;
+  int64_t numGroups =
+      layout && layout.isGroupSlots() ? layout.getNumGroups() : 0;
+  for (const LegalCastLayoutPattern &pattern : kLegalCastLayoutPatterns) {
+    if (!matchesElementBitsPattern(pattern.sourceBits, sourceBits) ||
+        !matchesElementBitsPattern(pattern.resultBits, resultBits))
+      continue;
+
+    VMILayoutAttr sourceLayout = materializeLayoutPattern(
+        ctx, pattern.sourceLayout, blockElems, numGroups);
+    VMILayoutAttr resultLayout = materializeLayoutPattern(
+        ctx, pattern.resultLayout, blockElems, numGroups);
+    if (!sourceLayout || !resultLayout)
+      continue;
+
+    if (port == VMICastLayoutPort::Source && sourceLayout != layout)
+      continue;
+    if (port == VMICastLayoutPort::Result && resultLayout != layout)
+      continue;
+
+    facts.push_back(
+        makeCastLayoutFact(sourceBits, resultBits, sourceLayout, resultLayout));
   }
 
-  if (*groupSize == 2 * vlaneElems) {
-    fact.kind = VMIGroupReduceLayoutKind::TwoVLane;
-    fact.sourceLayout =
-        VMILayoutAttr::getDeinterleaved(ctx, 2, /*blockElems=*/8);
-    fact.maskLayout = fact.sourceLayout;
-    fact.resultLayout =
-        VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/8);
-    return fact;
+  if (facts.empty()) {
+    if (port == VMICastLayoutPort::Source)
+      return fail("requires a legal cast relation for the source layout");
+    return fail("requires a legal cast relation for the result layout");
   }
-
-  if (*groupSize == 4 * vlaneElems) {
-    fact.kind = VMIGroupReduceLayoutKind::FourVLane;
-    fact.sourceLayout =
-        VMILayoutAttr::getDeinterleaved(ctx, 4, /*blockElems=*/8);
-    fact.maskLayout = fact.sourceLayout;
-    fact.resultLayout =
-        VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/8);
-    return fact;
-  }
-
-  if (*groupSize >= *lanesPerPart && *groupSize % *lanesPerPart == 0) {
-    fact.kind = VMIGroupReduceLayoutKind::RowLocal;
-    fact.sourceLayout = VMILayoutAttr::getContiguous(ctx);
-    fact.maskLayout = fact.sourceLayout;
-    fact.resultLayout =
-        VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/1);
-    return fact;
-  }
-
-  return fail("group_reduce layout supports group sizes VLaneElems, "
-              "2*VLaneElems, 4*VLaneElems, or full physical chunk multiples");
+  return facts;
 }
 
 static FailureOr<VMICastLayoutFact>
-getBaselineCastLayoutFact(VMIVRegType sourceType, VMIVRegType resultType,
-                          std::string *reason) {
+getUniqueCastLayoutFact(FailureOr<SmallVector<VMICastLayoutFact, 4>> facts,
+                        std::string *reason) {
+  auto fail = [&](const Twine &message) -> FailureOr<VMICastLayoutFact> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+  if (failed(facts))
+    return failure();
+  if (facts->empty())
+    return fail("cast layout query produced no layout facts");
+  if (facts->size() != 1)
+    return fail("cast layout query produced ambiguous layout facts");
+  return facts->front();
+}
+
+FailureOr<VMICastLayoutFact> VMILayoutSupport::getCastLayoutFactForSourceLayout(
+    VMIVRegType sourceType, VMIVRegType resultType, VMILayoutAttr sourceLayout,
+    std::string *reason) const {
+  return getUniqueCastLayoutFact(
+      getCastLayoutFactsForLayout(sourceType, resultType,
+                                  VMICastLayoutPort::Source, sourceLayout,
+                                  reason),
+      reason);
+}
+
+FailureOr<VMICastLayoutFact> VMILayoutSupport::getCastLayoutFactForResultLayout(
+    VMIVRegType sourceType, VMIVRegType resultType, VMILayoutAttr resultLayout,
+    std::string *reason) const {
+  return getUniqueCastLayoutFact(
+      getCastLayoutFactsForLayout(sourceType, resultType,
+                                  VMICastLayoutPort::Result, resultLayout,
+                                  reason),
+      reason);
+}
+
+FailureOr<VMICastLayoutFact> VMILayoutSupport::getCastLayoutFactForLayouts(
+    VMIVRegType sourceType, VMIVRegType resultType, VMILayoutAttr sourceLayout,
+    VMILayoutAttr resultLayout, std::string *reason) const {
   auto fail = [&](const Twine &message) -> FailureOr<VMICastLayoutFact> {
     if (reason)
       *reason = message.str();
     return failure();
   };
 
-  unsigned sourceBits =
-      pto::getPTOStorageElemBitWidth(sourceType.getElementType());
-  unsigned resultBits =
-      pto::getPTOStorageElemBitWidth(resultType.getElementType());
-  if (sourceBits == 0 || resultBits == 0)
-    return fail(
-        "requires source/result element types with known storage width");
-  if (sourceType.getElementCount() != resultType.getElementCount())
-    return fail("requires source/result lane count to match");
+  FailureOr<SmallVector<VMICastLayoutFact, 4>> facts =
+      getCastLayoutFactsForLayout(sourceType, resultType,
+                                  VMICastLayoutPort::Source, sourceLayout,
+                                  reason);
+  if (failed(facts))
+    return failure();
 
-  MLIRContext *ctx = sourceType.getContext();
-  VMICastLayoutFact fact;
-  fact.sourceBits = sourceBits;
-  fact.resultBits = resultBits;
-
-  if ((sourceBits == 8 || sourceBits == 16) &&
-      resultBits == sourceBits * 2) {
-    fact.kind = VMICastLayoutKind::Widen2x;
-    fact.factor = 2;
-    fact.sourceLayout = VMILayoutAttr::getContiguous(ctx);
-    fact.resultLayout =
-        VMILayoutAttr::getDeinterleaved(ctx, fact.factor, /*blockElems=*/1);
-    return fact;
+  std::optional<VMICastLayoutFact> selected;
+  for (const VMICastLayoutFact &fact : *facts) {
+    if (fact.resultLayout != resultLayout)
+      continue;
+    if (selected)
+      return fail("cast layout query produced ambiguous layout facts");
+    selected = fact;
   }
-
-  if (resultBits == 32 && sourceBits == 8) {
-    fact.kind = VMICastLayoutKind::Widen4x;
-    fact.factor = 4;
-    fact.sourceLayout = VMILayoutAttr::getContiguous(ctx);
-    fact.resultLayout =
-        VMILayoutAttr::getDeinterleaved(ctx, fact.factor, /*blockElems=*/1);
-    return fact;
-  }
-
-  if ((resultBits == 8 || resultBits == 16) &&
-      sourceBits == resultBits * 2) {
-    fact.kind = VMICastLayoutKind::Narrow2x;
-    fact.factor = 2;
-    fact.sourceLayout =
-        VMILayoutAttr::getDeinterleaved(ctx, fact.factor, /*blockElems=*/1);
-    fact.resultLayout = VMILayoutAttr::getContiguous(ctx);
-    return fact;
-  }
-
-  if (sourceBits == 32 && resultBits == 8) {
-    fact.kind = VMICastLayoutKind::Narrow4x;
-    fact.factor = 4;
-    fact.sourceLayout =
-        VMILayoutAttr::getDeinterleaved(ctx, fact.factor, /*blockElems=*/1);
-    fact.resultLayout = VMILayoutAttr::getContiguous(ctx);
-    return fact;
-  }
-
-  return fail("supports only 8/16-bit integer widening and 32-bit integer "
-              "narrowing dense cast layout facts");
+  if (!selected)
+    return fail("source/result layouts do not match a legal cast table row");
+  return *selected;
 }
 
-FailureOr<VMICastLayoutFact> VMILayoutSupport::getPreferredCastLayoutFact(
-    VMIVRegType sourceType, VMIVRegType resultType, std::string *reason) const {
-  FailureOr<VMICastLayoutFact> baseline =
-      getBaselineCastLayoutFact(sourceType, resultType, reason);
-  if (failed(baseline))
-    return baseline;
-
-  bool isWiden = baseline->kind == VMICastLayoutKind::Widen2x ||
-                 baseline->kind == VMICastLayoutKind::Widen4x;
-  bool isNarrow = baseline->kind == VMICastLayoutKind::Narrow2x ||
-                  baseline->kind == VMICastLayoutKind::Narrow4x;
-  if (!isWiden && !isNarrow)
-    return baseline;
-
-  MLIRContext *ctx = sourceType.getContext();
-  VMILayoutAttr compactSourceLayout = isWiden
-                                          ? VMILayoutAttr::getContiguous(
-                                                ctx, baseline->factor)
-                                          : VMILayoutAttr::getContiguous(ctx);
-  VMILayoutAttr compactResultLayout = isWiden
-                                          ? VMILayoutAttr::getContiguous(ctx)
-                                          : VMILayoutAttr::getContiguous(
-                                                ctx, baseline->factor);
-  VMIVRegType compactSourceType =
-      VMIVRegType::get(ctx, sourceType.getElementCount(),
-                       sourceType.getElementType(), compactSourceLayout);
-  VMIVRegType compactResultType =
-      VMIVRegType::get(ctx, resultType.getElementCount(),
-                       resultType.getElementType(), compactResultLayout);
-  FailureOr<int64_t> compactSourceArity =
-      getVMIPhysicalArity(compactSourceType);
-  FailureOr<int64_t> compactResultArity =
-      getVMIPhysicalArity(compactResultType);
-  if (failed(compactSourceArity) || failed(compactResultArity) ||
-      *compactSourceArity != *compactResultArity)
-    return baseline;
-
-  if (isWiden) {
-    VMIVRegType baselineSourceType =
-        VMIVRegType::get(ctx, sourceType.getElementCount(),
-                         sourceType.getElementType(), baseline->sourceLayout);
-    VMIVRegType baselineResultType =
-        VMIVRegType::get(ctx, resultType.getElementCount(),
-                         resultType.getElementType(), baseline->resultLayout);
-    FailureOr<int64_t> baselineSourceArity =
-        getVMIPhysicalArity(baselineSourceType);
-    FailureOr<int64_t> baselineResultArity =
-        getVMIPhysicalArity(baselineResultType);
-    if (failed(baselineSourceArity) || failed(baselineResultArity) ||
-        *compactSourceArity > *baselineSourceArity ||
-        *compactResultArity >= *baselineResultArity)
-      return baseline;
-  } else if (!sourceType.getElementType().isF32() ||
-             !isa<FloatType>(resultType.getElementType())) {
-    VMIVRegType baselineSourceType =
-        VMIVRegType::get(ctx, sourceType.getElementCount(),
-                         sourceType.getElementType(), baseline->sourceLayout);
-    VMIVRegType baselineResultType =
-        VMIVRegType::get(ctx, resultType.getElementCount(),
-                         resultType.getElementType(), baseline->resultLayout);
-    FailureOr<int64_t> baselineSourceArity =
-        getVMIPhysicalArity(baselineSourceType);
-    FailureOr<int64_t> baselineResultArity =
-        getVMIPhysicalArity(baselineResultType);
-    if (failed(baselineSourceArity) || failed(baselineResultArity) ||
-        *compactResultArity > *baselineResultArity ||
-        *compactSourceArity >= *baselineSourceArity)
-      return baseline;
-  } else {
-    VMICastLayoutFact best = *baseline;
-    VMIVRegType baselineSourceType =
-        VMIVRegType::get(ctx, sourceType.getElementCount(),
-                         sourceType.getElementType(), baseline->sourceLayout);
-    VMIVRegType baselineResultType =
-        VMIVRegType::get(ctx, resultType.getElementCount(),
-                         resultType.getElementType(), baseline->resultLayout);
-    FailureOr<int64_t> bestSourceArity = getVMIPhysicalArity(baselineSourceType);
-    FailureOr<int64_t> bestResultArity = getVMIPhysicalArity(baselineResultType);
-    if (failed(bestSourceArity) || failed(bestResultArity))
-      return baseline;
-    int64_t bestCost = *bestSourceArity + *bestResultArity;
-
-    for (int64_t sourceFactor = 1; sourceFactor <= baseline->factor;
-         sourceFactor *= 2) {
-      if (baseline->factor % sourceFactor != 0)
-        continue;
-      int64_t resultLaneStride = baseline->factor / sourceFactor;
-      if (resultLaneStride != 1 &&
-          !hasDenseLaneStridePackUnpackElement(resultType.getElementType(),
-                                               resultLaneStride))
-        continue;
-
-      VMILayoutAttr sourceLayout =
-          sourceFactor == 1
-              ? VMILayoutAttr::getContiguous(ctx)
-              : VMILayoutAttr::getDeinterleaved(ctx, sourceFactor,
-                                                /*blockElems=*/1);
-      VMILayoutAttr resultLayout =
-          VMILayoutAttr::getContiguous(ctx, resultLaneStride);
-      VMIVRegType candidateSourceType =
-          VMIVRegType::get(ctx, sourceType.getElementCount(),
-                           sourceType.getElementType(), sourceLayout);
-      VMIVRegType candidateResultType =
-          VMIVRegType::get(ctx, resultType.getElementCount(),
-                           resultType.getElementType(), resultLayout);
-      FailureOr<int64_t> candidateSourceArity =
-          getVMIPhysicalArity(candidateSourceType);
-      FailureOr<int64_t> candidateResultArity =
-          getVMIPhysicalArity(candidateResultType);
-      if (failed(candidateSourceArity) || failed(candidateResultArity) ||
-          *candidateSourceArity != sourceFactor * *candidateResultArity)
-        continue;
-
-      int64_t candidateCost = *candidateSourceArity + *candidateResultArity;
-      if (candidateCost >= bestCost)
-        continue;
-
-      best = *baseline;
-      best.sourceLayout = sourceLayout;
-      best.resultLayout = resultLayout;
-      bestCost = candidateCost;
-    }
-    return best;
-  }
-
-  VMICastLayoutFact compact = *baseline;
-  compact.sourceLayout = compactSourceLayout;
-  compact.resultLayout = compactResultLayout;
-  return compact;
-}
-
-FailureOr<VMILayoutAttr>
-VMILayoutSupport::getWidenSourceLayoutForResultLayout(
+FailureOr<VMILayoutAttr> VMILayoutSupport::getWidenSourceLayoutForResultLayout(
     VMIVRegType sourceType, VMIVRegType resultType,
     VMILayoutAttr requestedResultLayout, std::string *reason) const {
-  auto fail = [&](const Twine &message) -> FailureOr<VMILayoutAttr> {
-    if (reason)
-      *reason = message.str();
+  FailureOr<VMICastLayoutFact> fact = getCastLayoutFactForResultLayout(
+      sourceType, resultType, requestedResultLayout, reason);
+  if (failed(fact))
     return failure();
-  };
-
-  if (!requestedResultLayout)
-    return fail("requires requested result layout");
-  if (sourceType.getElementCount() != resultType.getElementCount())
-    return fail("requires source/result lane count to match");
-  if (requestedResultLayout.isGroupSlots())
-    return fail("dense widen relation does not support group_slots layout");
-  if (!requestedResultLayout.isContiguous() &&
-      (!requestedResultLayout.isDeinterleaved() ||
-       requestedResultLayout.getBlockElems() != 1))
-    return fail("requires contiguous or deinterleaved result layout with "
-                "block_elems=1");
-
-  FailureOr<VMICastLayoutFact> fact =
-      getPreferredCastLayoutFact(sourceType, resultType, reason);
-  if (failed(fact) || (fact->kind != VMICastLayoutKind::Widen2x &&
-                       fact->kind != VMICastLayoutKind::Widen4x))
-    return fail("requires supported 8/16-bit to 32-bit widen cast");
-
-  if (requestedResultLayout.isContiguous()) {
-    if (!fact->resultLayout.isContiguous() ||
-        fact->resultLayout.getLaneStride() !=
-            requestedResultLayout.getLaneStride())
-      return fail("requested contiguous result layout is not the natural "
-                  "compact widen result layout");
-    return VMILayoutAttr::getContiguous(sourceType.getContext(),
-                                        /*laneStride=*/fact->factor);
-  }
-
-  int64_t resultFactor = requestedResultLayout.isDeinterleaved()
-                             ? requestedResultLayout.getFactor()
-                             : 1;
-  if (resultFactor % fact->factor != 0)
-    return fail("requested result layout factor is not divisible by widen "
-                "factor");
-
-  int64_t sourceFactor = resultFactor / fact->factor;
-  if (sourceFactor == 1)
-    return VMILayoutAttr::getContiguous(sourceType.getContext());
-  if (sourceFactor == 2 || sourceFactor == 4)
-    return VMILayoutAttr::getDeinterleaved(sourceType.getContext(),
-                                          sourceFactor, /*blockElems=*/1);
-  return fail("derived source layout factor is unsupported");
+  return fact->sourceLayout;
 }
 
-FailureOr<VMIContiguousLoadSupport>
-VMILayoutSupport::getContiguousLoadSupport(VMIVRegType resultType,
-                                           std::string *reason) const {
-  auto fail = [&](const Twine &message) -> FailureOr<VMIContiguousLoadSupport> {
+FailureOr<VMILoadLayoutFact>
+VMILayoutSupport::getLoadLayoutFact(VMIVRegType resultType,
+                                    std::string *reason) const {
+  auto fail = [&](const Twine &message) -> FailureOr<VMILoadLayoutFact> {
     if (reason)
       *reason = message.str();
     return failure();
@@ -752,33 +1267,22 @@ VMILayoutSupport::getContiguousLoadSupport(VMIVRegType resultType,
   VMILayoutAttr layout = resultType.getLayoutAttr();
   if (!layout)
     return fail("requires assigned result layout");
-  if (!layout.isContiguous())
-    return fail("requires contiguous result layout");
-  if (layout.getLaneStride() == 1)
-    return VMIContiguousLoadSupport{
-        VMIContiguousLoadSupportKind::ContiguousVlds};
-  if (layout.getLaneStride() == 2) {
-    if (!hasDenseLaneStride2UnpackedLoad(resultType.getElementType()))
-      return fail("requires 8/16/32-bit element type for dense lane_stride=2 "
-                  "unpacked load");
-    return VMIContiguousLoadSupport{
-        VMIContiguousLoadSupportKind::LaneStride2UnpackedVlds};
+  for (const DenseMemoryLayoutPattern &pattern : kDenseLoadLayoutPatterns) {
+    if (!matchesElementBitsPattern(pattern.elementBits,
+                                   resultType.getElementType()))
+      continue;
+    if (!matchesLayoutPattern(resultType.getContext(), pattern.layout, layout))
+      continue;
+    return VMILoadLayoutFact{layout};
   }
-  if (layout.getLaneStride() == 4) {
-    if (!hasDenseLaneStride4UnpackedLoad(resultType.getElementType()))
-      return fail("requires 8-bit element type for dense lane_stride=4 "
-                  "unpacked load");
-    return VMIContiguousLoadSupport{
-        VMIContiguousLoadSupportKind::LaneStride4UnpackedVlds};
-  }
-  return fail("requires lane_stride 1, 2, or 4 for contiguous load");
+
+  return fail("result layout does not match a supported dense load table row");
 }
 
-FailureOr<VMIContiguousStoreSupport>
-VMILayoutSupport::getContiguousStoreSupport(VMIVRegType valueType,
-                                            std::string *reason) const {
-  auto fail =
-      [&](const Twine &message) -> FailureOr<VMIContiguousStoreSupport> {
+FailureOr<VMIStoreLayoutFact>
+VMILayoutSupport::getStoreLayoutFact(VMIVRegType valueType,
+                                     std::string *reason) const {
+  auto fail = [&](const Twine &message) -> FailureOr<VMIStoreLayoutFact> {
     if (reason)
       *reason = message.str();
     return failure();
@@ -787,1171 +1291,436 @@ VMILayoutSupport::getContiguousStoreSupport(VMIVRegType valueType,
   VMILayoutAttr layout = valueType.getLayoutAttr();
   if (!layout)
     return fail("requires assigned value layout");
-  if (layout.isContiguous() && layout.getLaneStride() == 1)
-    return VMIContiguousStoreSupport{
-        VMIContiguousStoreSupportKind::ContiguousVsts};
-  if (layout.isContiguous() && layout.getLaneStride() == 2) {
-    if (!hasDenseLaneStride2PackedStore(valueType.getElementType()))
-      return fail("requires 8/16/32-bit element type for dense lane_stride=2 "
-                  "packed store");
-    return VMIContiguousStoreSupport{
-        VMIContiguousStoreSupportKind::LaneStride2PackedVsts};
-  }
-  if (layout.isContiguous() && layout.getLaneStride() == 4) {
-    if (!hasDenseLaneStride4PackedStore(valueType.getElementType()))
-      return fail("requires 8-bit element type for dense lane_stride=4 "
-                  "packed store");
-    return VMIContiguousStoreSupport{
-        VMIContiguousStoreSupportKind::LaneStride4PackedVsts};
-  }
-  if (!layout.isDeinterleaved())
-    return fail("requires contiguous or deinterleaved value layout");
-  if (layout.getLaneStride() != 1)
-    return fail("deinterleaved packed store requires lane_stride=1");
-  if (layout.getBlockElems() != 1)
-    return fail("requires block_elems=1 deinterleaved value layout");
-  if (failed(checkFullDataPhysicalChunks(valueType, reason)))
-    return failure();
-
-  if (layout.getFactor() == 2) {
-    if (!hasX2MemoryDistToken(valueType.getElementType()))
-      return fail("requires 8/16/32-bit element type for vstsx2 INTLV");
-    return VMIContiguousStoreSupport{
-        VMIContiguousStoreSupportKind::Deinterleaved2Vstsx2};
+  for (const DenseMemoryLayoutPattern &pattern : kDenseStoreLayoutPatterns) {
+    if (!matchesElementBitsPattern(pattern.elementBits,
+                                   valueType.getElementType()))
+      continue;
+    if (!matchesLayoutPattern(valueType.getContext(), pattern.layout, layout))
+      continue;
+    return VMIStoreLayoutFact{layout};
   }
 
-  if (layout.getFactor() == 4)
-    return VMIContiguousStoreSupport{
-        VMIContiguousStoreSupportKind::DeinterleavedMaterializeThenVsts};
-
-  return fail("requires deinterleaved factor 2 or 4");
+  return fail("value layout does not match a supported dense store table row");
 }
 
-LogicalResult VMILayoutSupport::canFoldContiguousStoreMaterialization(
-    VMIVRegType sourceType, VMIVRegType resultType, std::string *reason) const {
-  if (sourceType.getElementType() != resultType.getElementType())
-    return failWithReason("source/result element types must match", reason);
-  if (sourceType.getElementCount() != resultType.getElementCount())
-    return failWithReason("source/result element counts must match", reason);
-
-  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
-  if (!resultLayout || !resultLayout.isContiguous())
-    return failWithReason("result layout must be contiguous", reason);
-
-  FailureOr<VMIContiguousStoreSupport> support =
-      getContiguousStoreSupport(sourceType, reason);
-  if (failed(support))
-    return failure();
-  if (support->kind == VMIContiguousStoreSupportKind::ContiguousVsts)
-    return failWithReason("source layout is already contiguous", reason);
-
-  return success();
-}
-
-LogicalResult VMILayoutSupport::canFoldContiguousMaskedStoreMaterialization(
-    VMIVRegType sourceType, VMIMaskType maskSourceType,
-    VMIVRegType resultType, VMIMaskType maskResultType,
-    std::string *reason) const {
-  if (sourceType.getElementType() != resultType.getElementType())
-    return failWithReason("source/result element types must match", reason);
-  if (sourceType.getElementCount() != resultType.getElementCount())
-    return failWithReason("source/result element counts must match", reason);
-  if (maskSourceType.getElementCount() != sourceType.getElementCount() ||
-      maskResultType.getElementCount() != resultType.getElementCount())
-    return failWithReason("value/mask element counts must match", reason);
-  if (maskSourceType.getGranularity() != maskResultType.getGranularity())
-    return failWithReason("mask layout fold cannot change granularity", reason);
-
-  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
-  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
-  VMILayoutAttr maskSourceLayout = maskSourceType.getLayoutAttr();
-  VMILayoutAttr maskResultLayout = maskResultType.getLayoutAttr();
-  if (!sourceLayout || !resultLayout || !maskSourceLayout || !maskResultLayout)
-    return failWithReason("requires assigned value/mask layouts", reason);
-  if (!resultLayout.isContiguous() || !maskResultLayout.isContiguous())
-    return failWithReason("result value/mask layouts must be contiguous",
-                          reason);
-  if (sourceLayout != maskSourceLayout)
-    return failWithReason("source value/mask layouts must match", reason);
-
-  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-  FailureOr<int64_t> maskArity = getVMIPhysicalArity(maskSourceType);
-  if (failed(sourceArity) || failed(maskArity) || *sourceArity != *maskArity)
-    return failWithReason("source value/mask physical arity must match",
-                          reason);
-
-  if (!sourceLayout.hasDenseLaneStride())
-    return canFoldContiguousStoreMaterialization(sourceType, resultType,
-                                                 reason);
-
-  std::optional<StringRef> packedGranularity =
-      getDenseLaneStrideMaskedStoreMaskGranularity(sourceType);
-  if (!packedGranularity)
-    return failWithReason("dense lane_stride masked store supports only "
-                          "LS=2 b8/b16 and LS=4 b8 compact masks",
-                          reason);
-
-  unsigned elementBits = pto::getPTOStorageElemBitWidth(sourceType.getElementType());
-  StringRef expectedSourceGranularity =
-      getMaskGranularityForElementBits(elementBits);
-  if (expectedSourceGranularity.empty() ||
-      maskSourceType.getGranularity() != expectedSourceGranularity)
-    return failWithReason("mask granularity must match source element width",
-                          reason);
-
-  return success();
-}
-
-FailureOr<VMILayoutMaterializationSupport>
-VMILayoutSupport::getDataLayoutMaterializationSupport(
-    VMIVRegType sourceType, VMIVRegType resultType, std::string *reason) const {
-  auto fail =
-      [&](const Twine &message) -> FailureOr<VMILayoutMaterializationSupport> {
+FailureOr<VMIMaskedStoreLayoutFact> VMILayoutSupport::getMaskedStoreLayoutFact(
+    VMIVRegType valueType, VMIMaskType maskType, std::string *reason) const {
+  auto fail = [&](const Twine &message) -> FailureOr<VMIMaskedStoreLayoutFact> {
     if (reason)
       *reason = message.str();
     return failure();
   };
 
-  if (sourceType.getElementType() != resultType.getElementType())
-    return fail("source/result element types must match");
-  if (sourceType.getElementCount() != resultType.getElementCount())
-    return fail("source/result element counts must match");
-
-  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
-  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
-  FailureOr<VMILayoutMaterializationSupport> support =
-      getLayoutMaterializationSupport(sourceLayout, resultLayout, reason);
-  if (succeeded(support)) {
-    if (failed(checkLayoutMaterializationShape(
-            sourceType, resultType, sourceLayout, resultLayout, reason)))
-      return failure();
-    return support;
+  VMILayoutAttr valueLayout = valueType.getLayoutAttr();
+  VMILayoutAttr maskLayout = maskType.getLayoutAttr();
+  if (!valueLayout || !maskLayout)
+    return fail("requires assigned value/mask layouts");
+  for (const DenseMaskedStoreLayoutPattern &pattern :
+       kDenseMaskedStoreLayoutPatterns) {
+    if (!matchesElementBitsPattern(pattern.elementBits,
+                                   valueType.getElementType()))
+      continue;
+    if (!matchesLayoutPattern(valueType.getContext(), pattern.valueLayout,
+                              valueLayout))
+      continue;
+    if (!matchesLayoutPattern(maskType.getContext(), pattern.maskLayout,
+                              maskLayout))
+      continue;
+    return VMIMaskedStoreLayoutFact{valueLayout, maskLayout};
   }
 
+  return fail("value/mask layouts do not match a supported dense masked store "
+              "table row");
+}
+
+FailureOr<VMIMaskedLoadLayoutFact> VMILayoutSupport::getMaskedLoadLayoutFact(
+    VMIVRegType resultType, VMIMaskType maskType, VMIVRegType passthruType,
+    std::string *reason) const {
+  auto fail = [&](const Twine &message) -> FailureOr<VMIMaskedLoadLayoutFact> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  VMILayoutAttr maskLayout = maskType.getLayoutAttr();
+  VMILayoutAttr passthruLayout = passthruType.getLayoutAttr();
+  if (!resultLayout || !maskLayout || !passthruLayout)
+    return fail("requires assigned result/mask/passthru layouts");
+  for (const DenseMaskedLoadLayoutPattern &pattern :
+       kDenseMaskedLoadLayoutPatterns) {
+    if (!matchesElementBitsPattern(pattern.elementBits,
+                                   resultType.getElementType()))
+      continue;
+    if (!matchesLayoutPattern(resultType.getContext(), pattern.resultLayout,
+                              resultLayout))
+      continue;
+    if (!matchesLayoutPattern(maskType.getContext(), pattern.maskLayout,
+                              maskLayout))
+      continue;
+    if (!matchesLayoutPattern(passthruType.getContext(),
+                              pattern.passthruLayout, passthruLayout))
+      continue;
+    return VMIMaskedLoadLayoutFact{resultLayout, maskLayout, passthruLayout};
+  }
+
+  return fail("result/mask/passthru layouts do not match a supported dense "
+              "masked_load table row");
+}
+
+static LogicalResult matchEnsureLayoutPattern(VMIVRegType sourceType,
+                                              VMIVRegType resultType,
+                                              VMILayoutAttr sourceLayout,
+                                              VMILayoutAttr resultLayout,
+                                              std::string *reason) {
+  auto fail = [&](const Twine &message) -> LogicalResult {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
   if (!sourceLayout || !resultLayout)
     return fail("requires assigned source/result layouts");
+  if (sourceLayout == resultLayout)
+    return success();
 
-  if (sourceLayout.isContiguous() && sourceLayout.getLaneStride() == 1 &&
-      resultLayout.isContiguous() && resultLayout.getLaneStride() != 1) {
-    FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-    FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
-    if (failed(sourceArity) || failed(resultArity))
-      return fail("requires computable source/result physical arity");
-    if (*sourceArity != *resultArity)
-      return fail("dense lane_stride register materialization currently "
-                  "requires source and result to have the same physical arity");
-    if (!hasDenseLaneStridePackUnpackElement(sourceType.getElementType(),
-                                             resultLayout.getLaneStride()))
-      return fail("requires bitcastable 8/16-bit element type for dense "
-                  "lane_stride register unpack materialization");
-    return VMILayoutMaterializationSupport{
-        VMILayoutMaterializationSupportKind::ContiguousToLaneStrideViaUnpack};
+  for (const EnsureLayoutPattern &pattern : kEnsureLayoutPatterns) {
+    if (!matchesElementBitsPattern(pattern.elementBits,
+                                   sourceType.getElementType()))
+      continue;
+    if (!matchesElementCountPattern(pattern.elementCounts,
+                                    sourceType.getElementCount()))
+      continue;
+    if (!matchesLayoutPattern(sourceType.getContext(), pattern.sourceLayout,
+                              sourceLayout))
+      continue;
+    if (!matchesLayoutPattern(resultType.getContext(), pattern.resultLayout,
+                              resultLayout))
+      continue;
+    return success();
   }
 
-  if (sourceLayout.isContiguous() && sourceLayout.getLaneStride() != 1 &&
-      resultLayout.isContiguous() && resultLayout.getLaneStride() == 1) {
-    FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-    FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
-    if (failed(sourceArity) || failed(resultArity))
-      return fail("requires computable source/result physical arity");
-    if (*sourceArity != *resultArity)
-      return fail("dense lane_stride register materialization currently "
-                  "requires source and result to have the same physical arity");
-    if (!hasDenseLaneStridePackUnpackElement(sourceType.getElementType(),
-                                             sourceLayout.getLaneStride()))
-      return fail("requires bitcastable 8/16-bit element type for dense "
-                  "lane_stride register pack materialization");
-    return VMILayoutMaterializationSupport{
-        VMILayoutMaterializationSupportKind::LaneStrideToContiguousViaPack};
-  }
-
-  return failure();
+  return fail("source/result layouts do not match a supported ensure_layout "
+              "table row");
 }
 
-LogicalResult VMILayoutSupport::canMaterializeDataLayout(
+static LogicalResult matchEnsureMaskLayoutPattern(VMIMaskType sourceType,
+                                                  VMIMaskType resultType,
+                                                  VMILayoutAttr sourceLayout,
+                                                  VMILayoutAttr resultLayout,
+                                                  std::string *reason) {
+  auto fail = [&](const Twine &message) -> LogicalResult {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+  if (!sourceLayout || !resultLayout)
+    return fail("requires assigned source/result layouts");
+  if (sourceLayout == resultLayout)
+    return success();
+
+  for (const EnsureMaskLayoutPattern &pattern : kEnsureMaskLayoutPatterns) {
+    if (!matchesMaskGranularityPattern(pattern.granularity,
+                                       sourceType.getGranularity()))
+      continue;
+    if (!matchesElementCountPattern(pattern.elementCounts,
+                                    sourceType.getElementCount()))
+      continue;
+    if (!matchesLayoutPattern(sourceType.getContext(), pattern.sourceLayout,
+                              sourceLayout))
+      continue;
+    if (!matchesLayoutPattern(resultType.getContext(), pattern.resultLayout,
+                              resultLayout))
+      continue;
+    return success();
+  }
+
+  return fail("source/result mask layouts do not match a supported "
+              "ensure_mask_layout table row");
+}
+
+FailureOr<VMIEnsureLayoutFact> VMILayoutSupport::getEnsureLayoutFact(
     VMIVRegType sourceType, VMIVRegType resultType, std::string *reason) const {
-  if (failed(
-          getDataLayoutMaterializationSupport(sourceType, resultType, reason)))
-    return failure();
-  return success();
-}
-
-FailureOr<VMILayoutMaterializationSupport>
-VMILayoutSupport::getMaskLayoutMaterializationSupport(
-    VMIMaskType sourceType, VMIMaskType resultType, std::string *reason) const {
-  auto fail =
-      [&](const Twine &message) -> FailureOr<VMILayoutMaterializationSupport> {
-    if (reason)
-      *reason = message.str();
-    return failure();
-  };
-
-  if (sourceType.getElementCount() != resultType.getElementCount())
-    return fail("source/result mask element counts must match");
-  if (sourceType.getGranularity() != resultType.getGranularity())
-    return fail("source/result mask granularities must match");
-
   VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
   VMILayoutAttr resultLayout = resultType.getLayoutAttr();
-  FailureOr<VMILayoutMaterializationSupport> support =
-      getLayoutMaterializationSupport(sourceLayout, resultLayout, reason);
-  if (failed(support))
+  if (failed(matchEnsureLayoutPattern(sourceType, resultType, sourceLayout,
+                                      resultLayout, reason)))
     return failure();
-  if (failed(checkLayoutMaterializationShape(
-          sourceType, resultType, sourceLayout, resultLayout, reason)))
-    return failure();
-  return support;
+  return VMIEnsureLayoutFact{sourceLayout, resultLayout};
 }
 
-LogicalResult VMILayoutSupport::canMaterializeMaskLayout(
+FailureOr<VMIEnsureMaskLayoutFact> VMILayoutSupport::getEnsureMaskLayoutFact(
     VMIMaskType sourceType, VMIMaskType resultType, std::string *reason) const {
-  if (failed(
-          getMaskLayoutMaterializationSupport(sourceType, resultType, reason)))
-    return failure();
-  return success();
-}
-
-FailureOr<VMIMaskGranularityMaterializationSupport>
-VMILayoutSupport::getMaskGranularityMaterializationSupport(
-    VMIMaskType sourceType, VMIMaskType resultType, std::string *reason) const {
-  auto fail = [&](const Twine &message)
-      -> FailureOr<VMIMaskGranularityMaterializationSupport> {
-    if (reason)
-      *reason = message.str();
-    return failure();
-  };
-
-  if (sourceType.getElementCount() != resultType.getElementCount())
-    return fail("source/result mask element counts must match");
-  if (sourceType.getLayoutAttr() != resultType.getLayoutAttr())
-    return fail("source/result mask layouts must match");
-  if (!VMIMaskType::isConcreteGranularity(sourceType.getGranularity()) ||
-      !VMIMaskType::isConcreteGranularity(resultType.getGranularity()))
-    return fail("requires concrete b8/b16/b32 source and result granularities");
-  if (sourceType.getGranularity() == resultType.getGranularity())
-    return VMIMaskGranularityMaterializationSupport{
-        VMIMaskGranularityMaterializationSupportKind::Identity};
-
-  return VMIMaskGranularityMaterializationSupport{
-      VMIMaskGranularityMaterializationSupportKind::PredicateCast};
-}
-
-LogicalResult VMILayoutSupport::canMaterializeMaskGranularity(
-    VMIMaskType sourceType, VMIMaskType resultType, std::string *reason) const {
-  if (failed(getMaskGranularityMaterializationSupport(sourceType, resultType,
-                                                      reason)))
-    return failure();
-  return success();
-}
-
-FailureOr<VMIGroupSlotLoadSupport> VMILayoutSupport::getGroupSlotLoadSupport(
-    const VMITargetCapabilityRegistry &capabilities, VMIGroupSlotLoadOp op,
-    std::string *reason) const {
-  auto fail = [&](const Twine &message) -> FailureOr<VMIGroupSlotLoadSupport> {
-    if (reason)
-      *reason = message.str();
-    return failure();
-  };
-
-  auto resultType = cast<VMIVRegType>(op.getResult().getType());
-  int64_t numGroups = op.getNumGroupsAttr().getInt();
-  if (resultType.getElementCount() != numGroups)
-    return fail("requires result logical lane count to match num_groups");
-  VMILayoutAttr layout = resultType.getLayoutAttr();
-  if (!layout || !layout.isGroupSlots() ||
-      layout.getNumGroups() != numGroups || layout.getSlots() <= 0)
-    return fail("requires explicit group_slots result layout matching "
-                "num_groups");
-
-  if (layout.getSlots() != 8 && layout.getSlots() != 1)
-    return fail("supports only slots=8 or slots=1 group_slot_load layouts");
-
-  if (!capabilities.supportsDirectMemory(op.getSource().getType(), "source")
-           .isSupported())
-    return fail("requires supported direct memory source");
-  if (!isa<PtrType>(op.getSource().getType()))
-    return fail("requires !pto.ptr source for vsldb lowering");
-
-  std::optional<int64_t> stride =
-      getConstantIndexValue(op.getSourceGroupStride());
-  if (layout.getSlots() == 8) {
-    if (!stride || *stride != 1)
-      return fail("slots=8 group_slot_load requires constant unit "
-                  "source_group_stride");
-    return VMIGroupSlotLoadSupport{
-        VMIGroupSlotLoadSupportKind::Slots8UnitStrideVsldb};
-  }
-
-  unsigned elementBits =
-      pto::getPTOStorageElemBitWidth(resultType.getElementType());
-  if (elementBits == 0 || 256 % elementBits != 0)
-    return fail("slots=1 group_slot_load requires an 8/16/32-bit element "
-                "type");
-  int64_t alignedStrideElems = 256 / elementBits;
-  if (!stride || *stride <= 0 || *stride % alignedStrideElems != 0)
-    return fail(Twine("slots=1 group_slot_load currently lowers as one "
-                      "lane-0 vsldb per group and requires constant "
-                      "positive source_group_stride divisible by ") +
-                Twine(alignedStrideElems) +
-                " elements for 32B load alignment; packed or unaligned "
-                "scalar load lowering is not implemented");
-
-  return VMIGroupSlotLoadSupport{
-      VMIGroupSlotLoadSupportKind::Slots1AlignedLane0Vsldb};
-}
-
-FailureOr<VMIGroupLoadSupport> VMILayoutSupport::getGroupLoadSupport(
-    const VMITargetCapabilityRegistry &capabilities, VMIGroupLoadOp op,
-    std::string *reason) const {
-  auto fail = [&](const Twine &message) -> FailureOr<VMIGroupLoadSupport> {
-    if (reason)
-      *reason = message.str();
-    return failure();
-  };
-
-  auto resultType = cast<VMIVRegType>(op.getResult().getType());
-  VMILayoutAttr layout = resultType.getLayoutAttr();
-  if (!layout || !layout.isDeinterleaved() || layout.getBlockElems() != 8 ||
-      !resultType.getElementType().isF32())
-    return fail("requires deinterleaved block8 f32 result layout");
-
-  FailureOr<int64_t> groupSize = getGroupSizeFromNumGroups(
-      resultType, op.getNumGroupsAttr().getInt(), reason);
-  if (failed(groupSize))
-    return failure();
-
-  if ((*groupSize != 16 || layout.getFactor() != 2) &&
-      (*groupSize != 32 || layout.getFactor() != 4))
-    return fail("block8 strided group_load requires S=16/factor=2 or "
-                "S=32/factor=4");
-
-  if (!capabilities.supportsDirectMemory(op.getSource().getType(), "source")
-           .isSupported())
-    return fail("requires supported direct memory source");
-  if (!isa<PtrType>(op.getSource().getType()))
-    return fail("block8 strided group_load requires !pto.ptr source");
-
-  if (op.getNumGroupsAttr().getInt() % 8 != 0)
-    return fail("block8 strided group_load requires num_groups multiple of 8");
-
-  std::optional<int64_t> rowStride = getConstantIndexValue(op.getRowStride());
-  if (!rowStride || *rowStride <= 0 || *rowStride % 8 != 0)
-    return fail("block8 strided group_load requires constant positive "
-                "row_stride divisible by 8 f32 elements");
-
-  std::string fullChunkReason;
-  if (failed(checkFullDataPhysicalChunks(resultType, &fullChunkReason)))
-    return fail(Twine("block8 strided group_load requires full physical "
-                      "result chunks; ") +
-                fullChunkReason);
-
-  if (*groupSize == 16)
-    return VMIGroupLoadSupport{VMIGroupLoadSupportKind::S16Block8Vsldb};
-  return VMIGroupLoadSupport{VMIGroupLoadSupportKind::S32Block8Vsldb};
-}
-
-FailureOr<VMIGroupSlotsStoreSupport>
-VMILayoutSupport::getGroupSlotsStoreSupport(
-    const VMITargetCapabilityRegistry &capabilities, VMIGroupStoreOp op,
-    std::string *reason) const {
-  auto fail =
-      [&](const Twine &message) -> FailureOr<VMIGroupSlotsStoreSupport> {
-    if (reason)
-      *reason = message.str();
-    return failure();
-  };
-
-  auto valueType = cast<VMIVRegType>(op.getValue().getType());
-  VMILayoutAttr layout = valueType.getLayoutAttr();
-  if (!layout || !layout.isGroupSlots())
-    return fail("requires group_slots value layout");
-
-  int64_t numGroups = op.getNumGroupsAttr().getInt();
-  if (layout.getNumGroups() != numGroups)
-    return fail("group_slots group_store requires layout num_groups to "
-                "match op num_groups");
-
-  VMICapabilityResult elementCapability = capabilities.supportsElementType(
-      valueType.getElementType(), VMIElementPurpose::PredicateMask);
-  if (!elementCapability.isSupported())
-    return fail(elementCapability.reason);
-
-  FailureOr<int64_t> arity = getVMIPhysicalArity(valueType);
-  if (failed(arity) || *arity < 1)
-    return fail("requires computable non-empty physical vreg parts");
-
-  if (layout.getSlots() == 1) {
-    if (*arity != numGroups)
-      return fail("slots=1 group_store requires one physical part per "
-                  "group");
-    unsigned elementBits =
-        pto::getPTOStorageElemBitWidth(valueType.getElementType());
-    if (elementBits == 0 || 256 % elementBits != 0)
-      return fail("slots=1 group_store requires an 8/16/32-bit element "
-                  "type");
-    std::optional<int64_t> rowStride = getConstantIndexValue(op.getRowStride());
-    FailureOr<int64_t> lanesPerPart =
-        getDataLanesPerPart(valueType.getElementType());
-    if (rowStride && *rowStride == 1 && succeeded(lanesPerPart) &&
-        numGroups <= *lanesPerPart)
-      return VMIGroupSlotsStoreSupport{
-          VMIGroupSlotsStoreSupportKind::Slots1PackedUnitStrideVsts};
-    if (rowStride && *rowStride <= 0)
-      return fail("slots=1 group_store requires positive row_stride when "
-                  "row_stride is constant");
-    return VMIGroupSlotsStoreSupport{
-        VMIGroupSlotsStoreSupportKind::Slots1PointVsts};
-  }
-
-  if (layout.getSlots() == 8) {
-    std::optional<int64_t> rowStride = getConstantIndexValue(op.getRowStride());
-    if (!rowStride || *rowStride != 1)
-      return fail("slots=8 group_store currently requires constant unit "
-                  "row_stride");
-    if (*arity != ceilDivNonNegative(numGroups, 8))
-      return fail("slots=8 group_store arity must equal ceil(num_groups / "
-                  "8)");
-    return VMIGroupSlotsStoreSupport{
-        VMIGroupSlotsStoreSupportKind::Slots8UnitStrideVsts};
-  }
-
-  return fail("group_slots group_store currently supports only slots=1 or "
-              "unit-stride slots=8");
-}
-
-FailureOr<VMIGroupReduceAddFSupport> getGroupReduceAddSupportImpl(
-    const VMITargetCapabilityRegistry &capabilities, Operation *op,
-    VMIVRegType sourceType, VMIMaskType maskType, VMIVRegType resultType,
-    int64_t numGroups, bool requiresReassoc, VMIReductionKind reductionKind,
-    std::string *reason) {
-  auto fail =
-      [&](const Twine &message) -> FailureOr<VMIGroupReduceAddFSupport> {
-    if (reason)
-      *reason = message.str();
-    return failure();
-  };
-
-  if (requiresReassoc && !op->hasAttr("reassoc"))
-    return fail("requires reassoc attr for pair-wise floating-point "
-                "reduction");
-
   VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
-  VMILayoutAttr maskLayout = maskType.getLayoutAttr();
   VMILayoutAttr resultLayout = resultType.getLayoutAttr();
-  if (!sourceLayout || !maskLayout || !resultLayout)
-    return fail("requires assigned source, mask, and result layouts");
-  if (!resultLayout.isGroupSlots() || resultLayout.getNumGroups() != numGroups)
-    return fail("requires group_slots result layout matching num_groups");
-  if (resultLayout.getSlots() != 8 && resultLayout.getSlots() != 1) {
-    FailureOr<int64_t> groupSize =
-        getGroupSizeFromNumGroups(sourceType, numGroups, reason);
-    FailureOr<int64_t> lanesPerPart =
-        getDataLanesPerPart(sourceType.getElementType());
-    int64_t vlaneElems = succeeded(lanesPerPart) && *lanesPerPart % 8 == 0
-                             ? *lanesPerPart / 8
-                             : -1;
-    if (succeeded(groupSize) && resultLayout.getSlots() <= 0 &&
-        (*groupSize != vlaneElems && *groupSize != 2 * vlaneElems &&
-         *groupSize != 4 * vlaneElems))
-      return fail("stable group_reduce_add slots=8 support group "
-                  "sizes VLaneElems, 2*VLaneElems, or 4*VLaneElems");
-    return fail("stable group_reduce_add layout support currently requires "
-                "result layout slots=8 or slots=1");
-  }
-
-  VMICapabilityResult elementCapability =
-      capabilities.supportsReductionElementType(reductionKind,
-                                                sourceType.getElementType());
-  if (!elementCapability.isSupported())
-    return fail(elementCapability.reason);
-  if (sourceType.getElementType() != resultType.getElementType())
-    return fail("stable group_reduce_add layout support requires matching "
-                "source/result element types");
-  if (resultType.getElementCount() != numGroups)
-    return fail("requires result lane count to match num_groups");
-
-  FailureOr<int64_t> groupSize =
-      getGroupSizeFromNumGroups(sourceType, numGroups, reason);
-  if (failed(groupSize))
+  if (failed(matchEnsureMaskLayoutPattern(sourceType, resultType, sourceLayout,
+                                          resultLayout, reason)))
     return failure();
-  FailureOr<int64_t> lanesPerPart =
-      getDataLanesPerPart(sourceType.getElementType());
-  if (failed(lanesPerPart) || *lanesPerPart % 8 != 0)
-    return fail("requires element type with known physical VLane width");
-  int64_t vlaneElems = *lanesPerPart / 8;
-
-  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-  FailureOr<int64_t> maskArity = getVMIPhysicalArity(maskType);
-  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
-  if (failed(sourceArity) || failed(maskArity) || failed(resultArity))
-    return fail("requires computable source/mask/result physical arity");
-  if (*sourceArity < 1 || *maskArity != *sourceArity)
-    return fail("requires matching non-empty source/mask physical arity");
-
-  if (resultLayout.getSlots() == 1) {
-    if (failed(lanesPerPart) || *groupSize < *lanesPerPart ||
-        *groupSize % *lanesPerPart != 0)
-      return fail("stable group_reduce_add slots=1 support group "
-                  "sizes that are multiples of one physical chunk");
-    if (!sourceLayout.isContiguous() || !maskLayout.isContiguous())
-      return fail("slots=1 group_reduce_add requires contiguous source/mask "
-                  "layouts");
-    if (*resultArity != numGroups)
-      return fail("slots=1 group_reduce_add requires one physical result "
-                  "part per group");
-    std::string sourceFullReason;
-    if (failed(checkFullDataPhysicalChunks(sourceType, &sourceFullReason)))
-      return fail(Twine("slots=1 group_reduce_add requires full source "
-                        "chunks; ") +
-                  sourceFullReason);
-    return VMIGroupReduceAddFSupport{
-        VMIGroupReduceAddFSupportKind::ContiguousVcaddRows};
-  }
-
-  if (*groupSize == vlaneElems) {
-    if (!sourceLayout.isContiguous() || !maskLayout.isContiguous())
-      return fail("one-vlane group_reduce_add requires contiguous source/mask "
-                  "layouts");
-    std::string sourceFullReason;
-    if (failed(checkFullDataPhysicalChunks(sourceType, &sourceFullReason)))
-      return fail(Twine("one-vlane group_reduce_add requires full source "
-                        "chunks; ") +
-                  sourceFullReason);
-    if (*resultArity != *sourceArity)
-      return fail("one-vlane group_reduce_add requires source/result physical "
-                  "arity to match");
-    return VMIGroupReduceAddFSupport{
-        VMIGroupReduceAddFSupportKind::OneVLaneVcgadd};
-  }
-
-  if (*groupSize == 2 * vlaneElems) {
-    if (!sourceLayout.isDeinterleaved() || sourceLayout.getFactor() != 2 ||
-        (sourceLayout.getBlockElems() != 1 &&
-         sourceLayout.getBlockElems() != 8))
-      return fail("two-vlane group_reduce_add requires source layout "
-                  "deinterleaved=2 with block_elems=1 or block_elems=8");
-    if (!maskLayout.isDeinterleaved() || maskLayout.getFactor() != 2 ||
-        maskLayout.getBlockElems() != sourceLayout.getBlockElems())
-      return fail("two-vlane group_reduce_add requires matching mask layout "
-                  "deinterleaved=2 with the same block_elems");
-    int64_t expectedResultArity = ceilDivNonNegative(numGroups, 8);
-    if (*resultArity != expectedResultArity || *sourceArity != *resultArity * 2)
-      return fail(
-          "two-vlane group_reduce_add requires two source/mask parts per "
-          "result part");
-    return VMIGroupReduceAddFSupport{
-        VMIGroupReduceAddFSupportKind::TwoVLaneDeinterleaved2VcgaddVadd};
-  }
-
-  if (*groupSize == 4 * vlaneElems) {
-    if (!sourceLayout.isDeinterleaved() || sourceLayout.getFactor() != 4 ||
-        (sourceLayout.getBlockElems() != 1 &&
-         sourceLayout.getBlockElems() != 8))
-      return fail("four-vlane group_reduce_add requires source layout "
-                  "deinterleaved=4 with block_elems=1 or block_elems=8");
-    if (!maskLayout.isDeinterleaved() || maskLayout.getFactor() != 4 ||
-        maskLayout.getBlockElems() != sourceLayout.getBlockElems())
-      return fail("four-vlane group_reduce_add requires matching mask layout "
-                  "deinterleaved=4 with the same block_elems");
-    int64_t expectedResultArity = ceilDivNonNegative(numGroups, 8);
-    if (*resultArity != expectedResultArity || *sourceArity != *resultArity * 4)
-      return fail(
-          "four-vlane group_reduce_add requires four source/mask parts per "
-          "result part");
-    return VMIGroupReduceAddFSupport{
-        VMIGroupReduceAddFSupportKind::FourVLaneDeinterleaved4VcgaddTree};
-  }
-
-  return fail("stable group_reduce_add slots=8 support group sizes "
-              "VLaneElems, 2*VLaneElems, or 4*VLaneElems");
+  return VMIEnsureMaskLayoutFact{sourceLayout, resultLayout};
 }
 
-FailureOr<VMIGroupReduceAddFSupport>
-VMILayoutSupport::getGroupReduceAddFSupport(
-    const VMITargetCapabilityRegistry &capabilities, VMIGroupReduceAddFOp op,
-    std::string *reason) const {
-  return getGroupReduceAddSupportImpl(
-      capabilities, op.getOperation(),
-      cast<VMIVRegType>(op.getSource().getType()),
-      cast<VMIMaskType>(op.getMask().getType()),
-      cast<VMIVRegType>(op.getResult().getType()),
-      op.getNumGroupsAttr().getInt(), /*requiresReassoc=*/true,
-      VMIReductionKind::GroupAddF, reason);
-}
-
-FailureOr<VMIGroupReduceAddFSupport>
-VMILayoutSupport::getGroupReduceMaxFSupport(
-    const VMITargetCapabilityRegistry &capabilities, VMIGroupReduceMaxFOp op,
-    std::string *reason) const {
-  return getGroupReduceAddSupportImpl(
-      capabilities, op.getOperation(),
-      cast<VMIVRegType>(op.getSource().getType()),
-      cast<VMIMaskType>(op.getMask().getType()),
-      cast<VMIVRegType>(op.getResult().getType()),
-      op.getNumGroupsAttr().getInt(), /*requiresReassoc=*/false,
-      VMIReductionKind::GroupMaxF, reason);
-}
-
-FailureOr<VMIGroupReduceAddFSupport>
-VMILayoutSupport::getGroupReduceAddISupport(
-    const VMITargetCapabilityRegistry &capabilities, VMIGroupReduceAddIOp op,
-    std::string *reason) const {
-  return getGroupReduceAddSupportImpl(
-      capabilities, op.getOperation(),
-      cast<VMIVRegType>(op.getSource().getType()),
-      cast<VMIMaskType>(op.getMask().getType()),
-      cast<VMIVRegType>(op.getResult().getType()),
-      op.getNumGroupsAttr().getInt(), /*requiresReassoc=*/false,
-      VMIReductionKind::GroupAddI, reason);
-}
-
-FailureOr<VMIGroupReduceAddFSupport>
-VMILayoutSupport::getGroupReduceMaxISupport(
-    const VMITargetCapabilityRegistry &capabilities, VMIGroupReduceMaxIOp op,
-    std::string *reason) const {
-  return getGroupReduceAddSupportImpl(
-      capabilities, op.getOperation(),
-      cast<VMIVRegType>(op.getSource().getType()),
-      cast<VMIMaskType>(op.getMask().getType()),
-      cast<VMIVRegType>(op.getResult().getType()),
-      op.getNumGroupsAttr().getInt(), /*requiresReassoc=*/false,
-      VMIReductionKind::GroupMaxI, reason);
-}
-
-FailureOr<VMIGroupBroadcastSupport> VMILayoutSupport::getGroupBroadcastSupport(
-    const VMITargetCapabilityRegistry &capabilities, VMIGroupBroadcastOp op,
-    std::string *reason) const {
-  return getGroupBroadcastSupport(capabilities,
-                                  cast<VMIVRegType>(op.getSource().getType()),
-                                  cast<VMIVRegType>(op.getResult().getType()),
-                                  op.getNumGroupsAttr().getInt(), reason);
-}
-
-FailureOr<VMIGroupBroadcastLoadSupport>
-VMILayoutSupport::getGroupBroadcastLoadSupport(
-    const VMITargetCapabilityRegistry &capabilities,
-    VMIGroupBroadcastLoadOp op, std::string *reason) const {
-  auto fail =
-      [&](const Twine &message) -> FailureOr<VMIGroupBroadcastLoadSupport> {
+FailureOr<VMIGroupSlotLayoutFact> VMILayoutSupport::getGroupSlotLoadLayoutFact(
+    VMIVRegType resultType, int64_t numGroups, std::string *reason) const {
+  auto fail = [&](const Twine &message) -> FailureOr<VMIGroupSlotLayoutFact> {
     if (reason)
       *reason = message.str();
     return failure();
   };
 
-  auto resultType = cast<VMIVRegType>(op.getResult().getType());
-  int64_t numGroups = op.getNumGroupsAttr().getInt();
-  if (numGroups <= 0)
-    return fail("requires positive num_groups");
-  if (resultType.getElementCount() % numGroups != 0)
-    return fail("requires num_groups to evenly divide result lane count");
-  if (!capabilities.supportsDirectMemory(op.getSource().getType(), "source")
-           .isSupported())
-    return fail("requires supported direct memory source");
-  if (!isa<PtrType>(op.getSource().getType()))
-    return fail("requires !pto.ptr source");
-
-  unsigned elementBits =
-      pto::getPTOStorageElemBitWidth(resultType.getElementType());
   VMILayoutAttr layout = resultType.getLayoutAttr();
   if (!layout)
     return fail("requires assigned result layout");
 
-  std::string fullChunkReason;
-  if (failed(checkFullDataPhysicalChunks(resultType, &fullChunkReason)))
-    return fail(Twine("requires full result physical chunks; ") +
-                fullChunkReason);
+  if (!isSupportedGroupSlotMemoryLayout(layout, numGroups))
+    return fail("result layout does not match a supported group_slot_load "
+                "table row");
 
-  FailureOr<int64_t> lanesPerPart =
-      getDataLanesPerPart(resultType.getElementType());
-  if (failed(lanesPerPart))
-    return fail("requires known result lanes per physical part");
-
-  int64_t groupSize = resultType.getElementCount() / numGroups;
-  std::optional<int64_t> stride =
-      getConstantIndexValue(op.getSourceGroupStride());
-
-  bool contiguousPacketLayout = layout.isContiguous();
-  bool splitPacketLayout = layout.isDeinterleaved() && layout.getFactor() == 2 &&
-                           layout.getBlockElems() == 1;
-  if ((elementBits == 16 || elementBits == 32) &&
-      *lanesPerPart == static_cast<int64_t>(2048 / elementBits) &&
-      (contiguousPacketLayout || splitPacketLayout) && numGroups % 8 == 0 &&
-      stride && *stride == 1) {
-    int64_t directGroupSize = 256 / elementBits;
-    if ((contiguousPacketLayout && groupSize == directGroupSize) ||
-        (splitPacketLayout && groupSize == 2 * directGroupSize))
-      return VMIGroupBroadcastLoadSupport{
-          VMIGroupBroadcastLoadSupportKind::E2BVlds};
-  }
-
-  if (elementBits == 0 || 256 % elementBits != 0)
-    return fail("fallback lowering requires an 8/16/32-bit element type");
-  int64_t alignedStrideElems = 256 / elementBits;
-  int64_t slots = 0;
-  if (stride && *stride == 1)
-    slots = 8;
-  else if (stride && *stride > 0 && *stride % alignedStrideElems == 0)
-    slots = 1;
-  else
-    return fail(Twine("fallback lowering requires constant unit "
-                      "source_group_stride for packed slots or constant "
-                      "positive source_group_stride divisible by ") +
-                Twine(alignedStrideElems) + " elements for lane-0 slots");
-
-  auto sourceType = VMIVRegType::get(
-      resultType.getContext(), numGroups, resultType.getElementType(),
-      VMILayoutAttr::getGroupSlots(resultType.getContext(), numGroups, slots));
-  std::string broadcastReason;
-  if (failed(getGroupBroadcastSupport(capabilities, sourceType, resultType,
-                                      numGroups, &broadcastReason)))
-    return fail(Twine("fallback broadcast is unsupported; ") +
-                broadcastReason);
-  return VMIGroupBroadcastLoadSupport{
-      VMIGroupBroadcastLoadSupportKind::SlotLoadThenBroadcast};
+  return VMIGroupSlotLayoutFact{layout, numGroups, layout.getSlots()};
 }
 
-FailureOr<VMIGroupBroadcastSupport> VMILayoutSupport::getGroupBroadcastSupport(
-    const VMITargetCapabilityRegistry &capabilities, VMIVRegType sourceType,
-    VMIVRegType resultType, int64_t numGroups, std::string *reason) const {
-  (void)capabilities;
-  auto fail = [&](const Twine &message) -> FailureOr<VMIGroupBroadcastSupport> {
+FailureOr<VMIGroupLoadLayoutFact>
+VMILayoutSupport::getGroupLoadLayoutFact(VMIGroupLoadOp op,
+                                         std::string *reason) const {
+  return getGroupLoadLayoutFact(cast<VMIVRegType>(op.getResult().getType()),
+                                op.getRowStride(),
+                                op.getNumGroupsAttr().getInt(), reason);
+}
+
+FailureOr<VMIGroupLoadLayoutFact> VMILayoutSupport::getGroupLoadLayoutFact(
+    VMIVRegType resultType, Value rowStride, int64_t numGroups,
+    std::string *reason) const {
+  auto fail = [&](const Twine &message) -> FailureOr<VMIGroupLoadLayoutFact> {
     if (reason)
       *reason = message.str();
     return failure();
   };
 
-  if (sourceType.getElementType() != resultType.getElementType())
-    return fail("requires source/result element type to match");
-  if (sourceType.getElementCount() != numGroups)
-    return fail("requires source lane count to match num_groups");
-  if (resultType.getElementCount() % numGroups != 0)
-    return fail("requires num_groups to evenly divide result lane count");
+  VMILayoutAttr layout = resultType.getLayoutAttr();
+  if (!layout)
+    return fail("requires assigned result layout");
+
+  unsigned elementBits =
+      pto::getPTOStorageElemBitWidth(resultType.getElementType());
+  if (elementBits == 0)
+    return fail("group_load requires known element bit width");
+  std::optional<int64_t> stride = getConstantIndexValue(rowStride);
+
+  FailureOr<GroupLayoutKey> key = buildGroupLayoutKey(
+      resultType, numGroups,
+      "group_load layout table has no row for this group size", reason);
+  if (failed(key))
+    return failure();
+
+  for (const GroupLoadLayoutPattern &pattern : kGroupLoadLayoutPatterns) {
+    if (!matchesElementBitsPattern(pattern.elementBits, elementBits))
+      continue;
+    if (!matchesGroupBlockPattern(pattern.block, *key))
+      continue;
+    if (!matchesGroupLoadMemoryPattern(pattern.memory, stride, key->groupSize,
+                                       elementBits))
+      continue;
+    if (!matchesLayoutPattern(resultType.getContext(), pattern.resultLayout,
+                              layout))
+      continue;
+    return VMIGroupLoadLayoutFact{
+        getGroupBlockClassFromPattern(pattern.block), layout, key->groupSize};
+  }
+
+  return fail("result layout, group size, and row_stride do not match a "
+              "supported group_load table row");
+}
+
+FailureOr<VMIGroupSlotLayoutFact> VMILayoutSupport::getGroupStoreLayoutFact(
+    VMIVRegType valueType, int64_t numGroups, std::string *reason) const {
+  auto fail = [&](const Twine &message) -> FailureOr<VMIGroupSlotLayoutFact> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  VMILayoutAttr layout = valueType.getLayoutAttr();
+  if (!layout)
+    return fail("requires assigned value layout");
+  if (!isSupportedGroupSlotMemoryLayout(layout, numGroups))
+    return fail("value layout does not match a supported group_store table "
+                "row");
+  return VMIGroupSlotLayoutFact{layout, numGroups, layout.getSlots()};
+}
+
+LogicalResult getGroupReduceAddSupportImpl(VMIVRegType sourceType,
+                                           VMIMaskType maskType,
+                                           VMIVRegType resultType,
+                                           int64_t numGroups,
+                                           std::string *reason) {
+  FailureOr<VMIGroupReduceLayoutFact> fact =
+      VMILayoutSupport().getGroupReduceLayoutFactForLayouts(
+          sourceType, maskType, resultType, numGroups, reason);
+  if (failed(fact))
+    return failure();
+  return success();
+}
+
+LogicalResult
+VMILayoutSupport::getGroupReduceAddFSupport(VMIGroupReduceAddFOp op,
+                                            std::string *reason) const {
+  return getGroupReduceAddSupportImpl(
+      cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIMaskType>(op.getMask().getType()),
+      cast<VMIVRegType>(op.getResult().getType()),
+      op.getNumGroupsAttr().getInt(), reason);
+}
+
+LogicalResult
+VMILayoutSupport::getGroupReduceMaxFSupport(VMIGroupReduceMaxFOp op,
+                                            std::string *reason) const {
+  return getGroupReduceAddSupportImpl(
+      cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIMaskType>(op.getMask().getType()),
+      cast<VMIVRegType>(op.getResult().getType()),
+      op.getNumGroupsAttr().getInt(), reason);
+}
+
+LogicalResult
+VMILayoutSupport::getGroupReduceAddISupport(VMIGroupReduceAddIOp op,
+                                            std::string *reason) const {
+  return getGroupReduceAddSupportImpl(
+      cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIMaskType>(op.getMask().getType()),
+      cast<VMIVRegType>(op.getResult().getType()),
+      op.getNumGroupsAttr().getInt(), reason);
+}
+
+LogicalResult
+VMILayoutSupport::getGroupReduceMaxISupport(VMIGroupReduceMaxIOp op,
+                                            std::string *reason) const {
+  return getGroupReduceAddSupportImpl(
+      cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIMaskType>(op.getMask().getType()),
+      cast<VMIVRegType>(op.getResult().getType()),
+      op.getNumGroupsAttr().getInt(), reason);
+}
+
+LogicalResult VMILayoutSupport::getGroupBroadcastSupport(
+    VMIGroupBroadcastOp op, std::string *reason) const {
+  return getGroupBroadcastSupport(cast<VMIVRegType>(op.getSource().getType()),
+                                  cast<VMIVRegType>(op.getResult().getType()),
+                                  op.getNumGroupsAttr().getInt(), reason);
+}
+
+LogicalResult
+VMILayoutSupport::getGroupBroadcastLoadSupport(VMIGroupBroadcastLoadOp op,
+                                               std::string *reason) const {
+  return success(succeeded(getGroupBroadcastLoadLayoutFact(op, reason)));
+}
+
+LogicalResult VMILayoutSupport::getGroupBroadcastSupport(
+    VMIVRegType sourceType, VMIVRegType resultType, int64_t numGroups,
+    std::string *reason) const {
+  return success(succeeded(getGroupBroadcastLayoutFactForLayouts(
+      sourceType, resultType, numGroups, reason)));
+}
+
+static LogicalResult matchSupplementalCastLayoutPattern(
+    VMIVRegType sourceType, VMIVRegType resultType,
+    ArrayRef<SupplementalCastLayoutPattern> patterns,
+    std::string *reason) {
+  auto fail = [&](const Twine &message) -> LogicalResult {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
 
   VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
   VMILayoutAttr resultLayout = resultType.getLayoutAttr();
   if (!sourceLayout || !resultLayout)
     return fail("requires assigned source/result layouts");
-  if (!sourceLayout.isGroupSlots() || sourceLayout.getNumGroups() != numGroups)
-    return fail("requires matching num_groups source layout");
-  if (resultLayout.isGroupSlots())
-    return fail("requires dense result layout");
-  if (sourceLayout.getSlots() > 0 && sourceLayout.getSlots() != 8 &&
-      sourceLayout.getSlots() != 1)
-    return fail("supports only slots=8 or slots=1 group_broadcast source "
-                "layouts");
 
-  std::string fullChunkReason;
-  if (failed(checkFullDataPhysicalChunks(resultType, &fullChunkReason)))
-    return fail(Twine("requires full result physical chunks; ") +
-                fullChunkReason);
+  auto [sourceBits, resultBits] = getCastElementBits(sourceType, resultType);
+  int64_t numGroups =
+      sourceLayout.isGroupSlots()
+          ? sourceLayout.getNumGroups()
+          : (resultLayout.isGroupSlots() ? resultLayout.getNumGroups() : 0);
+  MLIRContext *ctx = sourceType.getContext();
+  for (const SupplementalCastLayoutPattern &pattern : patterns) {
+    if (!matchesElementBitsPattern(pattern.sourceBits, sourceBits) ||
+        !matchesElementBitsPattern(pattern.resultBits, resultBits))
+      continue;
+    if (!matchesLayoutPattern(ctx, pattern.sourceLayout, sourceLayout,
+                              numGroups))
+      continue;
+    if (!matchesLayoutPattern(ctx, pattern.resultLayout, resultLayout,
+                              numGroups))
+      continue;
+    return success();
+  }
 
-  FailureOr<int64_t> lanesPerPart =
-      getDataLanesPerPart(sourceType.getElementType());
-  FailureOr<int64_t> resultLanesPerPart =
-      getDataLanesPerPart(resultType.getElementType());
-  if (failed(lanesPerPart) || failed(resultLanesPerPart) ||
-      *lanesPerPart != *resultLanesPerPart)
-    return fail("requires matching physical lanes per part");
-
-  FailureOr<int64_t> groupSize =
-      getGroupSizeFromNumGroups(resultType, numGroups, reason);
-  if (failed(groupSize))
-    return failure();
-  if (*lanesPerPart % *groupSize != 0 && *groupSize % *lanesPerPart != 0)
-    return fail("requires derived group size to divide or be a multiple of "
-                "physical lanes per part");
-
-  FailureOr<int64_t> resultFactor = getDataLayoutFactor(resultType);
-  if (failed(resultFactor))
-    return fail("requires known result layout factor");
-  if (*resultFactor == 1)
-    return VMIGroupBroadcastSupport{
-        VMIGroupBroadcastSupportKind::GroupSlotsVselr};
-
-  bool blockFragmentSmallGroup =
-      resultLayout.isDeinterleaved() && resultLayout.getBlockElems() > 1 &&
-      *groupSize < *lanesPerPart &&
-      *lanesPerPart % resultLayout.getBlockElems() == 0;
-  if (blockFragmentSmallGroup)
-    return VMIGroupBroadcastSupport{
-        VMIGroupBroadcastSupportKind::GroupSlotsVselr};
-
-  bool deinterleavedSmallGroup =
-      resultLayout.isDeinterleaved() && resultLayout.getBlockElems() == 1 &&
-      *groupSize < *lanesPerPart && *groupSize >= *resultFactor &&
-      *groupSize % *resultFactor == 0 &&
-      *lanesPerPart % (*groupSize / *resultFactor) == 0;
-  if (deinterleavedSmallGroup)
-    return VMIGroupBroadcastSupport{
-        VMIGroupBroadcastSupportKind::GroupSlotsVselr};
-
-  int64_t logicalSpanPerResultChunk = *lanesPerPart * *resultFactor;
-  if (*groupSize < *lanesPerPart || *groupSize % logicalSpanPerResultChunk != 0)
-    return fail("deinterleaved result requires every physical result chunk to "
-                "stay within one logical group");
-
-  return VMIGroupBroadcastSupport{
-      VMIGroupBroadcastSupportKind::GroupSlotsVselr};
+  return fail("source/result layouts do not match a supplemental cast table row");
 }
 
-FailureOr<VMITruncFSupport>
-VMILayoutSupport::getTruncFSupport(VMITruncFOp op, std::string *reason) const {
-  auto fail = [&](const Twine &message) -> FailureOr<VMITruncFSupport> {
-    if (reason)
-      *reason = message.str();
-    return failure();
-  };
-
-  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
-  auto resultType = cast<VMIVRegType>(op.getResult().getType());
-  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
-  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
-  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
-  if (!sourceLayout || !resultLayout || failed(sourceArity) ||
-      failed(resultArity))
-    return fail("requires assigned source/result layouts and computable "
-                "physical arity");
-
-  if (sourceLayout.isGroupSlots() || resultLayout.isGroupSlots()) {
-    unsigned resultBits =
-        pto::getPTOStorageElemBitWidth(resultType.getElementType());
-    if (!sourceLayout.isGroupSlots() || !resultLayout.isGroupSlots() ||
-        sourceLayout.getNumGroups() != resultLayout.getNumGroups() ||
-        sourceLayout.getSlots() != 1 || resultLayout.getSlots() != 1 ||
-        !sourceType.getElementType().isF32() || resultBits != 16 ||
-        *sourceArity != *resultArity)
-      return fail("group-slot truncf requires matching "
-                  "group_slots(num_groups=G, slots=1) source/result layouts, "
-                  "f32 source, f16 result, and matching physical arity");
-    return VMITruncFSupport{VMITruncFSupportKind::GroupSlots1F32ToF16};
-  }
-
-  if (!sourceType.getElementType().isF32())
-    return fail("requires f32 source");
-
-  FailureOr<VMICastLayoutFact> fact =
-      getPreferredCastLayoutFact(sourceType, resultType, reason);
-  if (failed(fact) || (fact->kind != VMICastLayoutKind::Narrow2x &&
-                       fact->kind != VMICastLayoutKind::Narrow4x))
-    return fail("unsupported deinterleaved truncf factor, arity, or result "
-                "element width");
-
-  int64_t sourceFactor =
-      sourceLayout.isDeinterleaved() ? sourceLayout.getFactor() : 1;
-  if (((sourceLayout.isContiguous() && sourceLayout.getLaneStride() == 1) ||
-       (sourceLayout.isDeinterleaved() && sourceLayout.getBlockElems() == 1 &&
-        sourceLayout.getLaneStride() == 1)) &&
-      resultLayout.isContiguous() && resultLayout.getLaneStride() > 0 &&
-      sourceFactor * resultLayout.getLaneStride() == fact->factor &&
-      *sourceArity == sourceFactor * *resultArity) {
-    if (fact->kind == VMICastLayoutKind::Narrow2x)
-      return VMITruncFSupport{
-          resultLayout.getLaneStride() == 1
-              ? VMITruncFSupportKind::Deinterleaved2F32ToContiguousF16
-              : VMITruncFSupportKind::ContiguousF32ToLaneStrideF16};
-    if (fact->kind == VMICastLayoutKind::Narrow4x)
-      return VMITruncFSupport{
-          resultLayout.getLaneStride() == 1
-              ? VMITruncFSupportKind::Deinterleaved4F32ToContiguousF8
-              : VMITruncFSupportKind::ContiguousF32ToLaneStrideF8};
-  }
-
-  if (!sourceLayout.isDeinterleaved() || !resultLayout.isContiguous() ||
-      resultLayout.getLaneStride() != 1)
-    return fail("requires f32 deinterleaved source and contiguous result, or "
-                "contiguous source and lane_stride narrowing result");
-
-  if (fact->kind == VMICastLayoutKind::Narrow2x &&
-      sourceLayout.getFactor() == fact->factor &&
-      *sourceArity == fact->factor * *resultArity)
-    return VMITruncFSupport{
-        VMITruncFSupportKind::Deinterleaved2F32ToContiguousF16};
-  if (fact->kind == VMICastLayoutKind::Narrow4x &&
-      sourceLayout.getFactor() == fact->factor &&
-      *sourceArity == fact->factor * *resultArity)
-    return VMITruncFSupport{
-        VMITruncFSupportKind::Deinterleaved4F32ToContiguousF8};
-
-  return fail("unsupported deinterleaved truncf factor, arity, or result "
-              "element width");
+static LogicalResult getNarrowCastSupport(VMIVRegType sourceType,
+                                          VMIVRegType resultType,
+                                          std::string *reason) {
+  VMILayoutSupport support;
+  if (succeeded(support.getCastLayoutFactForLayouts(
+          sourceType, resultType, sourceType.getLayoutAttr(),
+          resultType.getLayoutAttr(), reason)))
+    return success();
+  return matchSupplementalCastLayoutPattern(
+      sourceType, resultType, kSupplementalNarrowCastLayoutPatterns, reason);
 }
 
-FailureOr<VMIExtFSupport>
-VMILayoutSupport::getExtFSupport(VMIExtFOp op, std::string *reason) const {
-  auto fail = [&](const Twine &message) -> FailureOr<VMIExtFSupport> {
-    if (reason)
-      *reason = message.str();
-    return failure();
-  };
+LogicalResult VMILayoutSupport::getTruncFSupport(VMITruncFOp op,
+                                                 std::string *reason) const {
+  return getNarrowCastSupport(cast<VMIVRegType>(op.getSource().getType()),
+                              cast<VMIVRegType>(op.getResult().getType()),
+                              reason);
+}
 
+LogicalResult VMILayoutSupport::getExtFSupport(VMIExtFOp op,
+                                               std::string *reason) const {
   auto sourceType = cast<VMIVRegType>(op.getSource().getType());
   auto resultType = cast<VMIVRegType>(op.getResult().getType());
-  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
-  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
-  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
-  if (!sourceLayout || !resultLayout || failed(sourceArity) ||
-      failed(resultArity))
-    return fail("requires assigned source/result layouts and computable "
-                "physical arity");
-
-  FailureOr<VMICastLayoutFact> fact =
-      getPreferredCastLayoutFact(sourceType, resultType, reason);
-  if (failed(fact) || (fact->kind != VMICastLayoutKind::Widen2x &&
-                       fact->kind != VMICastLayoutKind::Widen4x))
-    return fail("unsupported extf source element width, result factor, or "
-                "physical arity");
-
-  if (sourceLayout.isContiguous() &&
-      sourceLayout.getLaneStride() == fact->factor &&
-      resultLayout.isContiguous() && resultLayout.getLaneStride() == 1 &&
-      *sourceArity == *resultArity && resultType.getElementType().isF32()) {
-    if (fact->kind == VMICastLayoutKind::Widen2x)
-      return VMIExtFSupport{
-          VMIExtFSupportKind::ContiguousF16ToDeinterleaved2F32};
-    if (fact->kind == VMICastLayoutKind::Widen4x)
-      return VMIExtFSupport{
-          VMIExtFSupportKind::ContiguousF8ToDeinterleaved4F32};
-  }
-
-  if (!resultLayout.isDeinterleaved() || resultLayout.getBlockElems() != 1 ||
-      resultLayout.getLaneStride() != 1 ||
-      !(sourceLayout.isContiguous() ||
-        (sourceLayout.isDeinterleaved() &&
-         sourceLayout.getBlockElems() == 1 &&
-         sourceLayout.getLaneStride() == 1)) ||
-      !resultType.getElementType().isF32())
-    return fail("requires contiguous or deinterleaved source layout and "
-                "deinterleaved f32 result layout with block_elems=1");
-
-  int64_t sourceFactor =
-      sourceLayout.isDeinterleaved() ? sourceLayout.getFactor() : 1;
-  if (resultLayout.getFactor() != sourceFactor * fact->factor ||
-      *resultArity != fact->factor * *sourceArity)
-    return fail("unsupported extf source/result layout factor or physical "
-                "arity");
-
-  if (fact->kind == VMICastLayoutKind::Widen2x)
-    return VMIExtFSupport{VMIExtFSupportKind::ContiguousF16ToDeinterleaved2F32};
-  if (fact->kind == VMICastLayoutKind::Widen4x)
-    return VMIExtFSupport{VMIExtFSupportKind::ContiguousF8ToDeinterleaved4F32};
-
-  return fail("unsupported extf source element width");
+  return success(succeeded(getCastLayoutFactForLayouts(
+      sourceType, resultType, sourceType.getLayoutAttr(),
+      resultType.getLayoutAttr(), reason)));
 }
 
 template <typename OpT>
-static FailureOr<VMIExtISupport> getExtISupportImpl(OpT op,
-                                                    std::string *reason) {
-  auto fail = [&](const Twine &message) -> FailureOr<VMIExtISupport> {
-    if (reason)
-      *reason = message.str();
-    return failure();
-  };
-
+static LogicalResult getExtISupportImpl(OpT op, std::string *reason) {
   auto sourceType = cast<VMIVRegType>(op.getSource().getType());
   auto resultType = cast<VMIVRegType>(op.getResult().getType());
-  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
-  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
-  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
-  if (!sourceLayout || !resultLayout || failed(sourceArity) ||
-      failed(resultArity))
-    return fail("requires assigned source/result layouts and computable "
-                "physical arity");
 
   FailureOr<VMICastLayoutFact> fact =
-      VMILayoutSupport().getPreferredCastLayoutFact(sourceType, resultType,
-                                                    reason);
+      VMILayoutSupport().getCastLayoutFactForLayouts(
+          sourceType, resultType, sourceType.getLayoutAttr(),
+          resultType.getLayoutAttr(), reason);
+  if (succeeded(fact))
+    return success();
 
-  if (sourceLayout.isGroupSlots() && resultLayout.isGroupSlots()) {
-    if (!isa<IntegerType>(sourceType.getElementType()) ||
-        !isa<IntegerType>(resultType.getElementType()))
-      return fail("requires integer source/result element types");
-    if (sourceLayout.getNumGroups() != resultLayout.getNumGroups() ||
-        sourceLayout.getSlots() != 8 || resultLayout.getSlots() != 8)
-      return fail("requires matching group_slots(num_groups=G, slots=8) "
-                  "source/result layouts");
-    if (*sourceArity != *resultArity)
-      return fail("group_slots integer extension requires matching physical "
-                  "arity");
-
-    unsigned sourceBits = pto::getPTOStorageElemBitWidth(
-        sourceType.getElementType());
-    unsigned resultBits = pto::getPTOStorageElemBitWidth(
-        resultType.getElementType());
-    if (resultBits != 32)
-      return fail("group_slots integer extension requires 32-bit result "
-                  "element type");
-    if (sourceBits == 16)
-      return VMIExtISupport{VMIExtISupportKind::GroupSlotsI16ToI32};
-    if (sourceBits == 8)
-      return VMIExtISupport{VMIExtISupportKind::GroupSlotsI8ToI32};
-    return fail("group_slots integer extension source must be 8-bit or "
-                "16-bit");
-  }
-
-  if (succeeded(fact) &&
-      (fact->kind == VMICastLayoutKind::Widen2x ||
-       fact->kind == VMICastLayoutKind::Widen4x) &&
-      sourceLayout.isContiguous() &&
-      sourceLayout.getLaneStride() == fact->factor &&
-      resultLayout.isContiguous() && resultLayout.getLaneStride() == 1 &&
-      *sourceArity == *resultArity &&
-      isa<IntegerType>(sourceType.getElementType()) &&
-      isa<IntegerType>(resultType.getElementType())) {
-    if (fact->kind == VMICastLayoutKind::Widen2x)
-      return VMIExtISupport{
-          VMIExtISupportKind::ContiguousI16ToDeinterleaved2I32};
-    if (fact->kind == VMICastLayoutKind::Widen4x)
-      return VMIExtISupport{
-          VMIExtISupportKind::ContiguousI8ToDeinterleaved4I32};
-  }
-
-  if (!resultLayout.isDeinterleaved() || resultLayout.getBlockElems() != 1 ||
-      resultLayout.getLaneStride() != 1 ||
-      !(sourceLayout.isContiguous() ||
-        (sourceLayout.isDeinterleaved() &&
-         sourceLayout.getBlockElems() == 1 &&
-         sourceLayout.getLaneStride() == 1)) ||
-      !isa<IntegerType>(sourceType.getElementType()) ||
-      !isa<IntegerType>(resultType.getElementType()))
-    return fail("requires contiguous or deinterleaved integer source layout "
-                "and deinterleaved integer result layout with block_elems=1");
-
-  if (failed(fact) || (fact->kind != VMICastLayoutKind::Widen2x &&
-                       fact->kind != VMICastLayoutKind::Widen4x))
-    return fail("unsupported integer extension source/result element width, "
-                "result factor, or physical arity");
-
-  int64_t sourceFactor =
-      sourceLayout.isDeinterleaved() ? sourceLayout.getFactor() : 1;
-  if (resultLayout.getFactor() != sourceFactor * fact->factor ||
-      *resultArity != fact->factor * *sourceArity)
-    return fail("unsupported integer extension source/result layout factor or "
-                "physical arity");
-
-  if (fact->kind == VMICastLayoutKind::Widen2x)
-    return VMIExtISupport{VMIExtISupportKind::ContiguousI16ToDeinterleaved2I32};
-  if (fact->kind == VMICastLayoutKind::Widen4x)
-    return VMIExtISupport{VMIExtISupportKind::ContiguousI8ToDeinterleaved4I32};
-
-  return fail("unsupported integer extension source/result element width");
+  return matchSupplementalCastLayoutPattern(
+      sourceType, resultType, kSupplementalIntegerExtLayoutPatterns, reason);
 }
 
-FailureOr<VMIExtISupport>
-VMILayoutSupport::getExtSISupport(VMIExtSIOp op, std::string *reason) const {
+LogicalResult VMILayoutSupport::getExtSISupport(VMIExtSIOp op,
+                                                std::string *reason) const {
   return getExtISupportImpl(op, reason);
 }
 
-FailureOr<VMIExtISupport>
-VMILayoutSupport::getExtUISupport(VMIExtUIOp op, std::string *reason) const {
+LogicalResult VMILayoutSupport::getExtUISupport(VMIExtUIOp op,
+                                                std::string *reason) const {
   return getExtISupportImpl(op, reason);
 }
 
-FailureOr<VMITruncISupport>
+LogicalResult
 VMILayoutSupport::getTruncISupport(VMITruncIOp op, std::string *reason) const {
-  auto fail = [&](const Twine &message) -> FailureOr<VMITruncISupport> {
-    if (reason)
-      *reason = message.str();
-    return failure();
-  };
-
-  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
-  auto resultType = cast<VMIVRegType>(op.getResult().getType());
-  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
-  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
-  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
-  if (!sourceLayout || !resultLayout || failed(sourceArity) ||
-      failed(resultArity))
-    return fail("requires assigned source/result layouts and computable "
-                "physical arity");
-  if (!isa<IntegerType>(sourceType.getElementType()) ||
-      !isa<IntegerType>(resultType.getElementType()))
-    return fail("requires integer source and result element types");
-
-  unsigned sourceBits =
-      pto::getPTOStorageElemBitWidth(sourceType.getElementType());
-  unsigned resultBits =
-      pto::getPTOStorageElemBitWidth(resultType.getElementType());
-
-  if (sourceLayout.isGroupSlots() || resultLayout.isGroupSlots()) {
-    if (!sourceLayout.isGroupSlots() || !resultLayout.isGroupSlots() ||
-        sourceLayout.getNumGroups() != resultLayout.getNumGroups() ||
-        sourceLayout.getSlots() != resultLayout.getSlots() ||
-        (sourceLayout.getSlots() != 1 && sourceLayout.getSlots() != 8) ||
-        sourceBits != 32 || (resultBits != 16 && resultBits != 8) ||
-        *sourceArity != *resultArity)
-      return fail("group-slot trunci requires matching "
-                  "group_slots(num_groups=G, slots=1 or 8) source/result layouts, "
-                  "32-bit integer source, 8/16-bit integer result, and "
-                  "matching physical arity");
-    return VMITruncISupport{VMITruncISupportKind::GroupSlots1I32ToNarrow};
-  }
-
-  FailureOr<VMICastLayoutFact> fact =
-      getPreferredCastLayoutFact(sourceType, resultType, reason);
-  if (failed(fact) || (fact->kind != VMICastLayoutKind::Narrow2x &&
-                       fact->kind != VMICastLayoutKind::Narrow4x))
-    return fail("unsupported deinterleaved trunci factor, arity, result "
-                "element width, or result signedness; 8-bit integer narrowing "
-                "requires unsigned i8 result");
-
-  if (!sourceLayout.isDeinterleaved() || sourceLayout.getBlockElems() != 1 ||
-      !((resultLayout.isContiguous() && resultLayout.getLaneStride() == 1) ||
-        (resultLayout.isDeinterleaved() &&
-         resultLayout.getBlockElems() == 1 &&
-         resultLayout.getLaneStride() == 1)))
-    if (!(sourceLayout.isContiguous() && sourceLayout.getLaneStride() == 1 &&
-          resultLayout.isContiguous() &&
-          resultLayout.getLaneStride() == fact->factor))
-      return fail("requires integer deinterleaved source and contiguous or "
-                  "deinterleaved integer result with block_elems=1, or "
-                  "contiguous source and lane_stride narrowing result");
-
-  if (sourceLayout.isContiguous() && sourceLayout.getLaneStride() == 1 &&
-      resultLayout.isContiguous() &&
-      resultLayout.getLaneStride() == fact->factor &&
-      *sourceArity == *resultArity) {
-    if (resultBits == 8 &&
-        !cast<IntegerType>(resultType.getElementType()).isUnsigned())
-      return fail("8-bit integer narrowing requires unsigned i8 result");
-    if (fact->kind == VMICastLayoutKind::Narrow2x)
-      return VMITruncISupport{
-          VMITruncISupportKind::ContiguousI32ToLaneStrideI16};
-    if (fact->kind == VMICastLayoutKind::Narrow4x)
-      return VMITruncISupport{
-          VMITruncISupportKind::ContiguousI32ToLaneStrideI8};
-  }
-
-  int64_t resultFactor =
-      resultLayout.isDeinterleaved() ? resultLayout.getFactor() : 1;
-  if (sourceLayout.getFactor() != resultFactor * fact->factor ||
-      *sourceArity != *resultArity * fact->factor)
-    return fail("unsupported deinterleaved trunci source/result layout factor "
-                "or physical arity");
-
-  if (resultBits == 8 &&
-      !cast<IntegerType>(resultType.getElementType()).isUnsigned())
-    return fail("8-bit integer narrowing requires unsigned i8 result");
-
-  if (fact->kind == VMICastLayoutKind::Narrow2x)
-    return VMITruncISupport{
-        VMITruncISupportKind::Deinterleaved2I32ToContiguousI16};
-  if (fact->kind == VMICastLayoutKind::Narrow4x)
-    return VMITruncISupport{
-        VMITruncISupportKind::Deinterleaved4I32ToContiguousI8};
-
-  return fail("unsupported deinterleaved trunci factor, arity, result element "
-              "width, or result signedness; 8-bit integer narrowing "
-              "requires unsigned i8 result");
+  return getNarrowCastSupport(cast<VMIVRegType>(op.getSource().getType()),
+                              cast<VMIVRegType>(op.getResult().getType()),
+                              reason);
 }
 
-FailureOr<VMIBitcastSupport>
-VMILayoutSupport::getBitcastSupport(VMIBitcastOp op,
-                                    std::string *reason) const {
-  auto fail = [&](const Twine &message) -> FailureOr<VMIBitcastSupport> {
+FailureOr<VMIBitcastLayoutFact>
+VMILayoutSupport::getBitcastLayoutFact(VMIBitcastOp op,
+                                       std::string *reason) const {
+  auto fail = [&](const Twine &message) -> FailureOr<VMIBitcastLayoutFact> {
     if (reason)
       *reason = message.str();
     return failure();
@@ -1966,39 +1735,53 @@ VMILayoutSupport::getBitcastSupport(VMIBitcastOp op,
   if (sourceLayout != resultLayout)
     return fail("requires matching source and result layouts");
 
-  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
-  if (failed(sourceArity) || failed(resultArity))
-    return fail("requires computable source and result physical arity");
-  if (*sourceArity != *resultArity)
-    return fail("requires source and result to have the same physical arity");
-
-  FailureOr<SmallVector<int64_t>> sourceBits =
-      getPhysicalLogicalBitFootprint(sourceType);
-  FailureOr<SmallVector<int64_t>> resultBits =
-      getPhysicalLogicalBitFootprint(resultType);
-  if (failed(sourceBits) || failed(resultBits))
-    return fail("requires computable physical logical bit footprints");
-  if (sourceBits->size() != resultBits->size())
-    return fail("requires source and result physical footprint counts to "
-                "match");
-  for (auto [source, result] : llvm::zip_equal(*sourceBits, *resultBits)) {
-    if (source != result)
-      return fail("requires matching logical bit footprint in every physical "
-                  "chunk");
+  int64_t numGroups =
+      sourceLayout.isGroupSlots() ? sourceLayout.getNumGroups() : 0;
+  unsigned sourceElementBits =
+      pto::getPTOStorageElemBitWidth(sourceType.getElementType());
+  unsigned resultElementBits =
+      pto::getPTOStorageElemBitWidth(resultType.getElementType());
+  if (sourceElementBits == 0 || resultElementBits == 0)
+    return fail("requires source and result with known storage element width");
+  // Equal-width bitcast is layout-transparent for any identical layout.  Only
+  // width-changing bitcast needs a table row because not every layout has a
+  // representation-preserving carrier reinterpretation across element widths.
+  if (sourceElementBits != resultElementBits) {
+    bool matchedLayout = false;
+    MLIRContext *ctx = op.getContext();
+    for (const WidthChangingBitcastLayoutPattern &pattern :
+         kWidthChangingBitcastLayoutPatterns) {
+      if (matchesLayoutPattern(ctx, pattern.layout, sourceLayout, numGroups) &&
+          matchesLayoutPattern(ctx, pattern.layout, resultLayout, numGroups)) {
+        matchedLayout = true;
+        break;
+      }
+    }
+    if (!matchedLayout)
+      return fail("width-changing bitcast layout does not match a bitcast "
+                  "layout table row");
   }
 
-  return VMIBitcastSupport{VMIBitcastSupportKind::PerPartVbitcast};
+  return VMIBitcastLayoutFact{sourceLayout, resultLayout};
+}
+
+LogicalResult VMILayoutSupport::getBitcastSupport(VMIBitcastOp op,
+                                                  std::string *reason) const {
+  return getBitcastLayoutFact(op, reason);
 }
 
 template <typename OpTy>
-static FailureOr<VMIHistogramSupport>
-getHistogramSupportImpl(OpTy op, std::string *reason) {
-  auto fail = [&](const Twine &message) -> FailureOr<VMIHistogramSupport> {
+static FailureOr<VMIHistogramLayoutFact>
+getHistogramLayoutFactImpl(OpTy op, ArrayRef<HistogramLayoutPattern> patterns,
+                           StringRef opName, std::string *reason) {
+  auto fail = [&](const Twine &message) -> FailureOr<VMIHistogramLayoutFact> {
     if (reason)
       *reason = message.str();
     return failure();
   };
+
+  if (patterns.empty())
+    return fail(opName + " histogram layout table has no row");
 
   auto accType = cast<VMIVRegType>(op.getAcc().getType());
   auto sourceType = cast<VMIVRegType>(op.getSource().getType());
@@ -2011,47 +1794,48 @@ getHistogramSupportImpl(OpTy op, std::string *reason) {
   VMILayoutAttr resultLayout = resultType.getLayoutAttr();
   if (!accLayout || !sourceLayout || !maskLayout || !resultLayout)
     return fail("requires assigned acc/source/mask/result layouts");
-  if (!accLayout.isContiguous() || !sourceLayout.isContiguous() ||
-      !maskLayout.isContiguous() || !resultLayout.isContiguous())
-    return fail("requires contiguous acc, source, mask, and result layouts");
-  if (maskType.getGranularity() != "b8")
-    return fail("requires b8 mask granularity");
-  if (maskType.getElementCount() != sourceType.getElementCount())
-    return fail("requires mask lane count to match source lane count");
 
-  auto accElem = dyn_cast<IntegerType>(accType.getElementType());
-  auto sourceElem = dyn_cast<IntegerType>(sourceType.getElementType());
-  if (!accElem || !accElem.isUnsigned() || accElem.getWidth() != 16 ||
-      accType.getElementCount() != 256 || resultType != accType)
-    return fail("requires contiguous 256xui16 acc/result");
-  if (!sourceElem || !sourceElem.isUnsigned() || sourceElem.getWidth() != 8)
-    return fail("requires unsigned 8-bit source elements");
+  MLIRContext *ctx = op.getContext();
+  for (const HistogramLayoutPattern &pattern : patterns) {
+    if (!matchesLayoutPattern(ctx, pattern.accLayout, accLayout) ||
+        !matchesLayoutPattern(ctx, pattern.sourceLayout, sourceLayout) ||
+        !matchesLayoutPattern(ctx, pattern.maskLayout, maskLayout) ||
+        !matchesLayoutPattern(ctx, pattern.resultLayout, resultLayout))
+      continue;
 
-  FailureOr<int64_t> accArity = getVMIPhysicalArity(accType);
-  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
-  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-  FailureOr<int64_t> maskArity = getVMIPhysicalArity(maskType);
-  if (failed(accArity) || failed(resultArity) || failed(sourceArity) ||
-      failed(maskArity))
-    return fail("requires computable physical arity");
-  if (*accArity != 2 || *resultArity != 2)
-    return fail("requires acc/result to physicalize to two 128xui16 parts");
-  if (*sourceArity != *maskArity)
-    return fail("requires source and mask physical arity to match");
-  if (*sourceArity < 1)
-    return fail("requires at least one source physical chunk");
+    VMIHistogramLayoutFact fact;
+    fact.accLayout = accLayout;
+    fact.sourceLayout = sourceLayout;
+    fact.maskLayout = maskLayout;
+    fact.resultLayout = resultLayout;
+    return fact;
+  }
 
-  return VMIHistogramSupport{VMIHistogramSupportKind::Full256BinDhist};
+  return fail(opName + " acc/source/mask/result layouts do not match a "
+                       "histogram layout table row");
 }
 
-FailureOr<VMIHistogramSupport>
+FailureOr<VMIHistogramLayoutFact>
+VMILayoutSupport::getDhistLayoutFact(VMIDhistOp op,
+                                     std::string *reason) const {
+  return getHistogramLayoutFactImpl(op, kDhistLayoutPatterns, "dhist", reason);
+}
+
+FailureOr<VMIHistogramLayoutFact>
+VMILayoutSupport::getChistLayoutFact(VMIChistOp op,
+                                     std::string *reason) const {
+  // chist currently has no VPTO lowering support.  Keep it wired through the
+  // same histogram query path with an intentionally empty table so diagnostics
+  // stay aligned with dhist.
+  return getHistogramLayoutFactImpl(op, {}, "chist", reason);
+}
+
+LogicalResult
 VMILayoutSupport::getDhistSupport(VMIDhistOp op, std::string *reason) const {
-  return getHistogramSupportImpl(op, reason);
+  return getDhistLayoutFact(op, reason);
 }
 
-FailureOr<VMIHistogramSupport>
+LogicalResult
 VMILayoutSupport::getChistSupport(VMIChistOp op, std::string *reason) const {
-  if (reason)
-    *reason = "CHISTv2 cumulative high-range semantics are not classified";
-  return failure();
+  return getChistLayoutFact(op, reason);
 }

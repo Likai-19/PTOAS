@@ -10,12 +10,12 @@
 
 module {
   func.func @vmi_layout_gate_store_deint_tail_invalid(
-      %value: !pto.vmi.vreg<129xf32, #pto.vmi.layout<deinterleaved = 2>>,
+      %value: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2, block_elems = 2>>,
       %dst: !pto.ptr<f32, ub>, %offset: index) {
     // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.store has no registered contiguous-memory layout support
-    // CHECK-SAME: requires arity divisible by layout factor
+    // CHECK-SAME: value layout does not match a supported dense store table row
     pto.vmi.store %value, %dst[%offset]
-        : !pto.vmi.vreg<129xf32, #pto.vmi.layout<deinterleaved = 2>>,
+        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2, block_elems = 2>>,
           !pto.ptr<f32, ub>
     return
   }

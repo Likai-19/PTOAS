@@ -134,8 +134,12 @@ public:
   VMICapabilityResult supportsDirectMemory(Type type, StringRef role) const {
     switch (classifyDirectMemoryRole(type)) {
     case DirectMemoryRole::UB:
-    case DirectMemoryRole::Unknown:
       return VMICapabilityResult::supported();
+    case DirectMemoryRole::Unknown:
+      return VMICapabilityResult::missingCapability(
+          Twine(role) +
+          " has unknown memory space, but VMI memory operations require "
+          "UB-backed memory");
     case DirectMemoryRole::GM:
       return VMICapabilityResult::missingCapability(
           Twine(role) +

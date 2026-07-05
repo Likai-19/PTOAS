@@ -498,7 +498,7 @@ lib/PTO/Transforms/VMIToVPTO.cpp
 
 include/PTO/Transforms/VMILayoutSupport.h
 lib/PTO/Transforms/VMILayoutSupport.cpp
-  extend VMIContiguousStoreSupportKind with dense lane-stride PK/PK4 cases
+  extend dense store layout facts with lane_stride=2/4 cases
   extend VMILayoutMaterializationSupportKind with:
     ContiguousToLaneStrideViaUnpack
     LaneStrideToContiguousViaPack
@@ -510,7 +510,7 @@ lib/PTO/Transforms/VMILayoutSupport.cpp
     relevant arity is strictly smaller than the baseline relation
     use the returned source/result layouts for both ext and trunc assignment
   update getWidenSourceLayoutForResultLayout for dense lane_stride result/source
-  update getContiguousStoreSupport and canFoldContiguousStoreMaterialization for
+  update getStoreLayoutFact and canFoldContiguousStoreMaterialization for
     LS=2 b8/b16/b32 -> PK_B16/B32/B64
     LS=4 b8 -> PK4_B32
   update canMaterializeDataLayout for contiguous <-> dense lane_stride through

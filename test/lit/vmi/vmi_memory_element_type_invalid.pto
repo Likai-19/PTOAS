@@ -6,12 +6,12 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: not pto-test-opt %s -split-input-file -vmi-layout-assignment 2>&1 | FileCheck %s
+// RUN: not pto-test-opt %s -split-input-file -vmi-mask-granularity-assignment -vmi-layout-assignment 2>&1 | FileCheck %s
 
 module {
-  func.func @vmi_load_element_type_invalid(%src: !pto.ptr<f32>, %offset: index) {
+  func.func @vmi_load_element_type_invalid(%src: !pto.ptr<f32, ub>, %offset: index) {
     %value = pto.vmi.load %src[%offset]
-        : !pto.ptr<f32> -> !pto.vmi.vreg<128xf16>
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf16>
     return
   }
 }
@@ -22,9 +22,9 @@ module {
 
 module {
   func.func @vmi_store_element_type_invalid(
-      %value: !pto.vmi.vreg<128xf16>, %dst: !pto.ptr<f32>, %offset: index) {
+      %value: !pto.vmi.vreg<128xf16>, %dst: !pto.ptr<f32, ub>, %offset: index) {
     pto.vmi.store %value, %dst[%offset]
-        : !pto.vmi.vreg<128xf16>, !pto.ptr<f32>
+        : !pto.vmi.vreg<128xf16>, !pto.ptr<f32, ub>
     return
   }
 }

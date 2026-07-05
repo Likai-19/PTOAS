@@ -16,9 +16,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.load direct lowering requires a supported memory source
-// CHECK-SAME: source is GM-backed
-// CHECK-SAME: requires UB-backed memory
+// CHECK: 'pto.vmi.load' op requires memory source to be UB-backed
 
 // -----
 
@@ -36,9 +34,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.masked_load direct lowering requires a supported memory source, contiguous result/passthru/mask layouts
-// CHECK-SAME: source is GM-backed
-// CHECK-SAME: requires UB-backed memory
+// CHECK: 'pto.vmi.masked_load' op requires memory source to be UB-backed
 
 // -----
 
@@ -56,9 +52,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.expand_load direct lowering is currently supported
-// CHECK-SAME: source is GM-backed
-// CHECK-SAME: requires UB-backed memory
+// CHECK: 'pto.vmi.expand_load' op requires memory source to be UB-backed
 
 // -----
 
@@ -73,9 +67,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.store requires an 8/16/32-bit predicate-maskable element type
-// CHECK-SAME: with UB-backed destination
-// CHECK-SAME: destination is GM-backed
+// CHECK: 'pto.vmi.store' op requires memory destination to be UB-backed
 
 // -----
 
@@ -92,6 +84,4 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.masked_store requires either full physical chunks or contiguous tail-store value/mask layout
-// CHECK-SAME: with UB-backed destination
-// CHECK-SAME: destination is GM-backed
+// CHECK: 'pto.vmi.masked_store' op requires memory destination to be UB-backed

@@ -13,7 +13,7 @@ module {
       %source: !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>,
       %mask: !pto.vmi.mask<256xb32, #pto.vmi.layout<contiguous>>) {
     // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.group_reduce_addf has no registered group_slots layout support
-    // CHECK-SAME: stable group_reduce_add slots=1 support group sizes that are multiples of one physical chunk
+    // CHECK-SAME: group_reduce source/mask/result layouts do not match a legal layout table row for the group size
     // CHECK: note: see current operation: %{{.*}} = "pto.vmi.group_reduce_addf"
     %out = pto.vmi.group_reduce_addf %source, %mask
         {num_groups = 8, reassoc}

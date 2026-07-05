@@ -6,8 +6,8 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
-// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-layout-rematerialize -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+// RUN: pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-layout-rematerialize -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
 
 module {
   func.func @vmi_layout_assignment_broadcast_remat(
@@ -37,15 +37,13 @@ module {
 // ASSIGN-SAME: !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
 // ASSIGN: %[[SUM:.*]] = pto.vmi.addf %[[BCAST_DEINT]], %[[WIDE]]
 // ASSIGN-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>, !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>> -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
-// ASSIGN: %[[BCAST_CONTIG:.*]] = pto.vmi.ensure_layout %[[BCAST_DEINT]]
-// ASSIGN-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>> -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
-// ASSIGN: pto.vmi.store %[[BCAST_CONTIG]]
-// ASSIGN-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+// ASSIGN-NOT: pto.vmi.ensure_layout %[[BCAST_DEINT]]
+// ASSIGN: pto.vmi.store %[[BCAST_DEINT]]
+// ASSIGN-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>, !pto.ptr<f32, ub>
 
 // LOWER-LABEL: func.func @vmi_layout_assignment_broadcast_remat(
-// LOWER-COUNT-4: pto.vdup %arg0
+// LOWER-COUNT-2: pto.vdup %arg0
 // LOWER-NOT: pto.vintlv
-// LOWER: pto.vsts
-// LOWER: pto.vsts
+// LOWER: pto.vstsx2
 // LOWER-NOT: pto.vmi.
 // LOWER-NOT: !pto.vmi.

@@ -19,4 +19,4 @@ module {
 }
 
 // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.ensure_layout has no registered materialization support
-// CHECK-SAME: unsupported source/result layout pair
+// CHECK-SAME: source/result layouts do not match a supported ensure_layout table row

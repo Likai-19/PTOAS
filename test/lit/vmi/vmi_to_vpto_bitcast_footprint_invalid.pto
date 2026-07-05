@@ -19,5 +19,4 @@ module {
 }
 
 // CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.bitcast requires matching source/result layouts
-// CHECK-SAME: identical physical arity and matching per-chunk logical bit footprints
-// CHECK-SAME: requires matching logical bit footprint in every physical chunk
+// CHECK-SAME: width-changing bitcast layout does not match a bitcast layout table row

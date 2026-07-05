@@ -39,8 +39,10 @@ add_mlir_dialect_library(PTOTransforms
   PTOValidateVMIIR.cpp
   VMIPreAssignmentCombine.cpp
   VMILegalizeArithSelect.cpp
+  VMIMaskGranularityAssignment.cpp
   VMILayoutAssignment.cpp
   VMILayoutFold.cpp
+  VMILayoutPropagation.cpp
   VMILayoutSupport.cpp
   VMILayoutRematerialize.cpp
   VMILayoutSinkMaterialization.cpp

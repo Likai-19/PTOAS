@@ -17,351 +17,288 @@
 #include "PTO/IR/PTO.h"
 #include "mlir/Support/LLVM.h"
 
+#include "llvm/ADT/SmallVector.h"
+
 #include <string>
 
 namespace mlir::pto {
 
 class VMITargetCapabilityRegistry;
 
-enum class VMIContiguousStoreSupportKind {
-  ContiguousVsts,
-  LaneStride2PackedVsts,
-  LaneStride4PackedVsts,
-  Deinterleaved2Vstsx2,
-  DeinterleavedMaterializeThenVsts,
+struct VMILoadLayoutFact {
+  VMILayoutAttr resultLayout;
 };
 
-struct VMIContiguousStoreSupport {
-  VMIContiguousStoreSupportKind kind =
-      VMIContiguousStoreSupportKind::ContiguousVsts;
+struct VMIStoreLayoutFact {
+  VMILayoutAttr valueLayout;
 };
 
-enum class VMIContiguousLoadSupportKind {
-  ContiguousVlds,
-  LaneStride2UnpackedVlds,
-  LaneStride4UnpackedVlds,
+struct VMIMaskedStoreLayoutFact {
+  VMILayoutAttr valueLayout;
+  VMILayoutAttr maskLayout;
 };
 
-struct VMIContiguousLoadSupport {
-  VMIContiguousLoadSupportKind kind =
-      VMIContiguousLoadSupportKind::ContiguousVlds;
+struct VMIMaskedLoadLayoutFact {
+  VMILayoutAttr resultLayout;
+  VMILayoutAttr maskLayout;
+  VMILayoutAttr passthruLayout;
 };
 
-enum class VMILayoutMaterializationSupportKind {
-  Identity,
-  ContiguousToDeinterleaved,
-  DeinterleavedToContiguous,
-  DeinterleavedToDeinterleavedViaContiguous,
-  ContiguousToLaneStrideViaUnpack,
-  LaneStrideToContiguousViaPack,
+struct VMIEnsureLayoutFact {
+  VMILayoutAttr sourceLayout;
+  VMILayoutAttr resultLayout;
 };
 
-struct VMILayoutMaterializationSupport {
-  VMILayoutMaterializationSupportKind kind =
-      VMILayoutMaterializationSupportKind::Identity;
+struct VMIEnsureMaskLayoutFact {
+  VMILayoutAttr sourceLayout;
+  VMILayoutAttr resultLayout;
 };
 
-enum class VMIMaskGranularityMaterializationSupportKind {
-  Identity,
-  PredicateCast,
-};
-
-struct VMIMaskGranularityMaterializationSupport {
-  VMIMaskGranularityMaterializationSupportKind kind =
-      VMIMaskGranularityMaterializationSupportKind::Identity;
-};
-
-enum class VMICastLayoutKind {
-  Widen2x,
-  Widen4x,
-  Narrow2x,
-  Narrow4x,
+enum class VMICastLayoutPort {
+  Source,
+  Result,
 };
 
 struct VMICastLayoutFact {
-  VMICastLayoutKind kind = VMICastLayoutKind::Widen2x;
   VMILayoutAttr sourceLayout;
   VMILayoutAttr resultLayout;
   int64_t sourceBits = 0;
   int64_t resultBits = 0;
-  int64_t factor = 1;
 };
 
-enum class VMIGroupSlotLoadSupportKind {
-  Slots8UnitStrideVsldb,
-  Slots1AlignedLane0Vsldb,
+struct VMIBitcastLayoutFact {
+  VMILayoutAttr sourceLayout;
+  VMILayoutAttr resultLayout;
 };
 
-struct VMIGroupSlotLoadSupport {
-  VMIGroupSlotLoadSupportKind kind =
-      VMIGroupSlotLoadSupportKind::Slots8UnitStrideVsldb;
-};
-
-enum class VMIGroupLoadSupportKind {
-  S16Block8Vsldb,
-  S32Block8Vsldb,
-};
-
-struct VMIGroupLoadSupport {
-  VMIGroupLoadSupportKind kind = VMIGroupLoadSupportKind::S16Block8Vsldb;
-};
-
-enum class VMIGroupSlotsStoreSupportKind {
-  Slots8UnitStrideVsts,
-  Slots1PointVsts,
-  Slots1PackedUnitStrideVsts,
-};
-
-struct VMIGroupSlotsStoreSupport {
-  VMIGroupSlotsStoreSupportKind kind =
-      VMIGroupSlotsStoreSupportKind::Slots8UnitStrideVsts;
-};
-
-enum class VMIGroupReduceLayoutKind {
-  OneVLane,
-  TwoVLane,
-  FourVLane,
-  RowLocal,
+enum class VMIGroupBlockClass {
+  QuarterBlock,
+  HalfBlock,
+  OneBlock,
+  TwoBlock,
+  FourBlock,
+  FullPartMultiple,
 };
 
 struct VMIGroupReduceLayoutFact {
-  VMIGroupReduceLayoutKind kind = VMIGroupReduceLayoutKind::OneVLane;
+  VMIGroupBlockClass blockClass = VMIGroupBlockClass::OneBlock;
   VMILayoutAttr sourceLayout;
   VMILayoutAttr maskLayout;
   VMILayoutAttr resultLayout;
   int64_t groupSize = 0;
   int64_t lanesPerPart = 0;
-  int64_t vlaneElems = 0;
+  int64_t vcgBlockElems = 0;
 };
 
-enum class VMIGroupReduceAddFSupportKind {
-  OneVLaneVcgadd,
-  TwoVLaneDeinterleaved2VcgaddVadd,
-  FourVLaneDeinterleaved4VcgaddTree,
-  ContiguousVcaddRows,
+struct VMIGroupBroadcastLayoutFact {
+  VMIGroupBlockClass blockClass = VMIGroupBlockClass::OneBlock;
+  VMILayoutAttr sourceLayout;
+  VMILayoutAttr resultLayout;
+  int64_t groupSize = 0;
+  int64_t lanesPerPart = 0;
+  int64_t vcgBlockElems = 0;
 };
 
-struct VMIGroupReduceAddFSupport {
-  VMIGroupReduceAddFSupportKind kind =
-      VMIGroupReduceAddFSupportKind::OneVLaneVcgadd;
+struct VMIGroupBroadcastLoadLayoutFact {
+  VMIGroupBlockClass blockClass = VMIGroupBlockClass::OneBlock;
+  VMILayoutAttr resultLayout;
+  int64_t groupSize = 0;
+  int64_t lanesPerPart = 0;
+  int64_t vcgBlockElems = 0;
+  int64_t elementBits = 0;
 };
 
-enum class VMIGroupBroadcastSupportKind {
-  GroupSlotsVselr,
+struct VMIGroupLoadLayoutFact {
+  VMIGroupBlockClass blockClass = VMIGroupBlockClass::TwoBlock;
+  VMILayoutAttr resultLayout;
+  int64_t groupSize = 0;
 };
 
-struct VMIGroupBroadcastSupport {
-  VMIGroupBroadcastSupportKind kind =
-      VMIGroupBroadcastSupportKind::GroupSlotsVselr;
+struct VMIGroupSlotLayoutFact {
+  VMILayoutAttr layout;
+  int64_t numGroups = 0;
+  int64_t slots = 0;
 };
 
-enum class VMIGroupBroadcastLoadSupportKind {
-  E2BVlds,
-  SlotLoadThenBroadcast,
+enum class VMIGroupReduceLayoutPort {
+  Source,
+  Mask,
+  Result,
 };
 
-struct VMIGroupBroadcastLoadSupport {
-  VMIGroupBroadcastLoadSupportKind kind =
-      VMIGroupBroadcastLoadSupportKind::E2BVlds;
+enum class VMIGroupBroadcastLayoutPort {
+  Source,
+  Result,
 };
 
-enum class VMITruncFSupportKind {
-  Deinterleaved2F32ToContiguousF16,
-  Deinterleaved4F32ToContiguousF8,
-  ContiguousF32ToLaneStrideF16,
-  ContiguousF32ToLaneStrideF8,
-  GroupSlots1F32ToF16,
-};
-
-struct VMITruncFSupport {
-  VMITruncFSupportKind kind =
-      VMITruncFSupportKind::Deinterleaved2F32ToContiguousF16;
-};
-
-enum class VMIExtFSupportKind {
-  ContiguousF16ToDeinterleaved2F32,
-  ContiguousF8ToDeinterleaved4F32,
-};
-
-struct VMIExtFSupport {
-  VMIExtFSupportKind kind =
-      VMIExtFSupportKind::ContiguousF16ToDeinterleaved2F32;
-};
-
-enum class VMITruncISupportKind {
-  Deinterleaved2I32ToContiguousI16,
-  Deinterleaved4I32ToContiguousI8,
-  ContiguousI32ToLaneStrideI16,
-  ContiguousI32ToLaneStrideI8,
-  GroupSlots1I32ToNarrow,
-};
-
-struct VMITruncISupport {
-  VMITruncISupportKind kind =
-      VMITruncISupportKind::Deinterleaved2I32ToContiguousI16;
-};
-
-enum class VMIExtISupportKind {
-  ContiguousI16ToDeinterleaved2I32,
-  ContiguousI8ToDeinterleaved4I32,
-  GroupSlotsI16ToI32,
-  GroupSlotsI8ToI32,
-};
-
-struct VMIExtISupport {
-  VMIExtISupportKind kind =
-      VMIExtISupportKind::ContiguousI16ToDeinterleaved2I32;
-};
-
-enum class VMIBitcastSupportKind {
-  PerPartVbitcast,
-};
-
-struct VMIBitcastSupport {
-  VMIBitcastSupportKind kind = VMIBitcastSupportKind::PerPartVbitcast;
-};
-
-enum class VMIHistogramSupportKind {
-  Full256BinDhist,
-};
-
-struct VMIHistogramSupport {
-  VMIHistogramSupportKind kind = VMIHistogramSupportKind::Full256BinDhist;
+struct VMIHistogramLayoutFact {
+  VMILayoutAttr accLayout;
+  VMILayoutAttr sourceLayout;
+  VMILayoutAttr maskLayout;
+  VMILayoutAttr resultLayout;
 };
 
 class VMILayoutSupport {
 public:
-  FailureOr<VMIContiguousStoreSupport>
-  getContiguousStoreSupport(VMIVRegType valueType,
-                            std::string *reason = nullptr) const;
+  FailureOr<VMILoadLayoutFact>
+  getLoadLayoutFact(VMIVRegType resultType,
+                    std::string *reason = nullptr) const;
 
-  FailureOr<VMIContiguousLoadSupport>
-  getContiguousLoadSupport(VMIVRegType resultType,
+  FailureOr<VMIStoreLayoutFact>
+  getStoreLayoutFact(VMIVRegType valueType,
+                     std::string *reason = nullptr) const;
+
+  FailureOr<VMIMaskedStoreLayoutFact>
+  getMaskedStoreLayoutFact(VMIVRegType valueType, VMIMaskType maskType,
                            std::string *reason = nullptr) const;
 
-  LogicalResult
-  canFoldContiguousStoreMaterialization(VMIVRegType sourceType,
-                                        VMIVRegType resultType,
-                                        std::string *reason = nullptr) const;
-  LogicalResult canFoldContiguousMaskedStoreMaterialization(
-      VMIVRegType sourceType, VMIMaskType maskSourceType,
-      VMIVRegType resultType, VMIMaskType maskResultType,
-      std::string *reason = nullptr) const;
+  FailureOr<VMIMaskedLoadLayoutFact>
+  getMaskedLoadLayoutFact(VMIVRegType resultType, VMIMaskType maskType,
+                          VMIVRegType passthruType,
+                          std::string *reason = nullptr) const;
 
-  FailureOr<VMILayoutMaterializationSupport>
-  getDataLayoutMaterializationSupport(VMIVRegType sourceType,
-                                      VMIVRegType resultType,
-                                      std::string *reason = nullptr) const;
+  FailureOr<VMIEnsureLayoutFact>
+  getEnsureLayoutFact(VMIVRegType sourceType, VMIVRegType resultType,
+                      std::string *reason = nullptr) const;
 
-  LogicalResult canMaterializeDataLayout(VMIVRegType sourceType,
-                                         VMIVRegType resultType,
-                                         std::string *reason = nullptr) const;
-
-  FailureOr<VMILayoutMaterializationSupport>
-  getMaskLayoutMaterializationSupport(VMIMaskType sourceType,
-                                      VMIMaskType resultType,
-                                      std::string *reason = nullptr) const;
-
-  LogicalResult canMaterializeMaskLayout(VMIMaskType sourceType,
-                                         VMIMaskType resultType,
-                                         std::string *reason = nullptr) const;
-
-  FailureOr<VMIMaskGranularityMaterializationSupport>
-  getMaskGranularityMaterializationSupport(VMIMaskType sourceType,
-                                           VMIMaskType resultType,
-                                           std::string *reason = nullptr) const;
-
-  LogicalResult
-  canMaterializeMaskGranularity(VMIMaskType sourceType, VMIMaskType resultType,
-                                std::string *reason = nullptr) const;
+  FailureOr<VMIEnsureMaskLayoutFact>
+  getEnsureMaskLayoutFact(VMIMaskType sourceType, VMIMaskType resultType,
+                          std::string *reason = nullptr) const;
 
   FailureOr<VMICastLayoutFact>
   getPreferredCastLayoutFact(VMIVRegType sourceType, VMIVRegType resultType,
                              std::string *reason = nullptr) const;
 
-  FailureOr<VMILayoutAttr>
-  getWidenSourceLayoutForResultLayout(VMIVRegType sourceType,
-                                      VMIVRegType resultType,
-                                      VMILayoutAttr requestedResultLayout,
-                                      std::string *reason = nullptr) const;
+  FailureOr<SmallVector<VMICastLayoutFact, 4>>
+  getCastLayoutFactsForLayout(VMIVRegType sourceType, VMIVRegType resultType,
+                              VMICastLayoutPort port, VMILayoutAttr layout,
+                              std::string *reason = nullptr) const;
 
-  FailureOr<VMIGroupSlotLoadSupport>
-  getGroupSlotLoadSupport(const VMITargetCapabilityRegistry &capabilities,
-                          VMIGroupSlotLoadOp op,
+  FailureOr<VMICastLayoutFact> getCastLayoutFactForSourceLayout(
+      VMIVRegType sourceType, VMIVRegType resultType,
+      VMILayoutAttr sourceLayout, std::string *reason = nullptr) const;
+
+  FailureOr<VMICastLayoutFact> getCastLayoutFactForResultLayout(
+      VMIVRegType sourceType, VMIVRegType resultType,
+      VMILayoutAttr resultLayout, std::string *reason = nullptr) const;
+
+  FailureOr<VMICastLayoutFact> getCastLayoutFactForLayouts(
+      VMIVRegType sourceType, VMIVRegType resultType, VMILayoutAttr sourceLayout,
+      VMILayoutAttr resultLayout, std::string *reason = nullptr) const;
+
+  FailureOr<VMILayoutAttr> getWidenSourceLayoutForResultLayout(
+      VMIVRegType sourceType, VMIVRegType resultType,
+      VMILayoutAttr requestedResultLayout, std::string *reason = nullptr) const;
+
+  FailureOr<VMIGroupSlotLayoutFact>
+  getGroupSlotLoadLayoutFact(VMIVRegType resultType, int64_t numGroups,
+                             std::string *reason = nullptr) const;
+
+  FailureOr<VMIGroupLoadLayoutFact>
+  getGroupLoadLayoutFact(VMIGroupLoadOp op,
+                         std::string *reason = nullptr) const;
+  FailureOr<VMIGroupLoadLayoutFact>
+  getGroupLoadLayoutFact(VMIVRegType resultType, Value rowStride,
+                         int64_t numGroups,
+                         std::string *reason = nullptr) const;
+
+  FailureOr<VMIGroupSlotLayoutFact>
+  getGroupStoreLayoutFact(VMIVRegType valueType, int64_t numGroups,
                           std::string *reason = nullptr) const;
-
-  FailureOr<VMIGroupLoadSupport>
-  getGroupLoadSupport(const VMITargetCapabilityRegistry &capabilities,
-                      VMIGroupLoadOp op, std::string *reason = nullptr) const;
-
-  FailureOr<VMIGroupSlotsStoreSupport>
-  getGroupSlotsStoreSupport(const VMITargetCapabilityRegistry &capabilities,
-                            VMIGroupStoreOp op,
-                            std::string *reason = nullptr) const;
 
   FailureOr<VMIGroupReduceLayoutFact>
   getPreferredGroupReduceLayoutFact(VMIVRegType sourceType, int64_t numGroups,
                                     std::string *reason = nullptr) const;
 
-  FailureOr<VMIGroupReduceAddFSupport>
-  getGroupReduceAddFSupport(const VMITargetCapabilityRegistry &capabilities,
-                            VMIGroupReduceAddFOp op,
-                            std::string *reason = nullptr) const;
+  FailureOr<VMIGroupReduceLayoutFact> getGroupReduceLayoutFactForLayouts(
+      VMIVRegType sourceType, VMIMaskType maskType, VMIVRegType resultType,
+      int64_t numGroups, std::string *reason = nullptr) const;
 
-  FailureOr<VMIGroupReduceAddFSupport>
-  getGroupReduceMaxFSupport(const VMITargetCapabilityRegistry &capabilities,
-                            VMIGroupReduceMaxFOp op,
-                            std::string *reason = nullptr) const;
+  FailureOr<SmallVector<VMIGroupReduceLayoutFact, 4>>
+  getGroupReduceLayoutFactsForLayout(VMIVRegType sourceType,
+                                     int64_t numGroups,
+                                     VMIGroupReduceLayoutPort port,
+                                     VMILayoutAttr layout,
+                                     std::string *reason = nullptr) const;
 
-  FailureOr<VMIGroupReduceAddFSupport>
-  getGroupReduceAddISupport(const VMITargetCapabilityRegistry &capabilities,
-                            VMIGroupReduceAddIOp op,
-                            std::string *reason = nullptr) const;
+  FailureOr<VMIGroupBroadcastLayoutFact>
+  getGroupBroadcastLayoutFactForLayouts(VMIVRegType sourceType,
+                                        VMIVRegType resultType,
+                                        int64_t numGroups,
+                                        std::string *reason = nullptr) const;
 
-  FailureOr<VMIGroupReduceAddFSupport>
-  getGroupReduceMaxISupport(const VMITargetCapabilityRegistry &capabilities,
-                            VMIGroupReduceMaxIOp op,
-                            std::string *reason = nullptr) const;
+  FailureOr<SmallVector<VMIGroupBroadcastLayoutFact, 4>>
+  getGroupBroadcastLayoutFactsForLayout(VMIVRegType sourceType,
+                                        VMIVRegType resultType,
+                                        int64_t numGroups,
+                                        VMIGroupBroadcastLayoutPort port,
+                                        VMILayoutAttr layout,
+                                        std::string *reason = nullptr) const;
 
-  FailureOr<VMIGroupBroadcastSupport>
-  getGroupBroadcastSupport(const VMITargetCapabilityRegistry &capabilities,
-                           VMIGroupBroadcastOp op,
-                           std::string *reason = nullptr) const;
+  FailureOr<VMIGroupBroadcastLoadLayoutFact>
+  getGroupBroadcastLoadLayoutFact(VMIGroupBroadcastLoadOp op,
+                                  std::string *reason = nullptr) const;
+  FailureOr<VMIGroupBroadcastLoadLayoutFact>
+  getGroupBroadcastLoadLayoutFact(VMIVRegType resultType,
+                                  Value sourceGroupStride, int64_t numGroups,
+                                  std::string *reason = nullptr) const;
 
-  FailureOr<VMIGroupBroadcastSupport>
-  getGroupBroadcastSupport(const VMITargetCapabilityRegistry &capabilities,
-                           VMIVRegType sourceType, VMIVRegType resultType,
-                           int64_t numGroups,
-                           std::string *reason = nullptr) const;
+  FailureOr<VMIHistogramLayoutFact>
+  getDhistLayoutFact(VMIDhistOp op, std::string *reason = nullptr) const;
 
-  FailureOr<VMIGroupBroadcastLoadSupport>
-  getGroupBroadcastLoadSupport(const VMITargetCapabilityRegistry &capabilities,
-                               VMIGroupBroadcastLoadOp op,
+  FailureOr<VMIHistogramLayoutFact>
+  getChistLayoutFact(VMIChistOp op, std::string *reason = nullptr) const;
+
+  LogicalResult getGroupReduceAddFSupport(VMIGroupReduceAddFOp op,
+                                          std::string *reason = nullptr) const;
+
+  LogicalResult getGroupReduceMaxFSupport(VMIGroupReduceMaxFOp op,
+                                          std::string *reason = nullptr) const;
+
+  LogicalResult getGroupReduceAddISupport(VMIGroupReduceAddIOp op,
+                                          std::string *reason = nullptr) const;
+
+  LogicalResult getGroupReduceMaxISupport(VMIGroupReduceMaxIOp op,
+                                          std::string *reason = nullptr) const;
+
+  LogicalResult getGroupBroadcastSupport(VMIGroupBroadcastOp op,
+                                         std::string *reason = nullptr) const;
+
+  LogicalResult getGroupBroadcastSupport(VMIVRegType sourceType,
+                                         VMIVRegType resultType,
+                                         int64_t numGroups,
+                                         std::string *reason = nullptr) const;
+
+  LogicalResult getGroupBroadcastLoadSupport(
+      VMIGroupBroadcastLoadOp op, std::string *reason = nullptr) const;
+
+  LogicalResult getTruncFSupport(VMITruncFOp op,
+                                 std::string *reason = nullptr) const;
+
+  LogicalResult getExtFSupport(VMIExtFOp op,
                                std::string *reason = nullptr) const;
 
-  FailureOr<VMITruncFSupport>
-  getTruncFSupport(VMITruncFOp op, std::string *reason = nullptr) const;
+  LogicalResult getExtSISupport(VMIExtSIOp op,
+                                std::string *reason = nullptr) const;
 
-  FailureOr<VMIExtFSupport> getExtFSupport(VMIExtFOp op,
-                                           std::string *reason = nullptr) const;
+  LogicalResult getExtUISupport(VMIExtUIOp op,
+                                std::string *reason = nullptr) const;
 
-  FailureOr<VMIExtISupport>
-  getExtSISupport(VMIExtSIOp op, std::string *reason = nullptr) const;
+  LogicalResult getTruncISupport(VMITruncIOp op,
+                                 std::string *reason = nullptr) const;
 
-  FailureOr<VMIExtISupport>
-  getExtUISupport(VMIExtUIOp op, std::string *reason = nullptr) const;
+  FailureOr<VMIBitcastLayoutFact>
+  getBitcastLayoutFact(VMIBitcastOp op,
+                       std::string *reason = nullptr) const;
 
-  FailureOr<VMITruncISupport>
-  getTruncISupport(VMITruncIOp op, std::string *reason = nullptr) const;
+  LogicalResult getBitcastSupport(VMIBitcastOp op,
+                                  std::string *reason = nullptr) const;
 
-  FailureOr<VMIBitcastSupport>
-  getBitcastSupport(VMIBitcastOp op, std::string *reason = nullptr) const;
+  LogicalResult getDhistSupport(VMIDhistOp op,
+                                std::string *reason = nullptr) const;
 
-  FailureOr<VMIHistogramSupport>
-  getDhistSupport(VMIDhistOp op, std::string *reason = nullptr) const;
-
-  FailureOr<VMIHistogramSupport>
-  getChistSupport(VMIChistOp op, std::string *reason = nullptr) const;
+  LogicalResult getChistSupport(VMIChistOp op,
+                                std::string *reason = nullptr) const;
 };
 
 } // namespace mlir::pto

@@ -483,8 +483,7 @@ LogicalResult verifyLayoutHelperSupport(Operation *op,
     auto sourceType = cast<VMIVRegType>(ensure.getSource().getType());
     auto resultType = cast<VMIVRegType>(ensure.getResult().getType());
     std::string reason;
-    if (failed(
-            supports.canMaterializeDataLayout(sourceType, resultType, &reason)))
+    if (failed(supports.getEnsureLayoutFact(sourceType, resultType, &reason)))
       return emitHelperMaterializationContract(
           op, sourceType, resultType, "pto.vmi.ensure_layout", reason, diagOS);
     return success();
@@ -495,24 +494,10 @@ LogicalResult verifyLayoutHelperSupport(Operation *op,
     auto resultType = cast<VMIMaskType>(ensure.getResult().getType());
     std::string reason;
     if (failed(
-            supports.canMaterializeMaskLayout(sourceType, resultType, &reason)))
+            supports.getEnsureMaskLayoutFact(sourceType, resultType, &reason)))
       return emitHelperMaterializationContract(op, sourceType, resultType,
                                                "pto.vmi.ensure_mask_layout",
                                                reason, diagOS);
-    return success();
-  }
-
-  if (auto ensure = dyn_cast<VMIEnsureMaskGranularityOp>(op)) {
-    auto sourceType = cast<VMIMaskType>(ensure.getSource().getType());
-    auto resultType = cast<VMIMaskType>(ensure.getResult().getType());
-    std::string reason;
-    if (failed(supports.canMaterializeMaskGranularity(sourceType, resultType,
-                                                      &reason)))
-      return emitLayoutContract(
-          op, diagOS,
-          Twine("pto.vmi.ensure_mask_granularity has no registered "
-                "materialization support: ") +
-              reason);
     return success();
   }
 
@@ -522,7 +507,6 @@ LogicalResult verifyLayoutHelperSupport(Operation *op,
 LogicalResult verifyLayoutSemanticSupport(Operation *op,
                                           llvm::raw_ostream *diagOS) {
   VMILayoutSupport supports;
-  VMITargetCapabilityRegistry capabilities;
 
   if (auto store = dyn_cast<VMIStoreOp>(op)) {
     auto valueType = cast<VMIVRegType>(store.getValue().getType());
@@ -531,7 +515,7 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
       return success();
 
     std::string reason;
-    if (failed(supports.getContiguousStoreSupport(valueType, &reason)))
+    if (failed(supports.getStoreLayoutFact(valueType, &reason)))
       return emitLayoutSupportContract(
           op, diagOS,
           "pto.vmi.store has no registered contiguous-memory layout support",
@@ -542,21 +526,22 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
   if (auto load = dyn_cast<VMIGroupLoadOp>(op)) {
     auto resultType = cast<VMIVRegType>(load.getResult().getType());
     VMILayoutAttr layout = resultType.getLayoutAttr();
-    if (!layout || !layout.isDeinterleaved() || layout.getBlockElems() != 8 ||
-        !resultType.getElementType().isF32())
+    if (!layout)
       return success();
 
     std::string reason;
-    if (failed(supports.getGroupLoadSupport(capabilities, load, &reason)))
+    if (failed(supports.getGroupLoadLayoutFact(load, &reason)))
       return emitLayoutSupportContract(
           op, diagOS,
-          "pto.vmi.group_load has no registered block8 layout support", reason);
+          "pto.vmi.group_load has no registered layout support", reason);
     return success();
   }
 
   if (auto load = dyn_cast<VMIGroupSlotLoadOp>(op)) {
+    auto resultType = cast<VMIVRegType>(load.getResult().getType());
     std::string reason;
-    if (failed(supports.getGroupSlotLoadSupport(capabilities, load, &reason)))
+    if (failed(supports.getGroupSlotLoadLayoutFact(
+            resultType, load.getNumGroupsAttr().getInt(), &reason)))
       return emitLayoutSupportContract(
           op, diagOS,
           "pto.vmi.group_slot_load has no registered layout support", reason);
@@ -565,8 +550,7 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
 
   if (auto load = dyn_cast<VMIGroupBroadcastLoadOp>(op)) {
     std::string reason;
-    if (failed(
-            supports.getGroupBroadcastLoadSupport(capabilities, load, &reason)))
+    if (failed(supports.getGroupBroadcastLoadSupport(load, &reason)))
       return emitLayoutSupportContract(
           op, diagOS,
           "pto.vmi.group_broadcast_load has no registered layout support",
@@ -581,8 +565,8 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
       return success();
 
     std::string reason;
-    if (failed(
-            supports.getGroupSlotsStoreSupport(capabilities, store, &reason)))
+    if (failed(supports.getGroupStoreLayoutFact(
+            valueType, store.getNumGroupsAttr().getInt(), &reason)))
       return emitLayoutSupportContract(
           op, diagOS,
           "pto.vmi.group_store has no registered group_slots layout support",
@@ -597,8 +581,7 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
       return success();
 
     std::string reason;
-    if (failed(
-            supports.getGroupReduceAddFSupport(capabilities, reduce, &reason)))
+    if (failed(supports.getGroupReduceAddFSupport(reduce, &reason)))
       return emitLayoutSupportContract(
           op, diagOS,
           "pto.vmi.group_reduce_addf has no registered group_slots layout "
@@ -614,8 +597,7 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
       return success();
 
     std::string reason;
-    if (failed(
-            supports.getGroupReduceMaxFSupport(capabilities, reduce, &reason)))
+    if (failed(supports.getGroupReduceMaxFSupport(reduce, &reason)))
       return emitLayoutSupportContract(
           op, diagOS,
           "pto.vmi.group_reduce_maxf has no registered group_slots layout "
@@ -631,8 +613,7 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
       return success();
 
     std::string reason;
-    if (failed(
-            supports.getGroupReduceAddISupport(capabilities, reduce, &reason)))
+    if (failed(supports.getGroupReduceAddISupport(reduce, &reason)))
       return emitLayoutSupportContract(
           op, diagOS,
           "pto.vmi.group_reduce_addi has no registered group_slots layout "
@@ -648,8 +629,7 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
       return success();
 
     std::string reason;
-    if (failed(
-            supports.getGroupReduceMaxISupport(capabilities, reduce, &reason)))
+    if (failed(supports.getGroupReduceMaxISupport(reduce, &reason)))
       return emitLayoutSupportContract(
           op, diagOS,
           "pto.vmi.group_reduce_maxi has no registered group_slots layout "
@@ -665,8 +645,7 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
       return success();
 
     std::string reason;
-    if (failed(supports.getGroupBroadcastSupport(capabilities, broadcast,
-                                                 &reason)))
+    if (failed(supports.getGroupBroadcastSupport(broadcast, &reason)))
       return emitLayoutSupportContract(
           op, diagOS,
           "pto.vmi.group_broadcast has no registered layout support", reason);
