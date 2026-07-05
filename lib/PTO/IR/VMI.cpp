@@ -171,7 +171,11 @@ static FailureOr<Type> getVMIPhysicalElementType(VMIVRegType type) {
     return elementType;
 
   auto integerType = dyn_cast<IntegerType>(elementType);
-  if (!integerType || !integerType.isUnsigned())
+  if (!integerType && isa<FloatType>(elementType))
+    return elementType;
+  if (!integerType)
+    return failure();
+  if (!integerType.isUnsigned())
     return failure();
   unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
   int64_t laneStride = layout.getLaneStride();
@@ -332,6 +336,30 @@ static Type getMemoryElementType(Type type) {
   if (auto memrefType = dyn_cast<MemRefType>(type))
     return memrefType.getElementType();
   return {};
+}
+
+static bool isUBBackedMemoryType(Type type) {
+  if (auto ptrType = dyn_cast<PtrType>(type))
+    return ptrType.getMemorySpace().getAddressSpace() == AddressSpace::VEC;
+
+  auto memrefType = dyn_cast<BaseMemRefType>(type);
+  if (!memrefType)
+    return false;
+
+  Attribute memorySpace = memrefType.getMemorySpace();
+  if (auto addressSpace = dyn_cast_or_null<AddressSpaceAttr>(memorySpace))
+    return addressSpace.getAddressSpace() == AddressSpace::VEC;
+  if (auto integerSpace = dyn_cast_or_null<IntegerAttr>(memorySpace))
+    return integerSpace.getInt() == static_cast<int64_t>(AddressSpace::VEC);
+  return false;
+}
+
+static LogicalResult verifyUBBackedMemory(Operation *op, Type memoryType,
+                                          StringRef role) {
+  if (isUBBackedMemoryType(memoryType))
+    return success();
+  return op->emitOpError() << "requires memory " << role
+                           << " to be UB-backed";
 }
 
 static LogicalResult verifyMemoryElementMatches(Operation *op, Type memoryType,
@@ -762,11 +790,6 @@ LogicalResult VMIMaskType::verify(function_ref<InFlightDiagnostic()> emitError,
                        << formatVMIMaskType(elementCount, granularity, layout)
                        << "' pred mask must not carry layout";
 
-  if (granularity != "pred" && !layout)
-    return emitError() << "'"
-                       << formatVMIMaskType(elementCount, granularity, layout)
-                       << "' concrete mask granularity requires layout";
-
   return success();
 }
 
@@ -818,9 +841,6 @@ LogicalResult VMIIotaOp::verify() {
 }
 
 LogicalResult VMICreateMaskOp::verify() {
-  auto resultType = cast<VMIMaskType>(getResult().getType());
-  if (!resultType.isPred() && !isLayoutAssigned(resultType))
-    return emitOpError("requires concrete mask result to carry layout");
   return success();
 }
 
@@ -835,8 +855,6 @@ LogicalResult VMICreateGroupMaskOp::verify() {
   if (resultType.getElementCount() != numGroups * groupSize)
     return emitOpError("requires result lane count to equal num_groups * "
                        "group_size");
-  if (!resultType.isPred() && !isLayoutAssigned(resultType))
-    return emitOpError("requires concrete mask result to carry layout");
   return success();
 }
 
@@ -1142,6 +1160,9 @@ LogicalResult VMICompressStoreOp::verify() {
   if (failed(verifyMemoryElementMatches(getOperation(),
                                         getDestination().getType(), valueType,
                                         "destination")))
+    return failure();
+  if (failed(verifyUBBackedMemory(getOperation(), getDestination().getType(),
+                                  "destination")))
     return failure();
   return verifyMaskMatchesData(getOperation(), maskType, valueType);
 }
@@ -1559,9 +1580,11 @@ LogicalResult VMIBitcastOp::verify() {
 }
 
 LogicalResult VMILoadOp::verify() {
-  return verifyMemoryElementMatches(getOperation(), getSource().getType(),
-                                    cast<VMIVRegType>(getResult().getType()),
-                                    "source");
+  if (failed(verifyMemoryElementMatches(
+          getOperation(), getSource().getType(),
+          cast<VMIVRegType>(getResult().getType()), "source")))
+    return failure();
+  return verifyUBBackedMemory(getOperation(), getSource().getType(), "source");
 }
 
 void VMILoadOp::getEffects(
@@ -1579,6 +1602,9 @@ LogicalResult VMIDeinterleaveLoadOp::verify() {
     return failure();
   if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
                                         lowType, "source")))
+    return failure();
+  if (failed(verifyUBBackedMemory(getOperation(), getSource().getType(),
+                                  "source")))
     return failure();
   if (failed(verifyContiguousIfLayoutAssigned(getOperation(), lowType,
                                               "low result")) ||
@@ -1599,6 +1625,9 @@ LogicalResult VMIGroupLoadOp::verify() {
   if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
                                         resultType, "source")))
     return failure();
+  if (failed(verifyUBBackedMemory(getOperation(), getSource().getType(),
+                                  "source")))
+    return failure();
   return verifyNumGroups(getOperation(), resultType,
                          getNumGroupsAttr().getInt());
 }
@@ -1617,6 +1646,9 @@ LogicalResult VMIGroupSlotLoadOp::verify() {
         "requires result logical lane count to match num_groups");
   if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
                                         resultType, "source")))
+    return failure();
+  if (failed(verifyUBBackedMemory(getOperation(), getSource().getType(),
+                                  "source")))
     return failure();
   if (auto resultLayout = resultType.getLayoutAttr()) {
     if (!resultLayout.isGroupSlots() ||
@@ -1645,6 +1677,9 @@ LogicalResult VMIGroupBroadcastLoadOp::verify() {
   if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
                                         resultType, "source")))
     return failure();
+  if (failed(verifyUBBackedMemory(getOperation(), getSource().getType(),
+                                  "source")))
+    return failure();
   if (auto resultLayout = resultType.getLayoutAttr()) {
     if (resultLayout.isGroupSlots())
       return emitOpError(
@@ -1666,6 +1701,9 @@ LogicalResult VMIMaskedLoadOp::verify() {
   if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
                                         resultType, "source")))
     return failure();
+  if (failed(verifyUBBackedMemory(getOperation(), getSource().getType(),
+                                  "source")))
+    return failure();
   if (failed(verifyAllSameVRegShapeAndLayout(getOperation(),
                                              {passthruType, resultType},
                                              /*requireSameElement=*/true)))
@@ -1686,6 +1724,9 @@ LogicalResult VMIGatherOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
                                         resultType, "source")))
+    return failure();
+  if (failed(verifyUBBackedMemory(getOperation(), getSource().getType(),
+                                  "source")))
     return failure();
 
   auto indexElementType = dyn_cast<IntegerType>(indicesType.getElementType());
@@ -1726,6 +1767,9 @@ LogicalResult VMIExpandLoadOp::verify() {
   if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
                                         resultType, "source")))
     return failure();
+  if (failed(verifyUBBackedMemory(getOperation(), getSource().getType(),
+                                  "source")))
+    return failure();
   if (failed(verifyAllSameVRegShapeAndLayout(getOperation(),
                                              {passthruType, resultType},
                                              /*requireSameElement=*/true)))
@@ -1740,9 +1784,12 @@ void VMIExpandLoadOp::getEffects(
 }
 
 LogicalResult VMIStoreOp::verify() {
-  return verifyMemoryElementMatches(getOperation(), getDestination().getType(),
-                                    cast<VMIVRegType>(getValue().getType()),
-                                    "destination");
+  if (failed(verifyMemoryElementMatches(
+          getOperation(), getDestination().getType(),
+          cast<VMIVRegType>(getValue().getType()), "destination")))
+    return failure();
+  return verifyUBBackedMemory(getOperation(), getDestination().getType(),
+                              "destination");
 }
 
 void VMIStoreOp::getEffects(
@@ -1761,6 +1808,9 @@ LogicalResult VMIInterleaveStoreOp::verify() {
   if (failed(verifyMemoryElementMatches(getOperation(),
                                         getDestination().getType(), lowType,
                                         "destination")))
+    return failure();
+  if (failed(verifyUBBackedMemory(getOperation(), getDestination().getType(),
+                                  "destination")))
     return failure();
   if (failed(verifyContiguousIfLayoutAssigned(getOperation(), lowType,
                                               "low input")) ||
@@ -1783,6 +1833,9 @@ LogicalResult VMIGroupStoreOp::verify() {
                                         getDestination().getType(), valueType,
                                         "destination")))
     return failure();
+  if (failed(verifyUBBackedMemory(getOperation(), getDestination().getType(),
+                                  "destination")))
+    return failure();
   return verifyNumGroups(getOperation(), valueType,
                          getNumGroupsAttr().getInt());
 }
@@ -1798,6 +1851,9 @@ LogicalResult VMIStrideLoadOp::verify() {
   auto maskType = cast<VMIMaskType>(getMask().getType());
   if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
                                         resultType, "source")))
+    return failure();
+  if (failed(verifyUBBackedMemory(getOperation(), getSource().getType(),
+                                  "source")))
     return failure();
   return verifyMaskMatchesData(getOperation(), maskType, resultType);
 }
@@ -1815,6 +1871,9 @@ LogicalResult VMIMaskedStoreOp::verify() {
                                         getDestination().getType(), valueType,
                                         "destination")))
     return failure();
+  if (failed(verifyUBBackedMemory(getOperation(), getDestination().getType(),
+                                  "destination")))
+    return failure();
   return verifyMaskMatchesData(getOperation(), maskType, valueType);
 }
 
@@ -1830,6 +1889,9 @@ LogicalResult VMIStrideStoreOp::verify() {
   if (failed(verifyMemoryElementMatches(getOperation(),
                                         getDestination().getType(), valueType,
                                         "destination")))
+    return failure();
+  if (failed(verifyUBBackedMemory(getOperation(), getDestination().getType(),
+                                  "destination")))
     return failure();
   return verifyMaskMatchesData(getOperation(), maskType, valueType);
 }
@@ -1847,6 +1909,9 @@ LogicalResult VMIScatterOp::verify() {
   if (failed(verifyMemoryElementMatches(getOperation(),
                                         getDestination().getType(), valueType,
                                         "destination")))
+    return failure();
+  if (failed(verifyUBBackedMemory(getOperation(), getDestination().getType(),
+                                  "destination")))
     return failure();
 
   auto indexElementType = dyn_cast<IntegerType>(indicesType.getElementType());
@@ -2011,13 +2076,16 @@ LogicalResult VMIEnsureMaskGranularityOp::verify() {
   if (sourceType.getElementCount() != resultType.getElementCount())
     return emitOpError(
         "requires source and result to preserve VMI mask lane count");
-  if (!isLayoutAssigned(sourceType) || !isLayoutAssigned(resultType))
-    return emitOpError("requires source and result to be layout-assigned");
-  if (sourceType.getLayout() != resultType.getLayout())
-    return emitOpError("requires source and result mask layouts to match");
   if (sourceType.isPred() || resultType.isPred())
     return emitOpError(
         "requires concrete source and result mask granularities");
+  if (isLayoutAssigned(sourceType) || isLayoutAssigned(resultType)) {
+    if (!isLayoutAssigned(sourceType) || !isLayoutAssigned(resultType))
+      return emitOpError("requires either both source and result to carry "
+                         "layout or neither to carry layout");
+    if (sourceType.getLayout() != resultType.getLayout())
+      return emitOpError("requires source and result mask layouts to match");
+  }
   return success();
 }
 

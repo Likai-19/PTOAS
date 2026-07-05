@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: not pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto 2>&1 | FileCheck %s
+// RUN: not pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto 2>&1 | FileCheck %s
 
 module {
   func.func @vmi_layout_assignment_group_reduce_s32_tail_no_full_tile_invalid(
@@ -18,9 +18,9 @@ module {
     // CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.group_reduce_addf operand #0 has type
     // CHECK-SAME: #pto.vmi.layout<contiguous>
     // CHECK-SAME: requires
-    // CHECK-SAME: #pto.vmi.layout<deinterleaved = 4, block_elems = 8>
+    // CHECK-SAME: #pto.vmi.layout<deinterleaved = 4>
     // CHECK-SAME: pto.vmi.ensure_layout cannot materialize this conversion
-    // CHECK: requires source and result to have the same physical arity
+    // CHECK: source/result layouts do not match a supported ensure_layout table row
     %sum = pto.vmi.group_reduce_addf %source, %mask
         {num_groups = 6, reassoc}
         : !pto.vmi.vreg<192xf32>, !pto.vmi.mask<192xpred>

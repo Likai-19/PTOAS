@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: not pto-test-opt %s -vmi-layout-assignment 2>&1 | FileCheck %s
+// RUN: not pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment 2>&1 | FileCheck %s
 
 module {
   func.func @multi_return_conflict(
@@ -27,4 +27,4 @@ module {
   }
 }
 
-// CHECK: VMI-LAYOUT-CONTRACT: conflicting natural layouts #pto.vmi.layout<deinterleaved = 2> and #pto.vmi.layout<deinterleaved = 4>
+// CHECK: VMI-LAYOUT-CONTRACT: conflicting preferred layouts #pto.vmi.layout<deinterleaved = 2> and #pto.vmi.layout<deinterleaved = 4>

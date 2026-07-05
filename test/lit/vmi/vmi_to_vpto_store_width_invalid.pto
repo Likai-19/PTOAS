@@ -11,10 +11,10 @@
 module {
   func.func @vmi_store_f64_unsupported(
       %value: !pto.vmi.vreg<32xf64, #pto.vmi.layout<contiguous>>,
-      %dst: memref<32xf64>,
+      %dst: memref<32xf64, #pto.address_space<vec>>,
       %offset: index) {
     pto.vmi.store %value, %dst[%offset]
-        : !pto.vmi.vreg<32xf64, #pto.vmi.layout<contiguous>>, memref<32xf64>
+        : !pto.vmi.vreg<32xf64, #pto.vmi.layout<contiguous>>, memref<32xf64, #pto.address_space<vec>>
     return
   }
 }

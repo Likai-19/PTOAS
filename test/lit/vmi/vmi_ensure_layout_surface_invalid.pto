@@ -30,7 +30,7 @@ module {
   }
 }
 
-// CHECK: requires source and result to be layout-assigned
+// CHECK: requires concrete source and result mask granularities
 
 // -----
 

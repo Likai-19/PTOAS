@@ -33,18 +33,6 @@ module {
     return %p0, %p1 : !pto.mask<b32>, !pto.mask<b32>
   }
 
-  func.func @vmi_to_vpto_mask_deint2_tail_to_contiguous(
-      %m: !pto.vmi.mask<100xb32, #pto.vmi.layout<deinterleaved = 2>>)
-      -> (!pto.mask<b32>, !pto.mask<b32>) {
-    %dense = pto.vmi.ensure_mask_layout %m
-        : !pto.vmi.mask<100xb32, #pto.vmi.layout<deinterleaved = 2>>
-        -> !pto.vmi.mask<100xb32, #pto.vmi.layout<contiguous>>
-    %p0, %p1 = "pto.vmi.unpack"(%dense)
-        : (!pto.vmi.mask<100xb32, #pto.vmi.layout<contiguous>>)
-        -> (!pto.mask<b32>, !pto.mask<b32>)
-    return %p0, %p1 : !pto.mask<b32>, !pto.mask<b32>
-  }
-
   func.func @vmi_to_vpto_mask_deint4_to_contiguous(
       %m: !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4>>)
       -> (!pto.mask<b32>, !pto.mask<b32>, !pto.mask<b32>, !pto.mask<b32>) {
@@ -82,13 +70,6 @@ module {
 // CHECK-LABEL: func.func @vmi_to_vpto_mask_contiguous_to_deint2(
 // CHECK: %[[P0:.*]], %[[P1:.*]] = pto.pdintlv_b32 %arg0, %arg1
 // CHECK: return %[[P0]], %[[P1]]
-// CHECK-NOT: pto.vmi.
-// CHECK-NOT: !pto.vmi.
-// CHECK-NOT: unrealized_conversion_cast
-
-// CHECK-LABEL: func.func @vmi_to_vpto_mask_deint2_tail_to_contiguous(
-// CHECK: %[[D0:.*]], %[[D1:.*]] = pto.pintlv_b32 %arg0, %arg1
-// CHECK: return %[[D0]], %[[D1]]
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
 // CHECK-NOT: unrealized_conversion_cast

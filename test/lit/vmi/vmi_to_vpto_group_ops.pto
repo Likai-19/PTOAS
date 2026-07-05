@@ -30,9 +30,22 @@ module {
 
 // CHECK-LABEL: func.func @vmi_to_vpto_group_ops(
 // CHECK-COUNT-8: pto.vlds
-// CHECK: pto.vcgadd
-// CHECK: pto.vselr
-// CHECK-COUNT-7: pto.vcgadd
+// CHECK: pto.vcadd
+// CHECK: pto.vcadd
+// CHECK: pto.vadd
+// CHECK: pto.vcadd
+// CHECK: pto.vadd
+// CHECK: pto.vcadd
+// CHECK: pto.vadd
+// CHECK: pto.vsel
+// CHECK: pto.vcadd
+// CHECK: pto.vcadd
+// CHECK: pto.vadd
+// CHECK: pto.vcadd
+// CHECK: pto.vadd
+// CHECK: pto.vcadd
+// CHECK: pto.vadd
+// CHECK: pto.vsel
 // CHECK-COUNT-2: pto.vsts {{.*}} {dist = "1PT_B32"}
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.

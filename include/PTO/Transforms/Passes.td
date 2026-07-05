@@ -936,13 +936,32 @@ def VMIPreAssignmentCombine
 }
 
 def VMILayoutAssignment : Pass<"vmi-layout-assignment", "ModuleOp"> {
-  let summary = "Assign concrete VMI layouts and mask granularities";
+  let summary = "Assign concrete VMI layouts";
   let description = [{
-    Solves VMI layout constraints and materializes the chosen layout and mask
-    granularity into VMI types. This pass is the boundary between surface VMI
-    semantic IR and layout-assigned VMI IR.
+    Solves VMI layout constraints and materializes the chosen layout into VMI
+    types. Mask granularity is assigned by vmi-mask-granularity-assignment
+    before this pass, so this pass only propagates and materializes mask
+    layouts.
   }];
   let constructor = "mlir::pto::createVMILayoutAssignmentPass()";
+  let dependentDialects = ["mlir::cf::ControlFlowDialect",
+                           "mlir::func::FuncDialect",
+                           "mlir::pto::PTODialect",
+                           "mlir::memref::MemRefDialect",
+                           "mlir::scf::SCFDialect"];
+}
+
+def VMIMaskGranularityAssignment
+    : Pass<"vmi-mask-granularity-assignment", "ModuleOp"> {
+  let summary = "Assign concrete VMI mask granularities";
+  let description = [{
+    Assigns b8/b16/b32 granularity to VMI mask values before layout
+    assignment. This pass follows VMI semantic op contracts where mask
+    granularity is determined by the associated data element width. It does
+    not choose layouts; conflicting use granularities are represented with
+    pto.vmi.ensure_mask_granularity.
+  }];
+  let constructor = "mlir::pto::createVMIMaskGranularityAssignmentPass()";
   let dependentDialects = ["mlir::cf::ControlFlowDialect",
                            "mlir::func::FuncDialect",
                            "mlir::pto::PTODialect",

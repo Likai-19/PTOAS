@@ -19,5 +19,5 @@ module {
 }
 
 // CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.ensure_layout cannot materialize the requested data layout conversion
-// CHECK-SAME: requires source and result to have the same physical arity
+// CHECK-SAME: source/result layouts do not match a supported ensure_layout table row
 // CHECK-SAME: partial/tail layout materialization requires an explicit packing plan

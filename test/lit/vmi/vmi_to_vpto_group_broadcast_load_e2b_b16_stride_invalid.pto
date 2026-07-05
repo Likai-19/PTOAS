@@ -22,4 +22,4 @@ module {
 
 // CHECK: VMI-UNSUPPORTED:
 // CHECK: pto.vmi.group_broadcast_load requires either the E2B packet form
-// CHECK: fallback lowering requires constant unit source_group_stride
+// CHECK: group_broadcast_load requires a table row for result layout

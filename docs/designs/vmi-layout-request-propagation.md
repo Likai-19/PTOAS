@@ -842,23 +842,101 @@ The `anchorSide` is source or result.  Together, `anchorSide` and
 `anchorLayout` limit generation to the small set of facts that can match the
 currently propagated layout.
 
-For width-changing dense casts, fact generation is keyed by the width ratio and
-the known layout family.  For a narrowing cast with:
+For width-changing dense casts, legality and preference are separate tables.
+The legal table records only storage element widths and paired source/result
+layouts.  It is `AnyN`: vector element count is not part of dense cast
+legality.  `N` belongs only in the preferred table when one legal relation is
+chosen over another for a concrete shape.
+
+Storage widths are represented by an `ElementBitsPattern`, parallel to
+`LayoutPattern`.  A row matches when the concrete source/result storage widths
+match the row's bit patterns and the concrete source/result layouts match the
+row's layout patterns.  Do not introduce a separate width-class enum; write the
+supported bit set directly in the row.
+
+Legal dense rows are written as paired relations, for example:
 
 ```text
-R = source_bits / result_bits
+T16 -> T32:
+  contiguous      -> deinterleaved=2
+  lane_stride=2  -> contiguous
+  deinterleaved=2 -> deinterleaved=4
+
+T32 -> T16:
+  deinterleaved=2 -> contiguous
+  contiguous      -> lane_stride=2
+  deinterleaved=4 -> deinterleaved=2
 ```
 
-a deinterleaved source layout maps as:
+`T8 <-> T32` follows the same idea with factor 4:
 
 ```text
-source deinterleaved = F
-  if F % R == 0:
-    result factor = F / R
-    result factor 1 means contiguous
+T8 -> T32:
+  contiguous      -> deinterleaved=4
+  lane_stride=2  -> deinterleaved=2
+  lane_stride=4  -> contiguous
+
+T32 -> T8:
+  deinterleaved=4 -> contiguous
+  deinterleaved=2 -> lane_stride=2
+  contiguous      -> lane_stride=4
 ```
 
-Examples:
+Layout legality depends on storage width and physical layout, not on whether
+the op is floating-point or integer.  The op support layer still checks whether
+a particular VMI op and element type are valid.
+
+Group-slot cast rows live in the same legal table.  They are written as
+parameterized layout patterns; `num_groups = G` is inherited from the anchor
+layout used for the query.  Packed narrowing records the selected sub-lane
+stride on the result, and widening uses the inverse relation:
+
+```text
+T8 -> T16:
+  group_slots(G, slots=1) -> group_slots(G, slots=1)
+  group_slots(G, slots=8, lane_stride=2) -> group_slots(G, slots=8)
+
+T16 -> T32:
+  group_slots(G, slots=1) -> group_slots(G, slots=1)
+  group_slots(G, slots=8, lane_stride=2) -> group_slots(G, slots=8)
+
+T8 -> T32:
+  group_slots(G, slots=1) -> group_slots(G, slots=1)
+  group_slots(G, slots=8, lane_stride=4) -> group_slots(G, slots=8)
+
+T16 -> T8:
+  group_slots(G, slots=1) -> group_slots(G, slots=1)
+  group_slots(G, slots=8) -> group_slots(G, slots=8, lane_stride=2)
+
+T32 -> T16:
+  group_slots(G, slots=1) -> group_slots(G, slots=1)
+  group_slots(G, slots=8) -> group_slots(G, slots=8, lane_stride=2)
+
+T32 -> T8:
+  group_slots(G, slots=1) -> group_slots(G, slots=1)
+  group_slots(G, slots=8) -> group_slots(G, slots=8, lane_stride=4)
+```
+
+There is no separate group-slot branch in the fact query.  Dense and group-slot
+casts are both produced by matching the same legal table against the source or
+result anchor layout.
+
+The preferred table is a subset of the legal table.  Exact `N` rows override
+the default row for the same width pair:
+
+```text
+T16 -> T32, N=64:
+  lane_stride=2 -> contiguous
+
+T16 -> T32, default:
+  contiguous -> deinterleaved=2
+```
+
+When a preferred row is selected, the support helper must validate it through
+the same legal fact query.  A preferred row that is not legal is a bug in the
+table, not a fallback opportunity.
+
+Examples of legal dense facts:
 
 ```text
 f32 -> f8, R=4:
@@ -884,6 +962,219 @@ The propagator should accept an inverse only when fact generation returns a
 single supported matching fact for the anchor side.  If several facts could
 satisfy the same side, the relation must not guess; it should emit nothing
 unless another request makes the choice concrete.
+
+### Reduce Layout Facts
+
+Plain vector reductions currently have a fixed layout relation:
+
+```text
+reduce_*:
+  source contiguous
+  init   contiguous
+  mask   same(source)
+  result contiguous
+```
+
+`group_reduce_*` has a richer relation and should be expressed as a table.  The
+table is parameterized by:
+
+```text
+G = num_groups
+group_size = source_element_count / G
+VcgBlockElems = elements in one 32B VCG block
+```
+
+The query first classifies `group_size` against `VcgBlockElems`.  The class is
+an enum, not a numeric encoding:
+
+```text
+QuarterBlock      group_size == VcgBlockElems / 4
+HalfBlock         group_size == VcgBlockElems / 2
+OneBlock          group_size == VcgBlockElems
+TwoBlock          group_size == 2 * VcgBlockElems
+FourBlock         group_size == 4 * VcgBlockElems
+FullPartMultiple  group_size >= 8 * VcgBlockElems &&
+                  group_size % (8 * VcgBlockElems) == 0
+```
+
+Other values are unsupported.  Preferred group block rows are written with a
+`gb` pattern.  `gb(1, 4)` means one quarter of a 32B VCG block, and `gb(4)`
+means four 32B VCG blocks.  `group_reduce_*` is one consumer of this shared
+block classification:
+
+```text
+gb(1, 4):
+  source ls(4)
+  mask   same(source)
+  result gs(8)
+
+gb(1, 2):
+  source ls(2)
+  mask   same(source)
+  result gs(8)
+
+gb(1):
+  source c()
+  mask   same(source)
+  result gs(8)
+
+gb(2):
+  source d(2, block_elems=1)
+  mask   same(source)
+  result gs(8)
+
+gb(4):
+  source d(4, block_elems=1)
+  mask   same(source)
+  result gs(8)
+
+gbFull():
+  source c()
+  mask   same(source)
+  result gs(1)
+```
+
+The preferred table is not the whole legal relation.  A concrete fact query
+also exists for post-assignment validation:
+
+```text
+getGroupReduceLayoutFactForLayouts(source, mask, result, num_groups)
+```
+
+It matches the assigned source/mask/result layouts against legal rows for the
+classified group block.  Legal rows include additional source/mask alternatives
+for the same semantic row, such as `block_elems=1` for the two-block and
+four-block cases.  Those alternatives are part of the layout relation, not
+ad-hoc support relaxations.
+
+The concrete query is the single source of truth for layout-driven shape
+legality.  It may compute physical arity from the concrete VMI types, but only
+to validate the selected relation row; arity is not an independent support
+policy.  For example, the two-block row implies two source/mask physical parts
+per result part, while the four-block row implies four.
+
+Checks that are intrinsic to the VMI op contract belong in the op verifier, not
+in layout support:
+
+```text
+floating-point reassociation requirement
+source/result element type equality
+result element count equals num_groups
+integer group reduction accumulator type
+mask/data compatibility
+num_groups divisibility
+```
+
+The concrete lowering plan is derived from the returned fact.  The lowering may
+still defensively check the OneToN-converted `sourceParts`, `maskParts`, and
+`resultTypes`, but it must not re-encode a separate group-size or layout support
+table.
+
+### Memory Layout Facts
+
+Load/store layout support follows the same split:
+
+```text
+VMILayoutSupport:
+  layout relation facts only
+
+VMIToVPTO:
+  target/memory/stride/lowering preconditions
+  defensive checks on the actual OneToN value/result ranges
+```
+
+Do not encode VPTO instruction names in layout support.  Names such as
+`Vstsx2`, `Vsldb`, `PK4_B32`, or `Slots1PointVsts` are lowering choices, not
+layout facts.
+
+Dense `vmi.load` / `vmi.store` facts are keyed by element bits and assigned
+value layout:
+
+```text
+load:
+  bits(8,16,32), contiguous
+  bits(8,16,32), lane_stride=2
+  bits(8),       lane_stride=4
+  bits(8,16,32), deinterleaved=2/4
+
+store:
+  bits(8,16,32), contiguous
+  bits(8,16,32), lane_stride=2
+  bits(8),       lane_stride=4
+  bits(8,16,32), deinterleaved=2/4, block_elems=1
+```
+
+The fact query records only the dense memory layout pattern and element-bit
+pattern.  It may reject impossible layout/width combinations such as
+`lane_stride=4` for non-b8 elements.  It must not decide whether a particular
+memref is UB-backed, whether an offset is aligned, or whether the current
+lowering will materialize a fallback path.
+
+Two-way memory ops are separate VMI semantics:
+
+```text
+deinterleave_load:
+  low  contiguous
+  high contiguous
+
+interleave_store:
+  low  contiguous
+  high contiguous
+```
+
+They are not represented as dense load/store `deinterleaved` facts.  Their
+current VPTO lowering can still require `!pto.ptr`, direct UB memory, full
+chunks, and `vldsx2/vstsx2` element support in `VMIToVPTO`.
+
+Group memory facts are also table relations:
+
+```text
+group_load:
+  bits(32), gb(2) -> result d(2, block_elems=8)
+  bits(32), gb(4) -> result d(4, block_elems=8)
+
+group_slot_load:
+  result group_slots(num_groups=G, slots=1)
+  result group_slots(num_groups=G, slots=8)
+  result group_slots(num_groups=G, slots=8, lane_stride=2)
+  result group_slots(num_groups=G, slots=8, lane_stride=4)
+
+group_store:
+  value group_slots(num_groups=G, slots=1)
+  value group_slots(num_groups=G, slots=8)
+  value group_slots(num_groups=G, slots=8, lane_stride=2)
+  value group_slots(num_groups=G, slots=8, lane_stride=4)
+
+group_broadcast_load:
+  bits(8,16,32), memContiguous()    -> source group_slots(G, slots=8)
+  bits(8,16,32), memBlockAligned()  -> source group_slots(G, slots=1)
+
+masked_store compact lane-stride:
+  bits(8),  value ls(2), mask same(value) -> packed predicate b16
+  bits(16), value ls(2), mask same(value) -> packed predicate b32
+  bits(8),  value ls(4), mask same(value) -> packed predicate b32
+```
+
+The `num_groups` equality is part of the layout relation.  Current lowering
+requirements such as `group_load` row stride being a constant positive multiple
+of 8, `group_slot_load slots=8` using unit source-group stride, or
+`group_store slots=8` using unit row stride remain in `VMIToVPTO`.
+`group_broadcast_load` support is expressed as the equivalent
+`group_slot_load + group_broadcast` relation.  `VMIToVPTO` may still choose an
+E2B VPTO lowering when the matched layout/shape is the E2B-friendly case, but
+E2B is not a separate layout support fact.  `masked_store` still materializes
+the final predicate in lowering; the support table only records which
+layout/mask-shape relations are legal.
+
+The lowering may check actual converted arity before indexing:
+
+```text
+if resultTypes.size() != expected arity:
+  notifyMatchFailure(...)
+```
+
+This is a crash guard for the concrete rewrite.  It must not become another
+support policy in `VMILayoutSupport`.
 
 Group-value casts use a different static relation:
 

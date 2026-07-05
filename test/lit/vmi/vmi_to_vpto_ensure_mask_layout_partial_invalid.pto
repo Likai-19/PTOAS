@@ -19,5 +19,5 @@ module {
 }
 
 // CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.ensure_mask_layout cannot materialize the requested mask layout conversion
-// CHECK-SAME: requires source and result to have the same physical arity
+// CHECK-SAME: source/result mask layouts do not match a supported ensure_mask_layout table row
 // CHECK-SAME: partial/tail predicate layout materialization requires an explicit packing plan

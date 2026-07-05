@@ -8,7 +8,7 @@
 // FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
 // for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-layout-assignment | FileCheck %s
+// RUN: pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment | FileCheck %s
 
 module {
   func.func @typed_group_reduce_assignment(
@@ -34,12 +34,10 @@ module {
 }
 
 // CHECK-LABEL: func.func @typed_group_reduce_assignment(
+// CHECK: %[[MF16_B16:.*]] = pto.vmi.ensure_mask_granularity %arg1
+// CHECK-SAME: -> !pto.vmi.mask<256xb16, #pto.vmi.layout<deinterleaved = 2>>
 // CHECK: %[[F16_SPLIT:.*]] = pto.vmi.ensure_layout
-// CHECK-SAME: -> !pto.vmi.vreg<256xf16, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
-// CHECK: %[[MF16_SPLIT:.*]] = pto.vmi.ensure_mask_layout
-// CHECK-SAME: -> !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
-// CHECK: %[[MF16_B16:.*]] = pto.vmi.ensure_mask_granularity %[[MF16_SPLIT]]
-// CHECK-SAME: -> !pto.vmi.mask<256xb16, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+// CHECK-SAME: -> !pto.vmi.vreg<256xf16, #pto.vmi.layout<deinterleaved = 2>>
 // CHECK: pto.vmi.group_reduce_addf %[[F16_SPLIT]], %[[MF16_B16]]
 // CHECK-SAME: -> !pto.vmi.vreg<8xf16, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // CHECK: %[[WIDE_I16:.*]] = pto.vmi.extsi %arg2
@@ -49,8 +47,8 @@ module {
 // CHECK: pto.vmi.group_reduce_addi %[[WIDE_I16]], %[[MI16_SPLIT]]
 // CHECK-SAME: -> !pto.vmi.vreg<8xi32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // CHECK: %[[I32_SPLIT:.*]] = pto.vmi.ensure_layout
-// CHECK-SAME: -> !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+// CHECK-SAME: -> !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>
 // CHECK: %[[MI32_SPLIT:.*]] = pto.vmi.ensure_mask_layout
-// CHECK-SAME: -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+// CHECK-SAME: -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
 // CHECK: pto.vmi.group_reduce_addi %[[I32_SPLIT]], %[[MI32_SPLIT]]
 // CHECK-SAME: -> !pto.vmi.vreg<8xi32, #pto.vmi.layout<num_groups = 8, slots = 8>>

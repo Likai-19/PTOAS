@@ -50,6 +50,5 @@ module {
 // CHECK: %[[MDEINT:.*]] = pto.vmi.create_mask %arg0 : index -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
 // CHECK: %[[GMDEINT:.*]] = pto.vmi.create_group_mask %arg0{{.*}}group_size = 16{{.*}}num_groups = 8{{.*}}index -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
 // CHECK: %[[CM16:.*]] = "pto.vmi.constant_mask"(){{.*}}dense<true> : tensor<128xi1>{{.*}}!pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
-// CHECK-NOT: pto.vmi.ensure_mask_layout
 // CHECK-NOT: pto.vmi.ensure_mask_granularity
 // CHECK: return %[[M16]], %[[MDEINT]], %[[GMDEINT]], %[[CM16]]

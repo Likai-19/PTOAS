@@ -6,8 +6,8 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
-// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+// RUN: pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
 
 module {
   func.func @vmi_layout_assignment_widen_dense_reduce_multi_consumer(
@@ -43,25 +43,21 @@ module {
 }
 
 // ASSIGN-LABEL: func.func @vmi_layout_assignment_widen_dense_reduce_multi_consumer(
-// ASSIGN-SAME: %arg1: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+// ASSIGN-SAME: %[[B:arg[0-9]+]]: !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
 // ASSIGN-SAME: %arg2: !pto.vmi.vreg<1xf32, #pto.vmi.layout<contiguous>>
 // ASSIGN-SAME: %arg3: !pto.vmi.vreg<1xf32, #pto.vmi.layout<contiguous>>
 // ASSIGN: %[[A:.*]] = pto.vmi.load
-// ASSIGN-SAME: -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
+// ASSIGN-SAME: -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous, lane_stride = 2>>
 // ASSIGN: %[[W:.*]] = pto.vmi.extf %[[A]]
-// ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
-// ASSIGN: %[[T1:.*]] = pto.vmi.mulf %[[W]], %arg1
-// ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+// ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[T1:.*]] = pto.vmi.mulf %[[W]], %[[B]]
+// ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
 // ASSIGN: %[[MASK:.*]] = pto.vmi.create_mask
 // ASSIGN-SAME: -> !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
-// ASSIGN: %[[T1_DENSE:.*]] = pto.vmi.ensure_layout %[[T1]]
-// ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
-// ASSIGN: %[[R0:.*]] = pto.vmi.reduce_addf %[[T1_DENSE]], %arg2, %[[MASK]]
+// ASSIGN: %[[R0:.*]] = pto.vmi.reduce_addf %[[T1]], %arg2, %[[MASK]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<1xf32, #pto.vmi.layout<contiguous>>
 // ASSIGN: pto.vmi.store %[[R0]]
-// ASSIGN: %[[W_DENSE:.*]] = pto.vmi.ensure_layout %[[W]]
-// ASSIGN-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
-// ASSIGN: %[[R:.*]] = pto.vmi.reduce_addf %[[W_DENSE]], %arg3, %[[MASK]]
+// ASSIGN: %[[R:.*]] = pto.vmi.reduce_addf %[[W]], %arg3, %[[MASK]]
 // ASSIGN-SAME: -> !pto.vmi.vreg<1xf32, #pto.vmi.layout<contiguous>>
 // ASSIGN: pto.vmi.store %[[R]]
 
@@ -70,11 +66,9 @@ module {
 // LOWER: pto.vcvt
 // LOWER: pto.vcvt
 // LOWER: pto.vmul
-// LOWER: pto.vintlv
 // LOWER: pto.vcadd
 // LOWER: pto.vadd
 // LOWER: pto.vsts
-// LOWER: pto.vintlv
 // LOWER: pto.vcadd
 // LOWER: pto.vadd
 // LOWER: pto.vsts
