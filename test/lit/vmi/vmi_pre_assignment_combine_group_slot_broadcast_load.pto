@@ -10,7 +10,7 @@
 // RUN: pto-test-opt %s -vmi-pre-assignment-combine -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
 
 module {
-  func.func @e2b_candidate(%src: !pto.ptr<f16, ub>, %off: index)
+  func.func @not_e2b_num_groups_16(%src: !pto.ptr<f16, ub>, %off: index)
       -> !pto.vmi.vreg<256xf16> {
     %c1 = arith.constant 1 : index
     %slots = pto.vmi.group_slot_load %src[%off], %c1 {num_groups = 16}
@@ -47,7 +47,7 @@ module {
   }
 }
 
-// CHECK-LABEL: func.func @e2b_candidate
+// CHECK-LABEL: func.func @not_e2b_num_groups_16
 // CHECK-NOT: pto.vmi.group_slot_load
 // CHECK: pto.vmi.group_broadcast_load
 // CHECK-NOT: pto.vmi.group_broadcast
@@ -62,8 +62,10 @@ module {
 // CHECK: pto.vmi.group_broadcast_load
 // CHECK-NOT: pto.vmi.group_broadcast
 
-// LOWER-LABEL: func.func @e2b_candidate
-// LOWER: pto.vlds {{.*}} {dist = "E2B_B16"}
+// LOWER-LABEL: func.func @not_e2b_num_groups_16
+// LOWER-NOT: E2B_B16
+// LOWER: pto.vsldb
+// LOWER: pto.vselr
 
 // LOWER-LABEL: func.func @not_e2b_candidate
 // LOWER-NOT: E2B_B32

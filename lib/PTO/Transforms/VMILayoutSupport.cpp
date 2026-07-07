@@ -123,6 +123,7 @@ template <int64_t... Counts> static constexpr ElementCountPattern G() {
 }
 
 static constexpr ElementCountPattern anyN() { return {{}, 0, true}; }
+static constexpr ElementCountPattern anyG() { return anyN(); }
 
 static constexpr MaskGranularityPattern mb8() { return {1u << 0}; }
 static constexpr MaskGranularityPattern mb16() { return {1u << 1}; }
@@ -560,8 +561,26 @@ static constexpr GroupBroadcastLoadLayoutPattern
         {gb(2), bits<8, 16, 32>(), memContiguous(), d(2, 1)},
         {gb(4), bits<8, 16, 32>(), memContiguous(), c()},
         {gb(4), bits<8, 16, 32>(), memContiguous(), d(4, 1)},
-        {gbFull(), bits<8, 16, 32>(), memContiguous(), c()},
-        {gbFull(), bits<8, 16, 32>(), memBlockAligned(), c()},
+        {gbFull(), bits<8, 16, 32>(), memAny(), c()},
+};
+
+struct GroupBroadcastLoadDirectPattern {
+  VMIGroupBroadcastLoadDirectKind kind;
+  ElementCountPattern numGroups;
+  GroupBlockPattern block;
+  ElementBitsPattern elementBits;
+  GroupMemoryPattern memory = memContiguous();
+  LayoutPattern resultLayout;
+};
+
+static constexpr GroupBroadcastLoadDirectPattern
+    kGroupBroadcastLoadDirectPatterns[] = {
+        {VMIGroupBroadcastLoadDirectKind::E2B, G<8>(), gb(1), bits<16, 32>(),
+         memContiguous(), c()},
+        {VMIGroupBroadcastLoadDirectKind::E2B, G<8>(), gb(2), bits<16, 32>(),
+         memContiguous(), d(2, 1)},
+        {VMIGroupBroadcastLoadDirectKind::BRC, anyG(), gbFull(),
+         bits<8, 16, 32>(), memAny(), c()},
 };
 
 struct GroupBroadcastLayoutPattern {
@@ -1065,6 +1084,74 @@ VMILayoutSupport::getGroupBroadcastLoadLayoutFact(VMIVRegType resultType,
                     "source_group_stride or constant positive "
                     "source_group_stride divisible by ") +
               Twine(alignedStrideElems) + " elements");
+}
+
+FailureOr<VMIGroupBroadcastLoadDirectFact>
+VMILayoutSupport::getGroupBroadcastLoadDirectFact(VMIGroupBroadcastLoadOp op,
+                                                  std::string *reason) const {
+  return getGroupBroadcastLoadDirectFact(
+      cast<VMIVRegType>(op.getResult().getType()), op.getSource().getType(),
+      op.getSourceGroupStride(), op.getNumGroupsAttr().getInt(), reason);
+}
+
+FailureOr<VMIGroupBroadcastLoadDirectFact>
+VMILayoutSupport::getGroupBroadcastLoadDirectFact(
+    VMIVRegType resultType, Type sourceType, Value sourceGroupStride,
+    int64_t numGroups, std::string *reason) const {
+  auto fail =
+      [&](const Twine &message) -> FailureOr<VMIGroupBroadcastLoadDirectFact> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  if (!isa<PtrType>(sourceType))
+    return fail("group_broadcast_load direct lowering requires !pto.ptr source");
+
+  unsigned elementBits =
+      pto::getPTOStorageElemBitWidth(resultType.getElementType());
+  if (elementBits == 0)
+    return fail("group_broadcast_load requires known element bit width");
+  std::optional<int64_t> stride = getConstantIndexValue(sourceGroupStride);
+
+  FailureOr<GroupLayoutKey> key = buildGroupLayoutKey(
+      resultType, numGroups,
+      "group_broadcast_load preferred layout table has no row for this group "
+      "size",
+      reason);
+  if (failed(key))
+    return failure();
+
+  VMILayoutAttr existing = resultType.getLayoutAttr();
+  for (const GroupBroadcastLoadDirectPattern &pattern :
+       kGroupBroadcastLoadDirectPatterns) {
+    if (!matchesElementCountPattern(pattern.numGroups, numGroups))
+      continue;
+    if (!matchesGroupBlockPattern(pattern.block, *key))
+      continue;
+    if (!matchesElementBitsPattern(pattern.elementBits, elementBits))
+      continue;
+    if (!matchesGroupBroadcastLoadMemoryPattern(pattern.memory, stride,
+                                               elementBits))
+      continue;
+    VMILayoutAttr resultLayout = materializeLayoutPattern(
+        resultType.getContext(), pattern.resultLayout, /*blockElems=*/1,
+        numGroups);
+    if (existing && existing != resultLayout)
+      continue;
+    return VMIGroupBroadcastLoadDirectFact{
+        pattern.kind,
+        VMIGroupBroadcastLoadLayoutFact{
+            getGroupBlockClassFromPattern(pattern.block),
+            resultLayout,
+            key->groupSize,
+            key->lanesPerPart,
+            key->vcgBlockElems,
+            static_cast<int64_t>(elementBits)}};
+  }
+
+  return fail("group_broadcast_load has no preferred direct lowering layout "
+              "table row");
 }
 
 static std::pair<int64_t, int64_t> getCastElementBits(VMIVRegType sourceType,

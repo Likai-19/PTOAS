@@ -95,12 +95,6 @@ struct GroupStoreUseRequest {
   VMIGroupStoreOp store;
 };
 
-static unsigned getElementBitWidth(Type type) {
-  if (isa<IndexType>(type))
-    return 64;
-  return pto::getPTOStorageElemBitWidth(type);
-}
-
 static std::optional<int64_t> getConstantIndexValue(Value value) {
   if (auto constant = value.getDefiningOp<arith::ConstantIndexOp>())
     return constant.value();
@@ -334,57 +328,27 @@ struct LayoutSolver {
     return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/1);
   }
 
-  bool isE2BGroupBroadcastLoadCandidate(VMIVRegType type, Type sourceType,
-                                        Value sourceGroupStride,
-                                        int64_t numGroups) {
-    if (numGroups <= 0 || type.getElementCount() % numGroups != 0)
-      return false;
-    int64_t groupSize = type.getElementCount() / numGroups;
-    if (numGroups % 8 != 0)
-      return false;
-
-    if (!isa<PtrType>(sourceType))
-      return false;
-    unsigned elementBits = getElementBitWidth(type.getElementType());
-    if (elementBits != 16 && elementBits != 32)
-      return false;
-    int64_t directGroupSize = 256 / elementBits;
-    if (groupSize != directGroupSize && groupSize != 2 * directGroupSize)
-      return false;
-    std::optional<int64_t> strideValue =
-        getConstantIndexValue(sourceGroupStride);
-    if (!strideValue || *strideValue != 1)
-      return false;
-
-    VMILayoutAttr existing = type.getLayoutAttr();
-    if (!existing)
-      return true;
-    if (groupSize == directGroupSize)
-      return existing.isContiguous();
-    return existing.isDeinterleaved() && existing.getFactor() == 2 &&
-           existing.getBlockElems() == 1;
-  }
-
-  bool isE2BGroupBroadcastLoadCandidate(VMIGroupBroadcastLoadOp op) {
-    return isE2BGroupBroadcastLoadCandidate(
-        cast<VMIVRegType>(op.getResult().getType()), op.getSource().getType(),
-        op.getSourceGroupStride(), op.getNumGroupsAttr().getInt());
-  }
-
   VMILayoutAttr
   getPreferredGroupBroadcastLoadLayout(VMIGroupBroadcastLoadOp op) {
     auto type = cast<VMIVRegType>(op.getResult().getType());
     if (VMILayoutAttr existing = type.getLayoutAttr())
       return existing;
 
-    if (!isE2BGroupBroadcastLoadCandidate(op))
+    VMILayoutSupport supports;
+    FailureOr<VMIGroupBroadcastLoadDirectFact> fact =
+        supports.getGroupBroadcastLoadDirectFact(
+            type, op.getSource().getType(), op.getSourceGroupStride(),
+            op.getNumGroupsAttr().getInt());
+    if (failed(fact))
       return {};
-    int64_t numGroups = op.getNumGroupsAttr().getInt();
-    int64_t groupSize = type.getElementCount() / numGroups;
-    int64_t directGroupSize = 256 / getElementBitWidth(type.getElementType());
-    if (groupSize == directGroupSize)
-      return getContiguousLayout();
-    return VMILayoutAttr::getDeinterleaved(ctx, 2, /*blockElems=*/1);
+    return fact->layout.resultLayout;
+  }
+
+  bool hasDirectGroupBroadcastLoadCandidate(VMIGroupBroadcastLoadOp op) {
+    VMILayoutSupport supports;
+    return succeeded(supports.getGroupBroadcastLoadDirectFact(
+        cast<VMIVRegType>(op.getResult().getType()), op.getSource().getType(),
+        op.getSourceGroupStride(), op.getNumGroupsAttr().getInt()));
   }
 
   VMILayoutAttr getPreferredGroupBroadcastSourceLayout(Value value,
@@ -1113,7 +1077,7 @@ struct LayoutSolver {
       }
       if (auto load = dyn_cast<VMIGroupBroadcastLoadOp>(op)) {
         DataLayoutSeedPhase phase =
-            isE2BGroupBroadcastLoadCandidate(load)
+            hasDirectGroupBroadcastLoadCandidate(load)
                 ? DataLayoutSeedPhase::GroupBroadcastLoad
                 : DataLayoutSeedPhase::Other;
         if (failed(setNaturalLayout(load.getResult(),
