@@ -2144,7 +2144,7 @@ Construction：
 ```text
 pto.vmi.constant
 pto.vmi.broadcast
-pto.vmi.iota
+pto.vmi.vci
 pto.vmi.create_mask
 pto.vmi.constant_mask
 ```
@@ -2194,7 +2194,7 @@ pto.vmi.cmpi
 pto.vmi.select
 pto.vmi.extf
 pto.vmi.truncf
-pto.vmi.bitcast
+pto.vmi.vinterpret_cast
 ```
 
 `pto.vmi.shrui` represents logical right shift and lowers to `pto.vshr`.
@@ -2820,7 +2820,7 @@ pto.vmi.broadcast:
   This is layout-independent because every logical lane has the same scalar value. A deinterleaved layout simply
   receives one identical vdup per partition/chunk; no vintlv/vdintlv is needed.
 
-pto.vmi.iota:
+pto.vmi.vci:
   semantics:
     ASC:  result[lane] = base + lane
     DESC: result[lane] = base - lane
@@ -3264,7 +3264,7 @@ pto.vmi.truncf, direct path:
     result part; converted padding lanes remain result padding
   reject other truncf width/layout shapes until their exact pack plan is implemented
 
-pto.vmi.bitcast:
+pto.vmi.vinterpret_cast:
   for each physical part:
     emit pto.vbitcast(source_part) -> result_part_type
   source/result layouts must match, physical arity must match, and every
@@ -3600,8 +3600,8 @@ Unsupported diagnostics:
     VMI-UNSUPPORTED: pto.vmi.truncf supports only f32 deinterleaved=2 source parts to one contiguous f16 result chunk
     or f32 deinterleaved=4 source parts to one contiguous fp8-like result chunk
 
-  unsupported pto.vmi.bitcast shape:
-    VMI-UNSUPPORTED: pto.vmi.bitcast requires matching source/result layouts with identical physical
+  unsupported pto.vmi.vinterpret_cast shape:
+    VMI-UNSUPPORTED: pto.vmi.vinterpret_cast requires matching source/result layouts with identical physical
     arity and matching per-chunk logical bit footprints (...)
 
   unsupported pto.vmi.channel_split / pto.vmi.channel_merge channel count:

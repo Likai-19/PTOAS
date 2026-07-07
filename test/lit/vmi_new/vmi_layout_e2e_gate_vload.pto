@@ -6,17 +6,20 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: not pto-test-opt %s -vmi-to-vpto 2>&1 | FileCheck %s
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-gate 2>&1 | FileCheck %s
+
+// E2E gate: vload + vcvt with gate validation.
 
 module {
-  func.func @vmi_to_vpto_relu_bf16_invalid(
-      %source: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>) {
-    %relu = pto.vmi.relu %source
-        : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
-        -> !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
-    return
+  func.func @gate_vload_vcvt_e2e(%src: !pto.ptr<f32, ub>, %off: index)
+      -> !pto.vmi.vreg<128xf16> {
+    %x = pto.vmi.vload %src[%off] {dist_mode = "continuous"}
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
+    %r = pto.vmi.vcvt %x : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
+    return %r : !pto.vmi.vreg<128xf16>
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.relu direct lowering requires physical vreg parts with b8/b16/b32 predicate masks and f16/f32 element type
-// CHECK-SAME: pto.vrelu direct lowering supports only f16/f32 VMI floating-point element types
+// CHECK: pto.vmi.load
+// CHECK: pto.vmi.truncf
+// CHECK-NOT: error:

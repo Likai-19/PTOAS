@@ -366,6 +366,9 @@ struct LayoutSolver {
 
     int64_t groupSize = type.getElementCount() / numGroups;
     std::optional<int64_t> rowStride = getConstantIndexValue(op.getRowStride());
+    // Slot-load with stride=1 uses contiguous layout.
+    if (rowStride && *rowStride == 1)
+      return getContiguousLayout();
     if (!rowStride || *rowStride <= 0 || *rowStride % 8 != 0)
       return getContiguousLayout();
 
@@ -393,6 +396,9 @@ struct LayoutSolver {
       return success();
 
     std::optional<int64_t> rowStride = getConstantIndexValue(op.getRowStride());
+    // Slot-load: stride=1 loads one scalar per group, contiguous layout is fine.
+    if (rowStride && *rowStride == 1)
+      return success();
     if (rowStride && *rowStride > 0 && *rowStride % 8 == 0)
       return success();
 
@@ -419,7 +425,10 @@ struct LayoutSolver {
     if (value.getDefiningOp<VMIGroupReduceAddFOp>() ||
         value.getDefiningOp<VMIGroupReduceMaxFOp>() ||
         value.getDefiningOp<VMIGroupReduceAddIOp>() ||
-        value.getDefiningOp<VMIGroupReduceMaxIOp>())
+        value.getDefiningOp<VMIGroupReduceMaxIOp>() ||
+        value.getDefiningOp<VMIvcaddOp>() ||
+        value.getDefiningOp<VMIvcmaxOp>() ||
+        value.getDefiningOp<VMIvcminOp>())
       return getPreferredGroupSlotsLayout(type, numGroups);
     if (auto load = value.getDefiningOp<VMIGroupSlotLoadOp>())
       return getPreferredGroupSlotLoadLayout(load);
@@ -521,12 +530,18 @@ struct LayoutSolver {
   bool canProducerAdoptConsumerLayout(Operation *op) {
     if (!op)
       return false;
-    return isa<VMILoadOp, VMIBroadcastOp,
-               VMIConstantOp, VMIIotaOp, VMIAddFOp, VMIAddIOp, VMISubFOp,
-               VMISubIOp, VMIMulFOp, VMIMulIOp, VMIFmaOp, VMIDivFOp, VMIMinFOp,
-               VMIMaxFOp, VMINegFOp, VMIAbsFOp, VMIAbsIOp, VMISqrtOp, VMIExpOp,
-               VMILnOp, VMIReluOp, VMIFPToSIOp, VMIAndIOp, VMIOrIOp, VMIXOrIOp,
-               VMIShLIOp, VMIShRUIOp, VMINotOp, VMISelectOp, VMIBitcastOp>(op);
+    return isa<VMILoadOp, VMIBroadcastOp, VMIVbrcOp,
+               VMIConstantOp, VMIVciOp, VMIIotaOp, VMIAddFOp, VMIAddIOp, VMISubFOp,
+               VMISubIOp, VMIMulFOp, VMIMulIOp, VMIVaddOp, VMIVsubOp, VMIVmulOp,
+               VMIFmaOp, VMIVdivOp, VMIDivFOp, VMIVminOp, VMIMinFOp,
+               VMIVmaxOp, VMIMaxFOp, VMIVnegOp, VMINegFOp, VMIAbsFOp, VMIAbsIOp,
+               VMIVabsOp, VMIVsqrtOp, VMISqrtOp, VMIVexpOp, VMIExpOp,
+               VMIVlnOp, VMILnOp, VMIVreluOp, VMIReluOp, VMIFPToSIOp, VMIVandOp,
+               VMIAndIOp, VMIVorOp, VMIOrIOp, VMIVxorOp, VMIXOrIOp, VMIVshlOp,
+               VMIShLIOp, VMIVshrOp, VMIShRUIOp, VMIVnotOp, VMINotOp, VMIvSelOp,
+               VMISelectOp, VMIVinterpretCastOp, VMIBitcastOp,
+               VMIAddSOp, VMIMulSOp, VMIMaxSOp, VMIMinSOp,
+               VMIShlSOp, VMIShrSOp>(op);
   }
 
   bool canGroupBroadcastProduceLayout(VMIGroupBroadcastOp broadcast,
@@ -561,14 +576,51 @@ struct LayoutSolver {
             !canGroupBroadcastProduceLayout(broadcast, requestedLayout))
           return false;
       }
+      if (auto vbrc = node.value.getDefiningOp<VMIVbrcOp>()) {
+        if (node.value == vbrc.getResult() && vbrc.getGroupAttr()) {
+          auto sourceType =
+              cast<VMIVRegType>(vbrc.getValue().getType());
+          auto resultType =
+              cast<VMIVRegType>(vbrc.getResult().getType());
+          int64_t numGroups = vbrc.getGroupAttr().getInt();
+          auto assignedSourceType = VMIVRegType::get(
+              ctx, sourceType.getElementCount(), sourceType.getElementType(),
+              getPreferredGroupSlotsLayout(sourceType, numGroups));
+          auto assignedResultType =
+              VMIVRegType::get(ctx, resultType.getElementCount(),
+                               resultType.getElementType(), requestedLayout);
+          VMILayoutSupport supports;
+          if (failed(supports.getGroupBroadcastSupport(
+                  capabilities, assignedSourceType, assignedResultType,
+                  numGroups)))
+            return false;
+        }
+      }
     }
     return true;
   }
 
   bool isUnsupportedGroupBroadcastResultForLayout(Value value,
                                                   VMILayoutAttr layout) {
-    auto broadcast = value.getDefiningOp<VMIGroupBroadcastOp>();
-    return broadcast && !canGroupBroadcastProduceLayout(broadcast, layout);
+    if (auto broadcast = value.getDefiningOp<VMIGroupBroadcastOp>())
+      return !canGroupBroadcastProduceLayout(broadcast, layout);
+    if (auto vbrc = value.getDefiningOp<VMIVbrcOp>()) {
+      if (!vbrc.getGroupAttr())
+        return false;
+      auto sourceType = cast<VMIVRegType>(vbrc.getValue().getType());
+      auto resultType = cast<VMIVRegType>(vbrc.getResult().getType());
+      int64_t numGroups = vbrc.getGroupAttr().getInt();
+      auto assignedSourceType = VMIVRegType::get(
+          ctx, sourceType.getElementCount(), sourceType.getElementType(),
+          getPreferredGroupSlotsLayout(sourceType, numGroups));
+      auto assignedResultType = VMIVRegType::get(
+          ctx, resultType.getElementCount(), resultType.getElementType(),
+          layout);
+      VMILayoutSupport supports;
+      return failed(supports.getGroupBroadcastSupport(
+          capabilities, assignedSourceType, assignedResultType, numGroups));
+    }
+    return false;
   }
 
   LogicalResult constrainElementwiseBinary(OpOperand &lhs, OpOperand &rhs,
@@ -848,28 +900,28 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto divf = dyn_cast<VMIDivFOp>(op)) {
+if (auto divf = dyn_cast<VMIDivFOp>(op)) {
         if (failed(constrainElementwiseBinary(divf.getLhsMutable(),
                                               divf.getRhsMutable(),
                                               divf.getResult(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto minf = dyn_cast<VMIMinFOp>(op)) {
+if (auto minf = dyn_cast<VMIMinFOp>(op)) {
         if (failed(constrainElementwiseBinary(minf.getLhsMutable(),
                                               minf.getRhsMutable(),
                                               minf.getResult(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto maxf = dyn_cast<VMIMaxFOp>(op)) {
+if (auto maxf = dyn_cast<VMIMaxFOp>(op)) {
         if (failed(constrainElementwiseBinary(maxf.getLhsMutable(),
                                               maxf.getRhsMutable(),
                                               maxf.getResult(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto negf = dyn_cast<VMINegFOp>(op)) {
+if (auto negf = dyn_cast<VMINegFOp>(op)) {
         if (failed(unite(negf.getSource(), negf.getResult(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -884,22 +936,22 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto sqrt = dyn_cast<VMISqrtOp>(op)) {
+if (auto sqrt = dyn_cast<VMISqrtOp>(op)) {
         if (failed(unite(sqrt.getSource(), sqrt.getResult(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto exp = dyn_cast<VMIExpOp>(op)) {
+if (auto exp = dyn_cast<VMIExpOp>(op)) {
         if (failed(unite(exp.getSource(), exp.getResult(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto ln = dyn_cast<VMILnOp>(op)) {
+if (auto ln = dyn_cast<VMILnOp>(op)) {
         if (failed(unite(ln.getSource(), ln.getResult(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto relu = dyn_cast<VMIReluOp>(op)) {
+if (auto relu = dyn_cast<VMIReluOp>(op)) {
         if (failed(unite(relu.getSource(), relu.getResult(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -914,41 +966,41 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto andi = dyn_cast<VMIAndIOp>(op)) {
+if (auto andi = dyn_cast<VMIAndIOp>(op)) {
         if (failed(constrainElementwiseBinary(andi.getLhsMutable(),
                                               andi.getRhsMutable(),
                                               andi.getResult(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto ori = dyn_cast<VMIOrIOp>(op)) {
+if (auto ori = dyn_cast<VMIOrIOp>(op)) {
         if (failed(constrainElementwiseBinary(
                 ori.getLhsMutable(), ori.getRhsMutable(), ori.getResult(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto xori = dyn_cast<VMIXOrIOp>(op)) {
+if (auto xori = dyn_cast<VMIXOrIOp>(op)) {
         if (failed(constrainElementwiseBinary(xori.getLhsMutable(),
                                               xori.getRhsMutable(),
                                               xori.getResult(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto shli = dyn_cast<VMIShLIOp>(op)) {
+if (auto shli = dyn_cast<VMIShLIOp>(op)) {
         if (failed(constrainElementwiseBinary(shli.getLhsMutable(),
                                               shli.getRhsMutable(),
                                               shli.getResult(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto shrui = dyn_cast<VMIShRUIOp>(op)) {
+if (auto shrui = dyn_cast<VMIShRUIOp>(op)) {
         if (failed(constrainElementwiseBinary(shrui.getLhsMutable(),
                                               shrui.getRhsMutable(),
                                               shrui.getResult(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto notOp = dyn_cast<VMINotOp>(op)) {
+if (auto notOp = dyn_cast<VMINotOp>(op)) {
         if (failed(unite(notOp.getSource(), notOp.getResult(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -963,7 +1015,7 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto select = dyn_cast<VMISelectOp>(op)) {
+if (auto select = dyn_cast<VMISelectOp>(op)) {
         if (failed(unite(select.getTrueValue(), select.getFalseValue(), op)) ||
             failed(unite(select.getTrueValue(), select.getResult(), op)))
           return WalkResult::interrupt();
@@ -1291,8 +1343,8 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto bitcast = dyn_cast<VMIBitcastOp>(op)) {
-        if (failed(unite(bitcast.getSource(), bitcast.getResult(), op)))
+      if (auto legacyBitcast = dyn_cast<VMIBitcastOp>(op)) {
+        if (failed(unite(legacyBitcast.getSource(), legacyBitcast.getResult(), op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
@@ -1343,13 +1395,6 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto load = dyn_cast<VMIGroupBroadcastLoadOp>(op)) {
-        if (failed(setNaturalLayout(
-                load.getResult(),
-                getPreferredGroupBroadcastLoadLayout(load), op)))
-          return WalkResult::interrupt();
-        return WalkResult::advance();
-      }
       if (auto load = dyn_cast<VMIStrideLoadOp>(op)) {
         auto resultType = cast<VMIVRegType>(load.getResult().getType());
         if (failed(
@@ -1363,6 +1408,18 @@ struct LayoutSolver {
       }
       if (auto store = dyn_cast<VMIStoreOp>(op)) {
         requestDataUse(store.getValueMutable(), getContiguousLayout());
+        return WalkResult::advance();
+      }
+      if (auto store = dyn_cast<VMIvStoreOp>(op)) {
+        for (auto &val : store.getValuesMutable())
+          requestDataUse(val, getContiguousLayout());
+        if (!store.getMask().empty()) {
+          auto valueType = cast<VMIVRegType>(store.getValues()[0].getType());
+          if (failed(requestMaskUse(
+                  store.getMaskMutable()[0], getContiguousLayout(),
+                  getMaskGranularityForElement(valueType.getElementType()), op)))
+            return WalkResult::interrupt();
+        }
         return WalkResult::advance();
       }
       if (auto store = dyn_cast<VMIInterleaveStoreOp>(op)) {
@@ -1459,6 +1516,228 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
+    // ===== Unified (new) VMI op constraints =====
+      if (auto vadd = dyn_cast<VMIVaddOp>(op)) {
+        if (failed(constrainElementwiseBinary(vadd.getLhsMutable(),
+                                              vadd.getRhsMutable(),
+                                              vadd.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto vsub = dyn_cast<VMIVsubOp>(op)) {
+        if (failed(constrainElementwiseBinary(vsub.getLhsMutable(),
+                                              vsub.getRhsMutable(),
+                                              vsub.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto vmul = dyn_cast<VMIVmulOp>(op)) {
+        if (failed(constrainElementwiseBinary(vmul.getLhsMutable(),
+                                              vmul.getRhsMutable(),
+                                              vmul.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto divf = dyn_cast<VMIVdivOp>(op)) {
+        if (failed(constrainElementwiseBinary(divf.getLhsMutable(),
+                                              divf.getRhsMutable(),
+                                              divf.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto minf = dyn_cast<VMIVminOp>(op)) {
+        if (failed(constrainElementwiseBinary(minf.getLhsMutable(),
+                                              minf.getRhsMutable(),
+                                              minf.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto maxf = dyn_cast<VMIVmaxOp>(op)) {
+        if (failed(constrainElementwiseBinary(maxf.getLhsMutable(),
+                                              maxf.getRhsMutable(),
+                                              maxf.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto negf = dyn_cast<VMIVnegOp>(op)) {
+        if (failed(unite(negf.getSource(), negf.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto vabs = dyn_cast<VMIVabsOp>(op)) {
+        if (failed(unite(vabs.getSource(), vabs.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto sqrt = dyn_cast<VMIVsqrtOp>(op)) {
+        if (failed(unite(sqrt.getSource(), sqrt.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto exp = dyn_cast<VMIVexpOp>(op)) {
+        if (failed(unite(exp.getSource(), exp.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto ln = dyn_cast<VMIVlnOp>(op)) {
+        if (failed(unite(ln.getSource(), ln.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto relu = dyn_cast<VMIVreluOp>(op)) {
+        if (failed(unite(relu.getSource(), relu.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto andi = dyn_cast<VMIVandOp>(op)) {
+        if (failed(constrainElementwiseBinary(andi.getLhsMutable(),
+                                              andi.getRhsMutable(),
+                                              andi.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto ori = dyn_cast<VMIVorOp>(op)) {
+        if (failed(constrainElementwiseBinary(
+                ori.getLhsMutable(), ori.getRhsMutable(), ori.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto xori = dyn_cast<VMIVxorOp>(op)) {
+        if (failed(constrainElementwiseBinary(xori.getLhsMutable(),
+                                              xori.getRhsMutable(),
+                                              xori.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto shli = dyn_cast<VMIVshlOp>(op)) {
+        if (failed(constrainElementwiseBinary(shli.getLhsMutable(),
+                                              shli.getRhsMutable(),
+                                              shli.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto shrui = dyn_cast<VMIVshrOp>(op)) {
+        if (failed(constrainElementwiseBinary(shrui.getLhsMutable(),
+                                              shrui.getRhsMutable(),
+                                              shrui.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto notOp = dyn_cast<VMIVnotOp>(op)) {
+        if (failed(unite(notOp.getSource(), notOp.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto vcmp = dyn_cast<VMIVcmpOp>(op)) {
+        if (failed(unite(vcmp.getLhs(), vcmp.getRhs(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto vcmps = dyn_cast<VMIVcmpsOp>(op)) {
+        // vcmps: scalar operand does not participate in layout unification;
+        // only the source vector needs its natural layout set for lowering.
+        return WalkResult::advance();
+      }
+      // Vector-scalar ops: scalar operand does not participate in layout
+      // unification, same as vcmps.
+      if (isa<VMIAddSOp, VMIMulSOp, VMIMaxSOp, VMIMinSOp,
+              VMIShlSOp, VMIShrSOp>(op)) {
+        return WalkResult::advance();
+      }
+      if (auto select = dyn_cast<VMIvSelOp>(op)) {
+        if (failed(unite(select.getTrueValue(), select.getFalseValue(), op)) ||
+            failed(unite(select.getTrueValue(), select.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto vcvt = dyn_cast<VMICvtOp>(op)) {
+        auto sourceType = cast<VMIVRegType>(vcvt.getSource().getType());
+        auto resultType = cast<VMIVRegType>(vcvt.getResult().getType());
+        Type srcElem = sourceType.getElementType();
+        Type dstElem = resultType.getElementType();
+
+        // Classify conversion direction.
+        bool srcFp =
+            isa<FloatType>(srcElem) || pto::isPTOLowPrecisionType(srcElem);
+        bool dstFp =
+            isa<FloatType>(dstElem) || pto::isPTOLowPrecisionType(dstElem);
+        bool srcInt = isa<IntegerType, IndexType>(srcElem);
+        unsigned srcBits = pto::getPTOStorageElemBitWidth(srcElem);
+        unsigned dstBits = pto::getPTOStorageElemBitWidth(dstElem);
+
+        enum { FpWiden, FpNarrow, FpToSi, SiToFp, IntWiden, IntNarrow } dir;
+        if (srcFp && dstFp)
+          dir = dstBits > srcBits ? FpWiden : FpNarrow;
+        else if (srcFp && srcInt)
+          dir = FpToSi;
+        else if (srcInt && dstFp)
+          dir = SiToFp;
+        else
+          dir = dstBits > srcBits ? IntWiden : IntNarrow;
+
+        VMILayoutSupport supports;
+        switch (dir) {
+        case FpWiden:
+        case IntWiden: {
+          FailureOr<VMICastLayoutFact> fact =
+              supports.getPreferredCastLayoutFact(sourceType, resultType);
+          if (succeeded(fact) && (fact->kind == VMICastLayoutKind::Widen2x ||
+                                  fact->kind == VMICastLayoutKind::Widen4x)) {
+            requestDataUse(vcvt.getSourceMutable(), fact->sourceLayout);
+            if (failed(
+                    setNaturalLayout(vcvt.getResult(), fact->resultLayout, op)))
+              return WalkResult::interrupt();
+          }
+          break;
+        }
+        case FpNarrow:
+        case IntNarrow: {
+          FailureOr<VMICastLayoutFact> fact =
+              supports.getPreferredCastLayoutFact(sourceType, resultType);
+          if (succeeded(fact) &&
+              (fact->kind == VMICastLayoutKind::Narrow2x ||
+               fact->kind == VMICastLayoutKind::Narrow4x))
+            requestDataUse(vcvt.getSourceMutable(), fact->sourceLayout);
+          VMILayoutAttr resultLayout =
+              succeeded(fact) ? fact->resultLayout : getContiguousLayout();
+          if (failed(setNaturalLayout(vcvt.getResult(), resultLayout, op)))
+            return WalkResult::interrupt();
+          break;
+        }
+        case FpToSi:
+        case SiToFp: {
+          if (failed(unite(vcvt.getSource(), vcvt.getResult(), op)))
+            return WalkResult::interrupt();
+          break;
+        }
+        }
+        return WalkResult::advance();
+      }
+      if (auto bitcast = dyn_cast<VMIVinterpretCastOp>(op)) {
+        if (failed(unite(bitcast.getSource(), bitcast.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto load = dyn_cast<VMIGroupBroadcastLoadOp>(op)) {
+        if (failed(setNaturalLayout(
+                load.getResult(),
+                getPreferredGroupBroadcastLoadLayout(load), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto vselr = dyn_cast<VMIVselrOp>(op)) {
+        auto sourceType = cast<VMIVRegType>(vselr.getSource().getType());
+        auto resultType = cast<VMIVRegType>(vselr.getResult().getType());
+        if (sourceType.hasLayout() || resultType.hasLayout())
+          return WalkResult::advance();
+
+        requestDataUse(vselr.getSourceMutable(), getContiguousLayout());
+        if (failed(setNaturalLayout(vselr.getResult(), getContiguousLayout(),
+                                    op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+    // ===== Structural (control-flow / function) =====
       if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
         if (failed(addIfConstraints(ifOp)))
           return WalkResult::interrupt();
@@ -1796,7 +2075,31 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
+      if (auto vcmp = dyn_cast<VMIVcmpOp>(op)) {
+        auto lhsType = cast<VMIVRegType>(vcmp.getLhs().getType());
+        if (failed(requestMask(
+                vcmp.getResult(), lhsType.getLayoutAttr(),
+                getMaskGranularityForElement(lhsType.getElementType()), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto vcmps = dyn_cast<VMIVcmpsOp>(op)) {
+        auto srcType = cast<VMIVRegType>(vcmps.getSrc().getType());
+        if (failed(requestMask(
+                vcmps.getResult(), srcType.getLayoutAttr(),
+                getMaskGranularityForElement(srcType.getElementType()), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
       if (auto select = dyn_cast<VMISelectOp>(op)) {
+        auto resultType = cast<VMIVRegType>(select.getResult().getType());
+        if (failed(requestMaskUse(
+                select.getMaskMutable(), resultType.getLayoutAttr(),
+                getMaskGranularityForElement(resultType.getElementType()), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto select = dyn_cast<VMIvSelOp>(op)) {
         auto resultType = cast<VMIVRegType>(select.getResult().getType());
         if (failed(requestMaskUse(
                 select.getMaskMutable(), resultType.getLayoutAttr(),

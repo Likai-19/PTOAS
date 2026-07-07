@@ -37,19 +37,19 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
       %x = pto.vmi.load %ub_src[%c0] : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
       %sum32 = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8, reassoc}
           : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
-          -> !pto.vmi.vreg<128xf32>
+          -> !pto.vmi.vreg<8xf32>
       %b_for_mul = pto.vmi.group_broadcast %sum32 {num_groups = 8}
-          : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<128xf32>
       %y = pto.vmi.mulf %x, %b_for_mul
           : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
           -> !pto.vmi.vreg<128xf32>
       %ysum = pto.vmi.group_reduce_addf %y, %mask {num_groups = 8, reassoc}
           : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
-          -> !pto.vmi.vreg<128xf32>
+          -> !pto.vmi.vreg<8xf32>
       pto.vmi.group_store %ysum, %ub_sum[%c0], %c1 {num_groups = 8}
-          : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
+          : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
       %b_for_cast = pto.vmi.group_broadcast %sum32 {num_groups = 8}
-          : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
+          : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<128xf32>
       %h = pto.vmi.truncf %b_for_cast
           : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
       pto.vmi.store %h, %ub_dense[%c0] : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>

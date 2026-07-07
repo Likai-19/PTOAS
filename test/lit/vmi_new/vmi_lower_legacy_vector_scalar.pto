@@ -1,0 +1,135 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). Please refer to the License for details. You may not use this
+// file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON AN
+// "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+// FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+// for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy | FileCheck %s
+
+// Two-stage lowering: C5 vector-scalar ops → broadcast + legacy + zero_const + select.
+// Lowering chain: unified_op(src, scalar, mask) → broadcast(scalar) → legacy_op(src, brc) → zero_const → select
+
+module {
+  // CHECK-LABEL: func.func @vadds_f32
+  // CHECK: pto.vmi.broadcast
+  // CHECK: pto.vmi.addf
+  // CHECK: pto.vmi.constant {value = dense<0.000000e+00>
+  // CHECK: pto.vmi.select
+  // CHECK-NOT: pto.vmi.vadds
+  func.func @vadds_f32(
+      %src: !pto.vmi.vreg<64xf32>,
+      %scalar: f32,
+      %mask: !pto.vmi.mask<64xpred>)
+      -> !pto.vmi.vreg<64xf32> {
+    %r = pto.vmi.vadds %src, %scalar, %mask
+        : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xf32>
+    return %r : !pto.vmi.vreg<64xf32>
+  }
+
+  // CHECK-LABEL: func.func @vadds_i32
+  // CHECK: pto.vmi.broadcast
+  // CHECK: pto.vmi.addi
+  // CHECK: pto.vmi.constant {value = dense<0>
+  // CHECK: pto.vmi.select
+  // CHECK-NOT: pto.vmi.vadds
+  func.func @vadds_i32(
+      %src: !pto.vmi.vreg<64xi32>,
+      %scalar: i32,
+      %mask: !pto.vmi.mask<64xpred>)
+      -> !pto.vmi.vreg<64xi32> {
+    %r = pto.vmi.vadds %src, %scalar, %mask
+        : !pto.vmi.vreg<64xi32>, i32, !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xi32>
+    return %r : !pto.vmi.vreg<64xi32>
+  }
+
+  // CHECK-LABEL: func.func @vmuls_f32
+  // CHECK: pto.vmi.broadcast
+  // CHECK: pto.vmi.mulf
+  // CHECK: pto.vmi.constant {value = dense<0.000000e+00>
+  // CHECK: pto.vmi.select
+  // CHECK-NOT: pto.vmi.vmuls
+  func.func @vmuls_f32(
+      %src: !pto.vmi.vreg<64xf32>,
+      %scalar: f32,
+      %mask: !pto.vmi.mask<64xpred>)
+      -> !pto.vmi.vreg<64xf32> {
+    %r = pto.vmi.vmuls %src, %scalar, %mask
+        : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xf32>
+    return %r : !pto.vmi.vreg<64xf32>
+  }
+
+  // CHECK-LABEL: func.func @vmaxs_f32
+  // CHECK: pto.vmi.broadcast
+  // CHECK: pto.vmi.maxf
+  // CHECK: pto.vmi.constant {value = dense<0.000000e+00>
+  // CHECK: pto.vmi.select
+  // CHECK-NOT: pto.vmi.vmaxs
+  func.func @vmaxs_f32(
+      %src: !pto.vmi.vreg<64xf32>,
+      %scalar: f32,
+      %mask: !pto.vmi.mask<64xpred>)
+      -> !pto.vmi.vreg<64xf32> {
+    %r = pto.vmi.vmaxs %src, %scalar, %mask
+        : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xf32>
+    return %r : !pto.vmi.vreg<64xf32>
+  }
+
+  // CHECK-LABEL: func.func @vmins_f32
+  // CHECK: pto.vmi.broadcast
+  // CHECK: pto.vmi.minf
+  // CHECK: pto.vmi.constant {value = dense<0.000000e+00>
+  // CHECK: pto.vmi.select
+  // CHECK-NOT: pto.vmi.vmins
+  func.func @vmins_f32(
+      %src: !pto.vmi.vreg<64xf32>,
+      %scalar: f32,
+      %mask: !pto.vmi.mask<64xpred>)
+      -> !pto.vmi.vreg<64xf32> {
+    %r = pto.vmi.vmins %src, %scalar, %mask
+        : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xf32>
+    return %r : !pto.vmi.vreg<64xf32>
+  }
+
+  // CHECK-LABEL: func.func @vshls
+  // CHECK: pto.vmi.broadcast
+  // CHECK: pto.vmi.shli
+  // CHECK: pto.vmi.constant {value = dense<0>
+  // CHECK: pto.vmi.select
+  // CHECK-NOT: pto.vmi.vshls
+  func.func @vshls(
+      %src: !pto.vmi.vreg<64xi32>,
+      %scalar: i32,
+      %mask: !pto.vmi.mask<64xpred>)
+      -> !pto.vmi.vreg<64xi32> {
+    %r = pto.vmi.vshls %src, %scalar, %mask
+        : !pto.vmi.vreg<64xi32>, i32, !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xi32>
+    return %r : !pto.vmi.vreg<64xi32>
+  }
+
+  // CHECK-LABEL: func.func @vshrs
+  // CHECK: pto.vmi.broadcast
+  // CHECK: pto.vmi.shrui
+  // CHECK: pto.vmi.constant {value = dense<0>
+  // CHECK: pto.vmi.select
+  // CHECK-NOT: pto.vmi.vshrs
+  func.func @vshrs(
+      %src: !pto.vmi.vreg<64xi32>,
+      %scalar: i32,
+      %mask: !pto.vmi.mask<64xpred>)
+      -> !pto.vmi.vreg<64xi32> {
+    %r = pto.vmi.vshrs %src, %scalar, %mask
+        : !pto.vmi.vreg<64xi32>, i32, !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xi32>
+    return %r : !pto.vmi.vreg<64xi32>
+  }
+}

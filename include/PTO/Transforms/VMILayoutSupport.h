@@ -328,6 +328,8 @@ public:
 
   FailureOr<VMIBitcastSupport>
   getBitcastSupport(VMIBitcastOp op, std::string *reason = nullptr) const;
+  FailureOr<VMIBitcastSupport>
+  getVinterpretCastSupport(VMIVinterpretCastOp op, std::string *reason = nullptr) const;
 
   FailureOr<VMIHistogramSupport>
   getDhistSupport(VMIDhistOp op, std::string *reason = nullptr) const;

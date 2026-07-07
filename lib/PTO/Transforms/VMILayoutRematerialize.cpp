@@ -81,7 +81,8 @@ static std::optional<Value> rematerializeWidenExt(ExtOp op,
 static std::optional<Value>
 rematerializeBinaryDataOp(Operation *op, VMIVRegType resultType, Location loc,
                           OpBuilder &builder) {
-  auto rebuild = [&](auto typedOp) -> std::optional<Value> {
+  // For deprecated mask-less binary ops.
+  auto rebuildMaskless = [&](auto typedOp) -> std::optional<Value> {
     auto lhsType = dyn_cast<VMIVRegType>(typedOp.getLhs().getType());
     auto rhsType = dyn_cast<VMIVRegType>(typedOp.getRhs().getType());
     if (!lhsType || !rhsType)
@@ -101,41 +102,91 @@ rematerializeBinaryDataOp(Operation *op, VMIVRegType resultType, Location loc,
         .getResult();
   };
 
+  // For unified binary ops that carry a mask operand and optional pmode attr.
+  auto rebuildMasked = [&](auto typedOp) -> std::optional<Value> {
+    auto lhsType = dyn_cast<VMIVRegType>(typedOp.getLhs().getType());
+    auto rhsType = dyn_cast<VMIVRegType>(typedOp.getRhs().getType());
+    if (!lhsType || !rhsType)
+      return std::nullopt;
+    auto lhsResultType =
+        VMIVRegType::get(lhsType.getContext(), lhsType.getElementCount(),
+                         lhsType.getElementType(), resultType.getLayoutAttr());
+    auto rhsResultType =
+        VMIVRegType::get(rhsType.getContext(), rhsType.getElementCount(),
+                         rhsType.getElementType(), resultType.getLayoutAttr());
+    Value lhs =
+        materializeDataLayout(typedOp.getLhs(), lhsResultType, loc, builder);
+    Value rhs =
+        materializeDataLayout(typedOp.getRhs(), rhsResultType, loc, builder);
+    auto mask = typedOp.getMask();
+    auto pmode = typedOp.getPmodeAttr();
+    return builder
+        .create<std::decay_t<decltype(typedOp)>>(loc, resultType, lhs, rhs,
+                                                  mask, pmode)
+        .getResult();
+  };
+
+  // Deprecated mask-less ops.
   if (auto addf = dyn_cast<VMIAddFOp>(op))
-    return rebuild(addf);
+    return rebuildMaskless(addf);
   if (auto addi = dyn_cast<VMIAddIOp>(op))
-    return rebuild(addi);
+    return rebuildMaskless(addi);
   if (auto subf = dyn_cast<VMISubFOp>(op))
-    return rebuild(subf);
+    return rebuildMaskless(subf);
   if (auto subi = dyn_cast<VMISubIOp>(op))
-    return rebuild(subi);
+    return rebuildMaskless(subi);
   if (auto mulf = dyn_cast<VMIMulFOp>(op))
-    return rebuild(mulf);
+    return rebuildMaskless(mulf);
   if (auto muli = dyn_cast<VMIMulIOp>(op))
-    return rebuild(muli);
+    return rebuildMaskless(muli);
+
+  // Unified ops with mask + pmode.
+  if (auto divf = dyn_cast<VMIVdivOp>(op))
+    return rebuildMasked(divf);
+  if (auto vadd = dyn_cast<VMIVaddOp>(op))
+    return rebuildMasked(vadd);
+  if (auto vsub = dyn_cast<VMIVsubOp>(op))
+    return rebuildMasked(vsub);
+  if (auto vmul = dyn_cast<VMIVmulOp>(op))
+    return rebuildMasked(vmul);
+  if (auto minf = dyn_cast<VMIVminOp>(op))
+    return rebuildMasked(minf);
+  if (auto maxf = dyn_cast<VMIVmaxOp>(op))
+    return rebuildMasked(maxf);
+  if (auto andi = dyn_cast<VMIVandOp>(op))
+    return rebuildMasked(andi);
+  if (auto ori = dyn_cast<VMIVorOp>(op))
+    return rebuildMasked(ori);
+  if (auto xori = dyn_cast<VMIVxorOp>(op))
+    return rebuildMasked(xori);
+  if (auto shli = dyn_cast<VMIVshlOp>(op))
+    return rebuildMasked(shli);
+  if (auto shrui = dyn_cast<VMIVshrOp>(op))
+    return rebuildMasked(shrui);
   if (auto divf = dyn_cast<VMIDivFOp>(op))
-    return rebuild(divf);
+    return rebuildMaskless(divf);
   if (auto minf = dyn_cast<VMIMinFOp>(op))
-    return rebuild(minf);
+    return rebuildMaskless(minf);
   if (auto maxf = dyn_cast<VMIMaxFOp>(op))
-    return rebuild(maxf);
+    return rebuildMaskless(maxf);
   if (auto andi = dyn_cast<VMIAndIOp>(op))
-    return rebuild(andi);
+    return rebuildMaskless(andi);
   if (auto ori = dyn_cast<VMIOrIOp>(op))
-    return rebuild(ori);
+    return rebuildMaskless(ori);
   if (auto xori = dyn_cast<VMIXOrIOp>(op))
-    return rebuild(xori);
+    return rebuildMaskless(xori);
   if (auto shli = dyn_cast<VMIShLIOp>(op))
-    return rebuild(shli);
+    return rebuildMaskless(shli);
   if (auto shrui = dyn_cast<VMIShRUIOp>(op))
-    return rebuild(shrui);
+    return rebuildMaskless(shrui);
   return std::nullopt;
 }
 
 static std::optional<Value>
 rematerializeUnaryDataOp(Operation *op, VMIVRegType resultType, Location loc,
                          OpBuilder &builder) {
-  auto rebuild = [&](auto typedOp) -> std::optional<Value> {
+  // For deprecated mask-less unary ops.
+  auto rebuildMaskless = [&](auto typedOp) -> std::optional<Value> {
     auto sourceType = dyn_cast<VMIVRegType>(typedOp.getSource().getType());
     if (!sourceType)
       return std::nullopt;
@@ -149,22 +200,55 @@ rematerializeUnaryDataOp(Operation *op, VMIVRegType resultType, Location loc,
         .getResult();
   };
 
-  if (auto negf = dyn_cast<VMINegFOp>(op))
-    return rebuild(negf);
+  // For unified unary ops that carry a mask operand and optional pmode attr.
+  auto rebuildMasked = [&](auto typedOp) -> std::optional<Value> {
+    auto sourceType = dyn_cast<VMIVRegType>(typedOp.getSource().getType());
+    if (!sourceType)
+      return std::nullopt;
+    auto sourceResultType = VMIVRegType::get(
+        sourceType.getContext(), sourceType.getElementCount(),
+        sourceType.getElementType(), resultType.getLayoutAttr());
+    Value source = materializeDataLayout(typedOp.getSource(), sourceResultType,
+                                         loc, builder);
+    auto mask = typedOp.getMask();
+    auto pmode = typedOp.getPmodeAttr();
+    return builder
+        .create<std::decay_t<decltype(typedOp)>>(loc, resultType, source,
+                                                  mask, pmode)
+        .getResult();
+  };
+
+  // Deprecated mask-less ops.
   if (auto absf = dyn_cast<VMIAbsFOp>(op))
-    return rebuild(absf);
+    return rebuildMaskless(absf);
   if (auto absi = dyn_cast<VMIAbsIOp>(op))
-    return rebuild(absi);
+    return rebuildMaskless(absi);
+
+  // Unified ops with mask + pmode.
+  if (auto negf = dyn_cast<VMIVnegOp>(op))
+    return rebuildMasked(negf);
+  if (auto sqrt = dyn_cast<VMIVsqrtOp>(op))
+    return rebuildMasked(sqrt);
+  if (auto exp = dyn_cast<VMIVexpOp>(op))
+    return rebuildMasked(exp);
+  if (auto ln = dyn_cast<VMIVlnOp>(op))
+    return rebuildMasked(ln);
+  if (auto relu = dyn_cast<VMIVreluOp>(op))
+    return rebuildMasked(relu);
+  if (auto notOp = dyn_cast<VMIVnotOp>(op))
+    return rebuildMasked(notOp);
+  if (auto negf = dyn_cast<VMINegFOp>(op))
+    return rebuildMaskless(negf);
   if (auto sqrt = dyn_cast<VMISqrtOp>(op))
-    return rebuild(sqrt);
+    return rebuildMaskless(sqrt);
   if (auto exp = dyn_cast<VMIExpOp>(op))
-    return rebuild(exp);
+    return rebuildMaskless(exp);
   if (auto ln = dyn_cast<VMILnOp>(op))
-    return rebuild(ln);
+    return rebuildMaskless(ln);
   if (auto relu = dyn_cast<VMIReluOp>(op))
-    return rebuild(relu);
+    return rebuildMaskless(relu);
   if (auto notOp = dyn_cast<VMINotOp>(op))
-    return rebuild(notOp);
+    return rebuildMaskless(notOp);
   return std::nullopt;
 }
 
@@ -225,9 +309,22 @@ static std::optional<Value> rematerializeDataProducer(Value value,
                                           broadcast.getValue())
         .getResult();
 
+  if (auto vbrc = value.getDefiningOp<VMIVbrcOp>()) {
+    if (!vbrc.getGroupAttr())
+      return builder.create<VMIVbrcOp>(loc, resultType, vbrc.getValue(),
+                                       IntegerAttr())
+          .getResult();
+  }
+
   if (auto iota = value.getDefiningOp<VMIIotaOp>())
     return builder
         .create<VMIIotaOp>(loc, resultType, iota.getBase(),
+                           iota.getOrderAttr())
+        .getResult();
+
+  if (auto iota = value.getDefiningOp<VMIVciOp>())
+    return builder
+        .create<VMIVciOp>(loc, resultType, iota.getBase(),
                            iota.getOrderAttr())
         .getResult();
 
@@ -245,6 +342,24 @@ static std::optional<Value> rematerializeMaskProducer(Value value,
     return builder
         .create<VMICreateMaskOp>(loc, resultType, createMask.getActiveLanes())
         .getResult();
+
+  if (auto pset = value.getDefiningOp<VMIPsetOp>())
+    return builder
+        .create<VMIPsetOp>(loc, resultType, pset.getPatternAttr(),
+                           pset.getGroupAttr())
+        .getResult();
+
+  if (auto pge = value.getDefiningOp<VMIPgeOp>())
+    return builder
+        .create<VMIPgeOp>(loc, resultType, pge.getPatternAttr(),
+                          pge.getGroupAttr())
+        .getResult();
+
+  if (auto plt = value.getDefiningOp<VMIPltOp>())
+    return builder
+        .create<VMIPltOp>(loc, resultType, builder.getI32Type(),
+                          plt.getScalar())
+        .getMask();
 
   if (auto createGroupMask = value.getDefiningOp<VMICreateGroupMaskOp>())
     return builder

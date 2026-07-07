@@ -1,0 +1,46 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
+
+// vexp/vln/vsqrt/vrelu contiguous: math unary ops → VPTO.
+
+module {
+  func.func @vexp_f32(%a: !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>) -> !pto.vreg<64xf32> {
+    %r = pto.vmi.vexp %a : !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
+    %p0 = "pto.vmi.unpack"(%r) : (!pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>) -> !pto.vreg<64xf32>
+    return %p0 : !pto.vreg<64xf32>
+  }
+  func.func @vln_f32(%a: !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>) -> !pto.vreg<64xf32> {
+    %r = pto.vmi.vln %a : !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
+    %p0 = "pto.vmi.unpack"(%r) : (!pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>) -> !pto.vreg<64xf32>
+    return %p0 : !pto.vreg<64xf32>
+  }
+  func.func @vsqrt_f32(%a: !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>) -> !pto.vreg<64xf32> {
+    %r = pto.vmi.vsqrt %a : !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
+    %p0 = "pto.vmi.unpack"(%r) : (!pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>) -> !pto.vreg<64xf32>
+    return %p0 : !pto.vreg<64xf32>
+  }
+  func.func @vrelu_f32(%a: !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>) -> !pto.vreg<64xf32> {
+    %r = pto.vmi.vrelu %a : !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
+    %p0 = "pto.vmi.unpack"(%r) : (!pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>) -> !pto.vreg<64xf32>
+    return %p0 : !pto.vreg<64xf32>
+  }
+}
+
+// CHECK-LABEL: func.func @vexp_f32(
+// CHECK: pto.vexp
+// CHECK-LABEL: func.func @vln_f32(
+// CHECK: pto.vln
+// CHECK-LABEL: func.func @vsqrt_f32(
+// CHECK: pto.vsqrt
+// CHECK-LABEL: func.func @vrelu_f32(
+// CHECK: pto.vrelu
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

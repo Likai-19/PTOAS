@@ -1540,6 +1540,49 @@ VMILayoutSupport::getBitcastSupport(VMIBitcastOp op,
   return VMIBitcastSupport{VMIBitcastSupportKind::PerPartVbitcast};
 }
 
+FailureOr<VMIBitcastSupport>
+VMILayoutSupport::getVinterpretCastSupport(VMIVinterpretCastOp op,
+                                    std::string *reason) const {
+  auto fail = [&](const Twine &message) -> FailureOr<VMIBitcastSupport> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
+  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  if (!sourceLayout || !resultLayout)
+    return fail("requires assigned source and result layouts");
+  if (sourceLayout != resultLayout)
+    return fail("requires matching source and result layouts");
+
+  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
+  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
+  if (failed(sourceArity) || failed(resultArity))
+    return fail("requires computable source and result physical arity");
+  if (*sourceArity != *resultArity)
+    return fail("requires source and result to have the same physical arity");
+
+  FailureOr<SmallVector<int64_t>> sourceBits =
+      getPhysicalLogicalBitFootprint(sourceType);
+  FailureOr<SmallVector<int64_t>> resultBits =
+      getPhysicalLogicalBitFootprint(resultType);
+  if (failed(sourceBits) || failed(resultBits))
+    return fail("requires computable physical logical bit footprints");
+  if (sourceBits->size() != resultBits->size())
+    return fail("requires source and result physical footprint counts to "
+                "match");
+  for (auto [source, result] : llvm::zip_equal(*sourceBits, *resultBits)) {
+    if (source != result)
+      return fail("requires matching logical bit footprint in every physical "
+                  "chunk");
+  }
+
+  return VMIBitcastSupport{VMIBitcastSupportKind::PerPartVbitcast};
+}
+
 template <typename OpTy>
 static FailureOr<VMIHistogramSupport>
 getHistogramSupportImpl(OpTy op, std::string *reason) {

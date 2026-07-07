@@ -1,0 +1,39 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
+
+module {
+  func.func @vmi_to_vpto_min_max(
+      %lhs: !pto.vmi.vreg<128xf32>,
+      %rhs: !pto.vmi.vreg<128xf32>)
+      -> (!pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>) {
+    %min = pto.vmi.vmin %lhs, %rhs
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
+        -> !pto.vmi.vreg<128xf32>
+    %max = pto.vmi.vmax %lhs, %rhs
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
+        -> !pto.vmi.vreg<128xf32>
+    return %min, %max : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
+  }
+}
+
+// CHECK-LABEL: func.func @vmi_to_vpto_min_max(
+// CHECK-SAME: %[[LHS0:[^,]+]]: !pto.vreg<64xf32>
+// CHECK-SAME: %[[LHS1:[^,]+]]: !pto.vreg<64xf32>
+// CHECK-SAME: %[[RHS0:[^,]+]]: !pto.vreg<64xf32>
+// CHECK-SAME: %[[RHS1:[^)]+]]: !pto.vreg<64xf32>
+// CHECK-SAME: -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>)
+// CHECK-DAG: %[[MIN0:.*]] = pto.vmin %[[LHS0]], %[[RHS0]], {{.*}} : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+// CHECK-DAG: %[[MIN1:.*]] = pto.vmin %[[LHS1]], %[[RHS1]], {{.*}} : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+// CHECK-DAG: %[[MAX0:.*]] = pto.vmax %[[LHS0]], %[[RHS0]], {{.*}} : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+// CHECK-DAG: %[[MAX1:.*]] = pto.vmax %[[LHS1]], %[[RHS1]], {{.*}} : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+// CHECK: return %[[MIN0]], %[[MIN1]], %[[MAX0]], %[[MAX1]]
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

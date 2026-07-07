@@ -443,6 +443,14 @@ static llvm::cl::opt<bool> enableVMI(
                    "(requires --pto-backend=vpto or pto.backend = \"vpto\")"),
     llvm::cl::init(false));
 
+static llvm::cl::opt<bool> enableTwoStageVMILowering(
+    "vmi-two-stage-lowering",
+    llvm::cl::desc("Expand all lowerable unified VMI ops to legacy ops "
+                   "before VMIToVPTO (two-stage path). "
+                   "Enabled by default; pass --vmi-two-stage-lowering=false "
+                   "to use the single-stage direct path."),
+    llvm::cl::init(true));
+
 static llvm::cl::opt<bool> emitAddPtrTrace(
     "emit-addptr-trace",
     llvm::cl::desc("Emit addptr trace comments in generated C++ output"),
@@ -1738,6 +1746,14 @@ static LogicalResult runVMISemanticPipeline(OwningOpRef<ModuleOp> &module) {
 
   PassManager pm(module->getContext());
   pm.enableVerifier();
+  // Two-stage lowering (opt-in): expand unified VMI ops to legacy ops so
+  // VMIToVPTO's legacy patterns handle them.  When the flag is OFF (default)
+  // we skip this pass entirely — all unified ops flow directly to VMIToVPTO's
+  // unified patterns.
+  if (enableTwoStageVMILowering)
+    pm.addPass(pto::createVMILowerUnifiedToLegacyPass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(pto::createVMILegalizeArithSelectPass());
   pm.addPass(pto::createPTOValidateVMIIRPass());
   pm.addPass(pto::createVMILayoutAssignmentPass());
   pm.addPass(createCanonicalizerPass());

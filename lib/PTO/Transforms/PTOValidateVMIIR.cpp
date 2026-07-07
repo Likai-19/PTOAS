@@ -658,6 +658,11 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
     return success();
   }
 
+  // TODO(Phase 3): add layout contract validation for VMIvcaddOp/VMIvcmaxOp
+  // with {group} when result layout is group_slots.  The existing support
+  // functions (getGroupReduceAddFSupport etc.) expect the old op types;
+  // generalize them or add new overloads before wiring validation here.
+
   if (auto broadcast = dyn_cast<VMIGroupBroadcastOp>(op)) {
     auto sourceType = cast<VMIVRegType>(broadcast.getSource().getType());
     VMILayoutAttr layout = sourceType.getLayoutAttr();
@@ -670,6 +675,25 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
       return emitLayoutSupportContract(
           op, diagOS,
           "pto.vmi.group_broadcast has no registered layout support", reason);
+    return success();
+  }
+
+  if (auto vbrc = dyn_cast<VMIVbrcOp>(op)) {
+    if (!vbrc.getGroupAttr())
+      return success();
+    auto sourceType = cast<VMIVRegType>(vbrc.getValue().getType());
+    VMILayoutAttr layout = sourceType.getLayoutAttr();
+    if (!layout || !layout.isGroupSlots() || layout.getSlots() <= 0)
+      return success();
+
+    std::string reason;
+    auto resultType = cast<VMIVRegType>(vbrc.getResult().getType());
+    int64_t numGroups = vbrc.getGroupAttr().getInt();
+    if (failed(supports.getGroupBroadcastSupport(
+            capabilities, sourceType, resultType, numGroups, &reason)))
+      return emitLayoutSupportContract(
+          op, diagOS,
+          "pto.vmi.vbrc has no registered layout support", reason);
     return success();
   }
 
@@ -708,9 +732,17 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
     return success();
   }
 
-  if (auto bitcast = dyn_cast<VMIBitcastOp>(op)) {
+  if (auto bitcast = dyn_cast<VMIVinterpretCastOp>(op)) {
     std::string reason;
-    if (failed(supports.getBitcastSupport(bitcast, &reason)))
+    if (failed(supports.getVinterpretCastSupport(bitcast, &reason)))
+      return emitLayoutSupportContract(
+          op, diagOS, "pto.vmi.vinterpret_cast has no registered layout support",
+          reason);
+    return success();
+  }
+  if (auto legacyBitcast = dyn_cast<VMIBitcastOp>(op)) {
+    std::string reason;
+    if (failed(supports.getBitcastSupport(legacyBitcast, &reason)))
       return emitLayoutSupportContract(
           op, diagOS, "pto.vmi.bitcast has no registered layout support",
           reason);

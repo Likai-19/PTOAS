@@ -1,0 +1,88 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
+
+// Unified fp/int eltwise vadd/vsub/vmul with a deinterleaved=2 layout.
+
+module {
+  func.func @vadd_sub_mul_f32(
+      %a: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+      %b: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>)
+      -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>) {
+    %sum = pto.vmi.vadd %a, %b
+        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+    %diff = pto.vmi.vsub %a, %b
+        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+    %prod = pto.vmi.vmul %a, %b
+        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+    %s0, %s1 = "pto.vmi.unpack"(%sum)
+        : (!pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>)
+        -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>)
+    %d0, %d1 = "pto.vmi.unpack"(%diff)
+        : (!pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>)
+        -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>)
+    %p0, %p1 = "pto.vmi.unpack"(%prod)
+        : (!pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>)
+        -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>)
+    return %s0, %s1, %d0, %d1, %p0, %p1
+        : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>
+  }
+
+  func.func @vadd_sub_mul_i32(
+      %a: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+      %b: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>)
+      -> (!pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.vreg<64xi32>) {
+    %sum = pto.vmi.vadd %a, %b
+        : !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>
+    %diff = pto.vmi.vsub %a, %b
+        : !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>
+    %prod = pto.vmi.vmul %a, %b
+        : !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>
+    %s0, %s1 = "pto.vmi.unpack"(%sum)
+        : (!pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>)
+        -> (!pto.vreg<64xi32>, !pto.vreg<64xi32>)
+    %d0, %d1 = "pto.vmi.unpack"(%diff)
+        : (!pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>)
+        -> (!pto.vreg<64xi32>, !pto.vreg<64xi32>)
+    %p0, %p1 = "pto.vmi.unpack"(%prod)
+        : (!pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>)
+        -> (!pto.vreg<64xi32>, !pto.vreg<64xi32>)
+    return %s0, %s1, %d0, %d1, %p0, %p1
+        : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.vreg<64xi32>
+  }
+}
+
+// CHECK-LABEL: func.func @vadd_sub_mul_f32(
+// CHECK: %[[M:.*]] = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+// CHECK: pto.vadd {{.*}}, {{.*}}, %[[M]] : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+// CHECK: pto.vsub {{.*}}, {{.*}}, %[[M]] : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+// CHECK: pto.vmul {{.*}}, {{.*}}, %[[M]] : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast
+
+// CHECK-LABEL: func.func @vadd_sub_mul_i32(
+// CHECK: pto.vadd {{.*}} : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+// CHECK: pto.vsub {{.*}} : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+// CHECK: pto.vmul {{.*}} : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

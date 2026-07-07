@@ -1,0 +1,23 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not ptoas --emit-pto-ir %s 2>&1 | FileCheck %s
+
+// vhist: bin_idx element type must be ui8, ui16, or ui32.
+
+module {
+  func.func @vhist_bad_bin_type(
+      %bin_idx: !pto.vmi.vreg<256xi64>,
+      %mask: !pto.vmi.mask<256xpred>)
+      -> !pto.vmi.vreg<256xi16> {
+    // CHECK: error: 'pto.vmi.vhist' op requires bin_idx element type to be ui8, ui16, or ui32
+    %r = pto.vmi.vhist %bin_idx, %mask
+        : !pto.vmi.vreg<256xi64>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<256xi16>
+    return %r : !pto.vmi.vreg<256xi16>
+  }
+}

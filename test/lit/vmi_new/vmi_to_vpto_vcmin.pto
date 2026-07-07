@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
+
+module {
+  func.func @vmi_to_vpto_vcmin(
+      %source: !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>,
+      %mask: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>)
+      -> !pto.vreg<128xf16> {
+    %out = pto.vmi.vcmin %source, %mask
+        : !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<1xf16, #pto.vmi.layout<contiguous>>
+    %part = "pto.vmi.unpack"(%out)
+        : (!pto.vmi.vreg<1xf16, #pto.vmi.layout<contiguous>>)
+        -> !pto.vreg<128xf16>
+    return %part : !pto.vreg<128xf16>
+  }
+}
+
+// CHECK-LABEL: func.func @vmi_to_vpto_vcmin(
+// CHECK: pto.vcmin
+// CHECK: pto.vmin
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

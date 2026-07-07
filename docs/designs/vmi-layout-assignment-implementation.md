@@ -66,7 +66,7 @@ vmi-layout-rematerialize:
   replace explicit ensure_* helpers with cloned cheap layout-polymorphic
   producers when the clone directly creates the requested result type
   current implementation: splat pto.vmi.constant, pto.vmi.broadcast,
-  pto.vmi.iota, selected layout-transparent data ops, widening
+  pto.vmi.vci, selected layout-transparent data ops, widening
   pto.vmi.ext{f,si,ui}, pto.vmi.create_mask, pto.vmi.create_group_mask, and
   pto.vmi.constant_mask.  Relation-aware remat rewrites result-side
   ensure_layout through layout-transparent producers and widening ext
@@ -108,7 +108,7 @@ pto-validate-vmi-layout-ir:
   `pto.vmi.group_load`, `pto.vmi.group_slot_load`, group_slots
   `pto.vmi.group_store`, group_slots `pto.vmi.group_reduce_add{f|i}`,
   explicit-slots `pto.vmi.group_broadcast`, `pto.vmi.truncf`,
-  `pto.vmi.extf`, `pto.vmi.bitcast`, and histogram family ops at the layout gate.
+  `pto.vmi.extf`, `pto.vmi.vinterpret_cast`, and histogram family ops at the layout gate.
 
 vmi-to-vpto:
   use OneToN type conversion

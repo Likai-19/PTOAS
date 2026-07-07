@@ -753,6 +753,24 @@ def VMILegalizeArithSelect : Pass<"vmi-legalize-arith-select", "ModuleOp"> {
                            "mlir::scf::SCFDialect"];
 }
 
+def VMILowerUnifiedToLegacy : Pass<"vmi-lower-unified-to-legacy", "ModuleOp"> {
+  let summary = "Lower syntactic-rename unified VMI ops to legacy equivalents";
+  let description = [{
+    Rewrites a small subset of unified v-prefixed VMI ops (vci → iota,
+    vinterpret_cast → bitcast, vsel → select, vbrc → broadcast) that are pure
+    syntactic renames with no semantic information loss.
+
+    Ops NOT lowered (flow through to VMIToVPTO for full semantic preservation):
+    - Elementwise compute (vadd/vsub/vmul/vdiv/vmin/vmax/vneg/vabs/vsqrt/vexp/
+      vln/vrelu/vand/vor/vxor/vshl/vshr/vnot): carry mask + pmode that VMIToVPTO
+      forwards directly to the hardware instruction via OneToNVMIMasked*Pattern.
+    - vcmp: seed operand has no legacy equivalent.
+    - vcvt: sign/rounding/saturate attributes have no legacy equivalent.
+  }];
+  let constructor = "mlir::pto::createVMILowerUnifiedToLegacyPass()";
+  let dependentDialects = ["mlir::pto::PTODialect"];
+}
+
 def VMIToVPTO : Pass<"vmi-to-vpto", "ModuleOp"> {
   let summary = "Convert layout-assigned VMI IR to physical VPTO IR";
   let description = [{

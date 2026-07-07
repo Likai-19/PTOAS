@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-assignment -vmi-to-vpto 2>&1 | FileCheck %s
+
+// group_reduce_addf→vcadd, group_store kept.
+module {
+  func.func @vmi_layout_assignment_vcadd_group_no_full_tile_invalid(
+      %source: !pto.vmi.vreg<192xf32>,
+      %mask: !pto.vmi.mask<192xpred>,
+      %dst: !pto.ptr<f32, ub>,
+      %off: index) {
+    %c1 = arith.constant 1 : index
+    %sum = pto.vmi.vcadd %source, %mask {group = 6, reassoc}
+        : !pto.vmi.vreg<192xf32>, !pto.vmi.mask<192xpred>
+        -> !pto.vmi.vreg<6xf32>
+    pto.vmi.group_store %sum, %dst[%off], %c1 {num_groups = 6}
+        : !pto.vmi.vreg<6xf32>, !pto.ptr<f32, ub>
+    return
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.group_reduce_addf operand #0 has type
+// CHECK-SAME: #pto.vmi.layout<contiguous>
+// CHECK-SAME: requires
+// CHECK-SAME: #pto.vmi.layout<deinterleaved = 4, block_elems = 8>
+// CHECK-SAME: pto.vmi.ensure_layout cannot materialize this conversion

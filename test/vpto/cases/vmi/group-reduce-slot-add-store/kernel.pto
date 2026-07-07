@@ -51,7 +51,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
           : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
       %sum16 = pto.vmi.group_reduce_addf %x16, %mask16 {num_groups = 8, reassoc}
           : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
-          -> !pto.vmi.vreg<128xf32>
+          -> !pto.vmi.vreg<8xf32>
       %out16 = pto.vmi.addf %sum16, %rhs16
           : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
           -> !pto.vmi.vreg<128xf32>
@@ -64,7 +64,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
           : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
       %sum32 = pto.vmi.group_reduce_addf %x32, %mask32 {num_groups = 8, reassoc}
           : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred>
-          -> !pto.vmi.vreg<256xf32>
+          -> !pto.vmi.vreg<8xf32>
       %out32 = pto.vmi.addf %sum32, %rhs32
           : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
           -> !pto.vmi.vreg<256xf32>

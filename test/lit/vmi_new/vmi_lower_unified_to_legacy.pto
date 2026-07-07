@@ -1,0 +1,130 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). Please refer to the License for details. You may not use this
+// file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON AN
+// "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+// FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+// for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy | FileCheck %s
+
+// The unified v-prefixed ops must lower to the legacy per-type ops so that the
+// existing layout-assignment / VMIToVPTO pipeline keeps working unchanged.
+
+module {
+  // CHECK-LABEL: func.func @lower_binary_unified
+  // CHECK: pto.vmi.addf
+  // CHECK: pto.vmi.subf
+  // CHECK: pto.vmi.mulf
+  // CHECK: pto.vmi.addi
+  // CHECK: pto.vmi.divf
+  // CHECK: pto.vmi.minf
+  // CHECK: pto.vmi.maxf
+  func.func @lower_binary_unified(
+      %a: !pto.vmi.vreg<64xf32>,
+      %b: !pto.vmi.vreg<64xf32>,
+      %c: !pto.vmi.vreg<64xi32>,
+      %d: !pto.vmi.vreg<64xi32>)
+      -> (!pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>,
+          !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>) {
+    %add = pto.vmi.vadd %a, %b
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+    %sub = pto.vmi.vsub %a, %b
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+    %mul = pto.vmi.vmul %a, %b
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+    %addi = pto.vmi.vadd %c, %d
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32> -> !pto.vmi.vreg<64xi32>
+    %div = pto.vmi.vdiv %a, %b
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+    %min = pto.vmi.vmin %a, %b
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+    %max = pto.vmi.vmax %a, %b
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+    return %add, %sub, %mul, %addi, %div, %min
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>,
+          !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+  }
+
+  // CHECK-LABEL: func.func @lower_unary_unified
+  // CHECK: pto.vmi.negf
+  // CHECK: pto.vmi.sqrt
+  // CHECK: pto.vmi.exp
+  // CHECK: pto.vmi.ln
+  // CHECK: pto.vmi.relu
+  // CHECK: pto.vmi.absf
+  // CHECK: pto.vmi.absi
+  func.func @lower_unary_unified(
+      %a: !pto.vmi.vreg<64xf32>,
+      %c: !pto.vmi.vreg<64xi32>)
+      -> (!pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>,
+          !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>,
+          !pto.vmi.vreg<64xi32>) {
+    %neg = pto.vmi.vneg %a : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+    %sqrt = pto.vmi.vsqrt %a : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+    %exp = pto.vmi.vexp %a : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+    %ln = pto.vmi.vln %a : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+    %relu = pto.vmi.vrelu %a : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+    %absf = pto.vmi.vabs %a : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+    %absi = pto.vmi.vabs %c : !pto.vmi.vreg<64xi32> -> !pto.vmi.vreg<64xi32>
+    return %neg, %sqrt, %exp, %ln, %relu, %absf, %absi
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>,
+          !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>,
+          !pto.vmi.vreg<64xi32>
+  }
+
+  // CHECK-LABEL: func.func @lower_bitwise_shift
+  // CHECK: pto.vmi.andi
+  // CHECK: pto.vmi.ori
+  // CHECK: pto.vmi.xori
+  // CHECK: pto.vmi.shli
+  // CHECK: pto.vmi.shrui
+  // CHECK: pto.vmi.not
+  func.func @lower_bitwise_shift(
+      %a: !pto.vmi.vreg<64xi32>,
+      %b: !pto.vmi.vreg<64xi32>)
+      -> (!pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>,
+          !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>) {
+    %and = pto.vmi.vand %a, %b
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32> -> !pto.vmi.vreg<64xi32>
+    %or = pto.vmi.vor %a, %b
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32> -> !pto.vmi.vreg<64xi32>
+    %xor = pto.vmi.vxor %a, %b
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32> -> !pto.vmi.vreg<64xi32>
+    %shl = pto.vmi.vshl %a, %b
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32> -> !pto.vmi.vreg<64xi32>
+    %shr = pto.vmi.vshr %a, %b
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32> -> !pto.vmi.vreg<64xi32>
+    %not = pto.vmi.vnot %a : !pto.vmi.vreg<64xi32> -> !pto.vmi.vreg<64xi32>
+    return %and, %or, %xor, %shl, %shr, %not
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>,
+          !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>
+  }
+
+  // CHECK-LABEL: func.func @lower_data_movement
+  // CHECK: pto.vmi.iota
+  // CHECK: pto.vmi.bitcast
+  // CHECK: pto.vmi.select
+  // CHECK: pto.vmi.broadcast
+  func.func @lower_data_movement(
+      %base: i32,
+      %a: !pto.vmi.vreg<64xf32>,
+      %b: !pto.vmi.vreg<64xf32>,
+      %m: !pto.vmi.mask<64xpred>,
+      %s: f32)
+      -> (!pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>,
+          !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>) {
+    %iota = pto.vmi.vci %base : i32 -> !pto.vmi.vreg<64xi32>
+    %bc = pto.vmi.vinterpret_cast %a
+        : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xi32>
+    %sel = pto.vmi.vsel %m, %a, %b
+        : !pto.vmi.mask<64xpred>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+        -> !pto.vmi.vreg<64xf32>
+    %brc = pto.vmi.vbrc %s : f32 -> !pto.vmi.vreg<64xf32>
+    return %iota, %bc, %sel, %brc
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>,
+          !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+  }
+}

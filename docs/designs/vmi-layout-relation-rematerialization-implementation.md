@@ -211,7 +211,7 @@ Keep current behavior for:
 ```text
 splat pto.vmi.constant
 pto.vmi.broadcast
-pto.vmi.iota
+pto.vmi.vci
 pto.vmi.create_mask
 pto.vmi.create_group_mask
 pto.vmi.constant_mask

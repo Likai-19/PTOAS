@@ -78,6 +78,28 @@ static std::optional<BinaryVRegOperands> getSinkableBinaryOperands(Operation *op
     return BinaryVRegOperands{&mulf.getLhsMutable(), &mulf.getRhsMutable()};
   if (auto muli = dyn_cast<VMIMulIOp>(op))
     return BinaryVRegOperands{&muli.getLhsMutable(), &muli.getRhsMutable()};
+  if (auto divf = dyn_cast<VMIVdivOp>(op))
+    return BinaryVRegOperands{&divf.getLhsMutable(), &divf.getRhsMutable()};
+  if (auto vadd = dyn_cast<VMIVaddOp>(op))
+    return BinaryVRegOperands{&vadd.getLhsMutable(), &vadd.getRhsMutable()};
+  if (auto vsub = dyn_cast<VMIVsubOp>(op))
+    return BinaryVRegOperands{&vsub.getLhsMutable(), &vsub.getRhsMutable()};
+  if (auto vmul = dyn_cast<VMIVmulOp>(op))
+    return BinaryVRegOperands{&vmul.getLhsMutable(), &vmul.getRhsMutable()};
+  if (auto minf = dyn_cast<VMIVminOp>(op))
+    return BinaryVRegOperands{&minf.getLhsMutable(), &minf.getRhsMutable()};
+  if (auto maxf = dyn_cast<VMIVmaxOp>(op))
+    return BinaryVRegOperands{&maxf.getLhsMutable(), &maxf.getRhsMutable()};
+  if (auto andi = dyn_cast<VMIVandOp>(op))
+    return BinaryVRegOperands{&andi.getLhsMutable(), &andi.getRhsMutable()};
+  if (auto ori = dyn_cast<VMIVorOp>(op))
+    return BinaryVRegOperands{&ori.getLhsMutable(), &ori.getRhsMutable()};
+  if (auto xori = dyn_cast<VMIVxorOp>(op))
+    return BinaryVRegOperands{&xori.getLhsMutable(), &xori.getRhsMutable()};
+  if (auto shli = dyn_cast<VMIVshlOp>(op))
+    return BinaryVRegOperands{&shli.getLhsMutable(), &shli.getRhsMutable()};
+  if (auto shrui = dyn_cast<VMIVshrOp>(op))
+    return BinaryVRegOperands{&shrui.getLhsMutable(), &shrui.getRhsMutable()};
   if (auto divf = dyn_cast<VMIDivFOp>(op))
     return BinaryVRegOperands{&divf.getLhsMutable(), &divf.getRhsMutable()};
   if (auto minf = dyn_cast<VMIMinFOp>(op))
@@ -92,8 +114,8 @@ static std::optional<BinaryVRegOperands> getSinkableBinaryOperands(Operation *op
     return BinaryVRegOperands{&xori.getLhsMutable(), &xori.getRhsMutable()};
   if (auto shli = dyn_cast<VMIShLIOp>(op))
     return BinaryVRegOperands{&shli.getLhsMutable(), &shli.getRhsMutable()};
-  if (auto shrui = dyn_cast<VMIShRUIOp>(op))
-    return BinaryVRegOperands{&shrui.getLhsMutable(), &shrui.getRhsMutable()};
+  if (auto shruiL = dyn_cast<VMIShRUIOp>(op))
+    return BinaryVRegOperands{&shruiL.getLhsMutable(), &shruiL.getRhsMutable()};
   return std::nullopt;
 }
 
@@ -107,6 +129,10 @@ getSinkableCompareOperands(Operation *op) {
 }
 
 static std::optional<SelectOperands> getSinkableSelectOperands(Operation *op) {
+  if (auto select = dyn_cast<VMIvSelOp>(op))
+    return SelectOperands{&select.getMaskMutable(),
+                          &select.getTrueValueMutable(),
+                          &select.getFalseValueMutable()};
   if (auto select = dyn_cast<VMISelectOp>(op))
     return SelectOperands{&select.getMaskMutable(),
                           &select.getTrueValueMutable(),
@@ -123,12 +149,24 @@ getSinkableTernaryOperands(Operation *op) {
 }
 
 static std::optional<UnaryVRegOperand> getSinkableUnaryOperand(Operation *op) {
-  if (auto negf = dyn_cast<VMINegFOp>(op))
+  if (auto negf = dyn_cast<VMIVnegOp>(op))
     return UnaryVRegOperand{&negf.getSourceMutable()};
   if (auto absf = dyn_cast<VMIAbsFOp>(op))
     return UnaryVRegOperand{&absf.getSourceMutable()};
   if (auto absi = dyn_cast<VMIAbsIOp>(op))
     return UnaryVRegOperand{&absi.getSourceMutable()};
+  if (auto sqrt = dyn_cast<VMIVsqrtOp>(op))
+    return UnaryVRegOperand{&sqrt.getSourceMutable()};
+  if (auto exp = dyn_cast<VMIVexpOp>(op))
+    return UnaryVRegOperand{&exp.getSourceMutable()};
+  if (auto ln = dyn_cast<VMIVlnOp>(op))
+    return UnaryVRegOperand{&ln.getSourceMutable()};
+  if (auto relu = dyn_cast<VMIVreluOp>(op))
+    return UnaryVRegOperand{&relu.getSourceMutable()};
+  if (auto notOp = dyn_cast<VMIVnotOp>(op))
+    return UnaryVRegOperand{&notOp.getSourceMutable()};
+  if (auto negf = dyn_cast<VMINegFOp>(op))
+    return UnaryVRegOperand{&negf.getSourceMutable()};
   if (auto sqrt = dyn_cast<VMISqrtOp>(op))
     return UnaryVRegOperand{&sqrt.getSourceMutable()};
   if (auto exp = dyn_cast<VMIExpOp>(op))
@@ -137,8 +175,8 @@ static std::optional<UnaryVRegOperand> getSinkableUnaryOperand(Operation *op) {
     return UnaryVRegOperand{&ln.getSourceMutable()};
   if (auto relu = dyn_cast<VMIReluOp>(op))
     return UnaryVRegOperand{&relu.getSourceMutable()};
-  if (auto notOp = dyn_cast<VMINotOp>(op))
-    return UnaryVRegOperand{&notOp.getSourceMutable()};
+  if (auto notOpL = dyn_cast<VMINotOp>(op))
+    return UnaryVRegOperand{&notOpL.getSourceMutable()};
   return std::nullopt;
 }
 
