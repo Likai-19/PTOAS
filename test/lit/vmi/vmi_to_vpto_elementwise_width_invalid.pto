@@ -20,8 +20,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.addf direct lowering requires f16/bf16/f32 element type and physical vreg parts with b8/b16/b32 predicate masks
-// CHECK-SAME: requires an 8/16/32-bit element type
+// CHECK: expected an 8-bit, 16-bit, or 32-bit logical element type
 
 // -----
 
@@ -37,5 +36,4 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.addi direct lowering requires physical vreg parts with b8/b16/b32 predicate masks
-// CHECK-SAME: requires an 8/16/32-bit element type
+// CHECK: expected an 8-bit, 16-bit, or 32-bit logical element type

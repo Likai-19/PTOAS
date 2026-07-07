@@ -22,5 +22,4 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.fma lowers through pto.vmula only for f16/bf16/f32 element types
-// CHECK-SAME: requires f16, bf16, or f32 element type for pto.vmula
+// CHECK: 'pto.vmi.fma' op requires f16, bf16, or f32 VMI element type

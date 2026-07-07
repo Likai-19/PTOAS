@@ -23,8 +23,6 @@
 
 namespace mlir::pto {
 
-class VMITargetCapabilityRegistry;
-
 struct VMILoadLayoutFact {
   VMILayoutAttr resultLayout;
 };

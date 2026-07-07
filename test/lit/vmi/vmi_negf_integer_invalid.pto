@@ -16,4 +16,4 @@ module {
   }
 }
 
-// CHECK: 'pto.vmi.negf' op requires floating-point-like VMI element type
+// CHECK: 'pto.vmi.negf' op requires f16 or f32 VMI element type

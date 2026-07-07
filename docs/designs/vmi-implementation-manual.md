@@ -2910,18 +2910,18 @@ pto.vmi.fma:
     may produce different floating-point results from separate multiply and add.
   layout assignment:
     lhs, rhs, acc, and result belong to one data layout equivalence class.
-  current direct lowering:
+  verifier contract:
     source/result element type must be f16, bf16, or f32
+  current direct lowering:
     for each physical part:
       materialize pto.pset_b16/b32 "PAT_ALL" from the physical element width
       emit pto.vmula(acc_part, lhs_part, rhs_part, all_true_mask)
     The VMI operand order is lhs, rhs, acc; the VPTO operand order is acc, lhs, rhs.
 
 pto.vmi.cmpf / cmpi:
-  current direct lowering has the same 8/16/32-bit physical element-width
-  precondition as elementwise arithmetic, so the result predicate can be
-  materialized as b8/b16/b32.
-  target element contract:
+  verifier contract:
+    source/result element width must be 8/16/32-bit so the result predicate
+    can be materialized as b8/b16/b32.
     cmpf: f16/bf16/f32, matching VISA VCMP floating-point element types
     cmpi: signless/signed/unsigned i8/i16/i32, matching VISA VCMP integer element types
   for each physical part:
@@ -4027,7 +4027,7 @@ Slice 4 完成条件：
    Covered by vmi_to_vpto_reduce_shape_invalid.pto together with the existing reduce add/min/max positive and
    per-feature tests, including vmi_to_vpto_reduce_addi_i16_invalid.pto for narrow integer rejection and
    vmi_to_vpto_reduce_addf_f16.pto for f16 floating-point reduction lowering.
-10. Target-specific element contracts are checked before OneToN rewriting for direct VPTO ops.
+10. VMI op/type verifiers reject unsupported element types before OneToN rewriting.
     Covered by vmi_to_vpto_bf16_arith.pto, vmi_to_vpto_math_element_type_invalid.pto,
     vmi_to_vpto_cmp_select.pto, vmi_to_vpto_cmp_element_type_invalid.pto,
     vmi_to_vpto_fma.pto, vmi_to_vpto_fma_element_type_invalid.pto, and
@@ -4177,59 +4177,48 @@ Slice 5 完成条件：
    writeMask fallback paths must report `VMI-UNSUPPORTED`.
 ```
 
-## 8. Target Capabilities And Layout Fact Helpers
+## 8. Layout Fact And Lowering Support Helpers
 
-Keep target capabilities separate from layout assignment policy.  The shared
-helpers expose target support and small layout/materialization facts; they do
-not select a global lowering plan and are not a shared lowering-plan registry
-between assignment and VMI-to-VPTO.
+Keep layout facts separate from layout assignment policy and VPTO lowering
+choices.  Shared layout helpers expose legal/preferred layout facts; they do
+not select a global lowering plan and are not a target capability registry.
 
 ```text
-supportsElementType(type, purpose)
 getPreferredCastLayoutFact(sourceType, resultType)
 getPreferredGroupReduceLayoutFact(sourceType, numGroups)
 canMaterializeDataLayout(sourceType, resultType)
 canMaterializeMaskLayout(sourceType, resultType)
-supportsMaskGranularityConversion(srcG, dstG)
 supportsMemoryAccessProof(proof)
 supportsPrefixPopcount(maskType)
 supportsReductionScanContract(op)
 getScratchResource(plan)
 ```
 
-Capability and materialization helpers return structured results:
-
-```text
-supported
-unsupported_missing_capability
-unsupported_disabled_by_option
-unsupported_resource
-```
-
-Diagnostics must expose that reason. A pass must not silently choose scalar fallback when fallback is disabled.
+Support and materialization helpers must expose actionable reasons. A pass must
+not silently choose scalar fallback when fallback is disabled.
 
 Current implementation status:
 
 ```text
-include/PTO/Transforms/VMITargetCapabilities.h
-  VMITargetCapabilityRegistry
-  VMICapabilityResult { status, reason }
+include/PTO/Transforms/VMILayoutSupport.h
+lib/PTO/Transforms/VMILayoutSupport.cpp
+  central table-driven source for legal/preferred layout facts:
+    dense/group load and store layouts
+    masked load/store data-mask layout relations
+    ensure data/mask layout materialization pairs
+    cast, bitcast, reduce, group_reduce, group_broadcast, histogram layouts
 
-currently routed through the registry:
-  element-type purpose checks for predicate-maskable vregs and direct elementwise/cmp/fma/relu VPTO lowering
-  reduction-family element-type contracts for reduce_addi/reduce_addf/reduce_maxf/reduce_minf
-  direct pto.vlds/vsts memory source/destination support
-  missing target true masked/non-faulting load capability for the current pto.vlds surface
-  pointer-only UB memory support for pto.vgather2_bc/pto.vscatter/pto.vstur based VMI paths
-  supported source/result layout conversion pairs
-  supported b8/b16/b32 mask granularity conversion pairs
-  pto.vmi.channel_split/channel_merge supported channel count
-  pto.vmi.dhist direct target support and pto.vmi.chist cumulative range semantics classification
+lib/PTO/Transforms/VMIToVPTO.cpp
+  local op lowering support helpers:
+    true masked-load and fallback diagnostics for currently unimplemented paths
+    pointer-only constraints for concrete VPTO gather/stride/scatter paths
+    padding-safety and full-physical-chunk requirements
 
-still legacy helper-based and should migrate into the registry as follow-up:
+still legacy helper-based and should migrate into layout/support tables when
+they become layout facts:
   full layout materialization plans and padding-safety checks
   adjacent ppack/punpack mask granularity materialization plans
-  prefix popcount and full reduction/scan/contract shape capability checks
+  prefix popcount and full reduction/scan/contract shape checks
 ```
 
 ## 9. Diagnostics
