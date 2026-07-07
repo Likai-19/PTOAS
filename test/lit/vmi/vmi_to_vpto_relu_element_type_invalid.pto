@@ -18,5 +18,4 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.relu direct lowering requires physical vreg parts with b8/b16/b32 predicate masks and f16/f32 element type
-// CHECK-SAME: pto.vrelu direct lowering supports only f16/f32 VMI floating-point element types
+// CHECK: 'pto.vmi.relu' op requires f16 or f32 VMI element type

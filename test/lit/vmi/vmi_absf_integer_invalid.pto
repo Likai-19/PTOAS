@@ -16,4 +16,4 @@ module {
   }
 }
 
-// CHECK: 'pto.vmi.absf' op requires floating-point-like VMI element type
+// CHECK: 'pto.vmi.absf' op requires f16 or f32 VMI element type

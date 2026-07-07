@@ -68,11 +68,14 @@ module {
     %ensure = pto.vmi.ensure_layout %layouted
         : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
-    %layouted_ext = pto.vmi.extf %ensure
+    %layouted_trunc = pto.vmi.truncf %ensure
         : !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
-        -> !pto.vmi.vreg<128xf64, #pto.vmi.layout<deinterleaved = 2>>
-    %layouted_trunc = pto.vmi.truncf %layouted_ext
-        : !pto.vmi.vreg<128xf64, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
+    %layouted_ext = pto.vmi.extf %layouted_trunc
+        : !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+    %layouted_roundtrip = pto.vmi.ensure_layout %layouted_ext
+        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
     %mask_layout = pto.vmi.ensure_mask_layout %mask_b32
         : !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
@@ -95,7 +98,7 @@ module {
     %icmp = pto.vmi.cmpi "slt", %iv0, %iv0
         : !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32> -> !pto.vmi.mask<128xpred>
 
-    return %add, %cmp, %sel, %trunc, %merged, %layouted_trunc, %mask_layout,
+    return %add, %cmp, %sel, %trunc, %merged, %layouted_roundtrip, %mask_layout,
         %mask_granularity, %packed, %iadd, %icmp
         : !pto.vmi.vreg<128xf32>,
           !pto.vmi.mask<128xpred>,

@@ -15,7 +15,6 @@
 #include "PTO/IR/VMIUtils.h"
 #include "PTO/Transforms/Passes.h"
 #include "PTO/Transforms/VMILayoutSupport.h"
-#include "PTO/Transforms/VMITargetCapabilities.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"

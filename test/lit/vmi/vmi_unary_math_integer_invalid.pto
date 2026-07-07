@@ -16,7 +16,7 @@ module {
   }
 }
 
-// CHECK: 'pto.vmi.sqrt' op requires floating-point-like VMI element type
+// CHECK: 'pto.vmi.sqrt' op requires f16 or f32 VMI element type
 
 // -----
 
@@ -28,7 +28,7 @@ module {
   }
 }
 
-// CHECK: 'pto.vmi.exp' op requires floating-point-like VMI element type
+// CHECK: 'pto.vmi.exp' op requires f16 or f32 VMI element type
 
 // -----
 
@@ -40,7 +40,7 @@ module {
   }
 }
 
-// CHECK: 'pto.vmi.ln' op requires floating-point-like VMI element type
+// CHECK: 'pto.vmi.ln' op requires f16 or f32 VMI element type
 
 // -----
 
@@ -52,4 +52,4 @@ module {
   }
 }
 
-// CHECK: 'pto.vmi.relu' op requires floating-point-like VMI element type
+// CHECK: 'pto.vmi.relu' op requires f16 or f32 VMI element type

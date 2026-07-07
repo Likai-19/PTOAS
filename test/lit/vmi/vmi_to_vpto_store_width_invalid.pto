@@ -19,5 +19,4 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.store requires an 8/16/32-bit predicate-maskable element type
-// CHECK-SAME: requires an 8/16/32-bit element type
+// CHECK: expected an 8-bit, 16-bit, or 32-bit logical element type

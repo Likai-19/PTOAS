@@ -19,7 +19,6 @@
 #include "PTO/IR/VMIUtils.h"
 #include "PTO/Transforms/Passes.h"
 #include "PTO/Transforms/VMILayoutSupport.h"
-#include "PTO/Transforms/VMITargetCapabilities.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -78,6 +77,30 @@ bool containsVMIType(Type type) {
 bool hasVMIType(TypeRange types) {
   return llvm::any_of(types, [](Type type) { return containsVMIType(type); });
 }
+
+struct VMISupportResult {
+  bool supported = true;
+  std::string reason;
+
+  static VMISupportResult success() { return {}; }
+
+  static VMISupportResult failure(const Twine &reason) {
+    VMISupportResult result;
+    result.supported = false;
+    result.reason = reason.str();
+    return result;
+  }
+
+  bool isSupported() const { return supported; }
+
+  LogicalResult toLogicalResult(std::string *outReason = nullptr) const {
+    if (supported)
+      return mlir::success();
+    if (outReason)
+      *outReason = reason;
+    return mlir::failure();
+  }
+};
 
 bool hasVMIType(FunctionType type) {
   return hasVMIType(type.getInputs()) || hasVMIType(type.getResults());
@@ -501,45 +524,17 @@ createRuntimePrefixMask(Location loc, MaskType maskType, Value activeLanes,
 }
 
 LogicalResult
-checkSupportedMaskableVReg(const VMITargetCapabilityRegistry &capabilities,
-                           VMIVRegType type, std::string *reason = nullptr) {
+checkSupportedMaskableVReg(VMIVRegType type, std::string *reason = nullptr) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
       *reason = message.str();
     return failure();
   };
-
-  VMICapabilityResult elementCapability = capabilities.supportsElementType(
-      type.getElementType(), VMIElementPurpose::PredicateMask);
-  if (!elementCapability.isSupported())
-    return fail(elementCapability.reason);
 
   FailureOr<int64_t> lanesPerPart = getDataLanesPerPart(type.getElementType());
   FailureOr<int64_t> arity = getVMIPhysicalArity(type);
   if (failed(lanesPerPart) || failed(arity) || *arity < 1)
     return fail("requires computable non-empty physical vreg parts");
-
-  return success();
-}
-
-LogicalResult
-checkSupportedTargetElementVReg(const VMITargetCapabilityRegistry &capabilities,
-                                VMIVRegType type, VMIElementPurpose purpose,
-                                StringRef elementContract,
-                                std::string *reason = nullptr) {
-  auto fail = [&](const Twine &message) -> LogicalResult {
-    if (reason)
-      *reason = message.str();
-    return failure();
-  };
-
-  if (failed(checkSupportedMaskableVReg(capabilities, type, reason)))
-    return failure();
-
-  VMICapabilityResult elementCapability =
-      capabilities.supportsElementType(type.getElementType(), purpose);
-  if (!elementCapability.isSupported())
-    return fail(elementCapability.reason);
 
   return success();
 }
@@ -818,61 +813,6 @@ LogicalResult checkFullVMIPhysicalChunks(Type type, std::string *reason) {
 FailureOr<int64_t> getContiguousMaterializationPartCount(Type type,
                                                          std::string *reason);
 
-LogicalResult checkSupportedLayoutMaterialization(
-    const VMITargetCapabilityRegistry &capabilities, Type sourceType,
-    Type resultType, VMILayoutAttr sourceLayout, VMILayoutAttr resultLayout,
-    std::string *reason) {
-  auto fail = [&](const Twine &message) -> LogicalResult {
-    if (reason)
-      *reason = message.str();
-    return failure();
-  };
-
-  VMICapabilityResult layoutCapability =
-      capabilities.supportsLayoutConversion(sourceLayout, resultLayout, Type{});
-  if (!layoutCapability.isSupported())
-    return fail(layoutCapability.reason);
-
-  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
-  if (failed(sourceArity) || failed(resultArity))
-    return fail("requires computable source/result physical arity");
-  if (*sourceArity != *resultArity)
-    return fail("requires source and result to have the same physical arity");
-
-  if (sourceLayout == resultLayout)
-    return success();
-
-  std::string sourceReason;
-  std::string resultReason;
-  LogicalResult sourceFull =
-      checkFullVMIPhysicalChunks(sourceType, &sourceReason);
-  LogicalResult resultFull =
-      checkFullVMIPhysicalChunks(resultType, &resultReason);
-  if (succeeded(sourceFull) && succeeded(resultFull))
-    return success();
-
-  std::string sourceMaterializationReason;
-  FailureOr<int64_t> sourceMaterializedParts =
-      getContiguousMaterializationPartCount(sourceType,
-                                            &sourceMaterializationReason);
-  std::string resultMaterializationReason;
-  FailureOr<int64_t> resultMaterializedParts =
-      getContiguousMaterializationPartCount(resultType,
-                                            &resultMaterializationReason);
-  if (succeeded(sourceMaterializedParts) &&
-      succeeded(resultMaterializedParts) &&
-      *sourceMaterializedParts == *sourceArity &&
-      *resultMaterializedParts == *resultArity)
-    return success();
-
-  if (failed(sourceFull))
-    return fail(Twine("source ") + sourceReason + "; source materialization " +
-                sourceMaterializationReason);
-  return fail(Twine("result ") + resultReason + "; result materialization " +
-              resultMaterializationReason);
-}
-
 FailureOr<int64_t> getContiguousMaterializationPartCount(Type type,
                                                          std::string *reason) {
   auto fail = [&](const Twine &message) -> FailureOr<int64_t> {
@@ -1056,10 +996,7 @@ struct VMIMemoryAccessPlan {
   Attribute paddingValue;
   VMIMemoryWriteMaskKind writeMask = VMIMemoryWriteMaskKind::AllTrue;
   VMIMemorySafeReadProof safeReadProof;
-  VMICapabilityResult targetCapability;
-  VMICapabilityResult trueMaskedLoadCapability;
-  VMICapabilityResult scratchFallbackCapability;
-  VMICapabilityResult guardedFallbackCapability;
+  VMISupportResult layoutSupport;
   VMIMemoryFallbackDecision fallbackDecision;
 };
 
@@ -1085,11 +1022,11 @@ buildContiguousIdentityLaneAddressMap(int64_t constantOffset,
   return map;
 }
 
-VMICapabilityResult requireIdentityMemRefLayout(Type memoryType, StringRef role,
-                                                Value memoryValue = {}) {
+VMISupportResult requireIdentityMemRefLayout(Type memoryType, StringRef role,
+                                             Value memoryValue = {}) {
   auto memrefType = dyn_cast<MemRefType>(memoryType);
   if (!memrefType || memrefType.getLayout().isIdentity())
-    return VMICapabilityResult::supported();
+    return VMISupportResult::success();
   std::string reason =
       (Twine(role) +
        " memref layout is non-identity; current VMI memory access plan "
@@ -1098,7 +1035,7 @@ VMICapabilityResult requireIdentityMemRefLayout(Type memoryType, StringRef role,
   if (memoryValue && memoryValue.getDefiningOp<memref::SubViewOp>())
     reason += "; memref.subview requires normalized base/offset/stride "
               "lane-to-address planning";
-  return VMICapabilityResult::missingCapability(reason);
+  return VMISupportResult::failure(reason);
 }
 
 VMIMemorySafeReadProof
@@ -1145,8 +1082,7 @@ computeSafeFullReadProof(Type sourceType, std::optional<int64_t> constantOffset,
 }
 
 VMIMemoryAccessPlan
-buildReadAccessPlan(const VMITargetCapabilityRegistry &capabilities,
-                    Value source, Type sourceType, VMIVRegType resultType,
+buildReadAccessPlan(Value source, Type sourceType, VMIVRegType resultType,
                     std::optional<int64_t> constantOffset,
                     VMIMemoryValidMaskKind validMask) {
   VMIMemoryAccessPlan plan;
@@ -1160,24 +1096,13 @@ buildReadAccessPlan(const VMITargetCapabilityRegistry &capabilities,
   plan.safeReadProof =
       computeSafeFullReadProof(sourceType, constantOffset, resultType);
   plan.laneAddressMap = plan.safeReadProof.laneAddressMap;
-  plan.targetCapability =
-      capabilities.supportsDirectMemory(sourceType, "source");
-  if (plan.targetCapability.isSupported())
-    plan.targetCapability =
-        requireIdentityMemRefLayout(sourceType, "source", source);
-  if (validMask == VMIMemoryValidMaskKind::ExplicitMask)
-    plan.trueMaskedLoadCapability =
-        capabilities.supportsTrueMaskedLoad(sourceType, resultType, Type{});
-  plan.scratchFallbackCapability = capabilities.supportsFallbackResource(
-      VMIFallbackResourceKind::ScratchMemory);
-  plan.guardedFallbackCapability = capabilities.supportsFallbackResource(
-      VMIFallbackResourceKind::GuardedControlFlow);
+  plan.layoutSupport =
+      requireIdentityMemRefLayout(sourceType, "source", source);
   return plan;
 }
 
 VMIMemoryAccessPlan
-buildWriteAccessPlan(const VMITargetCapabilityRegistry &capabilities,
-                     Value destination, Type destinationType,
+buildWriteAccessPlan(Value destination, Type destinationType,
                      VMIVRegType valueType, VMIMemoryWriteMaskKind writeMask) {
   VMIMemoryAccessPlan plan;
   plan.baseType = destinationType;
@@ -1186,26 +1111,21 @@ buildWriteAccessPlan(const VMITargetCapabilityRegistry &capabilities,
   plan.validMask = VMIMemoryValidMaskKind::AllTrue;
   plan.permutation = VMIMemoryPermutationKind::Identity;
   plan.writeMask = writeMask;
-  plan.targetCapability =
-      capabilities.supportsDirectMemory(destinationType, "destination");
-  if (plan.targetCapability.isSupported())
-    plan.targetCapability = requireIdentityMemRefLayout(
-        destinationType, "destination", destination);
+  plan.layoutSupport =
+      requireIdentityMemRefLayout(destinationType, "destination", destination);
   return plan;
 }
 
 void requireUnavailableReadFallback(VMIMemoryAccessPlan &plan) {
   std::string maskedLoadReason;
-  if (plan.validMask == VMIMemoryValidMaskKind::ExplicitMask &&
-      !plan.trueMaskedLoadCapability.isSupported())
+  if (plan.validMask == VMIMemoryValidMaskKind::ExplicitMask)
     maskedLoadReason =
-        (Twine("; ") + plan.trueMaskedLoadCapability.reason).str();
-  std::string scratchReason;
-  if (!plan.scratchFallbackCapability.isSupported())
-    scratchReason = (Twine("; ") + plan.scratchFallbackCapability.reason).str();
-  std::string guardedReason;
-  if (!plan.guardedFallbackCapability.isSupported())
-    guardedReason = (Twine("; ") + plan.guardedFallbackCapability.reason).str();
+        "; target true masked/non-faulting load is unavailable because the "
+        "current VPTO pto.vlds surface has no mask operand";
+  std::string scratchReason =
+      "; scratch memory fallback resource allocation is not implemented";
+  std::string guardedReason =
+      "; guarded memory fallback control-flow lowering is not implemented";
   plan.fallbackDecision = VMIMemoryFallbackDecision::requiredUnavailable(
       Twine("partial/tail read needs a scratch, guarded, or true "
             "masked/non-faulting load fallback, but no such fallback resource "
@@ -1242,8 +1162,7 @@ FailureOr<int64_t> verifyFullOrSafeReadVRegChunks(Operation *op,
 }
 
 LogicalResult
-checkSupportedLoadShape(const VMITargetCapabilityRegistry &capabilities,
-                        VMIVRegType type, Value source, Type sourceType,
+checkSupportedLoadShape(VMIVRegType type, Value source, Type sourceType,
                         std::optional<int64_t> constantOffset,
                         std::string *reason) {
   auto fail = [&](const Twine &message) -> LogicalResult {
@@ -1253,10 +1172,10 @@ checkSupportedLoadShape(const VMITargetCapabilityRegistry &capabilities,
   };
 
   VMIMemoryAccessPlan accessPlan =
-      buildReadAccessPlan(capabilities, source, sourceType, type,
+      buildReadAccessPlan(source, sourceType, type,
                           constantOffset, VMIMemoryValidMaskKind::AllTrue);
-  if (!accessPlan.targetCapability.isSupported())
-    return fail(accessPlan.targetCapability.reason);
+  if (!accessPlan.layoutSupport.isSupported())
+    return fail(accessPlan.layoutSupport.reason);
 
   VMILayoutSupport supports;
   if (failed(supports.getLoadLayoutFact(type, reason)))
@@ -1271,7 +1190,7 @@ checkSupportedLoadShape(const VMITargetCapabilityRegistry &capabilities,
 }
 
 LogicalResult checkSupportedDeinterleaveLoadShape(
-    const VMITargetCapabilityRegistry &capabilities, VMIDeinterleaveLoadOp op,
+    VMIDeinterleaveLoadOp op,
     std::string *reason) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
@@ -1292,11 +1211,10 @@ LogicalResult checkSupportedDeinterleaveLoadShape(
   if (!getX2MemoryDistToken(lowType.getElementType(), "DINTLV"))
     return fail("requires 8/16/32-bit element type for vldsx2 DINTLV");
 
-  VMIMemoryAccessPlan accessPlan = buildReadAccessPlan(
-      capabilities, op.getSource(), op.getSource().getType(), lowType,
+  VMIMemoryAccessPlan accessPlan = buildReadAccessPlan(op.getSource(), op.getSource().getType(), lowType,
       getConstantIndexValue(op.getOffset()), VMIMemoryValidMaskKind::AllTrue);
-  if (!accessPlan.targetCapability.isSupported())
-    return fail(accessPlan.targetCapability.reason);
+  if (!accessPlan.layoutSupport.isSupported())
+    return fail(accessPlan.layoutSupport.reason);
 
   std::string fullChunkReason;
   if (failed(checkFullDataPhysicalChunks(lowType, &fullChunkReason)))
@@ -1305,19 +1223,18 @@ LogicalResult checkSupportedDeinterleaveLoadShape(
 }
 
 LogicalResult
-checkSupportedStoreShape(const VMITargetCapabilityRegistry &capabilities,
-                         VMIVRegType type, Value destination,
+checkSupportedStoreShape(VMIVRegType type, Value destination,
                          Type destinationType, std::string *reason) {
   VMIMemoryAccessPlan accessPlan =
-      buildWriteAccessPlan(capabilities, destination, destinationType, type,
+      buildWriteAccessPlan(destination, destinationType, type,
                            VMIMemoryWriteMaskKind::AllTrue);
-  if (!accessPlan.targetCapability.isSupported()) {
+  if (!accessPlan.layoutSupport.isSupported()) {
     if (reason)
-      *reason = accessPlan.targetCapability.reason;
+      *reason = accessPlan.layoutSupport.reason;
     return failure();
   }
 
-  if (failed(checkSupportedMaskableVReg(capabilities, type, reason)))
+  if (failed(checkSupportedMaskableVReg(type, reason)))
     return failure();
 
   VMILayoutSupport supports;
@@ -1355,7 +1272,7 @@ checkSupportedStoreShape(const VMITargetCapabilityRegistry &capabilities,
 }
 
 LogicalResult checkSupportedInterleaveStoreShape(
-    const VMITargetCapabilityRegistry &capabilities, VMIInterleaveStoreOp op,
+    VMIInterleaveStoreOp op,
     std::string *reason) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
@@ -1376,12 +1293,11 @@ LogicalResult checkSupportedInterleaveStoreShape(
   if (!getX2MemoryDistToken(lowType.getElementType(), "INTLV"))
     return fail("requires 8/16/32-bit element type for vstsx2 INTLV");
 
-  VMIMemoryAccessPlan accessPlan = buildWriteAccessPlan(
-      capabilities, op.getDestination(), op.getDestination().getType(), lowType,
+  VMIMemoryAccessPlan accessPlan = buildWriteAccessPlan(op.getDestination(), op.getDestination().getType(), lowType,
       VMIMemoryWriteMaskKind::AllTrue);
-  if (!accessPlan.targetCapability.isSupported())
-    return fail(accessPlan.targetCapability.reason);
-  if (failed(checkSupportedMaskableVReg(capabilities, lowType, reason)))
+  if (!accessPlan.layoutSupport.isSupported())
+    return fail(accessPlan.layoutSupport.reason);
+  if (failed(checkSupportedMaskableVReg(lowType, reason)))
     return failure();
 
   std::string fullChunkReason;
@@ -1475,8 +1391,7 @@ LogicalResult checkDeinterleaved2GroupStoreChunkShape(
 }
 
 LogicalResult
-checkSupportedGroupLoadShape(const VMITargetCapabilityRegistry &capabilities,
-                             VMIGroupLoadOp op, std::string *reason) {
+checkSupportedGroupLoadShape(VMIGroupLoadOp op, std::string *reason) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
       *reason = message.str();
@@ -1496,7 +1411,7 @@ checkSupportedGroupLoadShape(const VMITargetCapabilityRegistry &capabilities,
     VMILayoutSupport supports;
     if (failed(supports.getGroupLoadLayoutFact(op, reason)))
       return failure();
-    if (failed(checkSupportedLoadShape(capabilities, resultType, op.getSource(),
+    if (failed(checkSupportedLoadShape(resultType, op.getSource(),
                                        op.getSource().getType(), std::nullopt,
                                        reason)))
       return failure();
@@ -1511,11 +1426,10 @@ checkSupportedGroupLoadShape(const VMITargetCapabilityRegistry &capabilities,
     VMILayoutSupport supports;
     if (failed(supports.getGroupLoadLayoutFact(op, reason)))
       return failure();
-    VMIMemoryAccessPlan accessPlan = buildReadAccessPlan(
-        capabilities, op.getSource(), op.getSource().getType(), resultType,
+    VMIMemoryAccessPlan accessPlan = buildReadAccessPlan(op.getSource(), op.getSource().getType(), resultType,
         getConstantIndexValue(op.getOffset()), VMIMemoryValidMaskKind::AllTrue);
-    if (!accessPlan.targetCapability.isSupported())
-      return fail(accessPlan.targetCapability.reason);
+    if (!accessPlan.layoutSupport.isSupported())
+      return fail(accessPlan.layoutSupport.reason);
     if (!isa<PtrType>(op.getSource().getType()))
       return fail("block8 strided group_load requires !pto.ptr source");
     if (op.getNumGroupsAttr().getInt() % 8 != 0)
@@ -1537,7 +1451,7 @@ checkSupportedGroupLoadShape(const VMITargetCapabilityRegistry &capabilities,
 }
 
 LogicalResult checkSupportedGroupSlotLoadShape(
-    const VMITargetCapabilityRegistry &capabilities, VMIGroupSlotLoadOp op,
+    VMIGroupSlotLoadOp op,
     std::string *reason) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
@@ -1552,11 +1466,10 @@ LogicalResult checkSupportedGroupSlotLoadShape(
   if (failed(fact))
     return failure();
 
-  VMIMemoryAccessPlan accessPlan = buildReadAccessPlan(
-      capabilities, op.getSource(), op.getSource().getType(), resultType,
+  VMIMemoryAccessPlan accessPlan = buildReadAccessPlan(op.getSource(), op.getSource().getType(), resultType,
       getConstantIndexValue(op.getOffset()), VMIMemoryValidMaskKind::AllTrue);
-  if (!accessPlan.targetCapability.isSupported())
-    return fail(accessPlan.targetCapability.reason);
+  if (!accessPlan.layoutSupport.isSupported())
+    return fail(accessPlan.layoutSupport.reason);
   if (!isa<PtrType>(op.getSource().getType()))
     return fail("group_slot_load requires !pto.ptr source");
 
@@ -1588,7 +1501,7 @@ LogicalResult checkSupportedGroupSlotLoadShape(
 }
 
 LogicalResult checkSupportedGroupBroadcastLoadShape(
-    const VMITargetCapabilityRegistry &capabilities, VMIGroupBroadcastLoadOp op,
+    VMIGroupBroadcastLoadOp op,
     std::string *reason) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
@@ -1599,20 +1512,18 @@ LogicalResult checkSupportedGroupBroadcastLoadShape(
   VMILayoutSupport supports;
   if (failed(supports.getGroupBroadcastLoadSupport(op, reason)))
     return failure();
-  VMIMemoryAccessPlan accessPlan = buildReadAccessPlan(
-      capabilities, op.getSource(), op.getSource().getType(),
+  VMIMemoryAccessPlan accessPlan = buildReadAccessPlan(op.getSource(), op.getSource().getType(),
       cast<VMIVRegType>(op.getResult().getType()),
       getConstantIndexValue(op.getOffset()), VMIMemoryValidMaskKind::AllTrue);
-  if (!accessPlan.targetCapability.isSupported())
-    return fail(accessPlan.targetCapability.reason);
+  if (!accessPlan.layoutSupport.isSupported())
+    return fail(accessPlan.layoutSupport.reason);
   if (!isa<PtrType>(op.getSource().getType()))
     return fail("group_broadcast_load requires !pto.ptr source");
   return success();
 }
 
 LogicalResult
-checkSupportedGroupStoreShape(const VMITargetCapabilityRegistry &capabilities,
-                              VMIGroupStoreOp op, std::string *reason) {
+checkSupportedGroupStoreShape(VMIGroupStoreOp op, std::string *reason) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
       *reason = message.str();
@@ -1628,16 +1539,10 @@ checkSupportedGroupStoreShape(const VMITargetCapabilityRegistry &capabilities,
     if (failed(fact))
       return failure();
 
-    VMIMemoryAccessPlan accessPlan = buildWriteAccessPlan(
-        capabilities, op.getDestination(), op.getDestination().getType(),
+    VMIMemoryAccessPlan accessPlan = buildWriteAccessPlan(op.getDestination(), op.getDestination().getType(),
         valueType, VMIMemoryWriteMaskKind::AllTrue);
-    if (!accessPlan.targetCapability.isSupported())
-      return fail(accessPlan.targetCapability.reason);
-
-    VMICapabilityResult elementCapability = capabilities.supportsElementType(
-        valueType.getElementType(), VMIElementPurpose::PredicateMask);
-    if (!elementCapability.isSupported())
-      return fail(elementCapability.reason);
+    if (!accessPlan.layoutSupport.isSupported())
+      return fail(accessPlan.layoutSupport.reason);
 
     if (fact->slots == 1) {
       unsigned elementBits =
@@ -1666,7 +1571,7 @@ checkSupportedGroupStoreShape(const VMITargetCapabilityRegistry &capabilities,
       valueType, op.getNumGroupsAttr().getInt(), reason);
   if (failed(groupSize))
     return failure();
-  if (failed(checkSupportedStoreShape(capabilities, valueType,
+  if (failed(checkSupportedStoreShape(valueType,
                                       op.getDestination(),
                                       op.getDestination().getType(), reason)))
     return failure();
@@ -1682,8 +1587,7 @@ checkSupportedGroupStoreShape(const VMITargetCapabilityRegistry &capabilities,
 }
 
 LogicalResult
-checkSupportedMaskedLoadShape(const VMITargetCapabilityRegistry &capabilities,
-                              VMIMaskedLoadOp op, std::string *reason) {
+checkSupportedMaskedLoadShape(VMIMaskedLoadOp op, std::string *reason) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
       *reason = message.str();
@@ -1696,12 +1600,11 @@ checkSupportedMaskedLoadShape(const VMITargetCapabilityRegistry &capabilities,
   VMILayoutAttr resultLayout = resultType.getLayoutAttr();
   VMILayoutAttr passthruLayout = passthruType.getLayoutAttr();
   VMILayoutAttr maskLayout = maskType.getLayoutAttr();
-  VMIMemoryAccessPlan accessPlan = buildReadAccessPlan(
-      capabilities, op.getSource(), op.getSource().getType(), resultType,
+  VMIMemoryAccessPlan accessPlan = buildReadAccessPlan(op.getSource(), op.getSource().getType(), resultType,
       getConstantIndexValue(op.getOffset()),
       VMIMemoryValidMaskKind::ExplicitMask);
-  if (!accessPlan.targetCapability.isSupported())
-    return fail(accessPlan.targetCapability.reason);
+  if (!accessPlan.layoutSupport.isSupported())
+    return fail(accessPlan.layoutSupport.reason);
   if (!resultLayout || !passthruLayout || !maskLayout)
     return fail("requires assigned result, passthru, and mask layouts");
   if (!resultLayout.isContiguous() || !passthruLayout.isContiguous() ||
@@ -1723,8 +1626,7 @@ checkSupportedMaskedLoadShape(const VMITargetCapabilityRegistry &capabilities,
 }
 
 LogicalResult
-checkSupportedGatherShape(const VMITargetCapabilityRegistry &capabilities,
-                          VMIGatherOp op, std::string *reason) {
+checkSupportedGatherShape(VMIGatherOp op, std::string *reason) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
       *reason = message.str();
@@ -1747,11 +1649,9 @@ checkSupportedGatherShape(const VMITargetCapabilityRegistry &capabilities,
     return fail("requires contiguous result, indices, passthru, and mask "
                 "layouts");
 
-  VMICapabilityResult sourceCapability = capabilities.supportsUBPointerMemory(
-      op.getSource().getType(), "source", "pto.vgather2_bc",
-      "pto.vgather2_bc reads only UB");
-  if (!sourceCapability.isSupported())
-    return fail(sourceCapability.reason);
+  if (!isa<PtrType>(op.getSource().getType()))
+    return fail("requires !pto.ptr source because pto.vgather2_bc is "
+                "pointer-only");
 
   unsigned resultBits =
       pto::getPTOStorageElemBitWidth(resultType.getElementType());
@@ -1803,8 +1703,7 @@ checkSupportedGatherShape(const VMITargetCapabilityRegistry &capabilities,
 }
 
 LogicalResult
-checkSupportedScatterShape(const VMITargetCapabilityRegistry &capabilities,
-                           VMIScatterOp op, std::string *reason) {
+checkSupportedScatterShape(VMIScatterOp op, std::string *reason) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
       *reason = message.str();
@@ -1823,12 +1722,9 @@ checkSupportedScatterShape(const VMITargetCapabilityRegistry &capabilities,
       !maskLayout.isContiguous())
     return fail("requires contiguous value, indices, and mask layouts");
 
-  VMICapabilityResult destinationCapability =
-      capabilities.supportsUBPointerMemory(op.getDestination().getType(),
-                                           "destination", "pto.vscatter",
-                                           "pto.vscatter writes only UB");
-  if (!destinationCapability.isSupported())
-    return fail(destinationCapability.reason);
+  if (!isa<PtrType>(op.getDestination().getType()))
+    return fail("requires !pto.ptr destination because pto.vscatter is "
+                "pointer-only");
 
   if (pto::getPTOStorageElemBitWidth(valueType.getElementType()) != 32)
     return fail("currently requires 32-bit value element type so physical "
@@ -1864,8 +1760,7 @@ checkSupportedScatterShape(const VMITargetCapabilityRegistry &capabilities,
 }
 
 LogicalResult
-checkSupportedStrideStoreShape(const VMITargetCapabilityRegistry &capabilities,
-                               VMIStrideStoreOp op, std::string *reason) {
+checkSupportedStrideStoreShape(VMIStrideStoreOp op, std::string *reason) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
       *reason = message.str();
@@ -1881,13 +1776,10 @@ checkSupportedStrideStoreShape(const VMITargetCapabilityRegistry &capabilities,
   if (!valueLayout.isContiguous() || !maskLayout.isContiguous())
     return fail("requires contiguous value and mask layouts");
 
-  VMICapabilityResult destinationCapability =
-      capabilities.supportsUBPointerMemory(op.getDestination().getType(),
-                                           "destination", "pto.vsstb",
-                                           "pto.vsstb writes only UB");
-  if (!destinationCapability.isSupported())
-    return fail(destinationCapability.reason);
-  if (failed(checkSupportedStoreShape(capabilities, valueType,
+  if (!isa<PtrType>(op.getDestination().getType()))
+    return fail("requires !pto.ptr destination because pto.vsstb is "
+                "pointer-only");
+  if (failed(checkSupportedStoreShape(valueType,
                                       op.getDestination(),
                                       op.getDestination().getType(), reason)))
     return failure();
@@ -1902,8 +1794,7 @@ checkSupportedStrideStoreShape(const VMITargetCapabilityRegistry &capabilities,
 }
 
 LogicalResult
-checkSupportedStrideLoadShape(const VMITargetCapabilityRegistry &capabilities,
-                              VMIStrideLoadOp op, std::string *reason) {
+checkSupportedStrideLoadShape(VMIStrideLoadOp op, std::string *reason) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
       *reason = message.str();
@@ -1919,11 +1810,8 @@ checkSupportedStrideLoadShape(const VMITargetCapabilityRegistry &capabilities,
   if (!resultLayout.isContiguous() || !maskLayout.isContiguous())
     return fail("requires contiguous result and mask layouts");
 
-  VMICapabilityResult sourceCapability = capabilities.supportsUBPointerMemory(
-      op.getSource().getType(), "source", "pto.vsldb",
-      "pto.vsldb reads only UB");
-  if (!sourceCapability.isSupported())
-    return fail(sourceCapability.reason);
+  if (!isa<PtrType>(op.getSource().getType()))
+    return fail("requires !pto.ptr source because pto.vsldb is pointer-only");
 
   FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
   FailureOr<int64_t> maskArity = getVMIPhysicalArity(maskType);
@@ -1989,8 +1877,7 @@ bool isStaticAllActiveMask(Value mask, int64_t expectedLanes,
 }
 
 LogicalResult
-checkSupportedExpandLoadShape(const VMITargetCapabilityRegistry &capabilities,
-                              VMIExpandLoadOp op, std::string *reason) {
+checkSupportedExpandLoadShape(VMIExpandLoadOp op, std::string *reason) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
       *reason = message.str();
@@ -2003,12 +1890,11 @@ checkSupportedExpandLoadShape(const VMITargetCapabilityRegistry &capabilities,
   VMILayoutAttr resultLayout = resultType.getLayoutAttr();
   VMILayoutAttr passthruLayout = passthruType.getLayoutAttr();
   VMILayoutAttr maskLayout = maskType.getLayoutAttr();
-  VMIMemoryAccessPlan accessPlan = buildReadAccessPlan(
-      capabilities, op.getSource(), op.getSource().getType(), resultType,
+  VMIMemoryAccessPlan accessPlan = buildReadAccessPlan(op.getSource(), op.getSource().getType(), resultType,
       getConstantIndexValue(op.getOffset()),
       VMIMemoryValidMaskKind::ExplicitMask);
-  if (!accessPlan.targetCapability.isSupported())
-    return fail(accessPlan.targetCapability.reason);
+  if (!accessPlan.layoutSupport.isSupported())
+    return fail(accessPlan.layoutSupport.reason);
   if (!resultLayout || !passthruLayout || !maskLayout)
     return fail("requires assigned result, passthru, and mask layouts");
   if (!resultLayout.isContiguous() || !passthruLayout.isContiguous() ||
@@ -2042,15 +1928,10 @@ checkSupportedExpandLoadShape(const VMITargetCapabilityRegistry &capabilities,
             .str();
   }
 
-  VMICapabilityResult sourceCapability = capabilities.supportsUBPointerMemory(
-      op.getSource().getType(), "source", "pto.vgather2_bc",
-      "pto.vgather2_bc reads only UB");
-  if (!sourceCapability.isSupported()) {
-    if (!isa<PtrType>(op.getSource().getType()))
-      return fail(Twine("runtime-mask path ") + sourceCapability.reason +
-                  "; all-active path " + allActivePathReason);
-    return fail(Twine("runtime-mask path ") + sourceCapability.reason);
-  }
+  if (!isa<PtrType>(op.getSource().getType()))
+    return fail(Twine("runtime-mask path requires !pto.ptr source because "
+                      "pto.vgather2_bc is pointer-only; all-active path ") +
+                allActivePathReason);
   if (pto::getPTOStorageElemBitWidth(resultType.getElementType()) != 32)
     return fail("runtime-mask path currently requires 32-bit result element "
                 "type so prefix indices and gather result lane counts match");
@@ -2082,16 +1963,15 @@ checkSupportedExpandLoadShape(const VMITargetCapabilityRegistry &capabilities,
 }
 
 LogicalResult
-checkSupportedMaskedStoreShape(const VMITargetCapabilityRegistry &capabilities,
-                               VMIVRegType valueType, VMIMaskType maskType,
+checkSupportedMaskedStoreShape(VMIVRegType valueType, VMIMaskType maskType,
                                Value destination, Type destinationType,
                                std::string *reason) {
   VMIMemoryAccessPlan accessPlan =
-      buildWriteAccessPlan(capabilities, destination, destinationType,
+      buildWriteAccessPlan(destination, destinationType,
                            valueType, VMIMemoryWriteMaskKind::ExplicitMask);
-  if (!accessPlan.targetCapability.isSupported()) {
+  if (!accessPlan.layoutSupport.isSupported()) {
     if (reason)
-      *reason = accessPlan.targetCapability.reason;
+      *reason = accessPlan.layoutSupport.reason;
     return failure();
   }
 
@@ -4033,7 +3913,7 @@ StringRef getMaskGranularityForRank(int rank) {
 }
 
 LogicalResult checkSupportedMaskGranularityMaterialization(
-    const VMITargetCapabilityRegistry &capabilities, VMIMaskType sourceType,
+    VMIMaskType sourceType,
     VMIMaskType resultType, std::string *reason) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
@@ -4046,11 +3926,10 @@ LogicalResult checkSupportedMaskGranularityMaterialization(
   if (sourceType.getLayoutAttr() != resultType.getLayoutAttr())
     return fail("requires source and result mask layouts to match");
 
-  VMICapabilityResult granularityCapability =
-      capabilities.supportsMaskGranularityConversion(
-          sourceType.getGranularity(), resultType.getGranularity());
-  if (!granularityCapability.isSupported())
-    return fail(granularityCapability.reason);
+  if (!VMIMaskType::isConcreteGranularity(sourceType.getGranularity()) ||
+      !VMIMaskType::isConcreteGranularity(resultType.getGranularity()))
+    return fail("requires concrete b8/b16/b32 source and result "
+                "granularities");
 
   FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
   FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
@@ -4162,12 +4041,10 @@ FailureOr<SmallVector<Value>> materializeAdjacentMaskGranularityConversion(
 }
 
 FailureOr<SmallVector<Value>> materializeMaskGranularityConversion(
-    Operation *op, const VMITargetCapabilityRegistry &capabilities,
-    VMIMaskType sourceType, VMIMaskType resultType, ValueRange sourceParts,
+    Operation *op, VMIMaskType sourceType, VMIMaskType resultType, ValueRange sourceParts,
     PatternRewriter &rewriter) {
   std::string reason;
-  if (failed(checkSupportedMaskGranularityMaterialization(
-          capabilities, sourceType, resultType, &reason))) {
+  if (failed(checkSupportedMaskGranularityMaterialization(sourceType, resultType, &reason))) {
     (void)rewriter.notifyMatchFailure(op, reason);
     return failure();
   }
@@ -4279,12 +4156,8 @@ struct OneToNVMIEnsureMaskLayoutOpPattern
 
 struct OneToNVMIEnsureMaskGranularityOpPattern
     : OpConversionPattern<VMIEnsureMaskGranularityOp> {
-  OneToNVMIEnsureMaskGranularityOpPattern(
-      TypeConverter &typeConverter, MLIRContext *context,
-      const VMITargetCapabilityRegistry &capabilities)
-      : OpConversionPattern<VMIEnsureMaskGranularityOp>(typeConverter,
-                                                              context),
-        capabilities(capabilities) {}
+  using OpConversionPattern<
+      VMIEnsureMaskGranularityOp>::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(VMIEnsureMaskGranularityOp op, OneToNOpAdaptor adaptor,
@@ -4303,8 +4176,8 @@ struct OneToNVMIEnsureMaskGranularityOpPattern
     SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     if (sourceType.getGranularity() != resultType.getGranularity()) {
       FailureOr<SmallVector<Value>> results =
-          materializeMaskGranularityConversion(
-              op, capabilities, sourceType, resultType, sourceParts, rewriter);
+          materializeMaskGranularityConversion(op, sourceType, resultType,
+                                               sourceParts, rewriter);
       if (failed(results))
         return failure();
       if (results->size() != resultTypes.size())
@@ -4326,7 +4199,7 @@ struct OneToNVMIEnsureMaskGranularityOpPattern
   }
 
 private:
-  const VMITargetCapabilityRegistry &capabilities;
+  ;
 };
 
 struct OneToNVMIBroadcastOpPattern : OpConversionPattern<VMIBroadcastOp> {
@@ -6824,12 +6697,7 @@ struct OneToNVMIMaskedStoreOpPattern
 
 struct OneToNVMIGroupBroadcastLoadOpPattern
     : OpConversionPattern<VMIGroupBroadcastLoadOp> {
-  OneToNVMIGroupBroadcastLoadOpPattern(
-      TypeConverter &typeConverter, MLIRContext *context,
-      const VMITargetCapabilityRegistry &capabilities)
-      : OpConversionPattern<VMIGroupBroadcastLoadOp>(typeConverter,
-                                                           context),
-        capabilities(capabilities) {}
+  using OpConversionPattern<VMIGroupBroadcastLoadOp>::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(VMIGroupBroadcastLoadOp op, OneToNOpAdaptor adaptor,
@@ -7052,7 +6920,7 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
   }
 
 private:
-  const VMITargetCapabilityRegistry &capabilities;
+  ;
 };
 
 struct OneToNVMIStrideLoadOpPattern
@@ -7766,44 +7634,6 @@ enum class GroupReduceLoweringPlan {
   ContiguousVcaddRows,
 };
 
-LogicalResult checkGroupReduceTargetElementType(
-    const VMITargetCapabilityRegistry &capabilities, VMIGroupReduceAddFOp op,
-    std::string *reason = nullptr) {
-  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
-  return capabilities
-      .supportsReductionElementType(VMIReductionKind::GroupAddF,
-                                    sourceType.getElementType())
-      .toLogicalResult(reason);
-}
-
-LogicalResult checkGroupReduceTargetElementType(
-    const VMITargetCapabilityRegistry &capabilities, VMIGroupReduceMaxFOp op,
-    std::string *reason = nullptr) {
-  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
-  return capabilities
-      .supportsReductionElementType(VMIReductionKind::GroupMaxF,
-                                    sourceType.getElementType())
-      .toLogicalResult(reason);
-}
-
-LogicalResult checkGroupReduceTargetElementType(
-    const VMITargetCapabilityRegistry &capabilities, VMIGroupReduceAddIOp op,
-    std::string *reason = nullptr) {
-  (void)capabilities;
-  (void)op;
-  (void)reason;
-  return success();
-}
-
-LogicalResult checkGroupReduceTargetElementType(
-    const VMITargetCapabilityRegistry &capabilities, VMIGroupReduceMaxIOp op,
-    std::string *reason = nullptr) {
-  (void)capabilities;
-  (void)op;
-  (void)reason;
-  return success();
-}
-
 FailureOr<GroupReduceLoweringPlan>
 classifyGroupReduceLoweringPlan(VMIVRegType sourceType, VMIMaskType maskType,
                                 VMIVRegType resultType, int64_t numGroups,
@@ -7837,11 +7667,7 @@ classifyGroupReduceLoweringPlan(VMIVRegType sourceType, VMIMaskType maskType,
 template <typename OpTy, typename GroupReduceOpTy, typename RowReduceOpTy,
           typename CombineOpTy>
 struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
-  OneToNVMIGroupReduceOpPattern(TypeConverter &typeConverter,
-                                MLIRContext *context,
-                                const VMITargetCapabilityRegistry &capabilities)
-      : OpConversionPattern<OpTy>(typeConverter, context),
-        capabilities(capabilities) {}
+  using OpConversionPattern<OpTy>::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(OpTy op,
@@ -7859,11 +7685,6 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
 
     VMILayoutSupport supports;
     std::string supportReason;
-    if (failed(checkGroupReduceTargetElementType(capabilities, op,
-                                                 &supportReason)))
-      return rewriter.notifyMatchFailure(
-          op, Twine(op->getName().getStringRef()) +
-                  " has no target element support: " + supportReason);
     if (failed(getSupport(supports, op, &supportReason)))
       return rewriter.notifyMatchFailure(
           op, Twine(op->getName().getStringRef()) +
@@ -8245,7 +8066,7 @@ private:
     return supports.getGroupReduceMaxFSupport(op, reason);
   }
 
-  const VMITargetCapabilityRegistry &capabilities;
+  ;
 };
 
 struct OneToNVMIGroupBroadcastOpPattern
@@ -10002,8 +9823,7 @@ struct OneToNSCFIndexSwitchOpPattern
 };
 
 void populateVMIConversionPatterns(
-    VMIToVPTOTypeConverter &typeConverter, RewritePatternSet &patterns,
-    const VMITargetCapabilityRegistry &capabilities) {
+    VMIToVPTOTypeConverter &typeConverter, RewritePatternSet &patterns) {
   populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(patterns, typeConverter);
   populateCallOpTypeConversionPattern(patterns, typeConverter);
   populateReturnOpTypeConversionPattern(patterns, typeConverter);
@@ -10065,7 +9885,7 @@ void populateVMIConversionPatterns(
       OneToNVMIChannelSplitOpPattern, OneToNVMIChannelMergeOpPattern,
       OneToNVMIShuffleOpPattern>(typeConverter, patterns.getContext());
   patterns.add<OneToNVMIGroupBroadcastLoadOpPattern>(
-      typeConverter, patterns.getContext(), capabilities);
+      typeConverter, patterns.getContext());
   patterns.add<
       OneToNVMIGroupReduceOpPattern<VMIGroupReduceAddFOp, VcgaddOp, VcaddOp,
                                     VaddOp>,
@@ -10074,10 +9894,10 @@ void populateVMIConversionPatterns(
       OneToNVMIGroupReduceOpPattern<VMIGroupReduceMaxIOp, VcgmaxOp, VcmaxOp,
                                     VmaxOp>,
       OneToNVMIGroupReduceOpPattern<VMIGroupReduceMaxFOp, VcgmaxOp, VcmaxOp,
-                                    VmaxOp>>(
-      typeConverter, patterns.getContext(), capabilities);
+                                    VmaxOp>>(typeConverter,
+                                             patterns.getContext());
   patterns.add<OneToNVMIEnsureMaskGranularityOpPattern>(
-      typeConverter, patterns.getContext(), capabilities);
+      typeConverter, patterns.getContext());
 }
 
 LogicalResult verifyNoResidualVMIIR(ModuleOp module) {
@@ -10222,8 +10042,7 @@ LogicalResult checkSupportedBitcastShape(VMIBitcastOp op, std::string *reason) {
 }
 
 LogicalResult
-checkSupportedChannelSplitShape(const VMITargetCapabilityRegistry &capabilities,
-                                VMIChannelSplitOp op,
+checkSupportedChannelSplitShape(VMIChannelSplitOp op,
                                 std::string *reason = nullptr) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
@@ -10232,10 +10051,8 @@ checkSupportedChannelSplitShape(const VMITargetCapabilityRegistry &capabilities,
   };
 
   int64_t channels = op.getNumResults();
-  VMICapabilityResult channelCapability =
-      capabilities.supportsChannelCount("pto.vmi.channel_split", channels);
-  if (!channelCapability.isSupported())
-    return fail(channelCapability.reason);
+  if (channels != 2 && channels != 4)
+    return fail("pto.vmi.channel_split supports only 2 or 4 channels");
 
   auto sourceType = cast<VMIVRegType>(op.getSource().getType());
   VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
@@ -10254,17 +10071,7 @@ checkSupportedChannelSplitShape(const VMITargetCapabilityRegistry &capabilities,
       return fail("requires every result layout to be contiguous");
   }
 
-  auto channelType =
-      VMIVRegType::get(op.getContext(), sourceType.getElementCount(),
-                       sourceType.getElementType(), expectedLayout);
-  std::string materializationReason;
-  if (failed(checkSupportedLayoutMaterialization(
-          capabilities, sourceType, channelType, sourceLayout, expectedLayout,
-          &materializationReason)))
-    return fail(Twine("cannot materialize source to channel layout; ") +
-                materializationReason);
-
-  FailureOr<int64_t> channelArity = getVMIPhysicalArity(channelType);
+  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
   int64_t resultArity = 0;
   for (Value result : op.getResults()) {
     FailureOr<int64_t> arity =
@@ -10273,15 +10080,16 @@ checkSupportedChannelSplitShape(const VMITargetCapabilityRegistry &capabilities,
       return fail("requires computable result physical arity");
     resultArity += *arity;
   }
-  if (failed(channelArity) || *channelArity != resultArity)
-    return fail("requires channel physical arity to match all result parts");
+  if (failed(sourceArity))
+    return fail("requires computable source physical arity");
+  if (*sourceArity != resultArity)
+    return fail("requires source and result to have the same physical arity");
 
   return success();
 }
 
 LogicalResult
-checkSupportedChannelMergeShape(const VMITargetCapabilityRegistry &capabilities,
-                                VMIChannelMergeOp op,
+checkSupportedChannelMergeShape(VMIChannelMergeOp op,
                                 std::string *reason = nullptr) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
@@ -10290,10 +10098,8 @@ checkSupportedChannelMergeShape(const VMITargetCapabilityRegistry &capabilities,
   };
 
   int64_t channels = op.getInputs().size();
-  VMICapabilityResult channelCapability =
-      capabilities.supportsChannelCount("pto.vmi.channel_merge", channels);
-  if (!channelCapability.isSupported())
-    return fail(channelCapability.reason);
+  if (channels != 2 && channels != 4)
+    return fail("pto.vmi.channel_merge supports only 2 or 4 channels");
 
   int64_t inputArity = 0;
   for (Value input : op.getInputs()) {
@@ -10317,19 +10123,11 @@ checkSupportedChannelMergeShape(const VMITargetCapabilityRegistry &capabilities,
     return fail("requires result layout to be contiguous or matching "
                 "deinterleaved channel layout");
 
-  auto channelType =
-      VMIVRegType::get(op.getContext(), resultType.getElementCount(),
-                       resultType.getElementType(), expectedLayout);
-  FailureOr<int64_t> channelArity = getVMIPhysicalArity(channelType);
-  if (failed(channelArity) || *channelArity != inputArity)
-    return fail("requires channel physical arity to match all input parts");
-
-  std::string materializationReason;
-  if (failed(checkSupportedLayoutMaterialization(
-          capabilities, channelType, resultType, expectedLayout, resultLayout,
-          &materializationReason)))
-    return fail(Twine("cannot materialize channel layout to result; ") +
-                materializationReason);
+  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
+  if (failed(resultArity))
+    return fail("requires computable result physical arity");
+  if (*resultArity != inputArity)
+    return fail("requires source and result to have the same physical arity");
 
   return success();
 }
@@ -10414,7 +10212,7 @@ LogicalResult checkSupportedCompressShape(VMICompressOp op,
 }
 
 LogicalResult checkSupportedCompressStoreShape(
-    const VMITargetCapabilityRegistry &capabilities, VMICompressStoreOp op,
+    VMICompressStoreOp op,
     std::string *reason = nullptr) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
@@ -10431,12 +10229,9 @@ LogicalResult checkSupportedCompressStoreShape(
   if (!valueLayout.isContiguous() || !maskLayout.isContiguous())
     return fail("requires contiguous value and mask layouts");
 
-  VMICapabilityResult destinationCapability =
-      capabilities.supportsUBPointerMemory(op.getDestination().getType(),
-                                           "destination", "pto.vstur",
-                                           "pto.vstur stores only to UB");
-  if (!destinationCapability.isSupported())
-    return fail(destinationCapability.reason);
+  if (!isa<PtrType>(op.getDestination().getType()))
+    return fail("requires !pto.ptr destination because pto.vstur is "
+                "pointer-only");
 
   std::string fullChunkReason;
   if (failed(checkFullDataPhysicalChunks(valueType, &fullChunkReason)))
@@ -10458,8 +10253,7 @@ LogicalResult checkSupportedCompressStoreShape(
 
 template <typename OpTy>
 LogicalResult
-checkSupportedReduceShape(const VMITargetCapabilityRegistry &capabilities,
-                          OpTy op, VMIReductionKind kind, bool requiresReassoc,
+checkSupportedReduceShape(OpTy op, bool requiresReassoc,
                           std::string *reason = nullptr) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
@@ -10483,12 +10277,6 @@ checkSupportedReduceShape(const VMITargetCapabilityRegistry &capabilities,
   if (!sourceLayout.isContiguous() || !initLayout.isContiguous() ||
       !maskLayout.isContiguous() || !resultLayout.isContiguous())
     return fail("requires contiguous source, init, mask, and result layouts");
-
-  VMICapabilityResult elementCapability =
-      capabilities.supportsReductionElementType(kind,
-                                                sourceType.getElementType());
-  if (!elementCapability.isSupported())
-    return fail(elementCapability.reason);
 
   std::string fullChunkReason;
   if (failed(checkFullDataPhysicalChunks(sourceType, &fullChunkReason)))
@@ -10514,11 +10302,7 @@ checkSupportedReduceShape(const VMITargetCapabilityRegistry &capabilities,
 
 template <typename OpTy>
 LogicalResult
-checkSupportedGroupReduceShape(const VMITargetCapabilityRegistry &capabilities,
-                               OpTy op, std::string *reason = nullptr) {
-  if (failed(checkGroupReduceTargetElementType(capabilities, op, reason)))
-    return failure();
-
+checkSupportedGroupReduceShape(OpTy op, std::string *reason = nullptr) {
   VMILayoutSupport supports;
   if constexpr (std::is_same_v<OpTy, VMIGroupReduceAddFOp>) {
     if (succeeded(supports.getGroupReduceAddFSupport(op, reason)))
@@ -10537,9 +10321,8 @@ checkSupportedGroupReduceShape(const VMITargetCapabilityRegistry &capabilities,
 }
 
 LogicalResult checkSupportedGroupBroadcastShape(
-    const VMITargetCapabilityRegistry &capabilities, VMIGroupBroadcastOp op,
+    VMIGroupBroadcastOp op,
     std::string *reason = nullptr) {
-  (void)capabilities;
   auto sourceType = cast<VMIVRegType>(op.getSource().getType());
   auto resultType = cast<VMIVRegType>(op.getResult().getType());
   if (sourceType.getElementType() != resultType.getElementType()) {
@@ -10644,8 +10427,7 @@ LogicalResult checkSupportedChistShape(VMIChistOp op,
 }
 
 LogicalResult
-checkSupportedFmaShape(const VMITargetCapabilityRegistry &capabilities,
-                       VMIFmaOp op, std::string *reason = nullptr) {
+checkSupportedFmaShape(VMIFmaOp op, std::string *reason = nullptr) {
   auto fail = [&](const Twine &message) -> LogicalResult {
     if (reason)
       *reason = message.str();
@@ -10653,11 +10435,6 @@ checkSupportedFmaShape(const VMITargetCapabilityRegistry &capabilities,
   };
 
   auto lhsType = cast<VMIVRegType>(op.getLhs().getType());
-  VMICapabilityResult elementCapability = capabilities.supportsElementType(
-      lhsType.getElementType(), VMIElementPurpose::VMula);
-  if (!elementCapability.isSupported())
-    return fail(elementCapability.reason);
-
   FailureOr<int64_t> arity = getVMIPhysicalArity(lhsType);
   if (failed(arity) || *arity < 1)
     return fail("requires computable non-empty physical arity");
@@ -10666,22 +10443,10 @@ checkSupportedFmaShape(const VMITargetCapabilityRegistry &capabilities,
 }
 
 LogicalResult
-checkSupportedReluShape(const VMITargetCapabilityRegistry &capabilities,
-                        VMIReluOp op, std::string *reason = nullptr) {
-  auto fail = [&](const Twine &message) -> LogicalResult {
-    if (reason)
-      *reason = message.str();
-    return failure();
-  };
-
+checkSupportedReluShape(VMIReluOp op, std::string *reason = nullptr) {
   auto resultType = cast<VMIVRegType>(op.getResult().getType());
-  if (failed(checkSupportedMaskableVReg(capabilities, resultType, reason)))
+  if (failed(checkSupportedMaskableVReg(resultType, reason)))
     return failure();
-
-  VMICapabilityResult elementCapability = capabilities.supportsElementType(
-      resultType.getElementType(), VMIElementPurpose::VRelu);
-  if (!elementCapability.isSupported())
-    return fail(elementCapability.reason);
 
   return success();
 }
@@ -10718,13 +10483,12 @@ void emitEnsureLayoutMaterializationError(VMIEnsureLayoutOp ensure,
 
 LogicalResult
 verifySupportedVMIToVPTOOps(ModuleOp module,
-                            const VMITargetCapabilityRegistry &capabilities,
                             bool enableStableGatherMaskedLoad) {
   auto emitMemoryUnsupported =
       [&](Operation *op, StringRef opName, VMIVRegType type, Value source,
           std::optional<int64_t> constantOffset) -> WalkResult {
     std::string reason;
-    if (succeeded(checkSupportedLoadShape(capabilities, type, source,
+    if (succeeded(checkSupportedLoadShape(type, source,
                                           source.getType(), constantOffset,
                                           &reason)))
       return WalkResult::advance();
@@ -10738,29 +10502,13 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
   auto emitMaskableUnsupported = [&](Operation *op, StringRef opName,
                                      VMIVRegType type) -> WalkResult {
     std::string reason;
-    if (succeeded(checkSupportedMaskableVReg(capabilities, type, &reason)))
+    if (succeeded(checkSupportedMaskableVReg(type, &reason)))
       return WalkResult::advance();
 
     op->emitError()
         << kVMIDiagUnsupportedPrefix << opName
         << " direct lowering requires physical vreg parts with b8/b16/b32 "
            "predicate masks ("
-        << reason << ")";
-    return WalkResult::interrupt();
-  };
-
-  auto emitTargetElementUnsupported =
-      [&](Operation *op, StringRef opName, VMIVRegType type,
-          VMIElementPurpose purpose, StringRef elementContract) -> WalkResult {
-    std::string reason;
-    if (succeeded(checkSupportedTargetElementVReg(capabilities, type, purpose,
-                                                  elementContract, &reason)))
-      return WalkResult::advance();
-
-    op->emitError()
-        << kVMIDiagUnsupportedPrefix << opName << " direct lowering requires "
-        << elementContract
-        << " and physical vreg parts with b8/b16/b32 predicate masks ("
         << reason << ")";
     return WalkResult::interrupt();
   };
@@ -10786,7 +10534,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
           cast<VMIVRegType>(broadcast.getResult().getType()));
     if (auto broadcast = dyn_cast<VMIGroupBroadcastOp>(op)) {
       std::string reason;
-      if (succeeded(checkSupportedGroupBroadcastShape(capabilities, broadcast,
+      if (succeeded(checkSupportedGroupBroadcastShape(broadcast,
                                                       &reason)))
         return WalkResult::advance();
       broadcast.emitError()
@@ -10830,7 +10578,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     if (auto load = dyn_cast<VMIDeinterleaveLoadOp>(op)) {
       std::string reason;
       if (succeeded(
-              checkSupportedDeinterleaveLoadShape(capabilities, load, &reason)))
+              checkSupportedDeinterleaveLoadShape(load, &reason)))
         return WalkResult::advance();
       load.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -10842,7 +10590,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     }
     if (auto load = dyn_cast<VMIStrideLoadOp>(op)) {
       std::string reason;
-      if (succeeded(checkSupportedStrideLoadShape(capabilities, load, &reason)))
+      if (succeeded(checkSupportedStrideLoadShape(load, &reason)))
         return WalkResult::advance();
       load.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -10853,7 +10601,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     }
     if (auto load = dyn_cast<VMIGroupLoadOp>(op)) {
       std::string reason;
-      if (succeeded(checkSupportedGroupLoadShape(capabilities, load, &reason)))
+      if (succeeded(checkSupportedGroupLoadShape(load, &reason)))
         return WalkResult::advance();
       load.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -10866,7 +10614,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     if (auto load = dyn_cast<VMIGroupSlotLoadOp>(op)) {
       std::string reason;
       if (succeeded(
-              checkSupportedGroupSlotLoadShape(capabilities, load, &reason)))
+              checkSupportedGroupSlotLoadShape(load, &reason)))
         return WalkResult::advance();
       load.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -10879,7 +10627,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     }
     if (auto load = dyn_cast<VMIGroupBroadcastLoadOp>(op)) {
       std::string reason;
-      if (succeeded(checkSupportedGroupBroadcastLoadShape(capabilities, load,
+      if (succeeded(checkSupportedGroupBroadcastLoadShape(load,
                                                           &reason)))
         return WalkResult::advance();
       load.emitError()
@@ -10900,7 +10648,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
         return WalkResult::interrupt();
       }
       std::string reason;
-      if (succeeded(checkSupportedMaskedLoadShape(capabilities, load, &reason)))
+      if (succeeded(checkSupportedMaskedLoadShape(load, &reason)))
         return WalkResult::advance();
       load.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -10912,7 +10660,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     }
     if (auto gather = dyn_cast<VMIGatherOp>(op)) {
       std::string reason;
-      if (succeeded(checkSupportedGatherShape(capabilities, gather, &reason)))
+      if (succeeded(checkSupportedGatherShape(gather, &reason)))
         return WalkResult::advance();
       gather.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -10924,7 +10672,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     }
     if (auto load = dyn_cast<VMIExpandLoadOp>(op)) {
       std::string reason;
-      if (succeeded(checkSupportedExpandLoadShape(capabilities, load, &reason)))
+      if (succeeded(checkSupportedExpandLoadShape(load, &reason)))
         return WalkResult::advance();
       load.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -10937,8 +10685,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     }
     if (auto store = dyn_cast<VMIStoreOp>(op)) {
       std::string reason;
-      if (succeeded(checkSupportedStoreShape(
-              capabilities, cast<VMIVRegType>(store.getValue().getType()),
+      if (succeeded(checkSupportedStoreShape(cast<VMIVRegType>(store.getValue().getType()),
               store.getDestination(), store.getDestination().getType(),
               &reason)))
         return WalkResult::advance();
@@ -10953,7 +10700,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     if (auto store = dyn_cast<VMIInterleaveStoreOp>(op)) {
       std::string reason;
       if (succeeded(
-              checkSupportedInterleaveStoreShape(capabilities, store, &reason)))
+              checkSupportedInterleaveStoreShape(store, &reason)))
         return WalkResult::advance();
       store.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -10966,7 +10713,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     if (auto store = dyn_cast<VMIGroupStoreOp>(op)) {
       std::string reason;
       if (succeeded(
-              checkSupportedGroupStoreShape(capabilities, store, &reason)))
+              checkSupportedGroupStoreShape(store, &reason)))
         return WalkResult::advance();
       store.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -10978,8 +10725,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     }
     if (auto store = dyn_cast<VMIMaskedStoreOp>(op)) {
       std::string reason;
-      if (succeeded(checkSupportedMaskedStoreShape(
-              capabilities, cast<VMIVRegType>(store.getValue().getType()),
+      if (succeeded(checkSupportedMaskedStoreShape(cast<VMIVRegType>(store.getValue().getType()),
               cast<VMIMaskType>(store.getMask().getType()),
               store.getDestination(), store.getDestination().getType(),
               &reason)))
@@ -10995,7 +10741,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     if (auto store = dyn_cast<VMIStrideStoreOp>(op)) {
       std::string reason;
       if (succeeded(
-              checkSupportedStrideStoreShape(capabilities, store, &reason)))
+              checkSupportedStrideStoreShape(store, &reason)))
         return WalkResult::advance();
       store.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -11007,7 +10753,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     }
     if (auto scatter = dyn_cast<VMIScatterOp>(op)) {
       std::string reason;
-      if (succeeded(checkSupportedScatterShape(capabilities, scatter, &reason)))
+      if (succeeded(checkSupportedScatterShape(scatter, &reason)))
         return WalkResult::advance();
       scatter.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -11057,8 +10803,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
         return WalkResult::advance();
 
       std::string reason;
-      if (succeeded(checkSupportedMaskGranularityMaterialization(
-              capabilities, sourceType, resultType, &reason)))
+      if (succeeded(checkSupportedMaskGranularityMaterialization(sourceType, resultType, &reason)))
         return WalkResult::advance();
 
       ensure.emitError()
@@ -11070,66 +10815,53 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     }
 
     if (auto addf = dyn_cast<VMIAddFOp>(op))
-      return emitTargetElementUnsupported(
-          op, "pto.vmi.addf", cast<VMIVRegType>(addf.getResult().getType()),
-          VMIElementPurpose::F16BF16F32, "f16/bf16/f32 element type");
+      return emitMaskableUnsupported(
+          op, "pto.vmi.addf", cast<VMIVRegType>(addf.getResult().getType()));
     if (auto addi = dyn_cast<VMIAddIOp>(op))
       return emitMaskableUnsupported(
           op, "pto.vmi.addi", cast<VMIVRegType>(addi.getResult().getType()));
     if (auto subf = dyn_cast<VMISubFOp>(op))
-      return emitTargetElementUnsupported(
-          op, "pto.vmi.subf", cast<VMIVRegType>(subf.getResult().getType()),
-          VMIElementPurpose::F16BF16F32, "f16/bf16/f32 element type");
+      return emitMaskableUnsupported(
+          op, "pto.vmi.subf", cast<VMIVRegType>(subf.getResult().getType()));
     if (auto subi = dyn_cast<VMISubIOp>(op))
       return emitMaskableUnsupported(
           op, "pto.vmi.subi", cast<VMIVRegType>(subi.getResult().getType()));
     if (auto mulf = dyn_cast<VMIMulFOp>(op))
-      return emitTargetElementUnsupported(
-          op, "pto.vmi.mulf", cast<VMIVRegType>(mulf.getResult().getType()),
-          VMIElementPurpose::F16BF16F32, "f16/bf16/f32 element type");
+      return emitMaskableUnsupported(
+          op, "pto.vmi.mulf", cast<VMIVRegType>(mulf.getResult().getType()));
     if (auto muli = dyn_cast<VMIMulIOp>(op))
       return emitMaskableUnsupported(
           op, "pto.vmi.muli", cast<VMIVRegType>(muli.getResult().getType()));
     if (auto divf = dyn_cast<VMIDivFOp>(op))
-      return emitTargetElementUnsupported(
-          op, "pto.vmi.divf", cast<VMIVRegType>(divf.getResult().getType()),
-          VMIElementPurpose::F16F32, "f16/f32 element type");
+      return emitMaskableUnsupported(
+          op, "pto.vmi.divf", cast<VMIVRegType>(divf.getResult().getType()));
     if (auto minf = dyn_cast<VMIMinFOp>(op))
-      return emitTargetElementUnsupported(
-          op, "pto.vmi.minf", cast<VMIVRegType>(minf.getResult().getType()),
-          VMIElementPurpose::F16BF16F32, "f16/bf16/f32 element type");
+      return emitMaskableUnsupported(
+          op, "pto.vmi.minf", cast<VMIVRegType>(minf.getResult().getType()));
     if (auto maxf = dyn_cast<VMIMaxFOp>(op))
-      return emitTargetElementUnsupported(
-          op, "pto.vmi.maxf", cast<VMIVRegType>(maxf.getResult().getType()),
-          VMIElementPurpose::F16BF16F32, "f16/bf16/f32 element type");
+      return emitMaskableUnsupported(
+          op, "pto.vmi.maxf", cast<VMIVRegType>(maxf.getResult().getType()));
     if (auto negf = dyn_cast<VMINegFOp>(op))
-      return emitTargetElementUnsupported(
-          op, "pto.vmi.negf", cast<VMIVRegType>(negf.getResult().getType()),
-          VMIElementPurpose::F16F32, "f16/f32 element type");
+      return emitMaskableUnsupported(
+          op, "pto.vmi.negf", cast<VMIVRegType>(negf.getResult().getType()));
     if (auto absf = dyn_cast<VMIAbsFOp>(op))
-      return emitTargetElementUnsupported(
-          op, "pto.vmi.absf", cast<VMIVRegType>(absf.getResult().getType()),
-          VMIElementPurpose::F16F32, "f16/f32 element type");
+      return emitMaskableUnsupported(
+          op, "pto.vmi.absf", cast<VMIVRegType>(absf.getResult().getType()));
     if (auto absi = dyn_cast<VMIAbsIOp>(op))
-      return emitTargetElementUnsupported(
-          op, "pto.vmi.absi", cast<VMIVRegType>(absi.getResult().getType()),
-          VMIElementPurpose::SignlessOrSignedI8I16I32,
-          "signless/signed i8/i16/i32 element type");
+      return emitMaskableUnsupported(
+          op, "pto.vmi.absi", cast<VMIVRegType>(absi.getResult().getType()));
     if (auto sqrt = dyn_cast<VMISqrtOp>(op))
-      return emitTargetElementUnsupported(
-          op, "pto.vmi.sqrt", cast<VMIVRegType>(sqrt.getResult().getType()),
-          VMIElementPurpose::F16F32, "f16/f32 element type");
+      return emitMaskableUnsupported(
+          op, "pto.vmi.sqrt", cast<VMIVRegType>(sqrt.getResult().getType()));
     if (auto exp = dyn_cast<VMIExpOp>(op))
-      return emitTargetElementUnsupported(
-          op, "pto.vmi.exp", cast<VMIVRegType>(exp.getResult().getType()),
-          VMIElementPurpose::F16F32, "f16/f32 element type");
+      return emitMaskableUnsupported(
+          op, "pto.vmi.exp", cast<VMIVRegType>(exp.getResult().getType()));
     if (auto ln = dyn_cast<VMILnOp>(op))
-      return emitTargetElementUnsupported(
-          op, "pto.vmi.ln", cast<VMIVRegType>(ln.getResult().getType()),
-          VMIElementPurpose::F16F32, "f16/f32 element type");
+      return emitMaskableUnsupported(
+          op, "pto.vmi.ln", cast<VMIVRegType>(ln.getResult().getType()));
     if (auto relu = dyn_cast<VMIReluOp>(op)) {
       std::string reason;
-      if (succeeded(checkSupportedReluShape(capabilities, relu, &reason)))
+      if (succeeded(checkSupportedReluShape(relu, &reason)))
         return WalkResult::advance();
       relu.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -11162,23 +10894,20 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
           cast<VMIVRegType>(select.getResult().getType()));
 
     if (auto cmpf = dyn_cast<VMICmpFOp>(op)) {
-      WalkResult target = emitTargetElementUnsupported(
-          op, "pto.vmi.cmpf", cast<VMIVRegType>(cmpf.getLhs().getType()),
-          VMIElementPurpose::F16BF16F32, "f16/bf16/f32 element type");
-      if (target.wasInterrupted())
-        return target;
+      WalkResult physical = emitMaskableUnsupported(
+          op, "pto.vmi.cmpf", cast<VMIVRegType>(cmpf.getLhs().getType()));
+      if (physical.wasInterrupted())
+        return physical;
       if (succeeded(checkSupportedComparePredicate(op, cmpf.getPredicate())))
         return WalkResult::advance();
       return WalkResult::interrupt();
     }
 
     if (auto cmpi = dyn_cast<VMICmpIOp>(op)) {
-      WalkResult target = emitTargetElementUnsupported(
-          op, "pto.vmi.cmpi", cast<VMIVRegType>(cmpi.getLhs().getType()),
-          VMIElementPurpose::AnyI8I16I32,
-          "signless/signed/unsigned i8/i16/i32 element type");
-      if (target.wasInterrupted())
-        return target;
+      WalkResult physical = emitMaskableUnsupported(
+          op, "pto.vmi.cmpi", cast<VMIVRegType>(cmpi.getLhs().getType()));
+      if (physical.wasInterrupted())
+        return physical;
       if (succeeded(checkSupportedComparePredicate(op, cmpi.getPredicate())))
         return WalkResult::advance();
       return WalkResult::interrupt();
@@ -11211,8 +10940,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
 
     if (auto compressStore = dyn_cast<VMICompressStoreOp>(op)) {
       std::string reason;
-      if (succeeded(checkSupportedCompressStoreShape(capabilities,
-                                                     compressStore, &reason)))
+      if (succeeded(checkSupportedCompressStoreShape(compressStore, &reason)))
         return WalkResult::advance();
       compressStore.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -11226,8 +10954,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     if (auto reduce = dyn_cast<VMIReduceAddIOp>(op)) {
       std::string reason;
       if (succeeded(checkSupportedReduceShape(
-              capabilities, reduce, VMIReductionKind::AddI,
-              /*requiresReassoc=*/false, &reason)))
+              reduce, /*requiresReassoc=*/false, &reason)))
         return WalkResult::advance();
       reduce.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -11241,8 +10968,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     if (auto reduce = dyn_cast<VMIReduceAddFOp>(op)) {
       std::string reason;
       if (succeeded(checkSupportedReduceShape(
-              capabilities, reduce, VMIReductionKind::AddF,
-              /*requiresReassoc=*/true, &reason)))
+              reduce, /*requiresReassoc=*/true, &reason)))
         return WalkResult::advance();
       reduce.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -11256,7 +10982,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     if (auto reduce = dyn_cast<VMIGroupReduceAddFOp>(op)) {
       std::string reason;
       if (succeeded(
-              checkSupportedGroupReduceShape(capabilities, reduce, &reason)))
+              checkSupportedGroupReduceShape(reduce, &reason)))
         return WalkResult::advance();
       reduce.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -11273,7 +10999,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     if (auto reduce = dyn_cast<VMIGroupReduceAddIOp>(op)) {
       std::string reason;
       if (succeeded(
-              checkSupportedGroupReduceShape(capabilities, reduce, &reason)))
+              checkSupportedGroupReduceShape(reduce, &reason)))
         return WalkResult::advance();
       reduce.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -11288,7 +11014,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     if (auto reduce = dyn_cast<VMIGroupReduceMaxIOp>(op)) {
       std::string reason;
       if (succeeded(
-              checkSupportedGroupReduceShape(capabilities, reduce, &reason)))
+              checkSupportedGroupReduceShape(reduce, &reason)))
         return WalkResult::advance();
       reduce.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -11303,7 +11029,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     if (auto reduce = dyn_cast<VMIGroupReduceMaxFOp>(op)) {
       std::string reason;
       if (succeeded(
-              checkSupportedGroupReduceShape(capabilities, reduce, &reason)))
+              checkSupportedGroupReduceShape(reduce, &reason)))
         return WalkResult::advance();
       reduce.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -11319,8 +11045,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     if (auto reduce = dyn_cast<VMIReduceMaxFOp>(op)) {
       std::string reason;
       if (succeeded(checkSupportedReduceShape(
-              capabilities, reduce, VMIReductionKind::MaxF,
-              /*requiresReassoc=*/false, &reason)))
+              reduce, /*requiresReassoc=*/false, &reason)))
         return WalkResult::advance();
       reduce.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -11334,8 +11059,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     if (auto reduce = dyn_cast<VMIReduceMinFOp>(op)) {
       std::string reason;
       if (succeeded(checkSupportedReduceShape(
-              capabilities, reduce, VMIReductionKind::MinF,
-              /*requiresReassoc=*/false, &reason)))
+              reduce, /*requiresReassoc=*/false, &reason)))
         return WalkResult::advance();
       reduce.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -11348,7 +11072,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
 
     if (auto fma = dyn_cast<VMIFmaOp>(op)) {
       std::string reason;
-      if (succeeded(checkSupportedFmaShape(capabilities, fma, &reason)))
+      if (succeeded(checkSupportedFmaShape(fma, &reason)))
         return WalkResult::advance();
       fma.emitError()
           << kVMIDiagUnsupportedPrefix
@@ -11480,7 +11204,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
       int64_t channels = split.getNumResults();
       std::string reason;
       if (succeeded(
-              checkSupportedChannelSplitShape(capabilities, split, &reason)))
+              checkSupportedChannelSplitShape(split, &reason)))
         return WalkResult::advance();
 
       if (channels != 2 && channels != 4)
@@ -11501,7 +11225,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
       int64_t channels = merge.getInputs().size();
       std::string reason;
       if (succeeded(
-              checkSupportedChannelMergeShape(capabilities, merge, &reason)))
+              checkSupportedChannelMergeShape(merge, &reason)))
         return WalkResult::advance();
 
       if (channels != 2 && channels != 4)
@@ -11566,8 +11290,7 @@ struct VMIToVPTOPass : public mlir::pto::impl::VMIToVPTOBase<VMIToVPTOPass> {
       signalPassFailure();
       return;
     }
-    VMITargetCapabilityRegistry capabilities;
-    if (failed(verifySupportedVMIToVPTOOps(module, capabilities,
+    if (failed(verifySupportedVMIToVPTOOps(module,
                                            enableStableGatherMaskedLoad))) {
       signalPassFailure();
       return;
@@ -11577,7 +11300,7 @@ struct VMIToVPTOPass : public mlir::pto::impl::VMIToVPTOBase<VMIToVPTOPass> {
     VMIToVPTOTypeConverter typeConverter;
     RewritePatternSet patterns(context);
 
-    populateVMIConversionPatterns(typeConverter, patterns, capabilities);
+    populateVMIConversionPatterns(typeConverter, patterns);
     ConversionTarget target(*context);
     target.markUnknownOpDynamicallyLegal([](Operation *op) {
       return !isVMIOp(op) && !hasVMIType(op);

@@ -22,5 +22,4 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.reduce_addi lowers through pto.vcadd only
-// CHECK-SAME: currently supports only 32-bit integer elements
+// CHECK: 'pto.vmi.reduce_addi' op requires 32-bit integer source element type
