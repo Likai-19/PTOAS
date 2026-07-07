@@ -33,11 +33,8 @@ module {
 }
 
 // CHECK-LABEL: func.func @vmi_to_vpto_group_reduce_s64(
-// CHECK-DAG: %[[VL1:.*]] = pto.pge_b32 "PAT_VL1"
-// CHECK: pto.vcadd
-// CHECK: pto.vsel {{.*}}, {{.*}}, %[[VL1]]
-// CHECK: pto.vcadd
-// CHECK: pto.vsel {{.*}}, {{.*}}, %[[VL1]]
+// CHECK-COUNT-8: pto.vcadd
+// CHECK-NOT: pto.vsel
 // CHECK: return {{.*}} : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
