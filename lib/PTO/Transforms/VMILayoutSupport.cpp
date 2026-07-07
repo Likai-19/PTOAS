@@ -38,7 +38,6 @@
 
 #include "PTO/IR/PTOTypeUtils.h"
 #include "PTO/IR/VMIUtils.h"
-#include "PTO/Transforms/VMITargetCapabilities.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "llvm/ADT/Twine.h"

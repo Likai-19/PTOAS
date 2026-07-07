@@ -20,8 +20,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.addf direct lowering requires f16/bf16/f32 element type
-// CHECK-SAME: requires f16/bf16/f32 element type for direct VPTO lowering
+// CHECK: 'pto.vmi.addf' op requires f16, bf16, or f32 VMI element type
 
 // -----
 
@@ -37,8 +36,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.divf direct lowering requires f16/f32 element type
-// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+// CHECK: 'pto.vmi.divf' op requires f16 or f32 VMI element type
 
 // -----
 
@@ -52,8 +50,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.sqrt direct lowering requires f16/f32 element type
-// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+// CHECK: 'pto.vmi.sqrt' op requires f16 or f32 VMI element type
 
 // -----
 
@@ -67,8 +64,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.exp direct lowering requires f16/f32 element type
-// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+// CHECK: 'pto.vmi.exp' op requires f16 or f32 VMI element type
 
 // -----
 
@@ -82,8 +78,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.negf direct lowering requires f16/f32 element type
-// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+// CHECK: 'pto.vmi.negf' op requires f16 or f32 VMI element type
 
 // -----
 
@@ -97,8 +92,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.ln direct lowering requires f16/f32 element type
-// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+// CHECK: 'pto.vmi.ln' op requires f16 or f32 VMI element type
 
 // -----
 
@@ -112,8 +106,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.absf direct lowering requires f16/f32 element type
-// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+// CHECK: 'pto.vmi.absf' op requires f16 or f32 VMI element type
 
 // -----
 
@@ -127,5 +120,4 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.absi direct lowering requires signless/signed i8/i16/i32 element type
-// CHECK-SAME: requires signless/signed i8/i16/i32 element type for direct VPTO lowering
+// CHECK: 'pto.vmi.absi' op requires signless or signed i8, i16, or i32 VMI element type

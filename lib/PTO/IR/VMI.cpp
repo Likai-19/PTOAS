@@ -61,6 +61,35 @@ static bool isVMIIntegerLikeType(Type type) {
   return isa<IntegerType, IndexType>(type);
 }
 
+static bool isVMIF16OrF32Type(Type type) {
+  return type.isF16() || type.isF32();
+}
+
+static bool isVMIF16BF16OrF32Type(Type type) {
+  return type.isF16() || type.isBF16() || type.isF32();
+}
+
+static bool isVMIPredicateMaskableElementType(Type type) {
+  unsigned elementBits = pto::getPTOStorageElemBitWidth(type);
+  return elementBits == 8 || elementBits == 16 || elementBits == 32;
+}
+
+static bool isVMIAnyI8I16I32Type(Type type) {
+  auto integerType = dyn_cast<IntegerType>(type);
+  if (!integerType)
+    return false;
+  return integerType.getWidth() == 8 || integerType.getWidth() == 16 ||
+         integerType.getWidth() == 32;
+}
+
+static bool isVMISignedOrSignlessI8I16I32Type(Type type) {
+  auto integerType = dyn_cast<IntegerType>(type);
+  if (!integerType || integerType.isUnsigned())
+    return false;
+  return integerType.getWidth() == 8 || integerType.getWidth() == 16 ||
+         integerType.getWidth() == 32;
+}
+
 static bool isVMISignedOrSignlessIntegerType(Type type) {
   auto integerType = dyn_cast<IntegerType>(type);
   return integerType && !integerType.isUnsigned();
@@ -703,6 +732,11 @@ LogicalResult VMIVRegType::verify(function_ref<InFlightDiagnostic()> emitError,
                        << formatVMIVRegType(elementCount, elementType, layout)
                        << "' expected an integer, index, floating-point, or "
                           "PTO low-precision element type";
+  if (!isVMIPredicateMaskableElementType(elementType))
+    return emitError() << "'"
+                       << formatVMIVRegType(elementCount, elementType, layout)
+                       << "' expected an 8-bit, 16-bit, or 32-bit logical "
+                          "element type";
   if (pto::isPTOFloat4PackedType(elementType))
     return emitError()
            << "'" << formatVMIVRegType(elementCount, elementType, layout)
@@ -908,6 +942,8 @@ LogicalResult VMIAddFOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIFloatLikeType(lhsType.getElementType()))
     return emitOpError("requires floating-point-like VMI element type");
+  if (!isVMIF16BF16OrF32Type(lhsType.getElementType()))
+    return emitOpError("requires f16, bf16, or f32 VMI element type");
   return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
 }
 
@@ -917,6 +953,8 @@ LogicalResult VMIAddIOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIIntegerLikeType(lhsType.getElementType()))
     return emitOpError("requires integer-like VMI element type");
+  if (!isVMIAnyI8I16I32Type(lhsType.getElementType()))
+    return emitOpError("requires i8, i16, or i32 VMI element type");
   return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
 }
 
@@ -926,6 +964,8 @@ LogicalResult VMISubFOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIFloatLikeType(lhsType.getElementType()))
     return emitOpError("requires floating-point-like VMI element type");
+  if (!isVMIF16BF16OrF32Type(lhsType.getElementType()))
+    return emitOpError("requires f16, bf16, or f32 VMI element type");
   return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
 }
 
@@ -935,6 +975,8 @@ LogicalResult VMISubIOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIIntegerLikeType(lhsType.getElementType()))
     return emitOpError("requires integer-like VMI element type");
+  if (!isVMIAnyI8I16I32Type(lhsType.getElementType()))
+    return emitOpError("requires i8, i16, or i32 VMI element type");
   return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
 }
 
@@ -944,6 +986,8 @@ LogicalResult VMIMulFOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIFloatLikeType(lhsType.getElementType()))
     return emitOpError("requires floating-point-like VMI element type");
+  if (!isVMIF16BF16OrF32Type(lhsType.getElementType()))
+    return emitOpError("requires f16, bf16, or f32 VMI element type");
   return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
 }
 
@@ -953,6 +997,8 @@ LogicalResult VMIMulIOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIIntegerLikeType(lhsType.getElementType()))
     return emitOpError("requires integer-like VMI element type");
+  if (!isVMIAnyI8I16I32Type(lhsType.getElementType()))
+    return emitOpError("requires i8, i16, or i32 VMI element type");
   return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
 }
 
@@ -961,6 +1007,8 @@ LogicalResult VMIFmaOp::verify() {
   auto rhsType = cast<VMIVRegType>(getRhs().getType());
   auto accType = cast<VMIVRegType>(getAcc().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (!isVMIF16BF16OrF32Type(lhsType.getElementType()))
+    return emitOpError("requires f16, bf16, or f32 VMI element type");
   return verifyFloatTernaryVRegOp(getOperation(), lhsType, rhsType, accType,
                                   resultType);
 }
@@ -971,6 +1019,8 @@ LogicalResult VMIDivFOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIFloatLikeType(lhsType.getElementType()))
     return emitOpError("requires floating-point-like VMI element type");
+  if (!isVMIF16OrF32Type(lhsType.getElementType()))
+    return emitOpError("requires f16 or f32 VMI element type");
   return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
 }
 
@@ -980,6 +1030,8 @@ LogicalResult VMIMinFOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIFloatLikeType(lhsType.getElementType()))
     return emitOpError("requires floating-point-like VMI element type");
+  if (!isVMIF16BF16OrF32Type(lhsType.getElementType()))
+    return emitOpError("requires f16, bf16, or f32 VMI element type");
   return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
 }
 
@@ -989,18 +1041,24 @@ LogicalResult VMIMaxFOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIFloatLikeType(lhsType.getElementType()))
     return emitOpError("requires floating-point-like VMI element type");
+  if (!isVMIF16BF16OrF32Type(lhsType.getElementType()))
+    return emitOpError("requires f16, bf16, or f32 VMI element type");
   return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
 }
 
 LogicalResult VMINegFOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (!isVMIF16OrF32Type(sourceType.getElementType()))
+    return emitOpError("requires f16 or f32 VMI element type");
   return verifyFloatUnaryVRegOp(getOperation(), sourceType, resultType);
 }
 
 LogicalResult VMIAbsFOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (!isVMIF16OrF32Type(sourceType.getElementType()))
+    return emitOpError("requires f16 or f32 VMI element type");
   return verifyFloatUnaryVRegOp(getOperation(), sourceType, resultType);
 }
 
@@ -1009,6 +1067,9 @@ LogicalResult VMIAbsIOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIIntegerLikeType(sourceType.getElementType()))
     return emitOpError("requires integer-like VMI element type");
+  if (!isVMISignedOrSignlessI8I16I32Type(sourceType.getElementType()))
+    return emitOpError("requires signless or signed i8, i16, or i32 VMI "
+                       "element type");
   return verifyAllSameVRegShapeAndLayout(getOperation(),
                                          {sourceType, resultType},
                                          /*requireSameElement=*/true);
@@ -1017,24 +1078,32 @@ LogicalResult VMIAbsIOp::verify() {
 LogicalResult VMISqrtOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (!isVMIF16OrF32Type(sourceType.getElementType()))
+    return emitOpError("requires f16 or f32 VMI element type");
   return verifyFloatUnaryVRegOp(getOperation(), sourceType, resultType);
 }
 
 LogicalResult VMIExpOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (!isVMIF16OrF32Type(sourceType.getElementType()))
+    return emitOpError("requires f16 or f32 VMI element type");
   return verifyFloatUnaryVRegOp(getOperation(), sourceType, resultType);
 }
 
 LogicalResult VMILnOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (!isVMIF16OrF32Type(sourceType.getElementType()))
+    return emitOpError("requires f16 or f32 VMI element type");
   return verifyFloatUnaryVRegOp(getOperation(), sourceType, resultType);
 }
 
 LogicalResult VMIReluOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (!isVMIF16OrF32Type(sourceType.getElementType()))
+    return emitOpError("requires f16 or f32 VMI element type");
   return verifyFloatUnaryVRegOp(getOperation(), sourceType, resultType);
 }
 
@@ -1044,6 +1113,8 @@ LogicalResult VMIAndIOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIIntegerLikeType(lhsType.getElementType()))
     return emitOpError("requires integer-like VMI element type");
+  if (!isVMIAnyI8I16I32Type(lhsType.getElementType()))
+    return emitOpError("requires i8, i16, or i32 VMI element type");
   return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
 }
 
@@ -1053,6 +1124,8 @@ LogicalResult VMIOrIOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIIntegerLikeType(lhsType.getElementType()))
     return emitOpError("requires integer-like VMI element type");
+  if (!isVMIAnyI8I16I32Type(lhsType.getElementType()))
+    return emitOpError("requires i8, i16, or i32 VMI element type");
   return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
 }
 
@@ -1062,6 +1135,8 @@ LogicalResult VMIXOrIOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIIntegerLikeType(lhsType.getElementType()))
     return emitOpError("requires integer-like VMI element type");
+  if (!isVMIAnyI8I16I32Type(lhsType.getElementType()))
+    return emitOpError("requires i8, i16, or i32 VMI element type");
   return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
 }
 
@@ -1071,6 +1146,8 @@ LogicalResult VMIShLIOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIIntegerLikeType(lhsType.getElementType()))
     return emitOpError("requires integer-like VMI element type");
+  if (!isVMIAnyI8I16I32Type(lhsType.getElementType()))
+    return emitOpError("requires i8, i16, or i32 VMI element type");
   return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
 }
 
@@ -1082,6 +1159,8 @@ LogicalResult VMIShRUIOp::verify() {
   if (!integerType || integerType.isSigned())
     return emitOpError(
         "requires signless or unsigned integer VMI element type");
+  if (!isVMIAnyI8I16I32Type(lhsType.getElementType()))
+    return emitOpError("requires i8, i16, or i32 VMI element type");
   return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
 }
 
@@ -1090,6 +1169,8 @@ LogicalResult VMINotOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIIntegerLikeType(sourceType.getElementType()))
     return emitOpError("requires integer-like VMI element type");
+  if (!isVMIAnyI8I16I32Type(sourceType.getElementType()))
+    return emitOpError("requires i8, i16, or i32 VMI element type");
   return verifyAllSameVRegShapeAndLayout(getOperation(),
                                          {sourceType, resultType},
                                          /*requireSameElement=*/true);
@@ -1101,6 +1182,8 @@ LogicalResult VMICmpFOp::verify() {
   auto resultType = cast<VMIMaskType>(getResult().getType());
   if (!isVMIFloatLikeType(lhsType.getElementType()))
     return emitOpError("requires floating-point-like VMI element type");
+  if (!isVMIF16BF16OrF32Type(lhsType.getElementType()))
+    return emitOpError("requires f16, bf16, or f32 VMI element type");
   if (failed(verifyAllSameVRegShapeAndLayout(getOperation(), {lhsType, rhsType},
                                              /*requireSameElement=*/true)))
     return failure();
@@ -1113,6 +1196,8 @@ LogicalResult VMICmpIOp::verify() {
   auto resultType = cast<VMIMaskType>(getResult().getType());
   if (!isVMIIntegerLikeType(lhsType.getElementType()))
     return emitOpError("requires integer-like VMI element type");
+  if (!isVMIAnyI8I16I32Type(lhsType.getElementType()))
+    return emitOpError("requires i8, i16, or i32 VMI element type");
   if (failed(verifyAllSameVRegShapeAndLayout(getOperation(), {lhsType, rhsType},
                                              /*requireSameElement=*/true)))
     return failure();
@@ -1180,6 +1265,9 @@ LogicalResult VMIReduceAddIOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIIntegerLikeType(sourceType.getElementType()))
     return emitOpError("requires integer-like VMI source element type");
+  auto sourceIntegerType = dyn_cast<IntegerType>(sourceType.getElementType());
+  if (!sourceIntegerType || sourceIntegerType.getWidth() != 32)
+    return emitOpError("requires 32-bit integer source element type");
   if (sourceType.getElementType() != initType.getElementType() ||
       sourceType.getElementType() != resultType.getElementType())
     return emitOpError(
@@ -1204,6 +1292,8 @@ LogicalResult VMIReduceAddFOp::verify() {
         "floating-point reduction");
   if (!isVMIFloatLikeType(sourceType.getElementType()))
     return emitOpError("requires floating-point-like VMI source element type");
+  if (!isVMIF16OrF32Type(sourceType.getElementType()))
+    return emitOpError("requires f16 or f32 source element type");
   if (sourceType.getElementType() != initType.getElementType() ||
       sourceType.getElementType() != resultType.getElementType())
     return emitOpError(
@@ -1225,6 +1315,8 @@ template <typename OpTy> LogicalResult verifyReduceMinMaxFOp(OpTy op) {
   if (!isVMIFloatLikeType(sourceType.getElementType()))
     return op.emitOpError(
         "requires floating-point-like VMI source element type");
+  if (!isVMIF16OrF32Type(sourceType.getElementType()))
+    return op.emitOpError("requires f16 or f32 source element type");
   if (sourceType.getElementType() != initType.getElementType() ||
       sourceType.getElementType() != resultType.getElementType())
     return op.emitOpError(
@@ -1254,6 +1346,8 @@ static LogicalResult verifyGroupReduceFloatOp(OpTy op, bool requiresReassoc) {
   if (!isVMIFloatLikeType(sourceType.getElementType()))
     return op.emitOpError(
         "requires floating-point-like VMI source element type");
+  if (!isVMIF16OrF32Type(sourceType.getElementType()))
+    return op.emitOpError("requires f16 or f32 source element type");
   if (resultType.getElementCount() != op.getNumGroupsAttr().getInt())
     return op.emitOpError(
         "requires result logical lane count to match num_groups");

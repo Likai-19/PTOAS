@@ -17,7 +17,6 @@
 #include "PTO/Transforms/Passes.h"
 #include "PTO/Transforms/VMILayoutPropagation.h"
 #include "PTO/Transforms/VMILayoutSupport.h"
-#include "PTO/Transforms/VMITargetCapabilities.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -126,9 +125,8 @@ bool containsVMIType(Type type) {
 }
 
 struct LayoutSolver {
-  explicit LayoutSolver(ModuleOp module,
-                        const VMITargetCapabilityRegistry &capabilities)
-      : module(module), ctx(module.getContext()), capabilities(capabilities) {}
+  explicit LayoutSolver(ModuleOp module)
+      : module(module), ctx(module.getContext()) {}
 
   unsigned addDataValue(Value value) {
     auto type = dyn_cast<VMIVRegType>(value.getType());
@@ -1135,10 +1133,10 @@ struct LayoutSolver {
       }
       if (auto split = dyn_cast<VMIChannelSplitOp>(op)) {
         int64_t channels = split.getNumResults();
-        VMICapabilityResult capability = capabilities.supportsChannelCount(
-            "pto.vmi.channel_split", channels);
-        if (!capability.isSupported()) {
-          split.emitError() << kVMIDiagUnsupportedPrefix << capability.reason;
+        if (channels != 2 && channels != 4) {
+          split.emitError() << kVMIDiagUnsupportedPrefix
+                            << "pto.vmi.channel_split supports only 2 or 4 "
+                               "channels";
           return WalkResult::interrupt();
         }
         requestDataUse(split.getSourceMutable(),
@@ -1150,10 +1148,10 @@ struct LayoutSolver {
       }
       if (auto merge = dyn_cast<VMIChannelMergeOp>(op)) {
         int64_t channels = merge.getInputs().size();
-        VMICapabilityResult capability = capabilities.supportsChannelCount(
-            "pto.vmi.channel_merge", channels);
-        if (!capability.isSupported()) {
-          merge.emitError() << kVMIDiagUnsupportedPrefix << capability.reason;
+        if (channels != 2 && channels != 4) {
+          merge.emitError() << kVMIDiagUnsupportedPrefix
+                            << "pto.vmi.channel_merge supports only 2 or 4 "
+                               "channels";
           return WalkResult::interrupt();
         }
         for (OpOperand &input : merge.getInputsMutable())
@@ -1802,7 +1800,6 @@ struct LayoutSolver {
 
   ModuleOp module;
   MLIRContext *ctx;
-  const VMITargetCapabilityRegistry &capabilities;
   DenseMap<Value, unsigned> dataIds;
   DenseMap<Value, unsigned> maskIds;
   DenseMap<func::FuncOp, SmallVector<Value>> firstReturnOperandsByFunc;
@@ -1819,8 +1816,7 @@ struct VMILayoutAssignmentPass
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VMILayoutAssignmentPass)
 
   void runOnOperation() override {
-    VMITargetCapabilityRegistry capabilities;
-    if (failed(LayoutSolver(getOperation(), capabilities).run()))
+    if (failed(LayoutSolver(getOperation()).run()))
       signalPassFailure();
   }
 };

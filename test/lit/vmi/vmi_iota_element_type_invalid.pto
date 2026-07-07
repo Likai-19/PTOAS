@@ -16,4 +16,4 @@ module {
   }
 }
 
-// CHECK: 'pto.vmi.iota' op requires result element type to be integer 8/16/32 or f16/f32
+// CHECK: expected an 8-bit, 16-bit, or 32-bit logical element type
