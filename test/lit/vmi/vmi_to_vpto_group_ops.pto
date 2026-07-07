@@ -37,7 +37,6 @@ module {
 // CHECK: pto.vadd
 // CHECK: pto.vcadd
 // CHECK: pto.vadd
-// CHECK: pto.vsel
 // CHECK: pto.vcadd
 // CHECK: pto.vcadd
 // CHECK: pto.vadd
@@ -45,7 +44,7 @@ module {
 // CHECK: pto.vadd
 // CHECK: pto.vcadd
 // CHECK: pto.vadd
-// CHECK: pto.vsel
+// CHECK-NOT: pto.vsel
 // CHECK-COUNT-2: pto.vsts {{.*}} {dist = "1PT_B32"}
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.

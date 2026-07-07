@@ -72,7 +72,7 @@ module {
 // LOWER-LABEL: func.func @vmi_layout_assignment_group_reduce_maxf_quant(
 // LOWER: pto.vcmax
 // LOWER: pto.vmax
-// LOWER: pto.vsel
+// LOWER-NOT: pto.vsel
 // LOWER: pto.vdiv
 // LOWER: pto.vcvt {{.*}} {part = "P0", rnd = "R", sat = "SAT"}
 // LOWER: pto.vor

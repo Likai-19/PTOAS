@@ -7881,19 +7881,11 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
         return rewriter.notifyMatchFailure(
             op, "deinterleaved=2 group_reduce arity mismatch");
 
-      SmallVector<Value> results;
-      results.reserve(resultTypes.size());
+      SmallVector<Value> results(resultTypes.size());
       for (Type resultType : resultTypes) {
-        auto vregType = dyn_cast<VRegType>(resultType);
-        if (!vregType)
+        if (!isa<VRegType>(resultType))
           return rewriter.notifyMatchFailure(
               op, "deinterleaved=2 group_reduce result must be vreg");
-        FailureOr<Value> zero =
-            createZeroVector(op.getLoc(), vregType, rewriter);
-        if (failed(zero))
-          return rewriter.notifyMatchFailure(
-              op, "failed to materialize deinterleaved=2 group_reduce zero");
-        results.push_back(*zero);
       }
 
       auto resultType = dyn_cast<VRegType>(resultTypes.front());
@@ -7947,11 +7939,7 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
                                        accumulator, *firstLaneMask)
                   .getResult();
         }
-        results[group] =
-            rewriter
-                .create<VselOp>(op.getLoc(), resultType, accumulator,
-                                results[group], *firstLaneMask)
-                .getResult();
+        results[group] = accumulator;
       }
 
       replaceOpWithFlatConvertedValues(rewriter, op, results,
@@ -7983,18 +7971,11 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
       return rewriter.notifyMatchFailure(
           op, "group_reduce requires matching source/mask/result arity");
 
-    SmallVector<Value> results;
-    results.reserve(resultTypes.size());
+    SmallVector<Value> results(resultTypes.size());
     for (Type resultType : resultTypes) {
-      auto vregType = dyn_cast<VRegType>(resultType);
-      if (!vregType)
+      if (!isa<VRegType>(resultType))
         return rewriter.notifyMatchFailure(
             op, "group_reduce result must be vreg");
-      FailureOr<Value> zero = createZeroVector(op.getLoc(), vregType, rewriter);
-      if (failed(zero))
-        return rewriter.notifyMatchFailure(
-            op, "failed to materialize group_reduce zero result");
-      results.push_back(*zero);
     }
 
     auto resultType = dyn_cast<VRegType>(resultTypes.front());
@@ -8034,11 +8015,12 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
       }
 
       int64_t destChunk = rowLocalSlots1Result ? group : group * chunksPerGroup;
-      results[destChunk] =
-          rewriter
-              .create<VselOp>(op.getLoc(), resultType, accumulator,
-                              results[destChunk], *firstLaneMask)
-              .getResult();
+      if (rowLocalSlots1Result) {
+        results[destChunk] = accumulator;
+      } else {
+        for (int64_t chunk = 0; chunk < chunksPerGroup; ++chunk)
+          results[destChunk + chunk] = accumulator;
+      }
     }
 
     replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
