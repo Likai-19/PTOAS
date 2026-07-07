@@ -6851,7 +6851,9 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
 
     VMILayoutSupport supports;
     std::string supportReason;
-    if (failed(supports.getGroupBroadcastLoadSupport(op, &supportReason)))
+    FailureOr<VMIGroupBroadcastLoadLayoutFact> loadFact =
+        supports.getGroupBroadcastLoadLayoutFact(op, &supportReason);
+    if (failed(loadFact))
       return rewriter.notifyMatchFailure(
           op, Twine("group_broadcast_load has no registered support: ") +
                   supportReason);
@@ -6862,34 +6864,63 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
       return failure();
 
     SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
-    auto canLowerWithE2B = [&]() {
-      VMILayoutAttr layout = resultVMIType.getLayoutAttr();
-      bool contiguousPacketLayout = layout && layout.isContiguous();
-      bool splitPacketLayout = layout && layout.isDeinterleaved() &&
-                               layout.getFactor() == 2 &&
-                               layout.getBlockElems() == 1;
-      if (!contiguousPacketLayout && !splitPacketLayout)
-        return false;
+    FailureOr<VMIGroupBroadcastLoadDirectFact> directFact =
+        supports.getGroupBroadcastLoadDirectFact(op);
+    auto getBRCDist = [&]() -> std::optional<StringRef> {
       unsigned elementBits =
           pto::getPTOStorageElemBitWidth(resultVMIType.getElementType());
-      if (elementBits != 16 && elementBits != 32)
-        return false;
-      if (numGroups <= 0 || resultVMIType.getElementCount() % numGroups != 0)
-        return false;
-      int64_t groupSize = resultVMIType.getElementCount() / numGroups;
-      int64_t directGroupSize = 256 / elementBits;
-      if (numGroups % 8 != 0)
-        return false;
-      if (contiguousPacketLayout && groupSize != directGroupSize)
-        return false;
-      if (splitPacketLayout && groupSize != 2 * directGroupSize)
-        return false;
-      std::optional<int64_t> stride =
-          getConstantIndexValue(op.getSourceGroupStride());
-      return stride && *stride == 1 && isa<PtrType>((*source).getType());
+      if (elementBits == 8)
+        return StringRef("BRC_B8");
+      if (elementBits == 16)
+        return StringRef("BRC_B16");
+      if (elementBits == 32)
+        return StringRef("BRC_B32");
+      return std::nullopt;
     };
 
-    if (!canLowerWithE2B()) {
+    if (succeeded(directFact) &&
+        directFact->kind == VMIGroupBroadcastLoadDirectKind::BRC) {
+      int64_t chunksPerGroup =
+          directFact->layout.groupSize / directFact->layout.lanesPerPart;
+      std::optional<StringRef> brcDist = getBRCDist();
+      if (!brcDist)
+        return rewriter.notifyMatchFailure(
+            op, "group_broadcast_load BRC lowering requires b8/b16/b32 "
+                "element type");
+      if (!isa<PtrType>((*source).getType()))
+        return rewriter.notifyMatchFailure(
+            op, "group_broadcast_load BRC lowering requires !pto.ptr source");
+      if (chunksPerGroup <= 0 ||
+          static_cast<int64_t>(resultTypes.size()) !=
+              numGroups * chunksPerGroup)
+        return rewriter.notifyMatchFailure(
+            op, "group_broadcast_load BRC physical arity mismatch");
+
+      SmallVector<Value> results;
+      results.reserve(resultTypes.size());
+      for (auto [index, resultType] : llvm::enumerate(resultTypes)) {
+        auto vregType = dyn_cast<VRegType>(resultType);
+        if (!vregType)
+          return rewriter.notifyMatchFailure(
+              op, "group_broadcast_load BRC result must be vreg");
+        int64_t group = static_cast<int64_t>(index) / chunksPerGroup;
+        Value groupOffset =
+            createGroupChunkOffset(op.getLoc(), *offset, *sourceGroupStride,
+                                   group, /*inGroupLaneOffset=*/0, rewriter);
+        results.push_back(rewriter
+                              .create<VldsOp>(op.getLoc(), resultType,
+                                              /*updated_base=*/Type{}, *source,
+                                              groupOffset,
+                                              rewriter.getStringAttr(*brcDist))
+                              .getResult());
+      }
+      replaceOpWithFlatConvertedValues(rewriter, op, results,
+                                       *this->getTypeConverter());
+      return success();
+    }
+
+    if (failed(directFact) ||
+        directFact->kind != VMIGroupBroadcastLoadDirectKind::E2B) {
       std::optional<int64_t> stride =
           getConstantIndexValue(op.getSourceGroupStride());
       int64_t slots = (stride && *stride == 1) ? 8 : 1;
@@ -6927,7 +6958,8 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
                                           resultVMIType, resultTypes, numGroups,
                                           rewriter, results)))
         return failure();
-      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
+      replaceOpWithFlatConvertedValues(rewriter, op, results,
+                                       *this->getTypeConverter());
       return success();
     }
 
@@ -6943,31 +6975,12 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
               "deinterleaved=2, block_elems=1 result layout for split "
               "group size");
 
-    unsigned elementBits =
-        pto::getPTOStorageElemBitWidth(resultVMIType.getElementType());
+    unsigned elementBits = directFact->layout.elementBits;
     if (elementBits != 16 && elementBits != 32)
       return rewriter.notifyMatchFailure(
           op, "group_broadcast_load E2B lowering requires b16 or b32 "
               "element type");
-    int64_t directGroupSize = 256 / elementBits;
     StringRef e2bDist = elementBits == 16 ? "E2B_B16" : "E2B_B32";
-
-    if (numGroups <= 0 || resultVMIType.getElementCount() % numGroups != 0)
-      return rewriter.notifyMatchFailure(
-          op, "group_broadcast_load requires valid num_groups");
-    int64_t groupSize = resultVMIType.getElementCount() / numGroups;
-    if (numGroups % 8 != 0)
-      return rewriter.notifyMatchFailure(
-          op, "group_broadcast_load E2B lowering requires num_groups "
-              "multiple of 8");
-    if (contiguousPacketLayout && groupSize != directGroupSize)
-      return rewriter.notifyMatchFailure(
-          op, "group_broadcast_load E2B contiguous lowering requires "
-              "element-width direct group size");
-    if (splitPacketLayout && groupSize != 2 * directGroupSize)
-      return rewriter.notifyMatchFailure(
-          op, "group_broadcast_load E2B deinterleaved=2 lowering requires "
-              "element-width split group size");
 
     std::optional<int64_t> stride =
         getConstantIndexValue(op.getSourceGroupStride());
@@ -6979,6 +6992,10 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
     if (!isa<PtrType>((*source).getType()))
       return rewriter.notifyMatchFailure(
           op, "group_broadcast_load E2B lowering requires !pto.ptr source");
+
+    if (numGroups != 8)
+      return rewriter.notifyMatchFailure(
+          op, "group_broadcast_load E2B lowering requires num_groups = 8");
 
     FailureOr<int64_t> chunksPerPart = getDataChunksInPart(resultVMIType, 0);
     if (failed(chunksPerPart) || *chunksPerPart <= 0)
@@ -6995,10 +7012,10 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
     if (static_cast<int64_t>(resultTypes.size()) != factor * *chunksPerPart)
       return rewriter.notifyMatchFailure(
           op, "group_broadcast_load physical arity mismatch");
-    if (*chunksPerPart != numGroups / 8)
+    if (*chunksPerPart != 1)
       return rewriter.notifyMatchFailure(
-          op, "group_broadcast_load expected one E2B packet per 8 groups in "
-              "each part");
+          op,
+          "group_broadcast_load expected one E2B packet in each part");
 
     SmallVector<Value> packets;
     packets.reserve(*chunksPerPart);
@@ -10867,10 +10884,10 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
         return WalkResult::advance();
       load.emitError()
           << kVMIDiagUnsupportedPrefix
-          << "pto.vmi.group_broadcast_load requires either the E2B packet "
-             "form for b16/b32 direct or split group size, or the generic "
-             "group-slot-load then group-broadcast fallback with supported UB "
-             "pointer source and source_group_stride ("
+          << "pto.vmi.group_broadcast_load requires either the BRC full-group "
+             "chunk form, the E2B packet form for b16/b32 direct or split "
+             "group size, or the generic group-slot-load then group-broadcast "
+             "fallback with supported UB pointer source and source_group_stride ("
           << reason << ")";
       return WalkResult::interrupt();
     }

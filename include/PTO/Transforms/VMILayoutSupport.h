@@ -99,6 +99,11 @@ struct VMIGroupBroadcastLayoutFact {
   int64_t vcgBlockElems = 0;
 };
 
+enum class VMIGroupBroadcastLoadDirectKind {
+  E2B,
+  BRC,
+};
+
 struct VMIGroupBroadcastLoadLayoutFact {
   VMIGroupBlockClass blockClass = VMIGroupBlockClass::OneBlock;
   VMILayoutAttr resultLayout;
@@ -106,6 +111,11 @@ struct VMIGroupBroadcastLoadLayoutFact {
   int64_t lanesPerPart = 0;
   int64_t vcgBlockElems = 0;
   int64_t elementBits = 0;
+};
+
+struct VMIGroupBroadcastLoadDirectFact {
+  VMIGroupBroadcastLoadDirectKind kind = VMIGroupBroadcastLoadDirectKind::E2B;
+  VMIGroupBroadcastLoadLayoutFact layout;
 };
 
 struct VMIGroupLoadLayoutFact {
@@ -242,6 +252,11 @@ public:
   getGroupBroadcastLoadLayoutFact(VMIVRegType resultType,
                                   Value sourceGroupStride, int64_t numGroups,
                                   std::string *reason = nullptr) const;
+  FailureOr<VMIGroupBroadcastLoadDirectFact> getGroupBroadcastLoadDirectFact(
+      VMIGroupBroadcastLoadOp op, std::string *reason = nullptr) const;
+  FailureOr<VMIGroupBroadcastLoadDirectFact> getGroupBroadcastLoadDirectFact(
+      VMIVRegType resultType, Type sourceType, Value sourceGroupStride,
+      int64_t numGroups, std::string *reason = nullptr) const;
 
   FailureOr<VMIHistogramLayoutFact>
   getDhistLayoutFact(VMIDhistOp op, std::string *reason = nullptr) const;

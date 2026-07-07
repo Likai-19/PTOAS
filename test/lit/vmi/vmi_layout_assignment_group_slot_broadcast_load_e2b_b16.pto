@@ -52,11 +52,10 @@ module {
 
 // CHECK-LABEL: func.func @vmi_layout_assignment_group_slot_broadcast_load_e2b_b16
 // CHECK-SAME: (%[[SRC:.*]]: !pto.ptr<f16, ub>, %[[OFF:.*]]: index)
-// CHECK: %[[E2B0:.*]] = pto.vlds %[[SRC]][%[[OFF]]] {dist = "E2B_B16"} : !pto.ptr<f16, ub> -> !pto.vreg<128xf16>
-// CHECK: %[[C8:.*]] = arith.constant 8 : index
-// CHECK: %[[OFF8:.*]] = arith.addi %[[OFF]], %[[C8]] : index
-// CHECK: %[[E2B1:.*]] = pto.vlds %[[SRC]][%[[OFF8]]] {dist = "E2B_B16"} : !pto.ptr<f16, ub> -> !pto.vreg<128xf16>
-// CHECK: return %[[E2B0]], %[[E2B1]] : !pto.vreg<128xf16>, !pto.vreg<128xf16>
+// CHECK-NOT: E2B_B16
+// CHECK: pto.vsldb
+// CHECK: pto.vselr
+// CHECK-NOT: E2B_B16
 
 // CHECK-LABEL: func.func @vmi_layout_assignment_group_slot_broadcast_load_e2b_b16_deint2
 // CHECK-SAME: (%[[SRC2:.*]]: !pto.ptr<bf16, ub>, %[[OFF2:.*]]: index)
