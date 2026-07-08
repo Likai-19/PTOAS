@@ -1,0 +1,3580 @@
+{
+  "files": [
+    {
+      "filename": "vmi_absf_integer_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "integer_type_mismatch",
+        "vmi.absf"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_absi_float_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "float_type_mismatch",
+        "vmi.absi"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_active_prefix_index_result_type_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.active_prefix_index"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_addf_lane_mismatch_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.addf",
+        "vmi.addf/vmi.extf/vmi.truncf"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_bitcast_total_bits_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.bitcast"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_bitwise_float_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "float_type_mismatch",
+        "vmi.bitwise_and/vmi.bitwise_or/vmi.bitwise_xor"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_broadcast_type_mismatch_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.broadcast"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_channel_merge_input_mismatch_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.channel_merge"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_channel_merge_result_mismatch_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.channel_merge"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_channel_split_lane_count_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.channel_merge/vmi.channel_split/vmi.constant",
+        "vmi.channel_split"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_channel_split_result_count_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.channel_merge/vmi.channel_split/vmi.constant",
+        "vmi.channel_split"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_compress_result_mismatch_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.compress"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_constant_attr_kind_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.constant",
+        "vmi.elementwise(kind)"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_constant_element_count_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.channel_merge/vmi.channel_split/vmi.constant",
+        "vmi.constant"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_constant_element_type_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.constant"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_constant_mask_attr_kind_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.constant",
+        "vmi.constant_mask",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.elementwise(kind)"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_constant_mask_element_count_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.channel_merge/vmi.channel_split/vmi.constant",
+        "vmi.constant",
+        "vmi.constant_mask",
+        "vmi.constant_mask/vmi.create_mask"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_constant_mask_element_type_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.constant",
+        "vmi.constant_mask",
+        "vmi.constant_mask/vmi.create_mask"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_create_group_mask_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.create_group_mask"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_divf_integer_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "integer_type_mismatch",
+        "vmi.divf"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_elementwise_kind_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.elementwise(kind)",
+        "vmi.elementwise(various)"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_ensure_layout_surface_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "surface",
+        "vmi.ensure_layout",
+        "vmi.surface"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_extf_direction_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.extf",
+        "vmi.extf/vmi.truncf"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_extf_lane_mismatch_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.addf/vmi.extf/vmi.truncf",
+        "vmi.extf"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_fma_integer_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "integer_type_mismatch",
+        "vmi.fma"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_gather_indices_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.gather",
+        "vmi.gather/vmi.scatter/vmi.shuffle"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_group_reduce_addi_i16_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "i16",
+        "vmi.addi",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_group_reduce_addi_i8_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "i8",
+        "vmi.addi",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_group_reduce_maxi_i8_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "i8",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_interleaved_memory_ops.pto",
+      "category": "other",
+      "ops": [
+        "vmi.load/vmi.store"
+      ],
+      "notes": "Interleaved memory operations test"
+    },
+    {
+      "filename": "vmi_interleaved_memory_ops_invalid.pto",
+      "category": "other",
+      "ops": [
+        "vmi.load/vmi.store"
+      ],
+      "notes": "Interleaved memory operations test"
+    },
+    {
+      "filename": "vmi_iota_element_type_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.iota"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_iota_order_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.iota"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_layout_assignment_active_prefix_index.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.active_prefix_index"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_broadcast_dense_group_users.pto",
+      "category": "layout",
+      "ops": [
+        "dense_users",
+        "vmi.broadcast"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_broadcast_remat.pto",
+      "category": "layout",
+      "ops": [
+        "rematerialize",
+        "vmi.broadcast"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_call_argument_boundary.pto",
+      "category": "layout",
+      "ops": [
+        "boundary",
+        "vmi.call"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_call_boundary.pto",
+      "category": "layout",
+      "ops": [
+        "boundary",
+        "vmi.call"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_cf_branch.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.cf_branch"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_cf_switch.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.cf_switch"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_channel_merge_count_unsupported_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "hardware_support",
+        "vmi.channel_merge",
+        "vmi.channel_merge/vmi.channel_split/vmi.constant"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_channel_split_count_unsupported_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "hardware_support",
+        "vmi.channel_merge/vmi.channel_split/vmi.constant",
+        "vmi.channel_split"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_compress.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.compress"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_compress_store.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.compress",
+        "vmi.store"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_constant_remat.pto",
+      "category": "layout",
+      "ops": [
+        "rematerialize",
+        "vmi.constant"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_create_group_mask_s16.pto",
+      "category": "layout",
+      "ops": [
+        "s16_region",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.create_group_mask"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_create_group_mask_s32_dynamic.pto",
+      "category": "layout",
+      "ops": [
+        "s32_region",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.create_group_mask"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_dense_f16_f32_store.pto",
+      "category": "layout",
+      "ops": [
+        "dense_users",
+        "f16",
+        "f32",
+        "vmi.store"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_dense_group_reduce_multi_consumer.pto",
+      "category": "layout",
+      "ops": [
+        "dense_users",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_dense_store_group_slots_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "dense_users",
+        "group_slots",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.group_slots",
+        "vmi.store"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_dhist.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.dhist"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_expand_load.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.expand_load",
+        "vmi.load"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_external_call_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.call(external)"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_external_decl_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.call(external_decl)"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_external_decl_preserve.pto",
+      "category": "layout",
+      "ops": [
+        "preserve",
+        "vmi.call(external_decl)"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_f32_f8_store_reduce.pto",
+      "category": "layout",
+      "ops": [
+        "f32",
+        "f8",
+        "vmi.reduce",
+        "vmi.store",
+        "vmi.store/vmi.reduce"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_f8_compute_f8.pto",
+      "category": "layout",
+      "ops": [
+        "f8"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_fma.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.fma"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_gather.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.gather"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_broadcast_load_e2b_b16.pto",
+      "category": "layout",
+      "ops": [
+        "e2b_b16",
+        "vmi.broadcast",
+        "vmi.group_broadcast",
+        "vmi.load"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_broadcast_multi_consumer.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.broadcast",
+        "vmi.group_broadcast"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_broadcast_slots8.pto",
+      "category": "layout",
+      "ops": [
+        "group_slots",
+        "slots8",
+        "vmi.broadcast",
+        "vmi.group_broadcast"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_load.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.group_load",
+        "vmi.load"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_load_block8_truncf.pto",
+      "category": "layout",
+      "ops": [
+        "block8",
+        "vmi.group_load",
+        "vmi.load",
+        "vmi.truncf"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_load_s16_compact_stride12_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "compact_stride",
+        "s16_region",
+        "stride",
+        "vmi.group_load",
+        "vmi.load"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_load_s16_stride_store.pto",
+      "category": "layout",
+      "ops": [
+        "s16_region",
+        "stride",
+        "vmi.group_load",
+        "vmi.load",
+        "vmi.store",
+        "vmi.stride_store"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_load_s16_unaligned_stride_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "s16_region",
+        "stride",
+        "unaligned_stride",
+        "vmi.group_load",
+        "vmi.load"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_load_s32_stride_broadcast_reduce.pto",
+      "category": "layout",
+      "ops": [
+        "s32_region",
+        "stride",
+        "vmi.broadcast",
+        "vmi.group_load",
+        "vmi.load",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_load_s32_stride_store.pto",
+      "category": "layout",
+      "ops": [
+        "s32_region",
+        "stride",
+        "vmi.group_load",
+        "vmi.load",
+        "vmi.store",
+        "vmi.stride_store"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_load_s32_unaligned_stride_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "s32_region",
+        "stride",
+        "unaligned_stride",
+        "vmi.group_load",
+        "vmi.load"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_maxf_quant.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.group_reduce",
+        "vmi.quant/vmi.dequant",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_partial_slots8.pto",
+      "category": "layout",
+      "ops": [
+        "group_slots",
+        "partial_operation",
+        "slots8",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_s12_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "s12_region",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_s16_store.pto",
+      "category": "layout",
+      "ops": [
+        "s16_region",
+        "vmi.group_reduce",
+        "vmi.reduce",
+        "vmi.store"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_s16_truncf_broadcast_store.pto",
+      "category": "layout",
+      "ops": [
+        "s16_region",
+        "vmi.broadcast",
+        "vmi.group_reduce",
+        "vmi.reduce",
+        "vmi.store",
+        "vmi.truncf"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_s256.pto",
+      "category": "layout",
+      "ops": [
+        "s256_region",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_s32_broadcast_reduce.pto",
+      "category": "layout",
+      "ops": [
+        "s32_region",
+        "vmi.broadcast",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_s32_multitile_store.pto",
+      "category": "layout",
+      "ops": [
+        "multitile",
+        "s32_region",
+        "vmi.group_reduce",
+        "vmi.reduce",
+        "vmi.store"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_s32_store.pto",
+      "category": "layout",
+      "ops": [
+        "s32_region",
+        "vmi.group_reduce",
+        "vmi.reduce",
+        "vmi.store"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_s32_tail_full_tile.pto",
+      "category": "layout",
+      "ops": [
+        "full_tile",
+        "s32_region",
+        "tail_handling",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_s32_tail_no_full_tile_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "full_tile",
+        "s32_region",
+        "tail_handling",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_s64.pto",
+      "category": "layout",
+      "ops": [
+        "s64_region",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_s64_broadcast_reduce.pto",
+      "category": "layout",
+      "ops": [
+        "s64_region",
+        "vmi.broadcast",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_s64_tail_store.pto",
+      "category": "layout",
+      "ops": [
+        "s64_region",
+        "tail_handling",
+        "vmi.group_reduce",
+        "vmi.reduce",
+        "vmi.store"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_s64_truncf.pto",
+      "category": "layout",
+      "ops": [
+        "s64_region",
+        "vmi.group_reduce",
+        "vmi.reduce",
+        "vmi.truncf"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_slots8.pto",
+      "category": "layout",
+      "ops": [
+        "group_slots",
+        "slots8",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_slots8_store.pto",
+      "category": "layout",
+      "ops": [
+        "group_slots",
+        "slots8",
+        "vmi.group_reduce",
+        "vmi.reduce",
+        "vmi.store"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_reduce_typed.pto",
+      "category": "layout",
+      "ops": [
+        "typed_reduce",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_slot_broadcast_load_e2b_b16.pto",
+      "category": "layout",
+      "ops": [
+        "e2b_b16",
+        "vmi.broadcast",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.load"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_slot_broadcast_no_e2b.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.broadcast",
+        "vmi.group_slot_load/vmi.group_slot_store"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_slot_broadcast_partial_packet_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "packet",
+        "partial_operation",
+        "vmi.broadcast",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.pack"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_slot_load.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.load"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_slot_load_dual_layout.pto",
+      "category": "layout",
+      "ops": [
+        "dual_layout",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.load"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_slot_load_slots1_dynamic_stride_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "dynamic_stride",
+        "group_slots",
+        "slots1",
+        "stride",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.load"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_slot_load_slots1_unaligned_stride_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "group_slots",
+        "slots1",
+        "stride",
+        "unaligned_stride",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.load"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_slots_cf_join.pto",
+      "category": "layout",
+      "ops": [
+        "group_slots",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.group_slots"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_slots_fanout.pto",
+      "category": "layout",
+      "ops": [
+        "fanout",
+        "group_slots",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.group_slots"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_slots_scf_for.pto",
+      "category": "layout",
+      "ops": [
+        "group_slots",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.group_slots",
+        "vmi.scf_for"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_group_store_slots1_unit_stride.pto",
+      "category": "layout",
+      "ops": [
+        "group_slots",
+        "slots1",
+        "stride",
+        "unit_stride",
+        "vmi.group_store",
+        "vmi.store"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_indirect_call_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.call(indirect)"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_iota_remat.pto",
+      "category": "layout",
+      "ops": [
+        "rematerialize",
+        "vmi.iota"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_load_truncf.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.load",
+        "vmi.load/vmi.truncf",
+        "vmi.truncf"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_mask_granularity_conflict_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "granularity",
+        "layout_conflict",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.ensure_layout(mask)",
+        "vmi.pack/vmi.unpack"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_mask_granularity_f32_f16_store.pto",
+      "category": "layout",
+      "ops": [
+        "f16",
+        "f32",
+        "granularity",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.ensure_layout(mask)",
+        "vmi.pack/vmi.unpack",
+        "vmi.store"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_mask_remat.pto",
+      "category": "layout",
+      "ops": [
+        "rematerialize",
+        "rematerialize(mask)",
+        "vmi.constant_mask/vmi.create_mask"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_mask_select_store.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.mask_select",
+        "vmi.select",
+        "vmi.store"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_mask_use_ensure.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.ensure_layout"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_masked_load.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.load",
+        "vmi.masked_load"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_masked_load_dense_group_users.pto",
+      "category": "layout",
+      "ops": [
+        "dense_users",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.load",
+        "vmi.masked_load"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_masked_load_group_tail_s32.pto",
+      "category": "layout",
+      "ops": [
+        "s32_region",
+        "tail_handling",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.load",
+        "vmi.masked_load"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_multi_return.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.call(multi-return)"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_multi_return_conflict_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "layout_conflict",
+        "vmi.call(multi-return)"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_non_load_s32_reduce.pto",
+      "category": "layout",
+      "ops": [
+        "s32_region",
+        "vmi.load",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_packed_group_slots_truncf_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "group_slots",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.group_slots",
+        "vmi.pack",
+        "vmi.truncf"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_post_gate_type_attr_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "post_gate",
+        "type_attr"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_assignment_reduce_addf.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.addf",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_reduce_addi.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.addi",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_reduce_minmaxf.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.minf/vmi.maxf",
+        "vmi.reduce"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_scatter.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.scatter"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_scf_execute_region.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.scf_execute_region"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_scf_for.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.scf_for"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_scf_if.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.scf_if"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_scf_index_switch.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.scf_index_switch"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_scf_while.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.scf_while"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_store_ensure.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.store",
+        "vmi.store/vmi.ensure_layout"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_truncf_ensure.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.truncf"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_trunci_lane_stride.pto",
+      "category": "layout",
+      "ops": [
+        "stride",
+        "vmi.trunci"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_widen.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.widen"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_widen_dense_reduce_multi_consumer.pto",
+      "category": "layout",
+      "ops": [
+        "dense_users",
+        "vmi.reduce",
+        "vmi.widen"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_assignment_widen_f16_store_reduce.pto",
+      "category": "layout",
+      "ops": [
+        "f16",
+        "vmi.reduce",
+        "vmi.store",
+        "vmi.store/vmi.reduce",
+        "vmi.widen"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_factor_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "unknown"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_fold_deint4.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.ensure_layout(deint4)",
+        "vmi.load/vmi.store(deint)"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_fold_load.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.load"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_fold_masked_store.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.masked_store",
+        "vmi.store"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_fold_store.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.store"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_gate_bitcast_group_slots.pto",
+      "category": "gate",
+      "ops": [
+        "group_slots",
+        "vmi.bitcast",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.group_slots"
+      ],
+      "notes": "Layout gate validation test"
+    },
+    {
+      "filename": "vmi_layout_gate_bitcast_support_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "hardware_support",
+        "vmi.bitcast"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_extf_support_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "hardware_support",
+        "vmi.extf"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_group_broadcast_support_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "hardware_support",
+        "vmi.broadcast",
+        "vmi.group_broadcast"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_group_load_support_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "hardware_support",
+        "vmi.group_load",
+        "vmi.load"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_group_reduce_slots1_support_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "group_slots",
+        "hardware_support",
+        "slots1",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_group_reduce_support_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "hardware_support",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_group_slot_load_support_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "hardware_support",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.load"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_group_slots_unsupported_slots_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "group_slots",
+        "hardware_support",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.group_slots"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_group_store_support_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "hardware_support",
+        "vmi.group_store",
+        "vmi.store"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_helper_materialization_shape_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "helper",
+        "shape"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_helper_support_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "hardware_support",
+        "helper"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_store_support_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "hardware_support",
+        "vmi.store"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_support.pto",
+      "category": "gate",
+      "ops": [
+        "hardware_support"
+      ],
+      "notes": "Layout gate validation test"
+    },
+    {
+      "filename": "vmi_layout_gate_surface_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "surface",
+        "vmi.surface"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_surface_mask_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "surface",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.surface"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_truncf_support_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "hardware_support",
+        "vmi.truncf"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_type_attr_nested_physical_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "nested",
+        "physical",
+        "type_attr"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_type_attr_surface_invalid.pto",
+      "category": "gate",
+      "ops": [
+        "surface",
+        "type_attr",
+        "vmi.surface"
+      ],
+      "notes": "Layout gate - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_gate_valid.pto",
+      "category": "gate",
+      "ops": [
+        "unknown"
+      ],
+      "notes": "Layout gate validation test"
+    },
+    {
+      "filename": "vmi_layout_group_slots_invalid.pto",
+      "category": "layout",
+      "ops": [
+        "unknown"
+      ],
+      "notes": "Layout assignment - invalid input rejection"
+    },
+    {
+      "filename": "vmi_layout_rematerialize_data.pto",
+      "category": "layout",
+      "ops": [
+        "unknown"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_rematerialize_mask.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_rematerialize_relation.pto",
+      "category": "layout",
+      "ops": [
+        "unknown"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_sink_materialization_binary.pto",
+      "category": "layout",
+      "ops": [
+        "unknown"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_layout_sink_materialization_mask.pto",
+      "category": "layout",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask"
+      ],
+      "notes": "Layout assignment pass test"
+    },
+    {
+      "filename": "vmi_legalize_arith_select.pto",
+      "category": "other",
+      "ops": [
+        "vmi.select"
+      ],
+      "notes": "Legalization pass test"
+    },
+    {
+      "filename": "vmi_mask_concrete_without_layout_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.constant_mask",
+        "vmi.constant_mask/vmi.create_mask"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_mask_granularity_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "granularity",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.ensure_layout(mask)",
+        "vmi.pack/vmi.unpack"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_mask_logic_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.mask_and/vmi.mask_or/vmi.mask_xor/vmi.mask_not"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_mask_pred_with_layout_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.constant_mask",
+        "vmi.constant_mask/vmi.create_mask"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_masked_store_mask_granularity_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "granularity",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.ensure_layout(mask)",
+        "vmi.masked_store",
+        "vmi.pack/vmi.unpack",
+        "vmi.store"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_memory_element_type_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.load/vmi.store"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_min_max_integer_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "integer_type_mismatch",
+        "vmi.minf/vmi.mini/vmi.maxf/vmi.maxi"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_negf_integer_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "integer_type_mismatch",
+        "vmi.negf"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_op_verifier_basic.pto",
+      "category": "other",
+      "ops": [
+        "basic"
+      ],
+      "notes": "Other VMI test"
+    },
+    {
+      "filename": "vmi_pack_arity_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.pack",
+        "vmi.pack/vmi.unpack"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_producer_boundary_helper_invalid.pto",
+      "category": "other",
+      "ops": [
+        "helper"
+      ],
+      "notes": "Producer boundary check test"
+    },
+    {
+      "filename": "vmi_producer_boundary_layout_invalid.pto",
+      "category": "other",
+      "ops": [
+        "unknown"
+      ],
+      "notes": "Producer boundary check test"
+    },
+    {
+      "filename": "vmi_producer_boundary_mask_layout_invalid.pto",
+      "category": "other",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask"
+      ],
+      "notes": "Producer boundary check test"
+    },
+    {
+      "filename": "vmi_producer_boundary_non_vmi_op_invalid.pto",
+      "category": "other",
+      "ops": [
+        "non-vmi-op"
+      ],
+      "notes": "Producer boundary check test"
+    },
+    {
+      "filename": "vmi_producer_boundary_physical_invalid.pto",
+      "category": "other",
+      "ops": [
+        "physical"
+      ],
+      "notes": "Producer boundary check test"
+    },
+    {
+      "filename": "vmi_producer_boundary_type_attr_layout_invalid.pto",
+      "category": "other",
+      "ops": [
+        "type_attr"
+      ],
+      "notes": "Producer boundary check test"
+    },
+    {
+      "filename": "vmi_producer_boundary_type_attr_nested_invalid.pto",
+      "category": "other",
+      "ops": [
+        "nested",
+        "type_attr"
+      ],
+      "notes": "Producer boundary check test"
+    },
+    {
+      "filename": "vmi_producer_boundary_type_attr_surface_invalid.pto",
+      "category": "other",
+      "ops": [
+        "surface",
+        "type_attr",
+        "vmi.surface"
+      ],
+      "notes": "Producer boundary check test"
+    },
+    {
+      "filename": "vmi_producer_boundary_valid.pto",
+      "category": "other",
+      "ops": [
+        "unknown"
+      ],
+      "notes": "Producer boundary check test"
+    },
+    {
+      "filename": "vmi_ptoas_backend_required_invalid.pto",
+      "category": "other",
+      "ops": [
+        "ptoas_backend"
+      ],
+      "notes": "PTOAS CLI/integration test"
+    },
+    {
+      "filename": "vmi_ptoas_call_boundary_vecscope.pto",
+      "category": "other",
+      "ops": [
+        "boundary",
+        "vmi.call"
+      ],
+      "notes": "PTOAS CLI/integration test"
+    },
+    {
+      "filename": "vmi_ptoas_cli_control_flow.pto",
+      "category": "other",
+      "ops": [
+        "control_flow",
+        "ptoas-cli"
+      ],
+      "notes": "PTOAS CLI/integration test"
+    },
+    {
+      "filename": "vmi_ptoas_cli_licm.pto",
+      "category": "other",
+      "ops": [
+        "licm",
+        "ptoas-cli"
+      ],
+      "notes": "PTOAS CLI/integration test"
+    },
+    {
+      "filename": "vmi_ptoas_cli_pipeline.pto",
+      "category": "other",
+      "ops": [
+        "pipeline",
+        "ptoas-cli"
+      ],
+      "notes": "PTOAS CLI/integration test"
+    },
+    {
+      "filename": "vmi_ptoas_private_call_inline.pto",
+      "category": "other",
+      "ops": [
+        "vmi.call(inline)",
+        "vmi.call(private)"
+      ],
+      "notes": "PTOAS CLI/integration test"
+    },
+    {
+      "filename": "vmi_ptoas_public_abi_invalid.pto",
+      "category": "other",
+      "ops": [
+        "vmi.call(public-abi)"
+      ],
+      "notes": "PTOAS CLI/integration test"
+    },
+    {
+      "filename": "vmi_ptoas_public_result_abi_invalid.pto",
+      "category": "other",
+      "ops": [
+        "unknown"
+      ],
+      "notes": "PTOAS CLI/integration test"
+    },
+    {
+      "filename": "vmi_reduce_addf_missing_reassoc_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.addf",
+        "vmi.reduce",
+        "vmi.reduce(reassoc)"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_scatter_indices_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.gather/vmi.scatter/vmi.shuffle",
+        "vmi.scatter"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_select_mask_granularity_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "granularity",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.ensure_layout(mask)",
+        "vmi.pack/vmi.unpack",
+        "vmi.select"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_shli_float_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "float_type_mismatch",
+        "vmi.shli"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_shrui_float_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "float_type_mismatch",
+        "vmi.shrui"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_shrui_signed_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.shrui"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_shuffle_indices_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.gather/vmi.scatter/vmi.shuffle",
+        "vmi.shuffle"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_to_vpto_abs.pto",
+      "category": "lowering",
+      "ops": [
+        "unknown"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_active_prefix_index.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.active_prefix_index"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_active_prefix_index_multichunk_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "multi_chunk",
+        "vmi.active_prefix_index"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_active_prefix_index_tail_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "tail_handling",
+        "vmi.active_prefix_index"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_add.pto",
+      "category": "lowering",
+      "ops": [
+        "unknown"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_bf16_arith.pto",
+      "category": "lowering",
+      "ops": [
+        "bf16",
+        "f16"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_bitcast.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.bitcast"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_bitcast_deint_tail.pto",
+      "category": "lowering",
+      "ops": [
+        "tail_handling",
+        "vmi.bitcast",
+        "vmi.load/vmi.store(deint)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_bitcast_footprint_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "bitcast_footprint",
+        "vmi.bitcast"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_bitcast_group_slots.pto",
+      "category": "lowering",
+      "ops": [
+        "group_slots",
+        "vmi.bitcast",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.group_slots"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_bitcast_partial.pto",
+      "category": "lowering",
+      "ops": [
+        "partial_operation",
+        "vmi.bitcast"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_bitwise.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.bitwise_and/vmi.bitwise_or/vmi.bitwise_xor"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_broadcast.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.broadcast"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_call_boundary.pto",
+      "category": "lowering",
+      "ops": [
+        "boundary",
+        "vmi.call"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_cf_branch.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.cf_branch"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_channel_merge4_contiguous.pto",
+      "category": "lowering",
+      "ops": [
+        "contiguous_layout",
+        "vmi.channel_merge"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_channel_merge_count_unsupported_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "hardware_support",
+        "vmi.channel_merge",
+        "vmi.channel_merge/vmi.channel_split/vmi.constant"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_channel_merge_layout_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.channel_merge"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_channel_merge_partial_group_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "partial_operation",
+        "vmi.channel_merge"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_channel_split_count_unsupported_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "hardware_support",
+        "vmi.channel_merge/vmi.channel_split/vmi.constant",
+        "vmi.channel_split"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_channel_split_layout_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.channel_split"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_channel_split_merge.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.channel_split"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_channel_split_merge_tail.pto",
+      "category": "lowering",
+      "ops": [
+        "tail_handling",
+        "vmi.channel_split"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_channel_split_partial_group_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "partial_operation",
+        "vmi.channel_split"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_chist_semantics_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.chist"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_cmp_element_type_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.cmpf/vmi.cmpi"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_cmp_predicate_unsupported_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "hardware_support",
+        "vmi.cmpf/vmi.cmpi"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_cmp_select.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.cmpf/vmi.cmpi",
+        "vmi.select"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_cmpi_unsigned_predicate_unsupported_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "hardware_support",
+        "vmi.cmpf/vmi.cmpi"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_compaction_deint_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "compact_stride",
+        "vmi.compaction",
+        "vmi.load/vmi.store(deint)"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_compress.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.compress"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_compress_multichunk_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "multi_chunk",
+        "vmi.compress"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_compress_store.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.compress",
+        "vmi.store"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_compress_store_multichunk_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "multi_chunk",
+        "vmi.compress",
+        "vmi.store"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_compress_tail_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "tail_handling",
+        "vmi.compress"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_constant.pto",
+      "category": "lowering",
+      "ops": [
+        "unknown"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_constant_mask.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.constant",
+        "vmi.constant_mask",
+        "vmi.constant_mask/vmi.create_mask"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_constant_mask_nonprefix.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.constant",
+        "vmi.constant_mask",
+        "vmi.constant_mask/vmi.create_mask"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_constant_mask_rematerialize.pto",
+      "category": "lowering",
+      "ops": [
+        "rematerialize",
+        "rematerialize(mask)",
+        "vmi.constant",
+        "vmi.constant_mask",
+        "vmi.constant_mask/vmi.create_mask"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_constant_nonsplat_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "lane0_splat",
+        "vmi.constant"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_construction_width_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "construction_width",
+        "vpi.construction"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_create_mask.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.create_mask"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_create_mask_dynamic.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.create_mask"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_create_mask_plt_fallback.pto",
+      "category": "lowering",
+      "ops": [
+        "plt_fallback",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.create_mask"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_create_mask_rematerialize.pto",
+      "category": "lowering",
+      "ops": [
+        "rematerialize",
+        "rematerialize(mask)",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.create_mask"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_dhist.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.dhist"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_dhist_tail_mask.pto",
+      "category": "lowering",
+      "ops": [
+        "tail_handling",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.dhist"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_divf.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.divf"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_e2e_widen_add_store.pto",
+      "category": "lowering",
+      "ops": [
+        "e2e",
+        "vmi.store",
+        "vmi.widen"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_elementwise_width_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "construction_width",
+        "vmi.elementwise(various)"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_ensure_identity.pto",
+      "category": "lowering",
+      "ops": [
+        "identity",
+        "vmi.ensure_layout(identity)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_ensure_layout_deint4.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.ensure_layout",
+        "vmi.ensure_layout(deint4)",
+        "vmi.load/vmi.store(deint)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_ensure_layout_partial_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "partial_operation",
+        "vmi.ensure_layout"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_ensure_layout_vdintlv.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.ensure_layout",
+        "vmi.ensure_layout(vdintlv)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_ensure_layout_vintlv.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.ensure_layout",
+        "vmi.ensure_layout(vintlv)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_ensure_mask_granularity.pto",
+      "category": "lowering",
+      "ops": [
+        "granularity",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.ensure_layout(mask)",
+        "vmi.pack/vmi.unpack"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_ensure_mask_granularity_direct.pto",
+      "category": "lowering",
+      "ops": [
+        "granularity",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.ensure_layout(mask)",
+        "vmi.pack/vmi.unpack"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_ensure_mask_granularity_multistep.pto",
+      "category": "lowering",
+      "ops": [
+        "granularity",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.ensure_layout(mask)",
+        "vmi.pack/vmi.unpack"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_ensure_mask_layout.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.ensure_layout(mask)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_ensure_mask_layout_partial_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "partial_operation",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.ensure_layout(mask)"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_ensure_mask_layout_widths.pto",
+      "category": "lowering",
+      "ops": [
+        "construction_width",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.ensure_layout(mask)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_expand_load_all_active.pto",
+      "category": "lowering",
+      "ops": [
+        "all_active_mask",
+        "vmi.expand_load",
+        "vmi.load"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_expand_load_all_active_negative_offset_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "all_active_mask",
+        "negative_offset",
+        "vmi.expand_load",
+        "vmi.load"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_expand_load_partial_mask_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "partial_operation",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.expand_load",
+        "vmi.load"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_expand_load_runtime_mask.pto",
+      "category": "lowering",
+      "ops": [
+        "runtime_mask",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.expand_load",
+        "vmi.load"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_extf.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.extf"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_extf_f8.pto",
+      "category": "lowering",
+      "ops": [
+        "f8",
+        "vmi.extf"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_extf_multichunk.pto",
+      "category": "lowering",
+      "ops": [
+        "multi_chunk",
+        "vmi.extf"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_fma.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.fma"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_fma_element_type_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.fma"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_function_type_layout_free_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "function",
+        "layout_free"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_gather.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.gather"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_gather_f16_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "f16",
+        "vmi.gather"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_gather_scatter_shape_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "shape",
+        "vmi.gather",
+        "vmi.scatter"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_gather_u16.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.gather"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_broadcast_deint.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.broadcast",
+        "vmi.group_broadcast",
+        "vmi.load/vmi.store(deint)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_broadcast_load_e2b_b16.pto",
+      "category": "lowering",
+      "ops": [
+        "e2b_b16",
+        "vmi.broadcast",
+        "vmi.group_broadcast",
+        "vmi.load"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_broadcast_load_e2b_b16_stride_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "e2b_b16",
+        "stride",
+        "vmi.broadcast",
+        "vmi.group_broadcast",
+        "vmi.load"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_group_broadcast_s32_deint2_small_group.pto",
+      "category": "lowering",
+      "ops": [
+        "s32_region",
+        "vmi.broadcast",
+        "vmi.group_broadcast",
+        "vmi.load/vmi.store(deint)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_broadcast_slots8.pto",
+      "category": "lowering",
+      "ops": [
+        "group_slots",
+        "slots8",
+        "vmi.broadcast",
+        "vmi.group_broadcast"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_broadcast_slots8_support.pto",
+      "category": "lowering",
+      "ops": [
+        "group_slots",
+        "hardware_support",
+        "slots8",
+        "vmi.broadcast",
+        "vmi.group_broadcast"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_broadcast_vselr.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.broadcast",
+        "vmi.group_broadcast"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_load_support.pto",
+      "category": "lowering",
+      "ops": [
+        "hardware_support",
+        "vmi.group_load",
+        "vmi.load"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_ops.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.group_broadcast/vmi.group_load/vmi.group_reduce/vmi.group_store"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_reduce_legacy_slots_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "group_slots",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_group_reduce_partial_slots8.pto",
+      "category": "lowering",
+      "ops": [
+        "group_slots",
+        "partial_operation",
+        "slots8",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_reduce_s256_broadcast.pto",
+      "category": "lowering",
+      "ops": [
+        "s256_region",
+        "vmi.broadcast",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_reduce_s64.pto",
+      "category": "lowering",
+      "ops": [
+        "s64_region",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_reduce_s64_support.pto",
+      "category": "lowering",
+      "ops": [
+        "hardware_support",
+        "s64_region",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_reduce_slots8.pto",
+      "category": "lowering",
+      "ops": [
+        "group_slots",
+        "slots8",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_reduce_slots8_support.pto",
+      "category": "lowering",
+      "ops": [
+        "group_slots",
+        "hardware_support",
+        "slots8",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_reduce_typed.pto",
+      "category": "lowering",
+      "ops": [
+        "typed_reduce",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_reduce_vcgadd.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_reduce_vcgadd_multichunk.pto",
+      "category": "lowering",
+      "ops": [
+        "multi_chunk",
+        "vmi.group_reduce",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_slot_load.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.load"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_slot_load_nonunit_slots8_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "group_slots",
+        "slots8",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.load"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_group_slot_load_support.pto",
+      "category": "lowering",
+      "ops": [
+        "hardware_support",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.load"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_slot_truncf_slots1.pto",
+      "category": "lowering",
+      "ops": [
+        "group_slots",
+        "slots1",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.truncf"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_slot_truncf_slots1_support.pto",
+      "category": "lowering",
+      "ops": [
+        "group_slots",
+        "hardware_support",
+        "slots1",
+        "vmi.group_slot_load/vmi.group_slot_store",
+        "vmi.truncf"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_store_slots1_1pt.pto",
+      "category": "lowering",
+      "ops": [
+        "group_slots",
+        "slots1",
+        "vmi.group_store",
+        "vmi.store"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_store_slots1_unit_stride_alignment.pto",
+      "category": "lowering",
+      "ops": [
+        "group_slots",
+        "slots1",
+        "stride",
+        "unit_stride",
+        "vmi.group_store",
+        "vmi.store"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_group_store_slots8_nonunit_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "group_slots",
+        "slots8",
+        "vmi.group_store",
+        "vmi.store"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_group_store_slots8_packed_byte.pto",
+      "category": "lowering",
+      "ops": [
+        "group_slots",
+        "slots8",
+        "vmi.group_store",
+        "vmi.pack",
+        "vmi.store"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_integer_cast_reduce.pto",
+      "category": "lowering",
+      "ops": [
+        "integer_type_mismatch",
+        "vmi.reduce",
+        "vmi.trunci/vmi.extui/vmi.extsi"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_integer_casts.pto",
+      "category": "lowering",
+      "ops": [
+        "integer_type_mismatch",
+        "vmi.trunci/vmi.extui/vmi.extsi"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_iota.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.iota"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_iota_tail.pto",
+      "category": "lowering",
+      "ops": [
+        "tail_handling",
+        "vmi.iota"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_load_deint.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.load",
+        "vmi.load(deint)",
+        "vmi.load/vmi.store(deint)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_load_deint_multichunk.pto",
+      "category": "lowering",
+      "ops": [
+        "multi_chunk",
+        "vmi.load",
+        "vmi.load(deint)",
+        "vmi.load/vmi.store(deint)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_load_nonfull_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.load"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_load_safe_tail_memref.pto",
+      "category": "lowering",
+      "ops": [
+        "safe_tail",
+        "tail_handling",
+        "vmi.load",
+        "vmi.load(tail)",
+        "vmi.load/vmi.store(memref)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_load_safe_tail_memref_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "safe_tail",
+        "tail_handling",
+        "vmi.load",
+        "vmi.load(tail)",
+        "vmi.load/vmi.store(memref)"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_load_safe_tail_memref_negative_offset_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "negative_offset",
+        "safe_tail",
+        "tail_handling",
+        "vmi.load",
+        "vmi.load(tail)",
+        "vmi.load/vmi.store(memref)"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_load_store_contiguous.pto",
+      "category": "lowering",
+      "ops": [
+        "contiguous_layout",
+        "vmi.load",
+        "vmi.load/vmi.store",
+        "vmi.store"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_mask_logic.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.mask_and/vmi.mask_or/vmi.mask_xor/vmi.mask_not"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_masked_load.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.load",
+        "vmi.masked_load"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_masked_load_nonfull_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.load",
+        "vmi.masked_load"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_masked_load_safe_tail_memref.pto",
+      "category": "lowering",
+      "ops": [
+        "safe_tail",
+        "tail_handling",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.load",
+        "vmi.load(tail)",
+        "vmi.load/vmi.store(memref)",
+        "vmi.masked_load"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_masked_load_safe_tail_memref_negative_offset_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "negative_offset",
+        "safe_tail",
+        "tail_handling",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.load",
+        "vmi.load(tail)",
+        "vmi.load/vmi.store(memref)",
+        "vmi.masked_load"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_masked_store.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.masked_store",
+        "vmi.store"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_masked_store_deint_tail.pto",
+      "category": "lowering",
+      "ops": [
+        "tail_handling",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.load/vmi.store(deint)",
+        "vmi.masked_store",
+        "vmi.store",
+        "vmi.store(deint)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_masked_store_nonfull_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.masked_store",
+        "vmi.store"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_masked_store_tail.pto",
+      "category": "lowering",
+      "ops": [
+        "tail_handling",
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.masked_store",
+        "vmi.store",
+        "vmi.store(tail)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_math_element_type_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "unknown"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_memory_space_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.load/vmi.store",
+        "vmi.load/vmi.store(memory_space)"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_memory_x2_widths.pto",
+      "category": "lowering",
+      "ops": [
+        "construction_width",
+        "vmi.load/vmi.store",
+        "x2_widths"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_memref_layout_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.load/vmi.store(memref)"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_min_max.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.minf/vmi.mini/vmi.maxf/vmi.maxi"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_negf.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.negf"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_pack_unpack.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.pack",
+        "vmi.unpack"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_quant_dequant.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.quant/vmi.dequant"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_quant_fp8.pto",
+      "category": "lowering",
+      "ops": [
+        "fp8",
+        "vmi.quant/vmi.dequant"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_reduce_addf.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.addf",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_reduce_addf_f16.pto",
+      "category": "lowering",
+      "ops": [
+        "f16",
+        "vmi.addf",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_reduce_addf_multichunk.pto",
+      "category": "lowering",
+      "ops": [
+        "multi_chunk",
+        "vmi.addf",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_reduce_addi.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.addi",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_reduce_addi_i16_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "i16",
+        "vmi.addi",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_reduce_addi_multichunk.pto",
+      "category": "lowering",
+      "ops": [
+        "multi_chunk",
+        "vmi.addi",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_reduce_maxf_multichunk.pto",
+      "category": "lowering",
+      "ops": [
+        "multi_chunk",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_reduce_maxf_tail_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "tail_handling",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_reduce_minf.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_reduce_shape_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "shape",
+        "vmi.reduce"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_scatter.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.scatter"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_scf_for.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.scf_for"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_scf_if.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.scf_if"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_shli.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.shli"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_shrui.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.shrui"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_shuffle_forwarding.pto",
+      "category": "lowering",
+      "ops": [
+        "shuffle_forwarding",
+        "vmi.shuffle"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_shuffle_lane0_splat.pto",
+      "category": "lowering",
+      "ops": [
+        "lane0_splat",
+        "vmi.shuffle"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_stable_gather_masked_load_todo_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.constant_mask/vmi.create_mask",
+        "vmi.gather",
+        "vmi.load",
+        "vmi.masked_load",
+        "vmi.stable_gather"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_store_deint.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.load/vmi.store(deint)",
+        "vmi.store",
+        "vmi.store(deint)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_store_deint_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.load/vmi.store(deint)",
+        "vmi.store",
+        "vmi.store(deint)"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_store_deint_tail.pto",
+      "category": "lowering",
+      "ops": [
+        "tail_handling",
+        "vmi.load/vmi.store(deint)",
+        "vmi.store",
+        "vmi.store(deint)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_store_tail.pto",
+      "category": "lowering",
+      "ops": [
+        "tail_handling",
+        "vmi.store",
+        "vmi.store(tail)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_store_width_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "construction_width",
+        "vmi.store"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_stride_load.pto",
+      "category": "lowering",
+      "ops": [
+        "stride",
+        "vmi.load",
+        "vmi.stride_load"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_stride_store.pto",
+      "category": "lowering",
+      "ops": [
+        "stride",
+        "vmi.store",
+        "vmi.stride_store"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_sub_mul.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.subf/vmi.mulf"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_truncf.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.truncf"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_truncf_fp8_128_contiguous_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "contiguous_layout",
+        "fp8",
+        "vmi.truncf"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_truncf_unsupported_shape_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "hardware_support",
+        "shape",
+        "vmi.truncf"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_trunci_i8_signed_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "i8",
+        "vmi.trunci"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_type_arity.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.elementwise",
+        "vmi.pack/vmi.unpack"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_type_attr_nested_residual_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "nested",
+        "residual",
+        "type_attr"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_type_attr_residual_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "residual",
+        "type_attr"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_type_only.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.elementwise(no-value)"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_unary_math.pto",
+      "category": "lowering",
+      "ops": [
+        "vmi.math.unary"
+      ],
+      "notes": "Lowering VMI to VPTO ops"
+    },
+    {
+      "filename": "vmi_to_vpto_unrealized_cast_residual_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "residual"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_to_vpto_unsupported_op_invalid.pto",
+      "category": "lowering",
+      "ops": [
+        "hardware_support",
+        "unsupported"
+      ],
+      "notes": "Lowering VMI to VPTO - invalid input rejection"
+    },
+    {
+      "filename": "vmi_truncf_direction_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.extf/vmi.truncf",
+        "vmi.truncf"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_truncf_lane_mismatch_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.addf/vmi.extf/vmi.truncf",
+        "vmi.truncf"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_truncf_rounding_token_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.truncf",
+        "vmi.truncf(rounding)"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_truncf_rounding_unsupported_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "hardware_support",
+        "vmi.truncf",
+        "vmi.truncf(rounding)"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_type_attr_parse.pto",
+      "category": "other",
+      "ops": [
+        "parse",
+        "type_attr"
+      ],
+      "notes": "Other VMI test"
+    },
+    {
+      "filename": "vmi_type_element_count_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.channel_merge/vmi.channel_split/vmi.constant",
+        "vmi.type"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_unary_math_integer_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "integer_type_mismatch",
+        "vmi.math.unary"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    },
+    {
+      "filename": "vmi_unpack_arity_invalid.pto",
+      "category": "verifier",
+      "ops": [
+        "vmi.pack",
+        "vmi.pack/vmi.unpack",
+        "vmi.unpack"
+      ],
+      "notes": "Verifier rejection test (invalid input)"
+    }
+  ],
+  "total": 373,
+  "byCategory": {
+    "verifier": 54,
+    "other": 22,
+    "layout": 108,
+    "gate": 20,
+    "lowering": 169
+  }
+}

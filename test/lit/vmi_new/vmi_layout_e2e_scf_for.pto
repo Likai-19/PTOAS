@@ -1,0 +1,34 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
+
+// E2E layout: scf.for loop with vadd, vcvt widen + narrow.
+
+module {
+  func.func @scf_for_vadd_e2e(%a: !pto.vmi.vreg<128xf16>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %init = pto.vmi.vcvt %a : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
+    %result = scf.for %i = %c0 to %c2 step %c1
+        iter_args(%acc = %init) -> (!pto.vmi.vreg<128xf32>) {
+      %next = pto.vmi.vadd %acc, %acc
+          : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
+      scf.yield %next : !pto.vmi.vreg<128xf32>
+    }
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @scf_for_vadd_e2e
+// CHECK: scf.for
+// CHECK: pto.vadd
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

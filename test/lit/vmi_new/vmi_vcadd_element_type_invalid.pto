@@ -1,0 +1,24 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not ptoas --emit-pto-ir %s 2>&1 | FileCheck %s
+
+// vcadd: floating-point reduction without reassoc attr → error.
+
+module {
+  func.func @vcadd_fp_no_reassoc(
+      %src: !pto.vmi.vreg<64xf32>,
+      %mask: !pto.vmi.mask<64xpred>)
+      -> !pto.vmi.vreg<1xf32> {
+    // CHECK: floating add-reduction requires reassoc attr
+    %r = pto.vmi.vcadd %src, %mask
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<1xf32>
+    return %r : !pto.vmi.vreg<1xf32>
+  }
+}

@@ -1,0 +1,55 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). Please refer to the License for details. You may not use
+// this file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON
+// AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+// FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+// for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-assignment | FileCheck %s
+
+// Typed group reduce: f16 group_reduce, i16→i32 ext + group_reduce, i32 group_reduce.
+// After two-stage lowering, vcvt→extsi and vcadd→group_reduce_*, layout assigns
+// deinterleaved layouts for f16 and i32.
+module {
+  func.func @typed_group_reduce_assignment(
+      %f16: !pto.vmi.vreg<256xf16>,
+      %mf16: !pto.vmi.mask<256xpred>,
+      %i16: !pto.vmi.vreg<128xi16>,
+      %mi16: !pto.vmi.mask<128xpred>,
+      %i32: !pto.vmi.vreg<128xi32>,
+      %mi32: !pto.vmi.mask<128xpred>) {
+    %sum_f16 = pto.vmi.vcadd %f16, %mf16 {group = 8, reassoc}
+        : !pto.vmi.vreg<256xf16>, !pto.vmi.mask<256xpred>
+        -> !pto.vmi.vreg<8xf16>
+    %wide_i16 = pto.vmi.vcvt %i16 {sign = "S"}
+        : !pto.vmi.vreg<128xi16> -> !pto.vmi.vreg<128xi32>
+    %sum_i16 = pto.vmi.vcadd %wide_i16, %mi16 {group = 8}
+        : !pto.vmi.vreg<128xi32>, !pto.vmi.mask<128xpred>
+        -> !pto.vmi.vreg<8xi32>
+    %sum_i32 = pto.vmi.vcadd %i32, %mi32 {group = 8}
+        : !pto.vmi.vreg<128xi32>, !pto.vmi.mask<128xpred>
+        -> !pto.vmi.vreg<8xi32>
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @typed_group_reduce_assignment(
+// CHECK: pto.vmi.ensure_layout
+// CHECK-SAME: -> !pto.vmi.vreg<256xf16, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+// CHECK: pto.vmi.ensure_mask_layout
+// CHECK-SAME: -> !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+// CHECK: pto.vmi.ensure_mask_granularity
+// CHECK-SAME: -> !pto.vmi.mask<256xb16, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+// CHECK: pto.vmi.group_reduce_addf
+// CHECK-SAME: -> !pto.vmi.vreg<8xf16, #pto.vmi.layout<num_groups = 8, slots = 8>>
+// CHECK: pto.vmi.extsi
+// CHECK-SAME: -> !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>
+// CHECK: pto.vmi.group_reduce_addi
+// CHECK-SAME: -> !pto.vmi.vreg<8xi32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+// CHECK: pto.vmi.ensure_layout
+// CHECK-SAME: -> !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+// CHECK: pto.vmi.group_reduce_addi
+// CHECK-SAME: -> !pto.vmi.vreg<8xi32, #pto.vmi.layout<num_groups = 8, slots = 8>>

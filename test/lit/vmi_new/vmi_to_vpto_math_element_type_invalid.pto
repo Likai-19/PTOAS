@@ -1,0 +1,131 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not pto-test-opt %s -split-input-file -vmi-to-vpto 2>&1 | FileCheck %s
+
+module {
+  func.func @vmi_to_vpto_addf_f8_invalid(
+      %lhs: !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>,
+      %rhs: !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>) {
+    %out = pto.vmi.addf %lhs, %rhs
+        : !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
+    return
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.addf direct lowering requires f16/bf16/f32 element type
+// CHECK-SAME: requires f16/bf16/f32 element type for direct VPTO lowering
+
+// -----
+
+module {
+  func.func @vmi_to_vpto_divf_bf16_invalid(
+      %lhs: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>,
+      %rhs: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>) {
+    %out = pto.vmi.vdiv %lhs, %rhs
+        : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+    return
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.vdiv direct lowering requires f16/f32 element type
+// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+
+// -----
+
+module {
+  func.func @vmi_to_vpto_sqrt_bf16_invalid(
+      %source: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>) {
+    %out = pto.vmi.vsqrt %source
+        : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+    return
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.vsqrt direct lowering requires f16/f32 element type
+// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+
+// -----
+
+module {
+  func.func @vmi_to_vpto_exp_f8_invalid(
+      %source: !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>) {
+    %out = pto.vmi.vexp %source
+        : !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
+    return
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.vexp direct lowering requires f16/f32 element type
+// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+
+// -----
+
+module {
+  func.func @vmi_to_vpto_negf_bf16_invalid(
+      %source: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>) {
+    %out = pto.vmi.vneg %source
+        : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+    return
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.vneg direct lowering requires f16/f32 element type
+// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+
+// -----
+
+module {
+  func.func @vmi_to_vpto_ln_bf16_invalid(
+      %source: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>) {
+    %out = pto.vmi.vln %source
+        : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+    return
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.vln direct lowering requires f16/f32 element type
+// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+
+// -----
+
+module {
+  func.func @vmi_to_vpto_absf_bf16_invalid(
+      %source: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>) {
+    %out = pto.vmi.absf %source
+        : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+    return
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.absf direct lowering requires f16/f32 element type
+// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+
+// -----
+
+module {
+  func.func @vmi_to_vpto_absi_unsigned_invalid(
+      %source: !pto.vmi.vreg<128xui16, #pto.vmi.layout<contiguous>>) {
+    %out = pto.vmi.absi %source
+        : !pto.vmi.vreg<128xui16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xui16, #pto.vmi.layout<contiguous>>
+    return
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.absi direct lowering requires signless/signed i8/i16/i32 element type
+// CHECK-SAME: requires signless/signed i8/i16/i32 element type for direct VPTO lowering

@@ -1,0 +1,57 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
+
+module {
+  func.func @vmi_to_vpto_scf_if(
+      %cond: i1,
+      %a: !pto.vmi.vreg<128xf16>,
+      %b: !pto.vmi.vreg<128xf16>) -> !pto.vmi.vreg<128xf32> {
+    %value, %mask = scf.if %cond
+        -> (!pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>) {
+      %ea = pto.vmi.extf %a
+          : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
+      %cmpa = pto.vmi.cmpf "olt", %ea, %ea
+          : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
+          -> !pto.vmi.mask<128xpred>
+      scf.yield %ea, %cmpa : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
+    } else {
+      %eb = pto.vmi.extf %b
+          : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
+      %cmpb = pto.vmi.cmpf "olt", %eb, %eb
+          : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
+          -> !pto.vmi.mask<128xpred>
+      scf.yield %eb, %cmpb : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
+    }
+    %selected = pto.vmi.vsel %mask, %value, %value
+        : !pto.vmi.mask<128xpred>, !pto.vmi.vreg<128xf32>,
+          !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
+    return %selected : !pto.vmi.vreg<128xf32>
+  }
+}
+
+// CHECK-LABEL: func.func @vmi_to_vpto_scf_if(
+// CHECK-SAME: %[[COND:[^,]+]]: i1
+// CHECK-SAME: %[[A:[^,]+]]: !pto.vreg<128xf16>
+// CHECK-SAME: %[[B:[^)]+]]: !pto.vreg<128xf16>
+// CHECK-SAME: -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>)
+// CHECK: %[[IF:.*]]:4 = scf.if %[[COND]] -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32>, !pto.mask<b32>)
+// CHECK: pto.vcvt %[[A]]
+// CHECK: pto.vcmp {{.*}}, {{.*}}, {{.*}}, "lt"
+// CHECK: scf.yield {{.*}} : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32>, !pto.mask<b32>
+// CHECK: else
+// CHECK: pto.vcvt %[[B]]
+// CHECK: pto.vcmp {{.*}}, {{.*}}, {{.*}}, "lt"
+// CHECK: scf.yield {{.*}} : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32>, !pto.mask<b32>
+// CHECK: pto.vsel %[[IF]]#0, %[[IF]]#0, %[[IF]]#2
+// CHECK: pto.vsel %[[IF]]#1, %[[IF]]#1, %[[IF]]#3
+// CHECK: return {{.*}} : !pto.vreg<64xf32>, !pto.vreg<64xf32>
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

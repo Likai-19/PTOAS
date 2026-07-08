@@ -1,0 +1,86 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
+
+module {
+  // Test 1: scalar vbrc → vdup
+  func.func @vmi_to_vpto_vbrc_contiguous(%scalar: f32)
+      -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>) {
+    %value = pto.vmi.vbrc %scalar
+        : f32 -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+    %p0, %p1 = "pto.vmi.unpack"(%value)
+        : (!pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>)
+        -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>)
+    return %p0, %p1 : !pto.vreg<64xf32>, !pto.vreg<64xf32>
+  }
+
+  // Test 2: 1-lane vreg vbrc → vdup with position="LOWEST"
+  func.func @vmi_to_vpto_vbrc_rank0(
+      %scalar: !pto.vmi.vreg<1xf32, #pto.vmi.layout<contiguous>>)
+      -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>) {
+    %value = pto.vmi.vbrc %scalar
+        : !pto.vmi.vreg<1xf32, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
+    %p0, %p1, %p2, %p3 = "pto.vmi.unpack"(%value)
+        : (!pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>)
+        -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>)
+    return %p0, %p1, %p2, %p3
+        : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>
+  }
+
+  // Test 3: group vbrc with num_groups → vselr
+  func.func @vmi_to_vpto_vbrc_group_slots8(
+      %source: !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 128, slots = 8>>)
+      -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>,
+          !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>,
+          !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>,
+          !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>) {
+    %out = pto.vmi.vbrc %source
+        {num_groups = 128}
+        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 128, slots = 8>>
+        -> !pto.vmi.vreg<1024xf32, #pto.vmi.layout<contiguous>>
+    %p0, %p1, %p2, %p3, %p4, %p5, %p6, %p7,
+    %p8, %p9, %p10, %p11, %p12, %p13, %p14, %p15 = "pto.vmi.unpack"(%out)
+        : (!pto.vmi.vreg<1024xf32, #pto.vmi.layout<contiguous>>)
+        -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>,
+            !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>,
+            !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>,
+            !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>)
+    return %p0, %p1, %p2, %p3, %p4, %p5, %p6, %p7,
+           %p8, %p9, %p10, %p11, %p12, %p13, %p14, %p15
+        : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>,
+          !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>,
+          !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>,
+          !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>
+  }
+}
+
+// CHECK-LABEL: func.func @vmi_to_vpto_vbrc_contiguous(
+// CHECK: %[[M0:.*]] = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+// CHECK: %[[P0:.*]] = pto.vdup %arg0, %[[M0]] : f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+// CHECK: %[[M1:.*]] = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+// CHECK: %[[P1:.*]] = pto.vdup %arg0, %[[M1]] : f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+// CHECK: return %[[P0]], %[[P1]]
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast
+
+// CHECK-LABEL: func.func @vmi_to_vpto_vbrc_rank0(
+// CHECK-COUNT-4: pto.vdup %arg0{{.*}}{position = "LOWEST"}
+// CHECK: return
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast
+
+// CHECK-LABEL: func.func @vmi_to_vpto_vbrc_group_slots8(
+// CHECK-COUNT-16: pto.vselr
+// CHECK-NOT: pto.vcadd
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

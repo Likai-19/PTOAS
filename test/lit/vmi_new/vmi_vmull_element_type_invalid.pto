@@ -1,0 +1,38 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not ptoas --emit-pto-ir %s 2>&1 | FileCheck %s
+
+// vmull: result signedness must match input signedness.
+// Also: input element must be i32/u32 (not i16).
+
+module {
+  func.func @vmull_signedness_mismatch(
+      %a: !pto.vmi.vreg<64xi32>,
+      %b: !pto.vmi.vreg<64xi32>,
+      %mask: !pto.vmi.mask<64xpred>)
+      -> !pto.vmi.vreg<64xui64> {
+    // CHECK: requires result signedness to match input signedness
+    %r = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>, !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xui64>
+    return %r : !pto.vmi.vreg<64xui64>
+  }
+
+  func.func @vmull_not_32bit_input(
+      %a: !pto.vmi.vreg<64xi16>,
+      %b: !pto.vmi.vreg<64xi16>,
+      %mask: !pto.vmi.mask<64xpred>)
+      -> !pto.vmi.vreg<64xi32> {
+    // CHECK: requires a and b element type to be i32 or u32
+    %r = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<64xi16>, !pto.vmi.vreg<64xi16>, !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xi32>
+    return %r : !pto.vmi.vreg<64xi32>
+  }
+}

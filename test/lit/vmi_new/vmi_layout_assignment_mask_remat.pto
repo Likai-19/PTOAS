@@ -1,0 +1,88 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-layout-rematerialize | FileCheck %s --check-prefix=REMAT
+
+module {
+  func.func @vmi_layout_assignment_create_mask_remat(
+      %active: index,
+      %a16: !pto.vmi.vreg<128xf16>,
+      %b16: !pto.vmi.vreg<128xf16>,
+      %a32: !pto.vmi.vreg<128xf32>,
+      %b32: !pto.vmi.vreg<128xf32>)
+      -> (!pto.vmi.vreg<128xf16>, !pto.vmi.vreg<128xf32>) {
+    %mask = pto.vmi.create_mask %active : index -> !pto.vmi.mask<128xpred>
+    %sel16 = pto.vmi.vsel %mask, %a16, %b16
+        : !pto.vmi.mask<128xpred>, !pto.vmi.vreg<128xf16>, !pto.vmi.vreg<128xf16>
+        -> !pto.vmi.vreg<128xf16>
+    %sel32 = pto.vmi.vsel %mask, %a32, %b32
+        : !pto.vmi.mask<128xpred>, !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
+        -> !pto.vmi.vreg<128xf32>
+    return %sel16, %sel32
+        : !pto.vmi.vreg<128xf16>, !pto.vmi.vreg<128xf32>
+  }
+
+  func.func @vmi_layout_assignment_constant_mask_remat(
+      %a16: !pto.vmi.vreg<128xf16>,
+      %b16: !pto.vmi.vreg<128xf16>,
+      %a32: !pto.vmi.vreg<128xf32>,
+      %b32: !pto.vmi.vreg<128xf32>)
+      -> (!pto.vmi.vreg<128xf16>, !pto.vmi.vreg<128xf32>) {
+    %mask = "pto.vmi.constant_mask"() {
+      value = dense<true> : tensor<128xi1>
+    } : () -> !pto.vmi.mask<128xpred>
+    %sel16 = pto.vmi.vsel %mask, %a16, %b16
+        : !pto.vmi.mask<128xpred>, !pto.vmi.vreg<128xf16>, !pto.vmi.vreg<128xf16>
+        -> !pto.vmi.vreg<128xf16>
+    %sel32 = pto.vmi.vsel %mask, %a32, %b32
+        : !pto.vmi.mask<128xpred>, !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
+        -> !pto.vmi.vreg<128xf32>
+    return %sel16, %sel32
+        : !pto.vmi.vreg<128xf16>, !pto.vmi.vreg<128xf32>
+  }
+}
+
+// ASSIGN-LABEL: func.func @vmi_layout_assignment_create_mask_remat(
+// ASSIGN-SAME: %[[ACTIVE:.*]]: index
+// ASSIGN: %[[M32:.*]] = pto.vmi.create_mask %[[ACTIVE]]
+// ASSIGN-SAME: index -> !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[M16:.*]] = pto.vmi.ensure_mask_granularity %[[M32]]
+// ASSIGN-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>> -> !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+// ASSIGN: pto.vmi.vsel %[[M16]]
+// ASSIGN-SAME: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+// ASSIGN: pto.vmi.vsel %[[M32]]
+// ASSIGN-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+
+// ASSIGN-LABEL: func.func @vmi_layout_assignment_constant_mask_remat(
+// ASSIGN: %[[CM32:.*]] = "pto.vmi.constant_mask"()
+// ASSIGN-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[CM16:.*]] = pto.vmi.ensure_mask_granularity %[[CM32]]
+// ASSIGN-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>> -> !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+// ASSIGN: pto.vmi.vsel %[[CM16]]
+// ASSIGN-SAME: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+// ASSIGN: pto.vmi.vsel %[[CM32]]
+// ASSIGN-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+
+// REMAT-LABEL: func.func @vmi_layout_assignment_create_mask_remat(
+// REMAT-SAME: %[[ACTIVE:.*]]: index
+// REMAT: %[[M32:.*]] = pto.vmi.create_mask %[[ACTIVE]]
+// REMAT-SAME: index -> !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+// REMAT: %[[M16:.*]] = pto.vmi.create_mask %[[ACTIVE]]
+// REMAT-SAME: index -> !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+// REMAT: pto.vmi.vsel %[[M16]]
+// REMAT: pto.vmi.vsel %[[M32]]
+// REMAT-LABEL: func.func @vmi_layout_assignment_constant_mask_remat(
+// REMAT: %[[CM32:.*]] = "pto.vmi.constant_mask"()
+// REMAT-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+// REMAT: %[[CM16:.*]] = "pto.vmi.constant_mask"()
+// REMAT-SAME: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+// REMAT: pto.vmi.vsel %[[CM16]]
+// REMAT: pto.vmi.vsel %[[CM32]]
+// REMAT-NOT: pto.vmi.ensure_mask_layout
+// REMAT-NOT: pto.vmi.ensure_mask_granularity

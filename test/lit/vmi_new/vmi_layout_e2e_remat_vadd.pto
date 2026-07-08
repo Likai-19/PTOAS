@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-rematerialize 2>&1 | FileCheck %s
+
+// E2E remat: data rematerialization for vadd.
+
+module {
+  func.func @remat_vadd_e2e(%a: !pto.vmi.vreg<128xf32>, %b: !pto.vmi.vreg<128xf32>)
+      -> (!pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>) {
+    %r1 = pto.vmi.vadd %a, %b
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
+    %r2 = pto.vmi.vadd %r1, %b
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
+    return %r1, %r2 : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
+  }
+}
+
+// CHECK: pto.vmi.addf
+// CHECK-NOT: error:

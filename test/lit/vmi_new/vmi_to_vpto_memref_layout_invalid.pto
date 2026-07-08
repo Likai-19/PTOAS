@@ -1,0 +1,144 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not pto-test-opt %s -split-input-file -vmi-to-vpto 2>&1 | FileCheck %s
+
+module {
+  func.func @vmi_load_strided_memref_unsupported(
+      %src: memref<128xf32, strided<[2], offset: 0>>) {
+    %c0 = arith.constant 0 : index
+    %value = pto.vmi.load %src[%c0]
+        : memref<128xf32, strided<[2], offset: 0>>
+          -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
+    return
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.load requires full physical chunks without padding lanes or a statically safe full-read footprint
+// CHECK-SAME: source memref layout is non-identity
+// CHECK-SAME: contiguous identity lane-to-address maps
+
+// -----
+
+module {
+  func.func @vmi_load_memref_subview_unsupported(%src: memref<128xf32>) {
+    %c0 = arith.constant 0 : index
+    %view = memref.subview %src[%c0] [64] [1]
+        : memref<128xf32> to memref<64xf32, strided<[1], offset: ?>>
+    %value = pto.vmi.load %view[%c0]
+        : memref<64xf32, strided<[1], offset: ?>>
+          -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
+    return
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.load requires full physical chunks without padding lanes or a statically safe full-read footprint
+// CHECK-SAME: source memref layout is non-identity
+// CHECK-SAME: contiguous identity lane-to-address maps
+// CHECK-SAME: memref.subview requires normalized base/offset/stride lane-to-address planning
+
+// -----
+
+module {
+  func.func @vmi_masked_load_strided_memref_unsupported(
+      %src: memref<128xf32, strided<[2], offset: 0>>,
+      %mask: !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>,
+      %passthru: !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>) {
+    %c0 = arith.constant 0 : index
+    %value = pto.vmi.masked_load %src[%c0], %mask, %passthru
+        : memref<128xf32, strided<[2], offset: 0>>,
+          !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
+          -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
+    return
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.masked_load direct lowering requires a supported memory source, contiguous result/passthru/mask layouts
+// CHECK-SAME: source memref layout is non-identity
+// CHECK-SAME: contiguous identity lane-to-address maps
+
+// -----
+
+module {
+  func.func @vmi_expand_load_strided_memref_unsupported(
+      %src: memref<128xf32, strided<[2], offset: 0>>,
+      %mask: !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>,
+      %passthru: !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>) {
+    %c0 = arith.constant 0 : index
+    %value = pto.vmi.vexpand_load %src[%c0], %mask, %passthru
+        : memref<128xf32, strided<[2], offset: 0>>,
+          !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
+          -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
+    return
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.vexpand_load direct lowering is currently supported
+// CHECK-SAME: source memref layout is non-identity
+// CHECK-SAME: contiguous identity lane-to-address maps
+
+// -----
+
+module {
+  func.func @vmi_store_strided_memref_unsupported(
+      %value: !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>,
+      %dst: memref<128xf32, strided<[2], offset: 0>>) {
+    %c0 = arith.constant 0 : index
+    pto.vmi.store %value, %dst[%c0]
+        : !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>,
+          memref<128xf32, strided<[2], offset: 0>>
+    return
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.store requires an 8/16/32-bit predicate-maskable element type
+// CHECK-SAME: destination memref layout is non-identity
+// CHECK-SAME: contiguous identity lane-to-address maps
+
+// -----
+
+module {
+  func.func @vmi_store_memref_subview_unsupported(
+      %value: !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>,
+      %dst: memref<128xf32>) {
+    %c0 = arith.constant 0 : index
+    %view = memref.subview %dst[%c0] [64] [1]
+        : memref<128xf32> to memref<64xf32, strided<[1], offset: ?>>
+    pto.vmi.store %value, %view[%c0]
+        : !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>,
+          memref<64xf32, strided<[1], offset: ?>>
+    return
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.store requires an 8/16/32-bit predicate-maskable element type
+// CHECK-SAME: destination memref layout is non-identity
+// CHECK-SAME: contiguous identity lane-to-address maps
+// CHECK-SAME: memref.subview requires normalized base/offset/stride lane-to-address planning
+
+// -----
+
+module {
+  func.func @vmi_masked_store_strided_memref_unsupported(
+      %value: !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>,
+      %mask: !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>,
+      %dst: memref<128xf32, strided<[2], offset: 0>>) {
+    %c0 = arith.constant 0 : index
+    pto.vmi.masked_store %value, %dst[%c0], %mask
+        : !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>,
+          memref<128xf32, strided<[2], offset: 0>>,
+          !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>
+    return
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.masked_store requires either full physical chunks or contiguous tail-store value/mask layout
+// CHECK-SAME: destination memref layout is non-identity
+// CHECK-SAME: contiguous identity lane-to-address maps

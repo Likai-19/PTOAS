@@ -1,0 +1,22 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not ptoas --emit-pto-ir %s 2>&1 | FileCheck %s
+
+// Signless integer widening without an explicit {sign} attribute is rejected.
+
+module {
+  func.func @vcvt_int_widen_signless_no_sign_invalid(
+      %source: !pto.vmi.vreg<256xi8>) {
+    %result = pto.vmi.vcvt %source
+        : !pto.vmi.vreg<256xi8> -> !pto.vmi.vreg<256xi16>
+    return
+  }
+}
+
+// CHECK: 'sign' attribute ('S' or 'U') is required for int-widening conversions with a signless integer source element type

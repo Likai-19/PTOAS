@@ -1,0 +1,24 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not pto-test-opt %s -vmi-to-vpto 2>&1 | FileCheck %s
+
+module {
+  // CHECK: unsupported compare predicate 'uno'
+  func.func @vcmp_unsupported_predicate_uno(
+      %a: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+      %b: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+      %seed: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>) {
+    %mask = pto.vmi.vcmp %a, %b, %seed {cmp = "uno"}
+        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
+    return
+  }
+}

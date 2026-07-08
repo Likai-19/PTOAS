@@ -1,0 +1,53 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
+
+module {
+  func.func @vmi_to_vpto_bitwise(
+      %a: !pto.vmi.vreg<256xi16>,
+      %b: !pto.vmi.vreg<256xi16>)
+      -> (!pto.vmi.vreg<256xi16>, !pto.vmi.vreg<256xi16>,
+          !pto.vmi.vreg<256xi16>,
+          !pto.vmi.vreg<256xi16>) {
+    %and = pto.vmi.vand %a, %b
+        : !pto.vmi.vreg<256xi16>, !pto.vmi.vreg<256xi16>
+        -> !pto.vmi.vreg<256xi16>
+    %or = pto.vmi.vor %a, %b
+        : !pto.vmi.vreg<256xi16>, !pto.vmi.vreg<256xi16>
+        -> !pto.vmi.vreg<256xi16>
+    %xor = pto.vmi.vxor %a, %b
+        : !pto.vmi.vreg<256xi16>, !pto.vmi.vreg<256xi16>
+        -> !pto.vmi.vreg<256xi16>
+    %not = pto.vmi.vnot %a
+        : !pto.vmi.vreg<256xi16> -> !pto.vmi.vreg<256xi16>
+    return %and, %or, %xor, %not
+        : !pto.vmi.vreg<256xi16>, !pto.vmi.vreg<256xi16>,
+          !pto.vmi.vreg<256xi16>,
+          !pto.vmi.vreg<256xi16>
+  }
+}
+
+// CHECK-LABEL: func.func @vmi_to_vpto_bitwise(
+// CHECK-SAME: %[[A0:[^,]+]]: !pto.vreg<128xi16>
+// CHECK-SAME: %[[A1:[^,]+]]: !pto.vreg<128xi16>
+// CHECK-SAME: %[[B0:[^,]+]]: !pto.vreg<128xi16>
+// CHECK-SAME: %[[B1:[^)]+]]: !pto.vreg<128xi16>
+// CHECK-SAME: -> (!pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.vreg<128xi16>)
+// CHECK-DAG: %[[AND0:.*]] = pto.vand %[[A0]], %[[B0]], {{.*}} : !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>
+// CHECK-DAG: %[[AND1:.*]] = pto.vand %[[A1]], %[[B1]], {{.*}} : !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>
+// CHECK-DAG: %[[OR0:.*]] = pto.vor %[[A0]], %[[B0]], {{.*}} : !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>
+// CHECK-DAG: %[[OR1:.*]] = pto.vor %[[A1]], %[[B1]], {{.*}} : !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>
+// CHECK-DAG: %[[XOR0:.*]] = pto.vxor %[[A0]], %[[B0]], {{.*}} : !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>
+// CHECK-DAG: %[[XOR1:.*]] = pto.vxor %[[A1]], %[[B1]], {{.*}} : !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>
+// CHECK-DAG: %[[NOT0:.*]] = pto.vnot %[[A0]], {{.*}} : !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>
+// CHECK-DAG: %[[NOT1:.*]] = pto.vnot %[[A1]], {{.*}} : !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>
+// CHECK: return %[[AND0]], %[[AND1]], %[[OR0]], %[[OR1]], %[[XOR0]], %[[XOR1]], %[[NOT0]], %[[NOT1]]
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

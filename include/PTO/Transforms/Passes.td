@@ -1039,6 +1039,33 @@ def VMILegalizeArithSelect : Pass<"vmi-legalize-arith-select", "ModuleOp"> {
                            "mlir::scf::SCFDialect"];
 }
 
+def VMILowerUnifiedToLegacy : Pass<"vmi-lower-unified-to-legacy", "ModuleOp"> {
+  let summary = "Lower unified VMI ops to legacy equivalents before layout assignment";
+  let description = [{
+    Expands most unified v-prefixed VMI ops into their legacy (mask-less)
+    equivalents so downstream layout and VMIToVPTO passes only see legacy ops.
+
+    Ops lowered (Category A–C6):
+      A:  vci, vinterpret_cast, vsel, vbrc  →  iota, bitcast, select, broadcast/group_broadcast
+      B:  vadd/vsub/vmul/vdiv/vmin/vmax/vand/vor/vxor/vshl/vshr (masked binary)
+          vneg/vabs/vsqrt/vexp/vln/vrelu/vnot (masked unary)
+          →  legacy compute op + select for mask/pmode
+      C1: vcmp/vcmps  →  legacy cmp + select
+      C2: vcvt        →  legacy extf/truncf/fptosi/sitofp/extsi/extui/trunci
+      C3: vload/vstore  →  legacy load/store variants
+      C4: pset/pge    →  create_mask/create_group_mask
+      C5: vadds/vmuls/vmaxs/vmins/vshls/vshrs  →  broadcast + legacy binary
+      C6: vcadd/vcmax/vcmin  →  legacy reduce variants
+
+    Ops NOT lowered (no legacy equivalent — require direct VMIToVPTO 1:N patterns):
+      plt, vhist, vintlv, vdintlv, vselr,
+      vgather, vgatherb, vscatter,
+      vexpdif, vaxpy, vlrelu, vprelu, vmull, vmula
+  }];
+  let constructor = "mlir::pto::createVMILowerUnifiedToLegacyPass()";
+  let dependentDialects = ["mlir::pto::PTODialect"];
+}
+
 def VMIToVPTO : Pass<"vmi-to-vpto", "ModuleOp"> {
   let summary = "Convert layout-assigned VMI IR to physical VPTO IR";
   let description = [{

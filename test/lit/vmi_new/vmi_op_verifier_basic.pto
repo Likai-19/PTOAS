@@ -1,0 +1,131 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --emit-pto-ir %s 2>&1 | FileCheck %s
+
+module {
+  func.func @vmi_op_verifier_basic(
+      %ptr: !pto.ptr<f32>,
+      %layouted: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+      %mask_b16: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>,
+      %mask_b32: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>)
+      -> (!pto.vmi.vreg<128xf32>,
+          !pto.vmi.mask<128xpred>,
+          !pto.vmi.vreg<128xf32>,
+          !pto.vmi.vreg<128xf16>,
+          !pto.vmi.vreg<4xf32>,
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xi32>,
+          !pto.vmi.mask<128xpred>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %f32 = arith.constant 1.000000e+00 : f32
+    %f16 = arith.constant 1.000000e+00 : f16
+    %active = arith.constant 64 : index
+
+    %const = "pto.vmi.constant"() {
+      value = dense<1.000000e+00> : tensor<128xf32>
+    } : () -> !pto.vmi.vreg<128xf32>
+    %broadcast = pto.vmi.broadcast %f32 : f32 -> !pto.vmi.vreg<128xf32>
+    %broadcast16 = pto.vmi.broadcast %f16 : f16 -> !pto.vmi.vreg<128xf16>
+    %mask = pto.vmi.create_mask %active : index -> !pto.vmi.mask<128xpred>
+    %mask_const = "pto.vmi.constant_mask"() {
+      value = dense<true> : tensor<128xi1>
+    } : () -> !pto.vmi.mask<128xpred>
+
+    %add = pto.vmi.addf %broadcast, %const
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
+    %cmp = pto.vmi.cmpf "olt", %broadcast, %const
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32> -> !pto.vmi.mask<128xpred>
+    %sel = pto.vmi.vsel %mask, %broadcast, %const
+        : !pto.vmi.mask<128xpred>, !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
+    %ext = pto.vmi.extf %broadcast16 : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
+    %trunc = pto.vmi.truncf %ext : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
+
+    %loaded = pto.vmi.load %ptr[%c0] : !pto.ptr<f32> -> !pto.vmi.vreg<128xf32>
+    %slot_loaded = pto.vmi.group_slot_load %ptr[%c0], %c1 {num_groups = 8}
+        : !pto.ptr<f32> -> !pto.vmi.vreg<8xf32>
+    pto.vmi.group_store %slot_loaded, %ptr[%c0], %c1 {num_groups = 8}
+        : !pto.vmi.vreg<8xf32>, !pto.ptr<f32>
+    pto.vmi.store %loaded, %ptr[%c0] : !pto.vmi.vreg<128xf32>, !pto.ptr<f32>
+
+    %small = "pto.vmi.shuffle"(%broadcast) {
+      indices = array<i64: 0, 1, 2, 3>
+    } : (!pto.vmi.vreg<128xf32>) -> !pto.vmi.vreg<4xf32>
+    %split0, %split1 = "pto.vmi.channel_split"(%small)
+        : (!pto.vmi.vreg<4xf32>) -> (!pto.vmi.vreg<2xf32>, !pto.vmi.vreg<2xf32>)
+    %merged = "pto.vmi.channel_merge"(%split0, %split1)
+        : (!pto.vmi.vreg<2xf32>, !pto.vmi.vreg<2xf32>) -> !pto.vmi.vreg<4xf32>
+
+    %ensure = pto.vmi.ensure_layout %layouted
+        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+    %layouted_ext = pto.vmi.extf %ensure
+        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xf64, #pto.vmi.layout<deinterleaved = 2>>
+    %layouted_trunc = pto.vmi.truncf %layouted_ext
+        : !pto.vmi.vreg<128xf64, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+    %mask_layout = pto.vmi.ensure_mask_layout %mask_b32
+        : !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
+    %mask_granularity = pto.vmi.ensure_mask_granularity %mask_b16
+        : !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+
+    %part0, %part1 = "pto.vmi.unpack"(%layouted)
+        : (!pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>)
+        -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>)
+    %packed = "pto.vmi.pack"(%part0, %part1)
+        : (!pto.vreg<64xf32>, !pto.vreg<64xf32>)
+        -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+
+    %i0 = arith.constant 0 : i32
+    %iv0 = pto.vmi.broadcast %i0 : i32 -> !pto.vmi.vreg<128xi32>
+    %iadd = pto.vmi.addi %iv0, %iv0
+        : !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32> -> !pto.vmi.vreg<128xi32>
+    %icmp = pto.vmi.cmpi "slt", %iv0, %iv0
+        : !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32> -> !pto.vmi.mask<128xpred>
+
+    return %add, %cmp, %sel, %trunc, %merged, %layouted_trunc, %mask_layout,
+        %mask_granularity, %packed, %iadd, %icmp
+        : !pto.vmi.vreg<128xf32>,
+          !pto.vmi.mask<128xpred>,
+          !pto.vmi.vreg<128xf32>,
+          !pto.vmi.vreg<128xf16>,
+          !pto.vmi.vreg<4xf32>,
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xi32>,
+          !pto.vmi.mask<128xpred>
+  }
+}
+
+// CHECK-LABEL: func.func @vmi_op_verifier_basic
+// CHECK: pto.vmi.broadcast
+// CHECK: pto.vmi.addf
+// CHECK: pto.vmi.cmpf
+// CHECK: pto.vmi.vsel
+// CHECK: pto.vmi.extf
+// CHECK: pto.vmi.truncf
+// CHECK: pto.vmi.load
+// CHECK: pto.vmi.group_slot_load
+// CHECK: pto.vmi.group_store
+// CHECK: pto.vmi.store
+// CHECK: pto.vmi.ensure_layout
+// CHECK: pto.vmi.ensure_mask_layout
+// CHECK: pto.vmi.ensure_mask_granularity
+// CHECK: "pto.vmi.unpack"
+// CHECK: "pto.vmi.pack"
+// CHECK: pto.vmi.addi
+// CHECK: pto.vmi.cmpi
