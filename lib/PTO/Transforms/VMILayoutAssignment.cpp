@@ -267,6 +267,30 @@ struct LayoutSolver {
     return VMILayoutAttr::getContiguous(ctx);
   }
 
+  VMILayoutAttr getPreferredDenseStoreLayout(VMIVRegType type) {
+    VMILayoutSupport supports;
+    FailureOr<VMIStoreLayoutFact> fact =
+        supports.getPreferredStoreLayoutFact(type);
+    if (failed(fact))
+      return {};
+    return fact->valueLayout;
+  }
+
+  bool hasDataLayoutSeed(Value value) {
+    unsigned id = addDataValue(value);
+    if (id == ~0u)
+      return false;
+    DataNode &node = dataNodes[find(id)];
+    return static_cast<bool>(node.naturalLayout || node.preferredLayout);
+  }
+
+  FailureOr<VMIMaskedStoreLayoutFact>
+  getPreferredDenseMaskedStoreLayout(VMIVRegType valueType,
+                                     VMIMaskType maskType) {
+    VMILayoutSupport supports;
+    return supports.getPreferredMaskedStoreLayoutFact(valueType, maskType);
+  }
+
   VMILayoutAttr getGroupSlotsLayout(int64_t numGroups) {
     return VMILayoutAttr::getGroupSlots(ctx, numGroups);
   }
@@ -1094,6 +1118,11 @@ struct LayoutSolver {
         return WalkResult::advance();
       }
       if (auto store = dyn_cast<VMIStoreOp>(op)) {
+        auto valueType = cast<VMIVRegType>(store.getValue().getType());
+        if (!hasDataLayoutSeed(store.getValue()))
+          if (VMILayoutAttr layout = getPreferredDenseStoreLayout(valueType))
+            requestDataUse(store.getValueMutable(), layout, /*late=*/false,
+                           DataLayoutSeedPhase::Store);
         return WalkResult::advance();
       }
       if (auto store = dyn_cast<VMIInterleaveStoreOp>(op)) {
@@ -1107,6 +1136,20 @@ struct LayoutSolver {
         return WalkResult::advance();
       }
       if (auto store = dyn_cast<VMIMaskedStoreOp>(op)) {
+        auto valueType = cast<VMIVRegType>(store.getValue().getType());
+        auto maskType = cast<VMIMaskType>(store.getMask().getType());
+        if (!hasDataLayoutSeed(store.getValue())) {
+          FailureOr<VMIMaskedStoreLayoutFact> fact =
+              getPreferredDenseMaskedStoreLayout(valueType, maskType);
+          if (succeeded(fact)) {
+            requestDataUse(store.getValueMutable(), fact->valueLayout,
+                           /*late=*/false,
+                           DataLayoutSeedPhase::Store);
+            if (failed(requestMaskUse(store.getMaskMutable(), fact->maskLayout,
+                                      op, DataLayoutSeedPhase::Store)))
+              return WalkResult::interrupt();
+          }
+        }
         return WalkResult::advance();
       }
       if (auto store = dyn_cast<VMIStrideStoreOp>(op)) {

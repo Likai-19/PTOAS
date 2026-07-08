@@ -472,6 +472,8 @@ static constexpr SupplementalCastLayoutPattern
 struct DenseMemoryLayoutPattern {
   ElementBitsPattern elementBits;
   LayoutPattern layout;
+  ElementCountPattern elementCounts = anyN();
+  bool preferred = false;
 };
 
 static constexpr DenseMemoryLayoutPattern kDenseLoadLayoutPatterns[] = {
@@ -481,6 +483,9 @@ static constexpr DenseMemoryLayoutPattern kDenseLoadLayoutPatterns[] = {
 
 static constexpr DenseMemoryLayoutPattern kDenseStoreLayoutPatterns[] = {
     {bits<8, 16, 32>(), c()},
+    {bits<8>(), ls(4), N<64>(), /*preferred=*/true},
+    {bits<8>(), ls(2), N<128>(), /*preferred=*/true},
+    {bits<16>(), ls(2), N<64>(), /*preferred=*/true},
     {bits<8, 16, 32>(), ls(2)},
     {bits<8>(), ls(4)},
     {bits<8, 16, 32>(), d(2, 1)},
@@ -491,6 +496,8 @@ struct DenseMaskedStoreLayoutPattern {
   ElementBitsPattern elementBits;
   LayoutPattern valueLayout;
   LayoutPattern maskLayout;
+  ElementCountPattern elementCounts = anyN();
+  bool preferred = false;
 };
 
 struct DenseMaskedLoadLayoutPattern {
@@ -503,6 +510,9 @@ struct DenseMaskedLoadLayoutPattern {
 static constexpr DenseMaskedStoreLayoutPattern
     kDenseMaskedStoreLayoutPatterns[] = {
         {bits<8, 16, 32>(), c(), c()},
+        {bits<8>(), ls(4), ls(4), N<64>(), /*preferred=*/true},
+        {bits<8>(), ls(2), ls(2), N<128>(), /*preferred=*/true},
+        {bits<16>(), ls(2), ls(2), N<64>(), /*preferred=*/true},
         {bits<8, 16>(), ls(2), ls(2)},
         {bits<8>(), ls(4), ls(4)},
         {bits<8, 16, 32>(), d(2, 1), d(2, 1)},
@@ -1357,6 +1367,9 @@ VMILayoutSupport::getLoadLayoutFact(VMIVRegType resultType,
     if (!matchesElementBitsPattern(pattern.elementBits,
                                    resultType.getElementType()))
       continue;
+    if (!matchesElementCountPattern(pattern.elementCounts,
+                                    resultType.getElementCount()))
+      continue;
     if (!matchesLayoutPattern(resultType.getContext(), pattern.layout, layout))
       continue;
     return VMILoadLayoutFact{layout};
@@ -1381,12 +1394,46 @@ VMILayoutSupport::getStoreLayoutFact(VMIVRegType valueType,
     if (!matchesElementBitsPattern(pattern.elementBits,
                                    valueType.getElementType()))
       continue;
+    if (!matchesElementCountPattern(pattern.elementCounts,
+                                    valueType.getElementCount()))
+      continue;
     if (!matchesLayoutPattern(valueType.getContext(), pattern.layout, layout))
       continue;
     return VMIStoreLayoutFact{layout};
   }
 
   return fail("value layout does not match a supported dense store table row");
+}
+
+FailureOr<VMIStoreLayoutFact>
+VMILayoutSupport::getPreferredStoreLayoutFact(VMIVRegType valueType,
+                                              std::string *reason) const {
+  auto fail = [&](const Twine &message) -> FailureOr<VMIStoreLayoutFact> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  if (valueType.getLayoutAttr())
+    return getStoreLayoutFact(valueType, reason);
+
+  for (const DenseMemoryLayoutPattern &pattern : kDenseStoreLayoutPatterns) {
+    if (!pattern.preferred)
+      continue;
+    if (!matchesElementBitsPattern(pattern.elementBits,
+                                   valueType.getElementType()))
+      continue;
+    if (!matchesElementCountPattern(pattern.elementCounts,
+                                    valueType.getElementCount()))
+      continue;
+    VMILayoutAttr layout =
+        materializeLayoutPattern(valueType.getContext(), pattern.layout);
+    if (!layout)
+      continue;
+    return VMIStoreLayoutFact{layout};
+  }
+
+  return fail("value type does not match a preferred dense store table row");
 }
 
 FailureOr<VMIMaskedStoreLayoutFact> VMILayoutSupport::getMaskedStoreLayoutFact(
@@ -1406,6 +1453,9 @@ FailureOr<VMIMaskedStoreLayoutFact> VMILayoutSupport::getMaskedStoreLayoutFact(
     if (!matchesElementBitsPattern(pattern.elementBits,
                                    valueType.getElementType()))
       continue;
+    if (!matchesElementCountPattern(pattern.elementCounts,
+                                    valueType.getElementCount()))
+      continue;
     if (!matchesLayoutPattern(valueType.getContext(), pattern.valueLayout,
                               valueLayout))
       continue;
@@ -1416,6 +1466,49 @@ FailureOr<VMIMaskedStoreLayoutFact> VMILayoutSupport::getMaskedStoreLayoutFact(
   }
 
   return fail("value/mask layouts do not match a supported dense masked store "
+              "table row");
+}
+
+FailureOr<VMIMaskedStoreLayoutFact>
+VMILayoutSupport::getPreferredMaskedStoreLayoutFact(
+    VMIVRegType valueType, VMIMaskType maskType, std::string *reason) const {
+  auto fail =
+      [&](const Twine &message) -> FailureOr<VMIMaskedStoreLayoutFact> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  VMILayoutAttr existingValueLayout = valueType.getLayoutAttr();
+  VMILayoutAttr existingMaskLayout = maskType.getLayoutAttr();
+  if (existingValueLayout && existingMaskLayout)
+    return getMaskedStoreLayoutFact(valueType, maskType, reason);
+
+  for (const DenseMaskedStoreLayoutPattern &pattern :
+       kDenseMaskedStoreLayoutPatterns) {
+    if (!pattern.preferred)
+      continue;
+    if (!matchesElementBitsPattern(pattern.elementBits,
+                                   valueType.getElementType()))
+      continue;
+    if (!matchesElementCountPattern(pattern.elementCounts,
+                                    valueType.getElementCount()))
+      continue;
+
+    VMILayoutAttr valueLayout =
+        materializeLayoutPattern(valueType.getContext(), pattern.valueLayout);
+    VMILayoutAttr maskLayout =
+        materializeLayoutPattern(maskType.getContext(), pattern.maskLayout);
+    if (!valueLayout || !maskLayout)
+      continue;
+    if (existingValueLayout && existingValueLayout != valueLayout)
+      continue;
+    if (existingMaskLayout && existingMaskLayout != maskLayout)
+      continue;
+    return VMIMaskedStoreLayoutFact{valueLayout, maskLayout};
+  }
+
+  return fail("value/mask types do not match a preferred dense masked store "
               "table row");
 }
 
