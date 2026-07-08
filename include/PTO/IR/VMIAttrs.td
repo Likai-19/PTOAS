@@ -51,4 +51,64 @@ def VMILayoutAttr : PTO_Attr<"VMILayout", "vmi.layout"> {
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// VMI Predication Mode — [pmode]
+// Controls inactive/predicated-off lane behavior on vector operations.
+//===----------------------------------------------------------------------===//
+
+def VMI_PMode_Merge : I32EnumAttrCase<"Merge", 0, "merge">;
+def VMI_PMode_Zero  : I32EnumAttrCase<"Zero",  1, "zero">;
+def VMIPredicationMode : I32EnumAttr<"PredicationMode",
+    "VMI predication mode: merge (keep old value) or zero (fill with 0)", [
+  VMI_PMode_Merge, VMI_PMode_Zero
+]> {
+  let cppNamespace = "::mlir::pto";
+}
+
+//===----------------------------------------------------------------------===//
+// VMI Distribution Mode — {dist-mode}
+// Controls the data-layout interpretation of load/store operations.
+//===----------------------------------------------------------------------===//
+
+def VMI_DistMode_Continuous : I32EnumAttrCase<"Continuous", 0, "continuous">;
+def VMI_DistMode_Unpack     : I32EnumAttrCase<"Unpack",     1, "unpack">;
+def VMI_DistMode_Dintlv     : I32EnumAttrCase<"Dintlv",     2, "dintlv">;
+def VMI_DistMode_Brc        : I32EnumAttrCase<"Brc",        3, "brc">;
+def VMIDistMode : I32EnumAttr<"DistMode",
+    "VMI distribution mode for load/store", [
+  VMI_DistMode_Continuous, VMI_DistMode_Unpack,
+  VMI_DistMode_Dintlv, VMI_DistMode_Brc
+]> {
+  let cppNamespace = "::mlir::pto";
+}
+
+//===----------------------------------------------------------------------===//
+// VMI Rounding Mode — {rnd=}
+// Controls the rounding direction for narrowing convert operations.
+//===----------------------------------------------------------------------===//
+
+def VMI_Round_RTZ : I32EnumAttrCase<"RTZ", 0, "rtz">;
+def VMI_Round_RNE : I32EnumAttrCase<"RNE", 1, "rne">;
+def VMI_Round_Odd : I32EnumAttrCase<"Odd", 2, "odd">;
+def VMIConvRoundMode : I32EnumAttr<"ConvRoundMode",
+    "VMI rounding mode for narrowing conversions", [
+  VMI_Round_RTZ, VMI_Round_RNE, VMI_Round_Odd
+]> {
+  let cppNamespace = "::mlir::pto";
+}
+
+//===----------------------------------------------------------------------===//
+// VMI Saturation Mode — {sat=}
+// Controls whether narrowing conversions saturate on overflow.
+//===----------------------------------------------------------------------===//
+
+def VMI_Sat_None : I32EnumAttrCase<"None", 0, "none">;
+def VMI_Sat_Sat  : I32EnumAttrCase<"Sat",  1, "sat">;
+def VMISatMode : I32EnumAttr<"SatMode",
+    "VMI saturation mode for narrowing conversions", [
+  VMI_Sat_None, VMI_Sat_Sat
+]> {
+  let cppNamespace = "::mlir::pto";
+}
+
 #endif // MLIR_DIALECT_PTO_IR_VMIATTRS

@@ -1,0 +1,52 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+
+// load→vload, create_mask→pge, group_reduce_addf→vcadd, store→vstore.  group_store kept.
+module {
+  func.func @vmi_layout_assignment_vcadd_group8_multi_consumer(
+      %src: !pto.ptr<f32, ub>,
+      %sum_out: !pto.ptr<f32, ub>,
+      %copy_out: !pto.ptr<f32, ub>,
+      %off: index) {
+    %c1 = arith.constant 1 : index
+    %c256 = arith.constant 256 : index
+    %x = pto.vmi.vload %src[%off] : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
+    %mask = pto.vmi.pge "PAT_VL256" : !pto.vmi.mask<256xpred>
+    %sum = pto.vmi.vcadd %x, %mask {group = 8, reassoc}
+        : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred>
+        -> !pto.vmi.vreg<8xf32>
+    pto.vmi.group_store %sum, %sum_out[%off], %c1 {num_groups = 8}
+        : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
+    pto.vmi.vstore %x, %copy_out[%off]
+        : !pto.vmi.vreg<256xf32>, !pto.ptr<f32, ub>
+    return
+  }
+}
+
+// ASSIGN-LABEL: func.func @vmi_layout_assignment_vcadd_group8_multi_consumer(
+// ASSIGN: pto.vmi.load
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>
+// ASSIGN: pto.vmi.create_mask
+// ASSIGN: pto.vmi.ensure_layout
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+// ASSIGN: pto.vmi.group_reduce_addf
+// ASSIGN-SAME: -> !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+// ASSIGN: pto.vmi.group_store
+// ASSIGN: pto.vmi.store
+// ASSIGN-SAME: !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>, !pto.ptr<f32, ub>
+
+// LOWER-LABEL: func.func @vmi_layout_assignment_vcadd_group8_multi_consumer(
+// LOWER: pto.vlds
+// LOWER: pto.vcgadd
+// LOWER: pto.vsts
+// LOWER-NOT: pto.vmi.
+// LOWER-NOT: !pto.vmi.
+// LOWER-NOT: unrealized_conversion_cast

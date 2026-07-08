@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-gate 2>&1 | FileCheck %s
+
+// E2E gate: vload + vcvt with gate validation.
+
+module {
+  func.func @gate_vload_vcvt_e2e(%src: !pto.ptr<f32, ub>, %off: index)
+      -> !pto.vmi.vreg<128xf16> {
+    %x = pto.vmi.vload %src[%off] {dist_mode = "continuous"}
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
+    %r = pto.vmi.vcvt %x : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
+    return %r : !pto.vmi.vreg<128xf16>
+  }
+}
+
+// CHECK: pto.vmi.load
+// CHECK: pto.vmi.truncf
+// CHECK-NOT: error:

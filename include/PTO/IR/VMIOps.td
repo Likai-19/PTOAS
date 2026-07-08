@@ -42,6 +42,8 @@ def PTO_PhysicalVMIPartTypeConstraint : AnyTypeOf<
 class VMI_Op<string mnemonic, list<Trait> traits = []>
     : PTO_Op<"vmi." # mnemonic, traits>;
 
+//===--- Legacy (old) VMI ops ---===//
+
 def VMIConstantOp : VMI_Op<"constant", [Pure]> {
   let summary = "VMI logical vector constant";
   let arguments = (ins AnyAttr:$value);
@@ -739,4 +741,910 @@ def VMIPackOp : VMI_Op<"pack"> {
   let hasVerifier = 1;
 }
 
+//===--- Unified (new) VMI ops ---===//
+
+def VMIVbrcOp : VMI_Op<"vbrc", [Pure]> {
+  let summary = "VMI broadcast: scalar/1-lane to vector, or group-slot to dense vector";
+  let arguments = (ins AnyType:$value, OptionalAttr<I64Attr>:$group);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$value attr-dict `:` type($value) `->` type($result)";
+}
+
+def VMIVciOp : VMI_Op<"vci", [Pure]> {
+  let summary = "Create a VMI logical index vector from a scalar base";
+  let arguments = (ins
+    AnyTypeOf<[AnyInteger, AnyFloat], "integer/float scalar">:$base,
+    OptionalAttr<StrAttr>:$order
+  );
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$base attr-dict `:` type($base) `->` type($result)";
+}
+
+def VMIPsetOp : VMI_Op<"pset", [Pure]> {
+  let summary = "Create a predicate mask with all lanes active";
+  let description = [{
+    Creates a mask where all lanes are active (set to true).
+    Replacement for the all-active mode of `create_mask`.
+
+    When {group = C} is present, creates a grouped all-active mask
+    (all lanes active within each of the C groups).
+
+    Example:
+    ```
+    %m = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<16>
+    %m2 = pto.vmi.pset "PAT_ALL" {group = 8} : !pto.vmi.mask<256xpred>
+    ```
+  }];
+  let arguments = (ins StrAttr:$pattern, OptionalAttr<I64Attr>:$group);
+  let results = (outs VMI_MaskTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$pattern attr-dict `:` type($result)";
+}
+
+def VMIPgeOp : VMI_Op<"pge", [Pure]> {
+  let summary = "Create a tail predicate mask with the first N logical lanes active";
+  let description = [{
+    Creates a mask where the first N logical lanes are active and the
+    remaining lanes are inactive. Replacement for the tail mode of
+    `create_mask`.
+
+    When {group = C} is present, creates a grouped tail mask where
+    the first N lanes within each of the C groups are active.
+    Replacement for `create_group_mask`.
+
+    Example:
+    ```
+    %m = pto.vmi.pge "PAT_VL16" : !pto.vmi.mask<32>
+    %m2 = pto.vmi.pge "PAT_VL25" {group = 8} : !pto.vmi.mask<256xpred>
+    ```
+  }];
+  let arguments = (ins StrAttr:$pattern, OptionalAttr<I64Attr>:$group);
+  let results = (outs VMI_MaskTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$pattern attr-dict `:` type($result)";
+}
+
+def VMIPltOp : VMI_Op<"plt", [Pure]> {
+  let summary = "Data-dependent tail mask from scalar remainder";
+  let description = [{
+    Creates a mask where the first min(rem, L) lanes are active
+    and returns the remainder for the next chunk.
+
+    The mask granularity (b8/b16/b32) is inferred from the result type.
+    Chaining:
+
+    ```
+    %m1, %next1 = pto.vmi.plt %rem : i32 -> !pto.vmi.mask<128>, i32
+    %m2, %next2 = pto.vmi.plt %next1 : i32 -> !pto.vmi.mask<128>, i32
+    ```
+
+    Example:
+    ```
+    // 250 elements across 128-lane chunks
+    // Round 1: rem=250 → mask all-active (clamped to 128), next=122
+    // Round 2: rem=122 → mask VL122, next=0
+    %m1, %n1 = pto.vmi.plt %rem : i32 -> !pto.vmi.mask<128>, i32
+    %m2, %n2 = pto.vmi.plt %n1  : i32 -> !pto.vmi.mask<128>, i32
+    ```
+  }];
+  let arguments = (ins I32:$scalar);
+  let results = (outs VMI_MaskTypeConstraint:$mask, I32:$scalar_out);
+  let hasVerifier = 1;
+  let assemblyFormat = "$scalar attr-dict `:` type($scalar) `->` type($mask) `,` type($scalar_out)";
+}
+
+def VMIVaddOp : VMI_Op<"vadd", [Pure]> {
+  let summary = "VMI elementwise add (unified fp/int)";
+  let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$lhs `,` $rhs (`,` $mask^)? attr-dict `:` type($lhs) `,` type($rhs) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVsubOp : VMI_Op<"vsub", [Pure]> {
+  let summary = "VMI elementwise subtract (unified fp/int)";
+  let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$lhs `,` $rhs (`,` $mask^)? attr-dict `:` type($lhs) `,` type($rhs) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVmulOp : VMI_Op<"vmul", [Pure]> {
+  let summary = "VMI elementwise multiply (unified fp/int)";
+  let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$lhs `,` $rhs (`,` $mask^)? attr-dict `:` type($lhs) `,` type($rhs) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVdivOp : VMI_Op<"vdiv", [Pure]> {
+  let summary = "VMI elementwise divide";
+  let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$lhs `,` $rhs (`,` $mask^)? attr-dict `:` type($lhs) `,` type($rhs) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVminOp : VMI_Op<"vmin", [Pure]> {
+  let summary = "VMI elementwise minimum";
+  let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$lhs `,` $rhs (`,` $mask^)? attr-dict `:` type($lhs) `,` type($rhs) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVmaxOp : VMI_Op<"vmax", [Pure]> {
+  let summary = "VMI elementwise maximum";
+  let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$lhs `,` $rhs (`,` $mask^)? attr-dict `:` type($lhs) `,` type($rhs) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVnegOp : VMI_Op<"vneg", [Pure]> {
+  let summary = "VMI elementwise negate";
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source (`,` $mask^)? attr-dict `:` type($source) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVabsOp : VMI_Op<"vabs", [Pure]> {
+  let summary = "VMI elementwise absolute value (float/int unified)";
+  let description = [{
+    Computes the elementwise absolute value of a logical vector.
+    Supports both floating-point and integer element types.
+
+    pmode governs inactive-lane behavior:
+    - "merge" (default): inactive lanes pass through the source value.
+    - "zero": inactive lanes are zeroed.
+
+    Example:
+    ```
+    %r = pto.vmi.vabs %v, %m {pmode = "zero"}
+      : !pto.vmi.vreg<128xi32>, !pto.vmi.mask<128xpred> -> !pto.vmi.vreg<128xi32>
+    ```
+  }];
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$source,
+    Variadic<VMI_MaskTypeConstraint>:$mask,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source (`,` $mask^)? attr-dict `:` type($source) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVsqrtOp : VMI_Op<"vsqrt", [Pure]> {
+  let summary = "VMI elementwise square root";
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source (`,` $mask^)? attr-dict `:` type($source) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVexpOp : VMI_Op<"vexp", [Pure]> {
+  let summary = "VMI elementwise exponential";
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source (`,` $mask^)? attr-dict `:` type($source) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVlnOp : VMI_Op<"vln", [Pure]> {
+  let summary = "VMI elementwise natural logarithm";
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source (`,` $mask^)? attr-dict `:` type($source) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVreluOp : VMI_Op<"vrelu", [Pure]> {
+  let summary = "VMI elementwise ReLU";
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source (`,` $mask^)? attr-dict `:` type($source) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVandOp : VMI_Op<"vand", [Pure]> {
+  let summary = "VMI elementwise bitwise and";
+  let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$lhs `,` $rhs (`,` $mask^)? attr-dict `:` type($lhs) `,` type($rhs) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVorOp : VMI_Op<"vor", [Pure]> {
+  let summary = "VMI elementwise bitwise or";
+  let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$lhs `,` $rhs (`,` $mask^)? attr-dict `:` type($lhs) `,` type($rhs) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVxorOp : VMI_Op<"vxor", [Pure]> {
+  let summary = "VMI elementwise bitwise xor";
+  let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$lhs `,` $rhs (`,` $mask^)? attr-dict `:` type($lhs) `,` type($rhs) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVshlOp : VMI_Op<"vshl", [Pure]> {
+  let summary = "VMI elementwise left shift";
+  let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$lhs `,` $rhs (`,` $mask^)? attr-dict `:` type($lhs) `,` type($rhs) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVshrOp : VMI_Op<"vshr", [Pure]> {
+  let summary = "VMI unsigned elementwise right shift";
+  let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$lhs `,` $rhs (`,` $mask^)? attr-dict `:` type($lhs) `,` type($rhs) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVnotOp : VMI_Op<"vnot", [Pure]> {
+  let summary = "VMI elementwise bitwise not";
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                       Variadic<VMI_MaskTypeConstraint>:$mask,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source (`,` $mask^)? attr-dict `:` type($source) (`,` type($mask)^)? `->` type($result)";
+}
+
+def VMIVcmpOp : VMI_Op<"vcmp", [Pure]> {
+  let summary = "VMI elementwise compare (fp/int unified) → predicate mask";
+  let description = [{
+    Compares two logical vector registers elementwise and produces a predicate
+    mask. The comparison mode is given by the `cmp` attribute. The `seed`
+    operand provides the governing predicate Pg: where seed[i]=0 the result
+    lane is zero (pmode="zeroing", default), and where seed[i]=1 the comparison
+    result is written. Supported comparison modes are eq/ne/lt/le/gt/ge, FP
+    ordered forms oeq/one/olt/ole/ogt/oge, and signed integer forms
+    slt/sle/sgt/sge.
+
+    Example:
+    ```
+    %r = pto.vmi.vcmp %a, %b, %seed {cmp = "lt"}
+      : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xb32>
+      -> !pto.vmi.mask<128xb32>
+    ```
+  }];
+
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$lhs,
+    VMI_VRegTypeConstraint:$rhs,
+    VMI_MaskTypeConstraint:$seed,
+    StrAttr:$cmp,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs VMI_MaskTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $lhs `,` $rhs `,` $seed attr-dict `:` type($lhs) `,` type($rhs) `,` type($seed) `->` type($result)
+  }];
+}
+
+def VMIVcmpsOp : VMI_Op<"vcmps", [Pure]> {
+  let summary = "VMI elementwise vector-scalar compare → predicate mask";
+  let description = [{
+    Compares each lane of a logical vector against a scalar and produces a
+    predicate mask. The scalar type must match the vector element type. The
+    `seed` operand provides the governing predicate Pg.
+
+    Example:
+    ```
+    %r = pto.vmi.vcmps %v, %s, %seed {cmp = "ge"}
+      : !pto.vmi.vreg<64xf16>, f16, !pto.vmi.mask<64xpred>
+      -> !pto.vmi.mask<64xpred>
+    ```
+  }];
+
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$src,
+    AnyType:$scalar,
+    VMI_MaskTypeConstraint:$seed,
+    StrAttr:$cmp,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs VMI_MaskTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $src `,` $scalar `,` $seed attr-dict `:` type($src) `,` type($scalar) `,` type($seed) `->` type($result)
+  }];
+}
+
+class VMI_VecScalarOp<string mnemonic, string summaryText>
+    : VMI_Op<mnemonic, [Pure]> {
+  let summary = summaryText;
+  let description = [{
+    Performs elementwise operation between a logical vector and a scalar.
+    The scalar is implicitly broadcast to all lanes (R6/M2).
+
+    pmode governs inactive-lane behavior on the result:
+    - "merge" (default): inactive lanes pass through the source value.
+    - "zero": inactive lanes are zeroed.
+
+    Example:
+    ```
+    %r = pto.vmi.} # mnemonic # [{ %v, %s, %m {pmode = "merge"}
+      : !pto.vmi.vreg<64xf16>, f16, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<64xf16>
+    ```
+  }];
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$src,
+    AnyType:$scalar,
+    VMI_MaskTypeConstraint:$mask,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $src `,` $scalar `,` $mask attr-dict `:` type($src) `,` type($scalar) `,` type($mask) `->` type($result)
+  }];
+}
+
+def VMIAddSOp : VMI_VecScalarOp<"vadds", "VMI vector-scalar elementwise add">;
+def VMIMulSOp : VMI_VecScalarOp<"vmuls", "VMI vector-scalar elementwise multiply">;
+def VMIMaxSOp : VMI_VecScalarOp<"vmaxs", "VMI vector-scalar elementwise maximum">;
+def VMIMinSOp : VMI_VecScalarOp<"vmins", "VMI vector-scalar elementwise minimum">;
+def VMIShlSOp : VMI_VecScalarOp<"vshls", "VMI vector-scalar elementwise shift left">;
+def VMIShrSOp : VMI_VecScalarOp<"vshrs", "VMI vector-scalar elementwise shift right">;
+
+def VMIvSelOp : VMI_Op<"vsel", [Pure]> {
+  let summary = "VMI elementwise select";
+  let description = [{
+    Per-lane selection driven by a predicate mask.  For each lane i:
+
+      result[i] = mask[i] ? true_value[i] : false_value[i]
+
+    pmode governs inactive-lane behavior on the result:
+    - "merge" (default): inactive lanes retain the false_value element.
+    - "zero": inactive lanes are zeroed.
+
+    Example:
+    ```mlir
+    %r = pto.vmi.vsel %m, %a, %b {pmode = "zero"}
+      : !pto.vmi.mask<256xpred>, !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<256xui16> -> !pto.vmi.vreg<256xui16>
+    ```
+  }];
+  let arguments = (ins VMI_MaskTypeConstraint:$mask, VMI_VRegTypeConstraint:$true_value,
+                       VMI_VRegTypeConstraint:$false_value,
+                       OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$mask `,` $true_value `,` $false_value attr-dict `:` type($mask) `,` type($true_value) `,` type($false_value) `->` type($result)";
+}
+
+def VMIvcaddOp : VMI_Op<"vcadd", [Pure]> {
+  let summary = "VMI add-reduction: sum lanes to a scalar or compact group vector";
+  let description = [{
+    Reduces source lanes by summation, governed by a mask.
+
+    - No init operand: inactive lanes contribute 0 (semantically nil in
+      addition).  Result reaches a single scalar when `group` is absent,
+      or `C` compact scalars when `{group=C}` is specified.
+    - Floating-point sources MUST carry the `reassoc` attribute (hardware
+      vcadd uses pair-wise reassociation).
+    - `pmode` controls inactive-result behaviour: "zero" (default) writes 0;
+      "merge" preserves the destination register's old value.
+  }];
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$source,
+    VMI_MaskTypeConstraint:$mask,
+    OptionalAttr<I64Attr>:$group,
+    OptionalAttr<StrAttr>:$pmode,
+    OptionalAttr<UnitAttr>:$reassoc
+  );
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `,` $mask attr-dict `:` type($source) `,` type($mask) `->` type($result)";
+}
+
+def VMIvcmaxOp : VMI_Op<"vcmax", [Pure]> {
+  let summary = "VMI max-reduction: maximum across lanes to a scalar or compact group vector";
+  let description = [{
+    Reduces source lanes by taking the element-wise maximum, governed by a mask.
+
+    - Inactive lanes are treated as -INF (floating-point) or the type's
+      minimum representable value (integer).
+    - `pmode` controls inactive-result behaviour as for `vcadd`.
+  }];
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$source,
+    VMI_MaskTypeConstraint:$mask,
+    OptionalAttr<I64Attr>:$group,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `,` $mask attr-dict `:` type($source) `,` type($mask) `->` type($result)";
+}
+
+def VMIvcminOp : VMI_Op<"vcmin", [Pure]> {
+  let summary = "VMI min-reduction: minimum across lanes to a scalar or compact group vector";
+  let description = [{
+    Reduces source lanes by taking the element-wise minimum, governed by a mask.
+
+    - Inactive lanes are treated as +INF (floating-point) or the type's
+      maximum representable value (integer).
+    - `pmode` controls inactive-result behaviour as for `vcadd`.
+  }];
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$source,
+    VMI_MaskTypeConstraint:$mask,
+    OptionalAttr<I64Attr>:$group,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `,` $mask attr-dict `:` type($source) `,` type($mask) `->` type($result)";
+}
+
+def VMICvtOp : VMI_Op<"vcvt", [Pure]> {
+  let summary = "VMI unified elementwise type conversion";
+  let description = [{
+    Converts a VMI logical vector from one element type to another.
+    The conversion direction and semantics are derived from the source and result
+    element types:
+
+    - fp → fp, |dst| > |src|:  floating-point widening   (replaces extf)
+    - fp → fp, |dst| < |src|:  floating-point narrowing   (replaces truncf)
+    - fp → int:                 float to signed integer    (replaces fptosi)
+    - int → fp:                 signed integer to float    (replaces sitofp)
+    - int → int, |dst| > |src|: integer extension          (replaces extsi/extui)
+    - int → int, |dst| < |src|: integer truncation         (replaces trunci)
+
+    Attributes:
+    - `rounding`: rounding mode for fp narrowing (A=away-from-zero,
+      H=half-up). Valid only when dst bit-width < src bit-width for fp types.
+    - `saturate`: saturating behavior on overflow ("SAT"). Valid for any
+      narrowing conversion (fp or int).
+    - `sign`: integer extension sign mode ("S"=signed, "U"=unsigned).
+      Required for int→int widening when the source type is signless;
+      optional (checked for consistency) otherwise.
+    - `pmode`: predication mode ("merge" | "zero").
+
+    Example:
+    ```mlir
+    %w = pto.vmi.vcvt %x : !pto.vmi.vreg<64xf16> -> !pto.vmi.vreg<64xf32>
+    %n = pto.vmi.vcvt %y {rounding="H"} : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf16>
+    %z = pto.vmi.vcvt %a {sign="U"} : !pto.vmi.vreg<256xi8> -> !pto.vmi.vreg<256xi16>
+    ```
+  }];
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                   OptionalAttr<StrAttr>:$rounding,
+                   OptionalAttr<StrAttr>:$saturate,
+                   OptionalAttr<StrAttr>:$sign,
+                   OptionalAttr<StrAttr>:$pmode);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
+}
+
+def VMIvLoadOp : VMI_Op<"vload",
+    [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+     AttrSizedOperandSegments]> {
+  let summary = "VMI unified logical vector load";
+  let description = [{
+    Unified vector load.  dist-mode selects the memory-access pattern.
+
+    dist-mode values:
+    - "continuous" (default): contiguous stride-1 load  → 1 result
+    - "dintlv":             deinterleaved dual load      → 2 results (%lo, %hi)
+    - "unpack":             widening unpack load         → 1 result
+    - "brc":                broadcast load               → 1 result
+
+    group mode (mutually exclusive with dist-mode):
+    - {group = C}: grouped vector load with row stride  → 1 result
+
+    block-stride mode (mutually exclusive with dist-mode and group):
+    - {block_stride = B, repeat_stride = R}: block-strided masked load → 1 result
+
+    pmode ("zero"|"merge") governs inactive-lane behavior on the result.
+    vload itself has no mask operand; A5 loads are not predicable — masks
+    migrate to consumer ops or vstore.
+  }];
+  let arguments = (ins
+    PtrOrMemRef:$source,
+    Index:$offset,
+    Optional<Index>:$stride,
+    Optional<I16>:$block_stride,
+    Optional<I16>:$repeat_stride,
+    OptionalAttr<StrAttr>:$dist_mode,
+    OptionalAttr<I64Attr>:$group,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs Variadic<VMI_VRegTypeConstraint>:$results);
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
+def VMIvStoreOp : VMI_Op<"vstore",
+    [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+     AttrSizedOperandSegments]> {
+  let summary = "VMI unified logical vector store";
+  let description = [{
+    Unified vector store replacing the individual store, interleave_store,
+    masked_store, stride_store, and group_store ops.
+
+    dist-mode controls the memory access pattern:
+    - "continuous" (default): contiguous stride-1 store  → 1 value
+    - "dintlv":             interleaved dual store        → 2 values (%lo, %hi)
+
+    group mode (mutually exclusive with dist-mode):
+    - {group = C}: grouped vector store with row stride
+
+    block-stride mode (mutually exclusive with dist-mode and group):
+    - {block_stride = B, repeat_stride = R}: block-strided masked store
+
+    pmode governs inactive lane behavior:
+    - "zero" (default):  inactive lanes store 0
+    - "merge":           inactive lanes skip write (needs mask)
+
+    mask is variadic: 0 or 1 mask operand.
+  }];
+  let arguments = (ins
+    Variadic<VMI_VRegTypeConstraint>:$values,
+    PtrOrMemRef:$destination,
+    Index:$offset,
+    Optional<Index>:$stride,
+    Optional<I16>:$block_stride,
+    Optional<I16>:$repeat_stride,
+    Variadic<VMI_MaskTypeConstraint>:$mask,
+    OptionalAttr<StrAttr>:$dist_mode,
+    OptionalAttr<I64Attr>:$group,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs);
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
+def VMIVinterpretCastOp : VMI_Op<"vinterpret_cast", [Pure]> {
+  let summary = "VMI bitwise vector reinterpretation";
+  let arguments = (ins VMI_VRegTypeConstraint:$source);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
+}
+
+def VMIVselrOp : VMI_Op<"vselr", [Pure]> {
+  let summary = "VMI dynamic lane select";
+  let description = [{
+    Dynamic lane permutation: for each lane i, result[i] = source[index[i]].
+    Replaces the static-index `shuffle` op with a dynamic index vector operand.
+    Lowers 1:1 to `pto.vselr` at the VPTO level.
+
+    Example:
+    ```
+    %r = pto.vmi.vselr %src, %idx : !pto.vmi.vreg<64xf16>, !pto.vmi.vreg<4xi16> -> !pto.vmi.vreg<4xf16>
+    ```
+  }];
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$source,
+    VMI_VRegTypeConstraint:$index
+  );
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $source `,` $index attr-dict `:` type($source) `,` type($index) `->` type($result)
+  }];
+}
+
+def VMIVintlvOp : VMI_Op<"vintlv"> {
+  let summary = "VMI interleave two vectors lane-by-lane (Category A: layout-transparent)";
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$lhs,
+    VMI_VRegTypeConstraint:$rhs,
+    VMI_MaskTypeConstraint:$mask,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs
+    VMI_VRegTypeConstraint:$low,
+    VMI_VRegTypeConstraint:$high
+  );
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $lhs `,` $rhs `,` $mask attr-dict `:` type($lhs) `,` type($rhs) `,` type($mask) `->` type($low) `,` type($high)
+  }];
+}
+
+def VMIVdintlvOp : VMI_Op<"vdintlv"> {
+  let summary = "VMI deinterleave two vectors by even/odd lanes (Category A: layout-transparent)";
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$lhs,
+    VMI_VRegTypeConstraint:$rhs,
+    VMI_MaskTypeConstraint:$mask,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs
+    VMI_VRegTypeConstraint:$low,
+    VMI_VRegTypeConstraint:$high
+  );
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $lhs `,` $rhs `,` $mask attr-dict `:` type($lhs) `,` type($rhs) `,` type($mask) `->` type($low) `,` type($high)
+  }];
+}
+
+def VMIHistV2Op : VMI_Op<"vhist"> {
+  let summary = "VMI histogram bin count (chistv2)";
+  let description = [{
+    Counts per-bin occurrences over an index vector, producing a half-axis
+    Bin_N0 / Bin_N1 pair accessible through the result's width axis.
+
+    pmode controls inactive-lane behavior:
+    - "zero" (default): inactive lanes contribute 0 to the count.
+    - "merge": inactive lanes preserve the prior accumulator value.
+
+    Example:
+    ```
+    %h = pto.vmi.vhist %bin_idx, %mask
+      : !pto.vmi.vreg<256xi8>, !pto.vmi.mask<256> -> !pto.vmi.vreg<256xi16>
+    ```
+  }];
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$bin_idx,
+    VMI_MaskTypeConstraint:$mask,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$bin_idx `,` $mask attr-dict `:` type($bin_idx) `,` type($mask) `->` type($result)";
+}
+
+def VMIVgatherOp : VMI_Op<"vgather", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "VMI logical masked indexed gather (B32 granularity)";
+  let description = [{
+    Gathers elements from UB memory using an index vector.
+    Inactive lanes are controlled by pmode (no explicit passthru operand).
+
+    pmode controls inactive-lane behavior:
+    - "zero" (default): inactive lanes are zeroed.
+    - "merge": inactive lanes preserve the prior destination value.
+
+    Example:
+    ```
+    %g = pto.vmi.vgather %src, %offsets, %mask
+      : !pto.ptr<f32, ub>, !pto.vmi.vreg<64xi32>, !pto.vmi.mask<64> -> !pto.vmi.vreg<64xf32>
+    ```
+  }];
+  let arguments = (ins
+    PtrOrMemRef:$source,
+    VMI_VRegTypeConstraint:$offsets,
+    VMI_MaskTypeConstraint:$mask,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `,` $offsets `,` $mask attr-dict `:` type($source) `,` type($offsets) `,` type($mask) `->` type($result)";
+}
+
+def VMIVgatherbOp : VMI_Op<"vgatherb", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "VMI logical masked byte-granularity indexed gather";
+  let description = [{
+    Gathers elements from UB memory using byte-offset indices.
+    Mask lane count equals result lane count (may differ from offset lane count).
+
+    Example:
+    ```
+    %gb = pto.vmi.vgatherb %src, %offsets, %mask
+      : !pto.ptr<i32, ub>, !pto.vmi.vreg<64xi32>, !pto.vmi.mask<256> -> !pto.vmi.vreg<256xi32>
+    ```
+  }];
+  let arguments = (ins
+    PtrOrMemRef:$source,
+    VMI_VRegTypeConstraint:$offsets,
+    VMI_MaskTypeConstraint:$mask,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `,` $offsets `,` $mask attr-dict `:` type($source) `,` type($offsets) `,` type($mask) `->` type($result)";
+}
+
+def VMIVscatterOp : VMI_Op<"vscatter", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "VMI logical masked indexed scatter";
+  let description = [{
+    Scatters elements to UB memory using an index vector.
+    Inactive lanes are controlled by pmode.
+
+    Example:
+    ```
+    pto.vmi.vscatter %v, %dest, %offsets, %mask
+      : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.vmi.vreg<64xi32>, !pto.vmi.mask<64>
+    ```
+  }];
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$value,
+    PtrOrMemRef:$destination,
+    VMI_VRegTypeConstraint:$offsets,
+    VMI_MaskTypeConstraint:$mask,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs);
+  let hasVerifier = 1;
+  let assemblyFormat = "$value `,` $destination `,` $offsets `,` $mask attr-dict `:` type($value) `,` type($destination) `,` type($offsets) `,` type($mask)";
+}
+
+def VMIVexpdifOp : VMI_Op<"vexpdif", [Pure]> {
+  let summary = "VMI fused exp(x - max) for softmax numerical stability";
+  let description = [{
+    Computes exp(x - max) in a single hardware instruction.
+    x may be f16 or f32; max and result are always f32 (hardware constraint).
+
+    Example:
+    ```
+    %e = pto.vmi.vexpdif %x, %max, %mask
+      : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64> -> !pto.vmi.vreg<64xf32>
+    ```
+  }];
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$x,
+    VMI_VRegTypeConstraint:$max,
+    VMI_MaskTypeConstraint:$mask,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$x `,` $max `,` $mask attr-dict `:` type($x) `,` type($max) `,` type($mask) `->` type($result)";
+}
+
+def VMIVaxpyOp : VMI_Op<"vaxpy", [Pure]> {
+  let summary = "VMI fused alpha*x + y (scale-add)";
+  let description = [{
+    Computes y = alpha * x + y in a single hardware instruction.
+
+    Example:
+    ```
+    %y = pto.vmi.vaxpy %x, %acc, %alpha, %mask
+      : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64> -> !pto.vmi.vreg<64xf32>
+    ```
+  }];
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$x,
+    VMI_VRegTypeConstraint:$acc,
+    AnyTypeOf<[AnyFloat]>:$alpha,
+    VMI_MaskTypeConstraint:$mask,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+}
+
+def VMIVlreluOp : VMI_Op<"vlrelu", [Pure]> {
+  let summary = "VMI leaky ReLU activation";
+  let description = [{
+    Computes y = x > 0 ? x : slope * x using a single hardware instruction.
+    The slope is a scalar shared across all lanes.
+
+    Example:
+    ```
+    %lr = pto.vmi.vlrelu %x, %slope, %mask
+      : !pto.vmi.vreg<64xf32>, f32, !pto.vmi.mask<64> -> !pto.vmi.vreg<64xf32>
+    ```
+  }];
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$x,
+    AnyTypeOf<[AnyFloat]>:$slope,
+    VMI_MaskTypeConstraint:$mask,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+}
+
+def VMIVpreluOp : VMI_Op<"vprelu", [Pure]> {
+  let summary = "VMI parametric ReLU activation";
+  let description = [{
+    Computes y = max(x, 0) + alpha * min(x, 0) where alpha is a per-lane
+    parameter vector (not a shared scalar).
+
+    Example:
+    ```
+    %pr = pto.vmi.vprelu %x, %alpha, %mask
+      : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64> -> !pto.vmi.vreg<64xf32>
+    ```
+  }];
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$x,
+    VMI_VRegTypeConstraint:$alpha,
+    VMI_MaskTypeConstraint:$mask,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$x `,` $alpha `,` $mask attr-dict `:` type($x) `,` type($alpha) `,` type($mask) `->` type($result)";
+}
+
+def VMIVmullOp : VMI_Op<"vmull", [Pure]> {
+  let summary = "VMI widening 32x32->64 multiply";
+  let description = [{
+    Computes per-lane 32-bit x 32-bit -> 64-bit product.
+    The result occupies two physical registers (hi + lo) accessed through
+    a virtual width axis.
+
+    Example:
+    ```
+    %res = pto.vmi.vmull %a, %b, %mask
+      : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>, !pto.vmi.mask<64> -> !pto.vmi.vreg<64xi64>
+    ```
+  }];
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$a,
+    VMI_VRegTypeConstraint:$b,
+    VMI_MaskTypeConstraint:$mask,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$a `,` $b `,` $mask attr-dict `:` type($a) `,` type($b) `,` type($mask) `->` type($result)";
+}
+
+def VMIVmulaOp : VMI_Op<"vmula", [Pure]> {
+  let summary = "VMI fused multiply-add (acc = acc + lhs * rhs)";
+  let description = [{
+    Computes acc = acc + lhs * rhs in a single hardware instruction.
+    The accumulator operand comes first to match hardware FMA semantics.
+
+    Supports both floating-point (f16/bf16/f32) and integer (i8-i32) types.
+
+    Example:
+    ```
+    %acc1 = pto.vmi.vmula %acc, %a, %b, %mask
+      : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64>
+        -> !pto.vmi.vreg<64xf32>
+    ```
+  }];
+  let arguments = (ins
+    VMI_VRegTypeConstraint:$acc,
+    VMI_VRegTypeConstraint:$lhs,
+    VMI_VRegTypeConstraint:$rhs,
+    VMI_MaskTypeConstraint:$mask,
+    OptionalAttr<StrAttr>:$pmode
+  );
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$acc `,` $lhs `,` $rhs `,` $mask attr-dict `:` type($acc) `,` type($lhs) `,` type($rhs) `,` type($mask) `->` type($result)";
+}
 #endif // MLIR_DIALECT_PTO_IR_VMIOPS

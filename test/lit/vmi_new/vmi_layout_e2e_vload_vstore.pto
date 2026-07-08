@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
+
+// E2E layout: vload + vstore continuous f16→f32 via vcvt.
+
+module {
+  func.func @vload_vcvt_vstore_e2e(
+      %src: !pto.ptr<f16, ub>, %dst: !pto.ptr<f32, ub>, %off: index) {
+    %x16 = pto.vmi.vload %src[%off] {dist_mode = "continuous"}
+        : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
+    %x32 = pto.vmi.vcvt %x16
+        : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
+    pto.vmi.vstore %x32, %dst[%off] {dist_mode = "continuous"}
+        : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @vload_vcvt_vstore_e2e
+// CHECK: pto.vlds
+// CHECK: pto.vcvt
+// CHECK: pto.vsts
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

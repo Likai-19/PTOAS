@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-assignment -vmi-to-vpto 2>&1 | FileCheck %s
+
+// 96xf32 with group=8 → 12 lanes per group (not a supported BlockLane multiple).
+// group_store kept (no new equivalent).
+module {
+  func.func @vmi_layout_assignment_vcadd_group_s12_invalid(
+      %source: !pto.vmi.vreg<96xf32>,
+      %mask: !pto.vmi.mask<96xpred>,
+      %dst: !pto.ptr<f32, ub>,
+      %off: index) {
+    %c1 = arith.constant 1 : index
+    %sum = pto.vmi.vcadd %source, %mask
+        {group = 8, reassoc}
+        : !pto.vmi.vreg<96xf32>, !pto.vmi.mask<96xpred>
+        -> !pto.vmi.vreg<8xf32>
+    pto.vmi.group_store %sum, %dst[%off], %c1 {num_groups = 8}
+        : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
+    return
+  }
+}
+
+// CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.group_reduce_addf has no registered group_slots layout support
+// CHECK-SAME: stable group_reduce_add slots=8 support group sizes VLaneElems, 2*VLaneElems, or 4*VLaneElems
+// CHECK-SAME: VMI types: operand#0=!pto.vmi.vreg<96xf32, #pto.vmi.layout<contiguous>>

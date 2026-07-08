@@ -1,0 +1,61 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
+
+// vload {dist_mode = "dintlv"} multichunk tests:
+//  - 256-lane f32 (deint2, 2 physical chunks per result)
+//  - 512-lane f32 (deint4, 4 physical chunks per result) — ported from vmi/vmi_to_vpto_load_deint_multichunk.pto
+
+module {
+  // CHECK-LABEL: func.func @vload_dintlv_multichunk_deint2
+  func.func @vload_dintlv_multichunk_deint2(
+      %src: !pto.ptr<f32, ub>, %offset: index)
+      -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>) {
+    %lo0, %hi0, %lo1, %hi1 = pto.vmi.vload %src[%offset] {dist_mode = "dintlv"}
+        : !pto.ptr<f32, ub>
+        -> !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
+    %p0, %p1 = "pto.vmi.unpack"(%lo0)
+        : (!pto.vmi.vreg<128xf32>) -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>)
+    %p2, %p3 = "pto.vmi.unpack"(%hi0)
+        : (!pto.vmi.vreg<128xf32>) -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>)
+    return %p0, %p1, %p2, %p3
+        : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>
+  }
+
+  // CHECK-LABEL: func.func @vload_dintlv_multichunk_deint4
+  // deint4 with 512 lanes → vdintlv reordering expected (port of load_deint4_multichunk)
+  func.func @vload_dintlv_multichunk_deint4(
+      %src: !pto.ptr<f32, ub>, %offset: index)
+      -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>,
+          !pto.vreg<64xf32>, !pto.vreg<64xf32>,
+          !pto.vreg<64xf32>, !pto.vreg<64xf32>,
+          !pto.vreg<64xf32>, !pto.vreg<64xf32>) {
+    %lo0, %hi0, %lo1, %hi1 = pto.vmi.vload %src[%offset] {dist_mode = "dintlv"}
+        : !pto.ptr<f32, ub>
+        -> !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
+    %p0_0, %p0_1, %p0_2, %p0_3 = "pto.vmi.unpack"(%lo0)
+        : (!pto.vmi.vreg<256xf32>)
+        -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>)
+    %p1_0, %p1_1, %p1_2, %p1_3 = "pto.vmi.unpack"(%hi0)
+        : (!pto.vmi.vreg<256xf32>)
+        -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>)
+    return %p0_0, %p0_1, %p0_2, %p0_3, %p1_0, %p1_1, %p1_2, %p1_3
+        : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>,
+          !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>
+  }
+}
+
+// CHECK-LABEL: func.func @vload_dintlv_multichunk_deint2(
+// CHECK-COUNT-2: pto.vldsx2 %arg0[{{.*}}], "DINTLV_B32"
+
+// CHECK-LABEL: func.func @vload_dintlv_multichunk_deint4(
+// CHECK: pto.vdintlv
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

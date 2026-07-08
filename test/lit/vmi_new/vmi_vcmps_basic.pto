@@ -1,0 +1,54 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
+
+module {
+  // CHECK-LABEL: func.func @vcmps_f16_ge
+  func.func @vcmps_f16_ge(
+      %v: !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous>>,
+      %seed: !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous>>)
+      -> !pto.mask<b16> {
+    %s = arith.constant 0.0 : f16
+    %mask = pto.vmi.vcmps %v, %s, %seed {cmp = "ge"}
+        : !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous>>,
+          f16,
+          !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous>>
+    %m = "pto.vmi.unpack"(%mask)
+        : (!pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous>>)
+        -> !pto.mask<b16>
+    return %m : !pto.mask<b16>
+  }
+  // CHECK: pto.vcmps {{.*}}, {{.*}}, {{.*}}, "ge"
+  // CHECK-SAME: !pto.vreg<128xf16>, f16, !pto.mask<b16> -> !pto.mask<b16>
+
+  // CHECK-LABEL: func.func @vcmps_i32_eq_deintlv
+  func.func @vcmps_i32_eq_deintlv(
+      %v: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+      %seed: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>)
+      -> (!pto.mask<b32>, !pto.mask<b32>) {
+    %s = arith.constant 42 : i32
+    %mask = pto.vmi.vcmps %v, %s, %seed {cmp = "eq"}
+        : !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          i32,
+          !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
+    %m0, %m1 = "pto.vmi.unpack"(%mask)
+        : (!pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>)
+        -> (!pto.mask<b32>, !pto.mask<b32>)
+    return %m0, %m1 : !pto.mask<b32>, !pto.mask<b32>
+  }
+  // CHECK: pto.vcmps {{.*}}, {{.*}}, {{.*}}, "eq"
+  // CHECK-SAME: !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.mask<b32>
+  // CHECK: pto.vcmps {{.*}}, {{.*}}, {{.*}}, "eq"
+  // CHECK-SAME: !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.mask<b32>
+
+  // CHECK-NOT: pto.vmi.
+  // CHECK-NOT: !pto.vmi.
+}

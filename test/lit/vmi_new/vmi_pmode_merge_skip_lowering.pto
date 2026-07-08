@@ -1,0 +1,27 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy | FileCheck %s
+
+// Cross-feature: pmode="merge" ops must be SKIPPED by two-stage lowering.
+// They stay as unified ops and go directly to VPTO lowering.
+
+module {
+  // CHECK-LABEL: func.func @vadd_merge_stays_unified
+  // CHECK: pto.vmi.vadd
+  // CHECK-SAME: pmode = "merge"
+  func.func @vadd_merge_stays_unified(
+      %a: !pto.vmi.vreg<64xf32>,
+      %b: !pto.vmi.vreg<64xf32>,
+      %mask: !pto.vmi.mask<64xpred>)
+      -> !pto.vmi.vreg<64xf32> {
+    %r = pto.vmi.vadd %a, %b, %mask {pmode = "merge"}
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<64xf32>
+    return %r : !pto.vmi.vreg<64xf32>
+  }
+}

@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not pto-test-opt %s 2>&1 | FileCheck %s
+
+module {
+  // plt with non-i32 scalar input: ODS operand constraint rejects i64
+  func.func @vmi_plt_non_i32_scalar_invalid(%rem: i64) {
+    %mask, %next = pto.vmi.plt %rem
+        : i64 -> !pto.vmi.mask<128 x pred>, i64
+    return
+  }
+}
+
+// CHECK: must be 32-bit signless integer
