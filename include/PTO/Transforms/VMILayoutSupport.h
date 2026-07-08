@@ -156,9 +156,18 @@ public:
   getStoreLayoutFact(VMIVRegType valueType,
                      std::string *reason = nullptr) const;
 
+  FailureOr<VMIStoreLayoutFact>
+  getPreferredStoreLayoutFact(VMIVRegType valueType,
+                              std::string *reason = nullptr) const;
+
   FailureOr<VMIMaskedStoreLayoutFact>
   getMaskedStoreLayoutFact(VMIVRegType valueType, VMIMaskType maskType,
                            std::string *reason = nullptr) const;
+
+  FailureOr<VMIMaskedStoreLayoutFact>
+  getPreferredMaskedStoreLayoutFact(VMIVRegType valueType,
+                                    VMIMaskType maskType,
+                                    std::string *reason = nullptr) const;
 
   FailureOr<VMIMaskedLoadLayoutFact>
   getMaskedLoadLayoutFact(VMIVRegType resultType, VMIMaskType maskType,
