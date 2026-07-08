@@ -1,0 +1,50 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
+
+module {
+  func.func @vmi_to_vpto_bf16_arith(
+      %lhs: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>,
+      %rhs: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>)
+      -> (!pto.vreg<128xbf16>, !pto.vreg<128xbf16>, !pto.vreg<128xbf16>) {
+    %sum = pto.vmi.addf %lhs, %rhs
+        : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+    %min = pto.vmi.vmin %lhs, %rhs
+        : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+    %max = pto.vmi.vmax %lhs, %rhs
+        : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+    %sum_part = "pto.vmi.unpack"(%sum)
+        : (!pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>)
+        -> !pto.vreg<128xbf16>
+    %min_part = "pto.vmi.unpack"(%min)
+        : (!pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>)
+        -> !pto.vreg<128xbf16>
+    %max_part = "pto.vmi.unpack"(%max)
+        : (!pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>)
+        -> !pto.vreg<128xbf16>
+    return %sum_part, %min_part, %max_part
+        : !pto.vreg<128xbf16>, !pto.vreg<128xbf16>, !pto.vreg<128xbf16>
+  }
+}
+
+// CHECK-LABEL: func.func @vmi_to_vpto_bf16_arith(
+// CHECK: %[[MASK:.*]] = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+// CHECK: %[[ADD:.*]] = pto.vadd %arg0, %arg1, %[[MASK]] : !pto.vreg<128xbf16>, !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<128xbf16>
+// CHECK: %[[MIN:.*]] = pto.vmin %arg0, %arg1, %{{.*}} : !pto.vreg<128xbf16>, !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<128xbf16>
+// CHECK: %[[MAX:.*]] = pto.vmax %arg0, %arg1, %{{.*}} : !pto.vreg<128xbf16>, !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<128xbf16>
+// CHECK: return %[[ADD]], %[[MIN]], %[[MAX]]
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

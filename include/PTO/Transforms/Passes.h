@@ -122,6 +122,7 @@ std::unique_ptr<Pass> createVMILayoutFoldPass();
 std::unique_ptr<Pass> createVMILayoutRematerializePass();
 std::unique_ptr<Pass> createVMILayoutSinkMaterializationPass();
 std::unique_ptr<Pass> createVMILegalizeArithSelectPass();
+std::unique_ptr<Pass> createVMILowerUnifiedToLegacyPass();
 std::unique_ptr<Pass> createVMIToVPTOPass();
 std::unique_ptr<Pass> createExpandTileOpPass();
 std::unique_ptr<Pass> createExpandTileOpPass(const ExpandTileOpOptions &options);

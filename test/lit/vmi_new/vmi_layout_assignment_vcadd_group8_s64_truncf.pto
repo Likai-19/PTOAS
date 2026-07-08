@@ -1,0 +1,47 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+
+// group_reduce_addf→vcadd, truncf→vcvt (fp narrowing).  group_store kept.
+module {
+  func.func @vmi_layout_assignment_vcadd_group8_s64_truncf(
+      %source: !pto.vmi.vreg<512xf32>,
+      %mask: !pto.vmi.mask<512xpred>,
+      %dst: !pto.ptr<f16, ub>,
+      %off: index) {
+    %c16 = arith.constant 16 : index
+    %sum32 = pto.vmi.vcadd %source, %mask {group = 8, reassoc}
+        : !pto.vmi.vreg<512xf32>, !pto.vmi.mask<512xpred>
+        -> !pto.vmi.vreg<8xf32>
+    %sum16 = pto.vmi.vcvt %sum32
+        : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xf16>
+    pto.vmi.group_store %sum16, %dst[%off], %c16 {num_groups = 8}
+        : !pto.vmi.vreg<8xf16>, !pto.ptr<f16, ub>
+    return
+  }
+}
+
+// ASSIGN-LABEL: func.func @vmi_layout_assignment_vcadd_group8_s64_truncf(
+// ASSIGN-SAME: %arg0: !pto.vmi.vreg<512xf32, #pto.vmi.layout<contiguous>>
+// ASSIGN-SAME: %arg1: !pto.vmi.mask<512xb32, #pto.vmi.layout<contiguous>>
+// ASSIGN: pto.vmi.group_reduce_addf %arg0, %arg1
+// ASSIGN-SAME: -> !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
+// ASSIGN: pto.vmi.truncf
+// ASSIGN-SAME: -> !pto.vmi.vreg<8xf16, #pto.vmi.layout<num_groups = 8, slots = 1>>
+// ASSIGN: pto.vmi.group_store
+// ASSIGN-SAME: !pto.vmi.vreg<8xf16, #pto.vmi.layout<num_groups = 8, slots = 1>>, !pto.ptr<f16
+
+// LOWER-LABEL: func.func @vmi_layout_assignment_vcadd_group8_s64_truncf(
+// LOWER: pto.vcgadd
+// LOWER: pto.vcvt
+// LOWER: pto.vsts
+// LOWER-NOT: pto.vmi.
+// LOWER-NOT: !pto.vmi.
+// LOWER-NOT: unrealized_conversion_cast

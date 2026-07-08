@@ -1,0 +1,65 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-assignment -vmi-layout-rematerialize -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+
+// load→vload, create_mask→pge, group_reduce_addf→vcadd.  group_store kept.
+module {
+  func.func @vmi_layout_assignment_vcadd_group_s32_tail_full_tile(
+      %src: memref<256xf32>, %dst: !pto.ptr<f32, ub>, %off: index) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c192 = arith.constant 192 : index
+    %x = pto.vmi.vload %src[%c0]
+        : memref<256xf32> -> !pto.vmi.vreg<192xf32>
+    %mask = pto.vmi.pge "PAT_VL192" : !pto.vmi.mask<192xpred>
+    %sum = pto.vmi.vcadd %x, %mask {group = 6, reassoc}
+        : !pto.vmi.vreg<192xf32>, !pto.vmi.mask<192xpred>
+        -> !pto.vmi.vreg<6xf32>
+    pto.vmi.group_store %sum, %dst[%off], %c1 {num_groups = 6}
+        : !pto.vmi.vreg<6xf32>, !pto.ptr<f32, ub>
+    return
+  }
+
+  func.func @vmi_layout_assignment_vcadd_group_s32_tail_full_tile_ptr_masked(
+      %src: !pto.ptr<f32, ub>, %dst: !pto.ptr<f32, ub>, %off: index) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c192 = arith.constant 192 : index
+    %x = pto.vmi.vload %src[%c0]
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
+    %mask = pto.vmi.pge "PAT_VL192" : !pto.vmi.mask<256xpred>
+    %sum = pto.vmi.vcadd %x, %mask {group = 8, reassoc}
+        : !pto.vmi.vreg<256xf32>, !pto.vmi.mask<256xpred>
+        -> !pto.vmi.vreg<8xf32>
+    pto.vmi.group_store %sum, %dst[%off], %c1 {num_groups = 8}
+        : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
+    return
+  }
+}
+
+// ASSIGN-LABEL: func.func @vmi_layout_assignment_vcadd_group_s32_tail_full_tile(
+// ASSIGN: pto.vmi.load
+// ASSIGN-SAME: -> !pto.vmi.vreg<192xf32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+// ASSIGN: pto.vmi.create_mask
+// ASSIGN: pto.vmi.group_reduce_addf
+// ASSIGN-SAME: -> !pto.vmi.vreg<6xf32, #pto.vmi.layout<num_groups = 6, slots = 8>>
+// ASSIGN: pto.vmi.group_store
+
+// ASSIGN-LABEL: func.func @vmi_layout_assignment_vcadd_group_s32_tail_full_tile_ptr_masked(
+// ASSIGN: pto.vmi.load
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+// ASSIGN: pto.vmi.create_mask
+// ASSIGN: pto.vmi.group_reduce_addf
+// ASSIGN-SAME: -> !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+
+// LOWER: pto.vsts
+// LOWER-NOT: pto.vmi.
+// LOWER-NOT: !pto.vmi.
+// LOWER-NOT: unrealized_conversion_cast

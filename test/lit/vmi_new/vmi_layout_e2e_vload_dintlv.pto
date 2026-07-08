@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
+
+// E2E layout: vload deinterleave → vcvt narrow → vstore.
+
+module {
+  func.func @vload_dintlv_vcvt_vstore_e2e(
+      %src: !pto.ptr<f32, ub>, %dst: !pto.ptr<f16, ub>, %off: index) {
+    %lo, %hi = pto.vmi.vload %src[%off] {dist_mode = "dintlv"}
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+    %nlo = pto.vmi.vcvt %lo : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf16>
+    %nhi = pto.vmi.vcvt %hi : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf16>
+    pto.vmi.vstore %nlo, %nhi, %dst[%off] {dist_mode = "dintlv"}
+        : !pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16>, !pto.ptr<f16, ub>
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @vload_dintlv_vcvt_vstore_e2e
+// CHECK: pto.vldsx2
+// CHECK: pto.vcvt
+// CHECK: pto.vsts
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

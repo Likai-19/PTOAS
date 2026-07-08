@@ -1,0 +1,69 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+
+module {
+  func.func @vmi_layout_assignment_widen_dense_vcadd_multi_consumer(
+      %src: !pto.ptr<f16, ub>,
+      %k1: !pto.vmi.vreg<128xf32>,
+      %out0: !pto.ptr<f32, ub>,
+      %out1: !pto.ptr<f32, ub>,
+      %off: index) {
+    %c128 = arith.constant 128 : index
+    %c0 = arith.constant 0 : index
+    %a = pto.vmi.vload %src[%off] {dist_mode = "continuous"}
+        : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
+    %w = pto.vmi.vcvt %a
+        : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
+    %t1 = pto.vmi.vmul %w, %k1
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
+        -> !pto.vmi.vreg<128xf32>
+    %mask = pto.vmi.pge "PAT_VL128" : !pto.vmi.mask<128xpred>
+    %r0 = pto.vmi.vcadd %t1, %mask {reassoc}
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
+        -> !pto.vmi.vreg<1xf32>
+    pto.vmi.vstore %r0, %out0[%c0]
+        : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+    %r = pto.vmi.vcadd %w, %mask {reassoc}
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
+        -> !pto.vmi.vreg<1xf32>
+    pto.vmi.vstore %r, %out1[%c0]
+        : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+    return
+  }
+}
+
+// ASSIGN-LABEL: func.func @vmi_layout_assignment_widen_dense_vcadd_multi_consumer
+// ASSIGN-SAME: %arg1: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+// ASSIGN: %[[MASK:.*]] = pto.vmi.create_mask
+// ASSIGN-SAME: -> !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+// ASSIGN: pto.vmi.ensure_layout
+// ASSIGN: pto.vmi.reduce_addf
+// ASSIGN-SAME: !pto.vmi.vreg<1xf32, #pto.vmi.layout<contiguous>>
+// ASSIGN: pto.vmi.store
+// ASSIGN: pto.vmi.reduce_addf
+// ASSIGN: pto.vmi.store
+
+// LOWER-LABEL: func.func @vmi_layout_assignment_widen_dense_vcadd_multi_consumer
+// LOWER: pto.vlds
+// LOWER: pto.vcvt
+// LOWER: pto.vcvt
+// LOWER: pto.vmul
+// LOWER: pto.vintlv
+// LOWER: pto.vcadd
+// LOWER: pto.vadd
+// LOWER: pto.vsts
+// LOWER: pto.vintlv
+// LOWER: pto.vcadd
+// LOWER: pto.vadd
+// LOWER: pto.vsts
+// LOWER-NOT: pto.vmi.
+// LOWER-NOT: !pto.vmi.
+// LOWER-NOT: unrealized_conversion_cast

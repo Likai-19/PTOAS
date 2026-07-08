@@ -2024,6 +2024,11 @@ static LogicalResult runVMISemanticPipeline(OwningOpRef<ModuleOp> &module) {
 
   PassManager pm(module->getContext());
   pm.enableVerifier();
+  // Expand unified VMI ops to legacy ops before layout assignment,
+  // so downstream passes only see legacy ops.
+  pm.addPass(pto::createVMILowerUnifiedToLegacyPass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(pto::createVMILegalizeArithSelectPass());
   pm.addPass(pto::createPTOValidateVMIIRPass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());

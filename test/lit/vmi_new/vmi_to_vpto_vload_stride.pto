@@ -1,0 +1,34 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
+
+// vload with stride pattern: contiguous layout, lowered via addptr+vsldb.
+// (Stride behavior is handled by layout in the new model.)
+
+module {
+  func.func @vload_contiguous_f8(
+      %src: !pto.ptr<f8E4M3FN, ub>,
+      %offset: index,
+      %mask: !pto.vmi.mask<64xb8, #pto.vmi.layout<contiguous>>)
+      -> !pto.vreg<256xf8E4M3FN> {
+    %r = pto.vmi.vload %src[%offset], %mask {dist_mode = "continuous"}
+        : !pto.ptr<f8E4M3FN, ub>, !pto.vmi.mask<64xb8, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<64xf8E4M3FN, #pto.vmi.layout<contiguous>>
+    %part = "pto.vmi.unpack"(%r)
+        : (!pto.vmi.vreg<64xf8E4M3FN, #pto.vmi.layout<contiguous>>)
+        -> !pto.vreg<256xf8E4M3FN>
+    return %part : !pto.vreg<256xf8E4M3FN>
+  }
+}
+
+// CHECK-LABEL: func.func @vload_contiguous_f8(
+// CHECK: pto.vlds
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

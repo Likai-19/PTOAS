@@ -1,0 +1,84 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
+
+// Category C4: pset (all-active mask) and pge (first-N-lane tail mask).
+// Ported from vmi/vmi_to_vpto_create_mask.pto.
+// pset "PAT_ALL" replaces create_mask with full lane count.
+// pge "PAT_VL<N>" replaces create_mask with partial lane count.
+
+module {
+  func.func @vmi_to_vpto_pset_all()
+      -> (!pto.mask<b32>, !pto.mask<b32>) {
+    %mask = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+    %p0, %p1 = "pto.vmi.unpack"(%mask)
+        : (!pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>)
+        -> (!pto.mask<b32>, !pto.mask<b32>)
+    return %p0, %p1 : !pto.mask<b32>, !pto.mask<b32>
+  }
+
+  func.func @vmi_to_vpto_pge_vl64()
+      -> (!pto.mask<b32>, !pto.mask<b32>) {
+    %mask = pto.vmi.pge "PAT_VL64" : !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+    %p0, %p1 = "pto.vmi.unpack"(%mask)
+        : (!pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>)
+        -> (!pto.mask<b32>, !pto.mask<b32>)
+    return %p0, %p1 : !pto.mask<b32>, !pto.mask<b32>
+  }
+
+  func.func @vmi_to_vpto_pset_b8_all()
+      -> (!pto.mask<b8>, !pto.mask<b8>) {
+    %mask = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<512xb8, #pto.vmi.layout<contiguous>>
+    %p0, %p1 = "pto.vmi.unpack"(%mask)
+        : (!pto.vmi.mask<512xb8, #pto.vmi.layout<contiguous>>)
+        -> (!pto.mask<b8>, !pto.mask<b8>)
+    return %p0, %p1 : !pto.mask<b8>, !pto.mask<b8>
+  }
+
+  func.func @vmi_to_vpto_pge_b16_deint2()
+      -> (!pto.mask<b16>, !pto.mask<b16>) {
+    %mask = pto.vmi.pge "PAT_VL64" : !pto.vmi.mask<256xb16, #pto.vmi.layout<deinterleaved = 2>>
+    %p0, %p1 = "pto.vmi.unpack"(%mask)
+        : (!pto.vmi.mask<256xb16, #pto.vmi.layout<deinterleaved = 2>>)
+        -> (!pto.mask<b16>, !pto.mask<b16>)
+    return %p0, %p1 : !pto.mask<b16>, !pto.mask<b16>
+  }
+}
+
+// CHECK-LABEL: func.func @vmi_to_vpto_pset_all
+// CHECK: %[[M0:.*]] = pto.pge_b32 "PAT_ALL" : !pto.mask<b32>
+// CHECK: %[[M1:.*]] = pto.pge_b32 "PAT_ALL" : !pto.mask<b32>
+// CHECK: return %[[M0]], %[[M1]]
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast
+
+// CHECK-LABEL: func.func @vmi_to_vpto_pge_vl64
+// CHECK: %[[P0:.*]] = pto.pge_b32 "PAT_ALL" : !pto.mask<b32>
+// CHECK: %[[P1:.*]] = pto.pge_b32 "PAT_ALLF" : !pto.mask<b32>
+// CHECK: return %[[P0]], %[[P1]]
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast
+
+// CHECK-LABEL: func.func @vmi_to_vpto_pset_b8_all
+// CHECK: %[[B8_0:.*]] = pto.pge_b8 "PAT_ALL" : !pto.mask<b8>
+// CHECK: %[[B8_1:.*]] = pto.pge_b8 "PAT_ALL" : !pto.mask<b8>
+// CHECK: return %[[B8_0]], %[[B8_1]]
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast
+
+// CHECK-LABEL: func.func @vmi_to_vpto_pge_b16_deint2
+// CHECK: %[[B16_0:.*]] = pto.pge_b16 "PAT_VL32" : !pto.mask<b16>
+// CHECK: %[[B16_1:.*]] = pto.pge_b16 "PAT_VL32" : !pto.mask<b16>
+// CHECK: return %[[B16_0]], %[[B16_1]]
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

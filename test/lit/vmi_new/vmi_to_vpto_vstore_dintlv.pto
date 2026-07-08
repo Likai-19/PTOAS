@@ -1,0 +1,28 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
+
+// vstore {dist_mode = "dintlv"}: interleaved dual store with 2 values.
+
+module {
+  func.func @vstore_dintlv(
+      %src: !pto.ptr<f32, ub>, %offset: index) {
+    %lo = "pto.vmi.pack"() : () -> !pto.vmi.vreg<64xf32>
+    %hi = "pto.vmi.pack"() : () -> !pto.vmi.vreg<64xf32>
+    pto.vmi.vstore %lo, %hi, %src[%offset] {dist_mode = "dintlv"}
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @vstore_dintlv(
+// CHECK: pto.vstsx2 %{{.*}}, %{{.*}}, %arg0[%arg1], "INTLV_B32"
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

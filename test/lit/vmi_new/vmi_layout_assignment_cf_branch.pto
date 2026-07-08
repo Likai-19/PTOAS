@@ -1,0 +1,56 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-layout-assignment | FileCheck %s
+
+module {
+  func.func @vmi_layout_assignment_cf_branch(
+      %cond: i1,
+      %a: !pto.vmi.vreg<128xf16>,
+      %b: !pto.vmi.vreg<128xf16>) {
+    cf.cond_br %cond, ^then(%a : !pto.vmi.vreg<128xf16>),
+        ^else(%b : !pto.vmi.vreg<128xf16>)
+
+  ^then(%then_arg: !pto.vmi.vreg<128xf16>):
+    %then_value = pto.vmi.extf %then_arg
+        : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
+    %then_mask = pto.vmi.cmpf "olt", %then_value, %then_value
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
+        -> !pto.vmi.mask<128xpred>
+    cf.br ^join(%then_value, %then_mask
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>)
+
+  ^else(%else_arg: !pto.vmi.vreg<128xf16>):
+    %else_value = pto.vmi.extf %else_arg
+        : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
+    %else_mask = pto.vmi.cmpf "olt", %else_value, %else_value
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
+        -> !pto.vmi.mask<128xpred>
+    cf.br ^join(%else_value, %else_mask
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>)
+
+  ^join(%value: !pto.vmi.vreg<128xf32>, %mask: !pto.vmi.mask<128xpred>):
+    %selected = pto.vmi.vsel %mask, %value, %value
+        : !pto.vmi.mask<128xpred>, !pto.vmi.vreg<128xf32>,
+          !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @vmi_layout_assignment_cf_branch(
+// CHECK: cf.cond_br
+// CHECK-SAME: !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
+// CHECK: ^{{.*}}(%{{.*}}: !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>):
+// CHECK: pto.vmi.extf
+// CHECK-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+// CHECK: cf.br
+// CHECK-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+// CHECK-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
+// CHECK: ^{{.*}}(%[[VALUE:.*]]: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>, %[[MASK:.*]]: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>):
+// CHECK: pto.vmi.vsel %[[MASK]], %[[VALUE]], %[[VALUE]]
+// CHECK-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>

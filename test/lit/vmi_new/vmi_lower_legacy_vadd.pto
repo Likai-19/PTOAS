@@ -1,0 +1,61 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). Please refer to the License for details. You may not use this
+// file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON AN
+// "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+// FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+// for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy | FileCheck %s
+
+// Two-stage lowering: vmi.vadd → vmi.addf/addi + zero_const + create_mask + select.
+
+module {
+  // CHECK-LABEL: func.func @vadd_f32_no_mask
+  // CHECK: pto.vmi.addf
+  // CHECK: pto.vmi.constant {value = dense<0.000000e+00>
+  // CHECK: pto.vmi.create_mask
+  // CHECK: pto.vmi.select
+  // CHECK-NOT: pto.vmi.vadd
+  func.func @vadd_f32_no_mask(
+      %a: !pto.vmi.vreg<64xf32>,
+      %b: !pto.vmi.vreg<64xf32>)
+      -> !pto.vmi.vreg<64xf32> {
+    %r = pto.vmi.vadd %a, %b
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf32>
+    return %r : !pto.vmi.vreg<64xf32>
+  }
+
+  // CHECK-LABEL: func.func @vadd_i32_no_mask
+  // CHECK: pto.vmi.addi
+  // CHECK: pto.vmi.constant {value = dense<0>
+  // CHECK: pto.vmi.create_mask
+  // CHECK: pto.vmi.select
+  // CHECK-NOT: pto.vmi.vadd
+  func.func @vadd_i32_no_mask(
+      %a: !pto.vmi.vreg<64xi32>,
+      %b: !pto.vmi.vreg<64xi32>)
+      -> !pto.vmi.vreg<64xi32> {
+    %r = pto.vmi.vadd %a, %b
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32> -> !pto.vmi.vreg<64xi32>
+    return %r : !pto.vmi.vreg<64xi32>
+  }
+
+  // CHECK-LABEL: func.func @vadd_f32_with_mask
+  // CHECK: pto.vmi.addf
+  // CHECK: pto.vmi.constant {value = dense<0.000000e+00>
+  // CHECK: pto.vmi.select
+  // CHECK-NOT: pto.vmi.vadd
+  func.func @vadd_f32_with_mask(
+      %a: !pto.vmi.vreg<64xf32>,
+      %b: !pto.vmi.vreg<64xf32>,
+      %mask: !pto.vmi.mask<64xpred>)
+      -> !pto.vmi.vreg<64xf32> {
+    %r = pto.vmi.vadd %a, %b, %mask
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xf32>
+    return %r : !pto.vmi.vreg<64xf32>
+  }
+}

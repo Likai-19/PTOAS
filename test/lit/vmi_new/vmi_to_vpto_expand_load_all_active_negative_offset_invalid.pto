@@ -1,0 +1,35 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not pto-test-opt %s -vmi-to-vpto 2>&1 | FileCheck %s
+
+module {
+  func.func @vmi_to_vpto_expand_load_all_active_negative_offset_invalid(
+      %src: memref<132xf32>,
+      %passthru: !pto.vmi.vreg<100xf32, #pto.vmi.layout<contiguous>>)
+      -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>) {
+    %active = arith.constant 100 : index
+    %offset = arith.constant -1 : index
+    %mask = pto.vmi.create_mask %active
+        : index -> !pto.vmi.mask<100xb32, #pto.vmi.layout<contiguous>>
+    %out = pto.vmi.vexpand_load %src[%offset], %mask, %passthru
+        : memref<132xf32>,
+          !pto.vmi.mask<100xb32, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.vreg<100xf32, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<100xf32, #pto.vmi.layout<contiguous>>
+    %part0, %part1 = "pto.vmi.unpack"(%out)
+        : (!pto.vmi.vreg<100xf32, #pto.vmi.layout<contiguous>>)
+        -> (!pto.vreg<64xf32>, !pto.vreg<64xf32>)
+    return %part0, %part1 : !pto.vreg<64xf32>, !pto.vreg<64xf32>
+  }
+}
+
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.vexpand_load direct lowering is currently supported
+// CHECK-SAME: all-active path requires full physical chunks or statically safe full-read footprint
+// CHECK-SAME: safe-read proof requires non-negative offset
+// CHECK-SAME: fallback decision: partial/tail read needs a scratch, guarded, or true masked/non-faulting load fallback

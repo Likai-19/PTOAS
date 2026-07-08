@@ -1,0 +1,42 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-layout-rematerialize -vmi-to-vpto | FileCheck %s
+
+module {
+  func.func @vmi_to_vpto_constant_mask_rematerialize(
+      %a16: !pto.vmi.vreg<128xf16>,
+      %b16: !pto.vmi.vreg<128xf16>,
+      %a32: !pto.vmi.vreg<128xf32>,
+      %b32: !pto.vmi.vreg<128xf32>)
+      -> (!pto.vmi.vreg<128xf16>, !pto.vmi.vreg<128xf32>) {
+    %mask = "pto.vmi.constant_mask"() {
+      value = dense<true> : tensor<128xi1>
+    } : () -> !pto.vmi.mask<128xpred>
+    %sel16 = pto.vmi.vsel %mask, %a16, %b16
+        : !pto.vmi.mask<128xpred>, !pto.vmi.vreg<128xf16>, !pto.vmi.vreg<128xf16>
+        -> !pto.vmi.vreg<128xf16>
+    %sel32 = pto.vmi.vsel %mask, %a32, %b32
+        : !pto.vmi.mask<128xpred>, !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
+        -> !pto.vmi.vreg<128xf32>
+    return %sel16, %sel32
+        : !pto.vmi.vreg<128xf16>, !pto.vmi.vreg<128xf32>
+  }
+}
+
+// CHECK-LABEL: func.func @vmi_to_vpto_constant_mask_rematerialize(
+// CHECK: %[[M32_0:.*]] = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+// CHECK: %[[M32_1:.*]] = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+// CHECK: %[[M16:.*]] = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+// CHECK: %[[S16:.*]] = pto.vsel %arg0, %arg1, %[[M16]]
+// CHECK: %[[S32_0:.*]] = pto.vsel %arg2, %arg4, %[[M32_0]]
+// CHECK: %[[S32_1:.*]] = pto.vsel %arg3, %arg5, %[[M32_1]]
+// CHECK: return %[[S16]], %[[S32_0]], %[[S32_1]]
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

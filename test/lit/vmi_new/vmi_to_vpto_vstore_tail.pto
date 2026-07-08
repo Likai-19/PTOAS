@@ -1,0 +1,29 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
+
+// vstore tail: 100xf32 contiguous store → two physical stores.
+
+module {
+  func.func @vstore_contiguous_tail(
+      %val: !pto.vmi.vreg<100xf32, #pto.vmi.layout<contiguous>>,
+      %dst: !pto.ptr<f32, ub>,
+      %offset: index) {
+    pto.vmi.vstore %val, %dst[%offset] {dist_mode = "continuous"}
+        : !pto.vmi.vreg<100xf32, #pto.vmi.layout<contiguous>>, !pto.ptr<f32, ub>
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @vstore_contiguous_tail(
+// CHECK: pto.vsts
+// CHECK: pto.vsts
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast
