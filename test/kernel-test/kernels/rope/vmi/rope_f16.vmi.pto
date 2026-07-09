@@ -1,0 +1,330 @@
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @rope_vmi_f16(
+      %x_gm: !pto.ptr<f16, gm>,
+      %cos_gm: !pto.ptr<f16, gm>,
+      %sin_gm: !pto.ptr<f16, gm>,
+      %y_gm: !pto.ptr<f16, gm>,
+      %sCount: i32,
+      %nCount: i32,
+      %mode: i32) attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    %c0_i16 = arith.constant 0 : i16
+    %c1 = arith.constant 1 : index
+    %c1_i16 = arith.constant 1 : i16
+    %c2_i32 = arith.constant 2 : i32
+    %c127 = arith.constant 127 : index
+    %c15 = arith.constant 15 : index
+    %c16 = arith.constant 16 : index
+    %c1_i64 = arith.constant 1 : i64
+    %c2_i64 = arith.constant 2 : i64
+    %c31_i64 = arith.constant 31 : i64
+    %c32_i64 = arith.constant 32 : i64
+    %c64 = arith.constant 64 : index
+    %c64_i32 = arith.constant 64 : i32
+    %c128 = arith.constant 128 : index
+    %c128_i64 = arith.constant 128 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %c0_i64 = arith.constant 0 : i64
+    %s_count = arith.index_cast %sCount : i32 to index
+    %s_count_i16 = arith.index_cast %s_count : index to i16
+    %n_count = arith.index_cast %nCount : i32 to index
+    %n_count_i16 = arith.index_cast %n_count : index to i16
+
+    %cos_elems = arith.muli %s_count, %c64 : index
+    %xy_rows = arith.muli %s_count, %n_count : index
+    %xy_elems = arith.muli %xy_rows, %c64 : index
+
+    %cos_elems_i64 = arith.index_cast %cos_elems : index to i64
+    %xy_elems_i64 = arith.index_cast %xy_elems : index to i64
+    %cos_bytes = arith.muli %cos_elems_i64, %c2_i64 : i64
+    %xy_bytes = arith.muli %xy_elems_i64, %c2_i64 : i64
+
+    %cos_lines = arith.addi %cos_bytes, %c31_i64 : i64
+    %cos_lines_q = arith.divui %cos_lines, %c32_i64 : i64
+    %cos_dma_bytes = arith.muli %cos_lines_q, %c32_i64 : i64
+
+    %xy_lines = arith.addi %xy_bytes, %c31_i64 : i64
+    %xy_lines_q = arith.divui %xy_lines, %c32_i64 : i64
+    %xy_dma_bytes = arith.muli %xy_lines_q, %c32_i64 : i64
+
+    %sin_ub_off = arith.addi %cos_dma_bytes, %c0_i64 : i64
+    %x_ub_off = arith.addi %sin_ub_off, %cos_dma_bytes : i64
+    %y_ub_off = arith.addi %x_ub_off, %xy_dma_bytes : i64
+
+    %cos_ub = pto.castptr %c0_i64 : i64 -> !pto.ptr<f16, ub>
+    %sin_ub = pto.castptr %sin_ub_off : i64 -> !pto.ptr<f16, ub>
+    %x_ub = pto.castptr %x_ub_off : i64 -> !pto.ptr<f16, ub>
+    %y_ub = pto.castptr %y_ub_off : i64 -> !pto.ptr<f16, ub>
+
+    pto.mte_gm_ub %cos_gm, %cos_ub, %c0_i64, %cos_dma_bytes
+      nburst(%c1_i64, %cos_dma_bytes, %cos_dma_bytes)
+      : !pto.ptr<f16, gm>, !pto.ptr<f16, ub>, i64, i64, i64, i64, i64
+    pto.mte_gm_ub %sin_gm, %sin_ub, %c0_i64, %cos_dma_bytes
+      nburst(%c1_i64, %cos_dma_bytes, %cos_dma_bytes)
+      : !pto.ptr<f16, gm>, !pto.ptr<f16, ub>, i64, i64, i64, i64, i64
+    pto.mte_gm_ub %x_gm, %x_ub, %c0_i64, %xy_dma_bytes
+      nburst(%c1_i64, %xy_dma_bytes, %xy_dma_bytes)
+      : !pto.ptr<f16, gm>, !pto.ptr<f16, ub>, i64, i64, i64, i64, i64
+
+    pto.set_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+    pto.wait_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+
+    %half_d_i32 = arith.divui %c64_i32, %c2_i32 : i32
+    %half_d = arith.index_cast %half_d_i32 : i32 to index
+    %half_d_plus = arith.addi %half_d, %c15 : index
+    %half_d_blocks = arith.divui %half_d_plus, %c16 : index
+    %half_d_aligned = arith.muli %half_d_blocks, %c16 : index
+
+    %half_repeat_num = arith.addi %half_d, %c127 : index
+    %half_repeats = arith.divui %half_repeat_num, %c128 : index
+    %full_repeat_num = arith.addi %c64, %c127 : index
+    %full_repeats = arith.divui %full_repeat_num, %c128 : index
+    %half_repeats_i16 = arith.index_cast %half_repeats : index to i16
+    %full_repeats_i16 = arith.index_cast %full_repeats : index to i16
+
+    %x_s_step = arith.muli %n_count, %c64 : index
+    %x_n_step = arith.addi %c64, %c0 : index
+    %cs_s_step = arith.addi %c64, %c0 : index
+    %y_s_step = arith.muli %n_count, %c64 : index
+    %y_n_step = arith.addi %c64, %c0 : index
+
+    %is_half_mode = arith.cmpi eq, %mode, %c0_i32 : i32
+
+    pto.vecscope {
+      // ========================================================================
+      // VMI vs MI — RoPE f16 向量计算路径对比概览
+      // ========================================================================
+      // 循环结构、数学公式与 MI 版本完全一致，差异在于表达层级：
+      //
+      // ┌──────────────────────┬────────────────────────────────────┐
+      // │  MI（硬件细节暴露）    │  VMI（语义级抽象）                  │
+      // ├──────────────────────┼────────────────────────────────────┤
+      // │ vlds + dist 模式      │ vmi.load（编译器决定物理排布）       │
+      // │   UNPK_B16 解包       │   continuous 逻辑连续向量           │
+      // │ vcvt + part EVEN/ODD  │ vmi.extf / vmi.truncf（纯语义转换） │
+      // │   显式 rnd="R" sat=   │   无需指定硬件舍入/饱和参数          │
+      // │ vmul/vsub/vadd        │ vmi.mulf / subf / addf             │
+      // │   + mask<b16/b32>     │   无 mask 参数（编译器管理）         │
+      // │ vsts + PK_B32 打包    │ vmi.masked_store（编译器处理 pack）  │
+      // │ pge_b16/pset_b16      │ vmi.create_mask（逻辑长度创建）      │
+      // │ vdintlv/vintlv 解交织 │ channel_split / channel_merge      │
+      // │   手工 negate 穿插     │   语义化的旋转伴侣向量构造           │
+      // └──────────────────────┴────────────────────────────────────┘
+      //
+      // 核心收益：loop body 从 10+ 条物理指令压缩到 ~6 条语义指令，
+      // 代码直接反映算法流程（load → mul → sub/add → store），
+      // 不再夹杂寄存器拆分、part 选择、pack/merge 等硬件噪音。
+      // ========================================================================
+      //
+      // ========================================================================
+      // Half 模式（contiguous-half layout）— 纯 f16 向量计算路径
+      // 将一个 64-d 行拆成 x1（前半）和 x2（后半），执行 RoPE 旋转：
+      //   out1 = x1 * cos - x2 * sin
+      //   out2 = x2 * cos + x1 * sin
+      // MI 版本中此模式需 f16 直接乘加（无需 f32 中间表示），但每次 vmul/vsub/vadd
+      //   都需携带 mask<b16>，且 load 需 UNPK_B16 解包、store 需 PK_B32 打包。
+      // ========================================================================
+      scf.if %is_half_mode {
+        scf.for %s = %c0_i16 to %s_count_i16 step %c1_i16 : i16 {
+          %s_idx = arith.index_cast %s : i16 to index
+          %x_s_off = arith.muli %s_idx, %x_s_step : index
+          %cs_s_off = arith.muli %s_idx, %cs_s_step : index
+          %y_s_off = arith.muli %s_idx, %y_s_step : index
+
+          %cs_off = arith.addi %cs_s_off, %c0 : index
+          scf.for %rep = %c0_i16 to %half_repeats_i16 step %c1_i16 : i16 {
+            %rep_idx = arith.index_cast %rep : i16 to index
+            %elem_off = arith.muli %rep_idx, %c128 : index
+            %rem = arith.subi %half_d, %elem_off : index
+            %lt_128 = arith.cmpi ult, %rem, %c128 : index
+            %active = arith.select %lt_128, %rem, %c128 : index
+            // VMI: create_mask 用逻辑长度直接创建，统一 vmi.mask<Nxpred>。
+            // MI 对应: pge_b16 "PAT_VL32" → !pto.mask<b16>，
+            //   不同数据类型需要不同粒度的 mask（b16/b32/b8），VMI 统一为一种。
+            %mask = pto.vmi.create_mask %active : index -> !pto.vmi.mask<128xpred>
+
+            %cos1_off = arith.addi %cs_off, %elem_off : index
+            %cos2_base = arith.addi %cs_off, %half_d_aligned : index
+            %cos2_off = arith.addi %cos2_base, %elem_off : index
+            %sin1_off = arith.addi %cs_off, %elem_off : index
+            %sin2_base = arith.addi %cs_off, %half_d_aligned : index
+            %sin2_off = arith.addi %sin2_base, %elem_off : index
+
+            // VMI: vmi.load 语义——加载逻辑连续向量 vreg<128xf16>。
+            // MI 对应: pto.vlds %cos_ub[%cs_off] {dist = "UNPK_B16"}
+            //   → !pto.vreg<128xf16>，需要开发者指定 UNPK_B16 解包模式，
+            //   且明白有效数据只占 EVEN 位置，ODD 是填充 0。
+            // VMI 消除了 dist 模式选择——编译器根据上下文自动决定物理排布。
+            %cos1_16 = pto.vmi.load %cos_ub[%cos1_off]
+                : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
+            %cos2_16 = pto.vmi.load %cos_ub[%cos2_off]
+                : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
+            %sin1_16 = pto.vmi.load %sin_ub[%sin1_off]
+                : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
+            %sin2_16 = pto.vmi.load %sin_ub[%sin2_off]
+                : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
+
+            scf.for %n = %c0_i16 to %n_count_i16 step %c1_i16 : i16 {
+              %n_idx = arith.index_cast %n : i16 to index
+              %x_n_off = arith.muli %n_idx, %x_n_step : index
+              %y_n_off = arith.muli %n_idx, %y_n_step : index
+
+              %x_off = arith.addi %x_s_off, %x_n_off : index
+              %y_off = arith.addi %y_s_off, %y_n_off : index
+              %x1_off = arith.addi %x_off, %elem_off : index
+              %x2_base = arith.addi %x_off, %half_d_aligned : index
+              %x2_off = arith.addi %x2_base, %elem_off : index
+              %y1_off = arith.addi %y_off, %elem_off : index
+              %y2_base = arith.addi %y_off, %half_d_aligned : index
+              %y2_off = arith.addi %y2_base, %elem_off : index
+
+              %x1_16 = pto.vmi.load %x_ub[%x1_off]
+                  : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
+              %x2_16 = pto.vmi.load %x_ub[%x2_off]
+                  : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
+
+              // ========================================================================
+              // Half 模式 RoPE 核心计算 (f16, 无 f32 中间转换)
+              // 公式: out1 = x1*cos - x2*sin
+              //       out2 = x2*cos + x1*sin
+              //
+              // VMI: vmi.mulf / subf / addf 直接表达向量乘减加，无需 mask 参数。
+              // MI 对应 (f16 half 模式):
+              //   %t0 = pto.vmul %cos_lo, %x_lo, %mask16_half  ← 需 mask<b16>
+              //   %t1 = pto.vmul %sin_lo, %x_hi, %mask16_half
+              //   %y_lo = pto.vsub %t0, %t1, %mask16_half
+              //   ...
+              //   每条算术指令都需要显式携带 mask（b16 for f16），
+              //   VMI 消除了这个负担——编译器自动管理 mask。
+              // ========================================================================
+              %x1_cos = pto.vmi.mulf %x1_16, %cos1_16
+                  : !pto.vmi.vreg<128xf16>, !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf16>
+              %x2_sin = pto.vmi.mulf %x2_16, %sin1_16
+                  : !pto.vmi.vreg<128xf16>, !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf16>
+              %out1 = pto.vmi.subf %x1_cos, %x2_sin
+                  : !pto.vmi.vreg<128xf16>, !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf16>
+
+              %x2_cos = pto.vmi.mulf %x2_16, %cos2_16
+                  : !pto.vmi.vreg<128xf16>, !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf16>
+              %x1_sin = pto.vmi.mulf %x1_16, %sin2_16
+                  : !pto.vmi.vreg<128xf16>, !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf16>
+              %out2 = pto.vmi.addf %x2_cos, %x1_sin
+                  : !pto.vmi.vreg<128xf16>, !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf16>
+
+              // VMI: masked_store 统一处理部分写入，一个 mask 管理活跃 lane。
+              // MI 对应: pto.vsts %y_lo, %y_ub[%y_off], %mask16_half
+              //   → !pto.vreg<128xf16> + !pto.mask<b16>，
+              //   且 f16 store 在 MI 中可能需要 {pk = "PK_B32"} 打包模式
+              //   （当数据从 f32 narrowing 后分散在 EVEN 位置时），
+              //   VMI 无需关心 pack 策略。
+              pto.vmi.masked_store %out1, %y_ub[%y1_off], %mask
+                  : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>, !pto.vmi.mask<128xpred>
+              pto.vmi.masked_store %out2, %y_ub[%y2_off], %mask
+                  : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>, !pto.vmi.mask<128xpred>
+            }
+          }
+        }
+      } else {
+        scf.for %s = %c0_i16 to %s_count_i16 step %c1_i16 : i16 {
+          %s_idx = arith.index_cast %s : i16 to index
+          %x_s_off = arith.muli %s_idx, %x_s_step : index
+          %cs_s_off = arith.muli %s_idx, %cs_s_step : index
+          %y_s_off = arith.muli %s_idx, %y_s_step : index
+
+          %cs_off = arith.addi %cs_s_off, %c0 : index
+          scf.for %rep = %c0_i16 to %full_repeats_i16 step %c1_i16 : i16 {
+            %rep_idx = arith.index_cast %rep : i16 to index
+            %elem_off = arith.muli %rep_idx, %c128 : index
+            %rem = arith.subi %c64, %elem_off : index
+            %lt_128 = arith.cmpi ult, %rem, %c128 : index
+            %active = arith.select %lt_128, %rem, %c128 : index
+            // ========================================================================
+            // Interleave 模式（奇偶交织布局）— 纯 f16 计算路径
+            // 公式: y = x * cos + rot(x) * sin
+            //   其中 rot(x) = [-x_odd, x_even] 是旋转伴侣向量
+            //
+            // 与 MI/CCE 参考实现保持一致：奇偶拆分、乘加、合并都在 f16 上直接完成，
+            // 不再经过 extf → f32 compute → truncf 这条额外链路。
+            // ========================================================================
+            %mask = pto.vmi.create_mask %active : index -> !pto.vmi.mask<128xpred>
+
+            %cs_elem_off = arith.addi %cs_off, %elem_off : index
+            %cos16 = pto.vmi.load %cos_ub[%cs_elem_off]
+                : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
+            %sin16 = pto.vmi.load %sin_ub[%cs_elem_off]
+                : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
+            %cos_even, %cos_odd = "pto.vmi.channel_split"(%cos16)
+                : (!pto.vmi.vreg<128xf16>) -> (!pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16>)
+            %sin_even, %sin_odd = "pto.vmi.channel_split"(%sin16)
+                : (!pto.vmi.vreg<128xf16>) -> (!pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16>)
+
+            scf.for %n = %c0_i16 to %n_count_i16 step %c1_i16 : i16 {
+              %n_idx = arith.index_cast %n : i16 to index
+              %x_n_off = arith.muli %n_idx, %x_n_step : index
+              %y_n_off = arith.muli %n_idx, %y_n_step : index
+
+              %x_off = arith.addi %x_s_off, %x_n_off : index
+              %y_off = arith.addi %y_s_off, %y_n_off : index
+              %x_elem_off = arith.addi %x_off, %elem_off : index
+              %y_elem_off = arith.addi %y_off, %elem_off : index
+
+              %x16 = pto.vmi.load %x_ub[%x_elem_off]
+                  : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
+
+              // ========================================================================
+              // VMI: channel_split / channel_merge 是第一公民的通道算子，
+              // 语义化地将交织的 128xf16 拆成 [even: 64xf16, odd: 64xf16]，
+              // 先完成与 MI 一致的成对 f16 乘加，再 merge 回交织结果。
+              //
+              // MI 对应（f16 interleave 模式，纯 f16 无 f32 中间）:
+              //   %x_even, %x_odd = pto.vdintlv %x, %x   ← 硬件解交织指令
+              //   %y_even = x_even*cos_even - x_odd*sin_even
+              //   %y_odd  = x_odd*cos_odd  + x_even*sin_odd
+              //   %y_pack, %y_pack_hi = pto.vintlv %y_even, %y_odd ← 硬件交织指令
+              //
+              // VMI 的关键简化：
+              // 1. channel_split/merge 表达"拆奇偶/合奇偶"的语义意图，
+              //    而非 MI 的 vdintlv/vintlv 硬件指令（需要理解寄存器 lane 映射）
+              // 2. 直接在 even/odd 通道上表达成对 f16 乘加，避免额外的 f32 中间值
+              // 3. 所有 mulf/addf/subf 无需 mask 参数——编译器自动管理
+              // ========================================================================
+              %x_even, %x_odd = "pto.vmi.channel_split"(%x16)
+                  : (!pto.vmi.vreg<128xf16>) -> (!pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16>)
+              %x_even_cos = pto.vmi.mulf %x_even, %cos_even
+                  : !pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16> -> !pto.vmi.vreg<64xf16>
+              %x_odd_sin = pto.vmi.mulf %x_odd, %sin_even
+                  : !pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16> -> !pto.vmi.vreg<64xf16>
+              %y_even = pto.vmi.subf %x_even_cos, %x_odd_sin
+                  : !pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16> -> !pto.vmi.vreg<64xf16>
+
+              %x_odd_cos = pto.vmi.mulf %x_odd, %cos_odd
+                  : !pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16> -> !pto.vmi.vreg<64xf16>
+              %x_even_sin = pto.vmi.mulf %x_even, %sin_odd
+                  : !pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16> -> !pto.vmi.vreg<64xf16>
+              %y_odd = pto.vmi.addf %x_odd_cos, %x_even_sin
+                  : !pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16> -> !pto.vmi.vreg<64xf16>
+
+              %out = "pto.vmi.channel_merge"(%y_even, %y_odd)
+                  : (!pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16>) -> !pto.vmi.vreg<128xf16>
+
+              // VMI: masked_store 用统一的 vmi.mask<128xpred> 掩码写回。
+              // MI 对应: pto.vsts %y_pack, %y_ub[%y_off], %mask16_full
+              //   → 需要 !pto.mask<b16> + 可能需要 pk 模式。
+              pto.vmi.masked_store %out, %y_ub[%y_elem_off], %mask
+                  : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>, !pto.vmi.mask<128xpred>
+            }
+          }
+        }
+      }
+    }
+
+    pto.set_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+    pto.wait_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+
+    pto.mte_ub_gm %y_ub, %y_gm, %xy_dma_bytes
+      nburst(%c1_i64, %xy_dma_bytes, %xy_dma_bytes)
+      : !pto.ptr<f16, ub>, !pto.ptr<f16, gm>, i64, i64, i64, i64
+    pto.barrier #pto.pipe<PIPE_ALL>
+    return
+  }
+}
