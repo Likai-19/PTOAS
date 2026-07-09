@@ -25,6 +25,37 @@ SOC="Ascend950"
 SCRIPT_FILE=""
 declare -a SCRIPT_ARGS=()
 
+normalize_kernel_dir_args() {
+  local -n normalized_ref="$1"
+  shift
+
+  local arg=""
+  local value=""
+  normalized_ref=()
+
+  while [ $# -gt 0 ]; do
+    arg="$1"
+    case "${arg}" in
+      --kernel-dir)
+        [ $# -lt 2 ] && { echo "--kernel-dir requires a value" >&2; exit 1; }
+        value="$(realpath -m -- "$2")"
+        normalized_ref+=("${arg}" "${value}")
+        shift 2
+        ;;
+      --kernel-dir=*)
+        value="${arg#--kernel-dir=}"
+        value="$(realpath -m -- "${value}")"
+        normalized_ref+=("--kernel-dir=${value}")
+        shift
+        ;;
+      *)
+        normalized_ref+=("${arg}")
+        shift
+        ;;
+    esac
+  done
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --output)
@@ -95,6 +126,12 @@ if [ -z "${WORK_DIR}" ]; then
   WORK_DIR="${OUTPUT_DIR}/work"
 fi
 WORK_DIR="$(realpath -m -- "${WORK_DIR}")"
+
+normalize_kernel_dir_args SCRIPT_ARGS "${SCRIPT_ARGS[@]}"
+if [ -n "${KERNEL_TEST_KERNEL_DIR:-}" ]; then
+  export KERNEL_TEST_KERNEL_DIR
+  KERNEL_TEST_KERNEL_DIR="$(realpath -m -- "${KERNEL_TEST_KERNEL_DIR}")"
+fi
 
 ENTRY_SCRIPT="${WORK_DIR}/run_sim_entry.sh"
 ENTRY_COMMON="${WORK_DIR}/common.sh"

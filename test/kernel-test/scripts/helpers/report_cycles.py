@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import argparse
-import importlib
+import os
 import sys
 from pathlib import Path
 
@@ -20,16 +20,27 @@ KT_ROOT = Path(__file__).resolve().parents[2]
 if str(KT_ROOT) not in sys.path:
     sys.path.insert(0, str(KT_ROOT))
 
+from kernel_test.registry import import_kernel_module
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Report cycle metrics for one kernel-test operator")
+    parser.add_argument(
+        "--kernel-dir",
+        help=(
+            "Kernel package root to discover. Accepts either a directory that contains "
+            "kernel subdirectories or one kernel package directory. "
+            "Defaults to test/kernel-test/kernels or $KERNEL_TEST_KERNEL_DIR."
+        ),
+    )
     parser.add_argument("--op", required=True, help="Kernel name")
     parser.add_argument("--table", action="store_true", help="Print compact table output")
     parser.add_argument("out_dirs", nargs="*", help="Per-case sim output directories")
     args = parser.parse_args(argv)
+    kernel_dir = args.kernel_dir or os.environ.get("KERNEL_TEST_KERNEL_DIR")
 
     try:
-        module = importlib.import_module(f"kernels.{args.op}.cycle_metrics")
+        module = import_kernel_module(args.op, kernel_dir=kernel_dir, submodule="cycle_metrics")
     except ModuleNotFoundError as exc:
         print(f"no cycle metrics analyzer for kernel {args.op}: {exc}", file=sys.stderr)
         return 1

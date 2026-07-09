@@ -20,6 +20,7 @@ kt_resolve_paths "${SCRIPT_PATH}"
 
 OP=""
 BACKEND=""
+KERNEL_DIR="${KERNEL_TEST_KERNEL_DIR:-}"
 OUTPUT_ROOT="${KT_ROOT}/sim_outputs"
 PYTHON_CMD="$(kt_default_python_cmd)"
 CASE_FILTER=""
@@ -39,6 +40,11 @@ while [ $# -gt 0 ]; do
     --backend)
       [ $# -lt 2 ] && { echo "--backend requires a value" >&2; exit 1; }
       BACKEND="$2"
+      shift 2
+      ;;
+    --kernel-dir)
+      [ $# -lt 2 ] && { echo "--kernel-dir requires a value" >&2; exit 1; }
+      KERNEL_DIR="$2"
       shift 2
       ;;
     --case)
@@ -83,6 +89,7 @@ Usage: run_cycle.sh --op <kernel> --backend <backend> [options]
 Recommended user-facing command for cycle measurement.
 
 Options:
+  --kernel-dir <dir>    Kernel package root or one kernel package directory.
   --case <id>           Select one case. Repeatable.
   --case-filter <text>  Filter case ids by substring.
   --engine <name>       Cycle runner: msprof or cannsim. Default: msprof.
@@ -109,7 +116,12 @@ OUTPUT_ROOT="$(realpath -m -- "${OUTPUT_ROOT}")"
 mkdir -p "${OUTPUT_ROOT}/${OP}/${BACKEND}"
 
 list_cases() {
-  kt_run_python_cmd "${PYTHON_CMD}" "${KT_ROOT}/run.py" --op "${OP}" --workflow cycle --list-cases
+  local args=("${KT_ROOT}/run.py")
+  if [ -n "${KERNEL_DIR}" ]; then
+    args+=(--kernel-dir "${KERNEL_DIR}")
+  fi
+  args+=(--op "${OP}" --workflow cycle --list-cases)
+  kt_run_python_cmd "${PYTHON_CMD}" "${args[@]}"
 }
 
 declare -a CASES=()
@@ -150,11 +162,16 @@ run_one_case() {
 
   mkdir -p "${case_dir}"
   echo "==> ${ENGINE} case ${case_id}"
+  local kernel_args=()
+  if [ -n "${KERNEL_DIR}" ]; then
+    kernel_args+=(--kernel-dir "${KERNEL_DIR}")
+  fi
   if [ "${ENGINE}" = "msprof" ]; then
     "${KT_SCRIPT_DIR}/run_msprof.sh" \
       --output "${case_dir}/msprof" \
       "${run_py}" \
       -- \
+      "${kernel_args[@]}" \
       --op "${OP}" \
       --workflow cycle \
       --backend "${BACKEND}" \
@@ -166,6 +183,7 @@ run_one_case() {
       --python-cmd "${PYTHON_CMD}" \
       "${run_py}" \
       -- \
+      "${kernel_args[@]}" \
       --op "${OP}" \
       --workflow cycle \
       --backend "${BACKEND}" \
@@ -183,6 +201,9 @@ report_cycles() {
   fi
 
   report_args=(--op "${OP}")
+  if [ -n "${KERNEL_DIR}" ]; then
+    report_args+=(--kernel-dir "${KERNEL_DIR}")
+  fi
   if [ "${#SUCCESS_CASE_DIRS[@]}" -gt 1 ]; then
     report_args+=(--table)
   fi

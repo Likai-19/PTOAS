@@ -10,13 +10,21 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 import importlib
-import pkgutil
+from importlib.machinery import ModuleSpec
+import os
+from pathlib import Path
+import sys
+import types
 
 from .backends import BackendAdapter
 from .results import CaseResult
+
+
+DEFAULT_KERNEL_ROOT = Path(__file__).resolve().parents[1] / "kernels"
 
 
 class RegistryError(RuntimeError):
@@ -95,6 +103,93 @@ class KernelRegistry:
         return sorted(self._entries.keys())
 
 
+def _resolve_kernel_dir(kernel_dir: str | os.PathLike[str] | None) -> Path:
+    candidate = DEFAULT_KERNEL_ROOT if kernel_dir is None else Path(kernel_dir).expanduser()
+    resolved = candidate.resolve()
+    if not resolved.exists():
+        raise RegistryError(f"kernel directory does not exist: {resolved}")
+    if not resolved.is_dir():
+        raise RegistryError(f"kernel directory is not a directory: {resolved}")
+    return resolved
+
+
+def _looks_like_kernel_package_dir(kernel_dir: Path) -> bool:
+    if not (kernel_dir / "__init__.py").is_file():
+        return False
+    return any((kernel_dir / name).exists() for name in ("backends.py", "spec.py", "cycle_metrics.py"))
+
+
+def _namespace_package_name(kernel_dir: Path) -> str:
+    digest = hashlib.sha1(str(kernel_dir).encode("utf-8")).hexdigest()[:12]
+    return f"_kernel_test_ext_{digest}"
+
+
+def _ensure_namespace_package(module_name: str, search_path: Path) -> None:
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        module_path = getattr(existing, "__path__", None)
+        if module_path is None:
+            raise RegistryError(f"module namespace conflict while loading kernels: {module_name}")
+        if str(search_path) not in module_path:
+            module_path.append(str(search_path))
+        return
+
+    module = types.ModuleType(module_name)
+    spec = ModuleSpec(name=module_name, loader=None, is_package=True)
+    spec.submodule_search_locations = [str(search_path)]
+    module.__file__ = str(search_path)
+    module.__package__ = module_name
+    module.__path__ = list(spec.submodule_search_locations)
+    module.__spec__ = spec
+    sys.modules[module_name] = module
+
+
+def _module_namespace_for_kernel_dir(kernel_dir: Path) -> tuple[str, str | None]:
+    namespace = _namespace_package_name(kernel_dir)
+    if _looks_like_kernel_package_dir(kernel_dir):
+        _ensure_namespace_package(namespace, kernel_dir.parent)
+        return namespace, kernel_dir.name
+
+    _ensure_namespace_package(namespace, kernel_dir)
+    return namespace, None
+
+
+def _iter_kernel_module_names(kernel_dir: Path) -> tuple[str, ...]:
+    _, single_kernel_name = _module_namespace_for_kernel_dir(kernel_dir)
+    if single_kernel_name is not None:
+        return (single_kernel_name,)
+
+    names: list[str] = []
+    for child in sorted(kernel_dir.iterdir()):
+        if child.name.startswith("_") or not child.is_dir():
+            continue
+        if _looks_like_kernel_package_dir(child):
+            names.append(child.name)
+    return tuple(names)
+
+
+def import_kernel_module(
+    kernel_name: str,
+    *,
+    kernel_dir: str | os.PathLike[str] | None = None,
+    submodule: str | None = None,
+):
+    """Import one kernel package or submodule from the requested kernel directory."""
+
+    resolved_dir = _resolve_kernel_dir(kernel_dir)
+    namespace, single_kernel_name = _module_namespace_for_kernel_dir(resolved_dir)
+    if single_kernel_name is not None and kernel_name != single_kernel_name:
+        raise ModuleNotFoundError(
+            f"kernel directory {resolved_dir} only exposes package {single_kernel_name!r}, "
+            f"not {kernel_name!r}"
+        )
+
+    qualified_name = f"{namespace}.{single_kernel_name or kernel_name}"
+    if submodule:
+        qualified_name = f"{qualified_name}.{submodule}"
+    return importlib.import_module(qualified_name)
+
+
 def _load_from_module(module_name: str, registry: KernelRegistry) -> None:
     module = importlib.import_module(module_name)
 
@@ -122,20 +217,14 @@ def _load_from_module(module_name: str, registry: KernelRegistry) -> None:
         f"kernel module {module_name!r} must expose register(), get_kernel_spec(), or KERNEL_SPEC"
     )
 
+def load_registry(kernel_dir: str | os.PathLike[str] | None = None) -> KernelRegistry:
+    """Load all kernel operators from the default or requested kernel directory."""
 
-def load_registry() -> KernelRegistry:
-    try:
-        import kernels
-    except ImportError as exc:
-        raise RegistryError("failed to import kernel adapters package 'kernels'") from exc
-
+    resolved_dir = _resolve_kernel_dir(kernel_dir)
     registry = KernelRegistry()
-    prefix = f"{kernels.__name__}."
+    namespace, _ = _module_namespace_for_kernel_dir(resolved_dir)
 
-    for module_info in pkgutil.iter_modules(kernels.__path__, prefix):
-        short_name = module_info.name.rsplit(".", 1)[-1]
-        if short_name.startswith("_"):
-            continue
-        _load_from_module(module_info.name, registry)
+    for kernel_name in _iter_kernel_module_names(resolved_dir):
+        _load_from_module(f"{namespace}.{kernel_name}", registry)
 
     return registry
