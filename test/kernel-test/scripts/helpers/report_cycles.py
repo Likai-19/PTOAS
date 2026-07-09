@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""Internal helper: dispatch cycle reporting to one kernel-local analyzer."""
+
+from __future__ import annotations
+
+import argparse
+import importlib
+import sys
+from pathlib import Path
+
+KT_ROOT = Path(__file__).resolve().parents[2]
+if str(KT_ROOT) not in sys.path:
+    sys.path.insert(0, str(KT_ROOT))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Report cycle metrics for one kernel-test operator")
+    parser.add_argument("--op", required=True, help="Kernel name")
+    parser.add_argument("--table", action="store_true", help="Print compact table output")
+    parser.add_argument("out_dirs", nargs="*", help="Per-case sim output directories")
+    args = parser.parse_args(argv)
+
+    try:
+        module = importlib.import_module(f"kernels.{args.op}.cycle_metrics")
+    except ModuleNotFoundError as exc:
+        print(f"no cycle metrics analyzer for kernel {args.op}: {exc}", file=sys.stderr)
+        return 1
+
+    if hasattr(module, "get_cycle_reporter"):
+        from kernel_test.cycle_reporting import run_cycle_report
+
+        reporter = module.get_cycle_reporter()
+        forwarded: list[str] = []
+        if args.table:
+            forwarded.append("--table")
+        forwarded.extend(args.out_dirs)
+        return int(run_cycle_report(reporter, forwarded))
+
+    forwarded = []
+    if args.table:
+        forwarded.append("--table")
+    forwarded.extend(args.out_dirs)
+    return int(module.main(forwarded))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
