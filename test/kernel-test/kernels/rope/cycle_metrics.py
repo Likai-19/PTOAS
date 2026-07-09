@@ -1,0 +1,60 @@
+"""Rope-specific cycle-report entrypoint built on shared kernel-test contracts."""
+
+from __future__ import annotations
+
+import glob
+import os
+
+from kernel_test.cycle_reporting import CycleReporterSpec, run_cycle_report
+
+
+def default_cycle_out_dirs(sim_root: str | None = None) -> list[str]:
+    """Return kernel-test rope sim output dirs in canonical case order."""
+
+    root = sim_root or os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "..",
+        "sim_outputs",
+        "rope",
+    )
+    try:
+        from .tile_config import DTYPES, MODES
+
+        ordered = [
+            os.path.join(root, backend, f"{dtype}_{mode}")
+            for backend in ("cce", "vmi", "mi")
+            for dtype in DTYPES
+            for mode in MODES
+            if os.path.isdir(os.path.join(root, backend, f"{dtype}_{mode}"))
+        ]
+        if ordered:
+            return ordered
+    except ImportError:
+        pass
+    return sorted(
+        path
+        for path in glob.glob(os.path.join(root, "*", "*"))
+        if os.path.isdir(path)
+    )
+
+
+CYCLE_REPORTER = CycleReporterSpec(
+    name="rope",
+    default_out_dirs=default_cycle_out_dirs,
+    missing_message="No rope cycle output dirs found. Run kernel-test/scripts/run_cycle.sh first.",
+)
+
+
+def get_cycle_reporter() -> CycleReporterSpec:
+    """Return the rope cycle reporter registration."""
+
+    return CYCLE_REPORTER
+
+
+def main(argv: list[str] | None = None) -> int:
+    return run_cycle_report(CYCLE_REPORTER, argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
