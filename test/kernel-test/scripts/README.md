@@ -17,6 +17,7 @@ This directory is split into two groups:
 - `run_cycle.sh`
   - Recommended command for cycle collection.
   - Expands selected cases, invokes `kernel-test/run.py` once per case, and prints a cycle report.
+  - Accepts `--kernel-dir <dir>` or `KERNEL_TEST_KERNEL_DIR` when kernels live outside the default `kernels/` root.
 - `run_sim.sh`
   - Generic `cannsim` transport for one Python entrypoint.
   - Use this when you want to run a specific script under cannsim directly.

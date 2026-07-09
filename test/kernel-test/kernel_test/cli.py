@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from typing import Sequence
 
 from .cases import select_cases
@@ -20,6 +21,14 @@ from .runners import run_correctness_suite, run_cycle_probe
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Unified kernel-test CLI")
+    parser.add_argument(
+        "--kernel-dir",
+        help=(
+            "Kernel package root to discover. Accepts either a directory that contains "
+            "kernel subdirectories such as docs/ or one kernel package directory such as docs/rope. "
+            "Defaults to test/kernel-test/kernels or $KERNEL_TEST_KERNEL_DIR."
+        ),
+    )
     parser.add_argument("--list-ops", action="store_true", help="List registered kernels")
     parser.add_argument("--op", help="Kernel name to run")
     parser.add_argument(
@@ -43,9 +52,10 @@ def _print_lines(lines: Sequence[str]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    kernel_dir = args.kernel_dir or os.environ.get("KERNEL_TEST_KERNEL_DIR")
 
     try:
-        registry = load_registry()
+        registry = load_registry(kernel_dir=kernel_dir)
     except RegistryError as exc:
         raise SystemExit(str(exc)) from exc
 
