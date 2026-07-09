@@ -78,6 +78,7 @@ from ._surface_types import (   # noqa: F401
 )
 from ._tensor_factories import empty_like  # noqa: F401
 from ._tile_namespace import tile  # noqa: F401
+from ._vmi_namespace import vmi  # noqa: F401
 
 # ── Operations ────────────────────────────────────────────────────────────────
 from ._ops import (             # noqa: F401

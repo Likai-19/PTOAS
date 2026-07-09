@@ -108,6 +108,12 @@ static py::object wrapAttributeAs(const py::module_ &m, const char *className,
   return cls.attr("__call__")(attr);
 }
 
+static MlirAttribute optionalAttributeFromPy(py::object attr) {
+  if (attr.is_none())
+    return MlirAttribute{nullptr};
+  return py::cast<MlirAttribute>(attr);
+}
+
 void populatePTODialectSubmodule(pybind11::module &m);
 void populatePTODialectSubmodule(pybind11::module &m) {
   (void)m;
@@ -967,6 +973,82 @@ static void bindPTOModule(pybind11::module &m) {
             "granularity",
             [](MlirType self) -> std::string {
                 return cast<mlir::pto::MaskType>(unwrap(self)).getGranularity().str();
+            });
+
+    mlir_type_subclass(
+        m, "VMIVRegType",
+        [](MlirType type) -> bool {
+            return isa<mlir::pto::VMIVRegType>(unwrap(type));
+        })
+        .def_classmethod(
+            "get",
+            [](py::object cls, int64_t elementCount, MlirType elementType,
+               py::object layout, MlirContext context) -> py::object {
+                context = inferContextFromElementType(context, elementType);
+                MlirAttribute layoutAttr = optionalAttributeFromPy(layout);
+                MlirType t = wrap(mlir::pto::VMIVRegType::get(
+                    unwrap(context), elementCount, unwrap(elementType),
+                    unwrap(layoutAttr)));
+                return cls.attr("__call__")(t);
+            },
+            py::arg("cls"), py::arg("element_count"), py::arg("element_type"),
+            py::arg("layout") = py::none(), py::arg("context") = py::none())
+        .def_property_readonly(
+            "element_count",
+            [](MlirType self) -> int64_t {
+                return cast<mlir::pto::VMIVRegType>(unwrap(self)).getElementCount();
+            })
+        .def_property_readonly(
+            "element_type",
+            [](MlirType self) -> MlirType {
+                return wrap(cast<mlir::pto::VMIVRegType>(unwrap(self)).getElementType());
+            })
+        .def_property_readonly(
+            "layout",
+            [](MlirType self) -> py::object {
+                mlir::Attribute attr =
+                    cast<mlir::pto::VMIVRegType>(unwrap(self)).getLayout();
+                if (!attr)
+                    return py::none();
+                return py::cast(wrap(attr));
+            });
+
+    mlir_type_subclass(
+        m, "VMIMaskType",
+        [](MlirType type) -> bool {
+            return isa<mlir::pto::VMIMaskType>(unwrap(type));
+        })
+        .def_classmethod(
+            "get",
+            [](py::object cls, int64_t elementCount, std::string granularity,
+               py::object layout, MlirContext context) -> py::object {
+                MlirAttribute layoutAttr = optionalAttributeFromPy(layout);
+                MlirType t = wrap(mlir::pto::VMIMaskType::get(
+                    unwrap(context), elementCount, granularity,
+                    unwrap(layoutAttr)));
+                return cls.attr("__call__")(t);
+            },
+            py::arg("cls"), py::arg("element_count"),
+            py::arg("granularity") = "pred", py::arg("layout") = py::none(),
+            py::arg("context") = py::none())
+        .def_property_readonly(
+            "element_count",
+            [](MlirType self) -> int64_t {
+                return cast<mlir::pto::VMIMaskType>(unwrap(self)).getElementCount();
+            })
+        .def_property_readonly(
+            "granularity",
+            [](MlirType self) -> std::string {
+                return cast<mlir::pto::VMIMaskType>(unwrap(self)).getGranularity().str();
+            })
+        .def_property_readonly(
+            "layout",
+            [](MlirType self) -> py::object {
+                mlir::Attribute attr =
+                    cast<mlir::pto::VMIMaskType>(unwrap(self)).getLayout();
+                if (!attr)
+                    return py::none();
+                return py::cast(wrap(attr));
             });
 
     mlir_type_subclass(
