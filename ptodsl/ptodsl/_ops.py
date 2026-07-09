@@ -1449,6 +1449,32 @@ def pdintlv_b32(lhs, rhs):
     )
 
 
+def _vreg_pair_op(op_ctor, lhs, rhs, *, context: str):
+    lhs_type = unwrap_surface_value(lhs).type
+    rhs_type = unwrap_surface_value(rhs).type
+    if lhs_type != rhs_type:
+        raise TypeError(f"{context} expects matching vreg types, got {lhs_type} and {rhs_type}")
+    _infer_vreg_metadata(lhs)
+    _infer_vreg_metadata(rhs)
+    op = op_ctor(
+        lhs_type,
+        lhs_type,
+        unwrap_surface_value(lhs),
+        unwrap_surface_value(rhs),
+    )
+    return wrap_surface_value(op.low), wrap_surface_value(op.high)
+
+
+def vintlv(lhs, rhs):
+    """``pto.vintlv`` – interleave two vector registers."""
+    return _vreg_pair_op(_pto.VintlvOp, lhs, rhs, context="vintlv(lhs, rhs)")
+
+
+def vdintlv(lhs, rhs):
+    """``pto.vdintlv`` – deinterleave two vector registers."""
+    return _vreg_pair_op(_pto.VdintlvOp, lhs, rhs, context="vdintlv(lhs, rhs)")
+
+
 def vcmp(src0, src1, seed_mask, cmp_mode):
     """``pto.vcmp`` – vector/vector comparison producing a predicate mask."""
     _, elem_type = _infer_vreg_metadata(src0)
@@ -5450,6 +5476,7 @@ __all__ = [
     "pbitcast", "vcvt", "vpack", "vmulscvt", "ppack", "punpack",
     "pintlv_b8", "pintlv_b16", "pintlv_b32",
     "pdintlv_b8", "pdintlv_b16", "pdintlv_b32",
+    "vintlv", "vdintlv",
     "vgather2", "vgather2_bc", "vgatherb", "vscatter", "vsldb", "vsstb",
     "vcmp", "vcmps",
     "plds", "psts", "pstu", "vstar", "vstas", "vstur", "vstus",
