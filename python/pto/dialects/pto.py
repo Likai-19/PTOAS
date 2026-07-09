@@ -104,6 +104,8 @@ register_dialect = _pto_mod.register_dialect
 PtrType = _pto_mod.PtrType
 VRegType = _pto_mod.VRegType
 MaskType = _pto_mod.MaskType
+VMIVRegType = _pto_mod.VMIVRegType
+VMIMaskType = _pto_mod.VMIMaskType
 AlignType = _pto_mod.AlignType
 AsyncSessionType = _pto_mod.AsyncSessionType
 AsyncEventType = _pto_mod.AsyncEventType
@@ -261,6 +263,8 @@ __all__ = [
     "PtrType",
     "VRegType",
     "MaskType",
+    "VMIVRegType",
+    "VMIMaskType",
     "AlignType",
     "AsyncSessionType",
     "AsyncEventType",
