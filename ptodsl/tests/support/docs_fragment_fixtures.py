@@ -189,6 +189,51 @@ FRAGMENT_FIXTURES = {
             {SNIPPET_PLACEHOLDER}
         """
     ),
+    "vmi.vector_pipeline": _fixture(
+        f"""
+        @pto.jit(target="a5")
+        def vmi_vector_pipeline_probe():
+            src_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
+            other_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
+            dst_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
+            src_ptr = src_tile.as_ptr()
+            other_ptr = other_tile.as_ptr()
+            dst_ptr = dst_tile.as_ptr()
+            offset = pto.const(0, dtype=pto.index)
+            active_lanes = pto.const(64, dtype=pto.index)
+            vec_ty = pto.vmi.vreg(64, pto.f32)
+            mask_ty = pto.vmi.mask(64)
+            {SNIPPET_PLACEHOLDER}
+        """
+    ),
+    "vmi.index_select": _fixture(
+        f"""
+        @pto.jit(target="a5")
+        def vmi_index_select_probe():
+            src_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
+            src_ptr = src_tile.as_ptr()
+            offset = pto.const(0, dtype=pto.index)
+            src = pto.vmi.vload(src_ptr, offset, size=64)
+            {SNIPPET_PLACEHOLDER}
+        """
+    ),
+    "vmi.predicate_and_rearrange": _fixture(
+        f"""
+        @pto.jit(target="a5")
+        def vmi_predicate_and_rearrange_probe():
+            src_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
+            src_ptr = src_tile.as_ptr()
+            offset = pto.const(0, dtype=pto.index)
+            active_lanes = pto.const(64, dtype=pto.index)
+            active_per_group = pto.const(8, dtype=pto.index)
+            src = pto.vmi.vload(src_ptr, offset, size=64)
+            mask = pto.vmi.create_mask(
+                active_lanes,
+                size=64,
+            )
+            {SNIPPET_PLACEHOLDER}
+        """
+    ),
     "quick_start.make_tensor_view": _fixture(
         f"""
         @pto.jit(target="a5")
