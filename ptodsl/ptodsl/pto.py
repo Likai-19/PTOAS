@@ -96,6 +96,7 @@ from ._ops import (             # noqa: F401
     ppack, punpack,
     pintlv_b8, pintlv_b16, pintlv_b32,
     pdintlv_b8, pdintlv_b16, pdintlv_b32,
+    vintlv, vdintlv,
     vgather2, vgather2_bc, vgatherb, vscatter, vsldb, vsstb,
     vcmp, vcmps,
     plds, psts, pstu, vstar, vstas, vstur, vstus,
