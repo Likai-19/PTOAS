@@ -191,6 +191,7 @@ module {
 // LOWER: pto.vsts {{.*}} {dist = "PK4_B32"} : !pto.vreg<256xui8>, !pto.ptr<ui8, ub>, !pto.mask<b32>
 
 // LOWER-LABEL: func.func @f16_store_does_not_override_channel_merge
-// LOWER: pto.vldsx2 {{.*}}, "DINTLV_B16"
+// LOWER: %[[LOAD:.*]] = pto.vlds
+// LOWER: %[[LOW:.*]], %[[HIGH:.*]] = pto.vdintlv %[[LOAD]], %[[LOAD]]
 // LOWER: pto.vintlv
 // LOWER: pto.vsts {{.*}} : !pto.vreg<128xf16>, !pto.ptr<f16, ub>, !pto.mask<b16>
