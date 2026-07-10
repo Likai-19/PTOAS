@@ -13,7 +13,7 @@ module {
       %a: !pto.vmi.vreg<128xf32>,
       %b: !pto.vmi.vreg<128xf32>,
       %m: !pto.vmi.mask<128xpred>) -> !pto.vmi.vreg<128xf32> {
-    %r = pto.vmi.addf %a, %b
+    %r = pto.vmi.vadd %a, %b
         : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
     %s = pto.vmi.vsel %m, %r, %a
         : !pto.vmi.mask<128xpred>, !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
@@ -23,5 +23,5 @@ module {
 }
 
 // CHECK-LABEL: func.func @vmi_producer_boundary_valid
-// CHECK: pto.vmi.addf
+// CHECK: pto.vmi.vadd
 // CHECK: pto.vmi.vsel

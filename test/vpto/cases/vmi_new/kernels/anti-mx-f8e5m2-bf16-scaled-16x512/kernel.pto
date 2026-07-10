@@ -61,8 +61,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
           %scale_off = arith.addi %row_scale_off, %scale_tile_off : index
           %scale_u8 = pto.vmi.vload %ub_mxscale[%scale_off], %c1 {group = 8}
               : !pto.ptr<ui8, ub> -> !pto.vmi.vreg<8xui8>
-          %scale_u32 = pto.vmi.vcvt %scale_u8 {sign = "U"}
-              : !pto.vmi.vreg<8xui8> -> !pto.vmi.vreg<8xui32>
+          %scale_u32 = pto.vmi.vcvt %scale_u8              : !pto.vmi.vreg<8xui8> -> !pto.vmi.vreg<8xui32>
           %scale_i32 = pto.vmi.vinterpret_cast %scale_u32
               : !pto.vmi.vreg<8xui32> -> !pto.vmi.vreg<8xi32>
           %shift = pto.vmi.vbrc %c23_i32

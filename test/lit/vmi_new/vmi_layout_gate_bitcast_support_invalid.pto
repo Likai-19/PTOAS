@@ -6,14 +6,14 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: not pto-test-opt %s -pto-validate-vmi-layout-ir 2>&1 | FileCheck %s
+// RUN: not pto-test-opt %s -vmi-lower-unified-to-legacy -pto-validate-vmi-layout-ir 2>&1 | FileCheck %s
 
 module {
   func.func @vmi_layout_gate_bitcast_support_invalid(
       %source: !pto.vmi.vreg<65xf32, #pto.vmi.layout<deinterleaved = 2>>) {
-    // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.vinterpret_cast has no registered layout support
-    // CHECK-SAME: requires matching logical bit footprint in every physical chunk
-    // CHECK: note: see current operation: %{{.*}} = "pto.vmi.vinterpret_cast"
+    // CHECK: VMI-LAYOUT-CONTRACT: pto.vmi.bitcast has no registered layout support
+    // CHECK-SAME: width-changing bitcast layout does not match a bitcast layout table row
+    // CHECK: note: see current operation: %{{.*}} = "pto.vmi.bitcast"
     %out = pto.vmi.vinterpret_cast %source
         : !pto.vmi.vreg<65xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<130xi16, #pto.vmi.layout<deinterleaved = 2>>
