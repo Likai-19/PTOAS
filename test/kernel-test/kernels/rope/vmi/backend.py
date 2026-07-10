@@ -17,68 +17,341 @@ from kernel_test.backends import RunPurpose
 from kernel_test.npu_runtime import ensure_runtime, stream_ptr, sync
 
 from ..runtime import RopeLaunchArgs, prepare_launch_args
+from ..tile_config import MAX_N, MAX_S, SIM_D
 
 _VMI_ROOT = Path(__file__).resolve().parent
-_PTO_FILE_F16 = _VMI_ROOT / "rope_f16.vmi.pto"
-_PTO_FILE_BF16 = _VMI_ROOT / "rope_bf16.vmi.pto"
-_PTO_FILE_F32 = _VMI_ROOT / "rope_f32.vmi.pto"
+_MAX_XY_ROWS = MAX_S * MAX_N
+_CS_ELEMS = MAX_S * SIM_D
+_XY_ELEMS = _MAX_XY_ROWS * SIM_D
+_UB_BASE_2B_COS = 0
+_UB_BASE_2B_SIN = _UB_BASE_2B_COS + _CS_ELEMS * 2
+_UB_BASE_2B_X = _UB_BASE_2B_SIN + _CS_ELEMS * 2
+_UB_BASE_2B_Y = _UB_BASE_2B_X + _XY_ELEMS * 2
+_UB_BASE_4B_COS = 0
+_UB_BASE_4B_SIN = _UB_BASE_4B_COS + _CS_ELEMS * 4
+_UB_BASE_4B_X = _UB_BASE_4B_SIN + _CS_ELEMS * 4
+_UB_BASE_4B_Y = _UB_BASE_4B_X + _XY_ELEMS * 4
 
 
 @pto.jit(
     name="rope_vmi_f16",
     target="a5",
+    backend="vpto",
+    mode="explicit",
     kernel_kind="vector",
-    source=str(_PTO_FILE_F16),
+    insert_sync=False,
 )
 def rope_vmi_f16(
-    x_ptr: pto.ptr(pto.f16, "gm"),
-    cos_ptr: pto.ptr(pto.f16, "gm"),
-    sin_ptr: pto.ptr(pto.f16, "gm"),
-    y_ptr: pto.ptr(pto.f16, "gm"),
+    x_gm: pto.ptr(pto.f16, "gm"),
+    cos_gm: pto.ptr(pto.f16, "gm"),
+    sin_gm: pto.ptr(pto.f16, "gm"),
+    y_gm: pto.ptr(pto.f16, "gm"),
     s_count: pto.i32,
     n_count: pto.i32,
-    mode: pto.i32,
+    *,
+    MODE: pto.const_expr = 0,
 ):
-    raise RuntimeError("source-backed PTODSL kernel body should not execute")
+    rows = s_count * n_count
+    row_bytes = SIM_D * 2
+    cs_bytes = SIM_D * 2
+
+    cos_ptr = pto.castptr(pto.const(_UB_BASE_2B_COS, dtype=pto.ui64), pto.ptr(pto.f16, "ub"))
+    sin_ptr = pto.castptr(pto.const(_UB_BASE_2B_SIN, dtype=pto.ui64), pto.ptr(pto.f16, "ub"))
+    x_ptr = pto.castptr(pto.const(_UB_BASE_2B_X, dtype=pto.ui64), pto.ptr(pto.f16, "ub"))
+    y_ptr = pto.castptr(pto.const(_UB_BASE_2B_Y, dtype=pto.ui64), pto.ptr(pto.f16, "ub"))
+
+    pto.mte_gm_ub(cos_gm, cos_ptr, 0, cs_bytes, nburst=(s_count, cs_bytes, cs_bytes))
+    pto.mte_gm_ub(sin_gm, sin_ptr, 0, cs_bytes, nburst=(s_count, cs_bytes, cs_bytes))
+    pto.mte_gm_ub(x_gm, x_ptr, 0, row_bytes, nburst=(rows, row_bytes, row_bytes))
+
+    pto.set_flag(pto.Pipe.MTE2, pto.Pipe.V, event_id=0)
+    pto.wait_flag(pto.Pipe.MTE2, pto.Pipe.V, event_id=0)
+
+    half_mask = pto.vmi.create_mask(32, size=64)
+    full_mask = pto.vmi.create_mask(64, size=64)
+    x_s_step = n_count * SIM_D
+
+    if MODE == 0:
+        for s in range(0, s_count, 1):
+            x_s_off = s * x_s_step
+            cs_off = s * SIM_D
+            cs_hi_off = cs_off + 32
+
+            cos_lo = pto.vmi.vload(cos_ptr, cs_off, size=64)
+            cos_hi = pto.vmi.vload(cos_ptr, cs_hi_off, size=64)
+            sin_lo = pto.vmi.vload(sin_ptr, cs_off, size=64)
+            sin_hi = pto.vmi.vload(sin_ptr, cs_hi_off, size=64)
+
+            for n in range(0, n_count, 1):
+                row_off = x_s_off + n * SIM_D
+                x_hi_off = row_off + 32
+
+                x_lo = pto.vmi.vload(x_ptr, row_off, size=64)
+                x_hi = pto.vmi.vload(x_ptr, x_hi_off, size=64)
+
+                y_lo = pto.vmi.vsub(
+                    pto.vmi.vmul(cos_lo, x_lo, half_mask),
+                    pto.vmi.vmul(sin_lo, x_hi, half_mask),
+                    half_mask,
+                )
+                y_hi = pto.vmi.vadd(
+                    pto.vmi.vmul(cos_hi, x_hi, half_mask),
+                    pto.vmi.vmul(sin_hi, x_lo, half_mask),
+                    half_mask,
+                )
+
+                pto.vmi.vstore(y_lo, y_ptr, row_off, half_mask)
+                pto.vmi.vstore(y_hi, y_ptr, x_hi_off, half_mask)
+    else:
+        for s in range(0, s_count, 1):
+            x_s_off = s * x_s_step
+            cs_off = s * SIM_D
+
+            cos = pto.vmi.vload(cos_ptr, cs_off, size=64)
+            sin = pto.vmi.vload(sin_ptr, cs_off, size=64)
+            cos_even, cos_odd = pto.vmi.vdintlv(cos, cos, half_mask)
+            sin_even, sin_odd = pto.vmi.vdintlv(sin, sin, half_mask)
+
+            for n in range(0, n_count, 1):
+                row_off = x_s_off + n * SIM_D
+                x = pto.vmi.vload(x_ptr, row_off, size=64)
+                x_even, x_odd = pto.vmi.vdintlv(x, x, half_mask)
+
+                y_even = pto.vmi.vsub(
+                    pto.vmi.vmul(x_even, cos_even, half_mask),
+                    pto.vmi.vmul(x_odd, sin_even, half_mask),
+                    half_mask,
+                )
+                y_odd = pto.vmi.vadd(
+                    pto.vmi.vmul(x_odd, cos_odd, half_mask),
+                    pto.vmi.vmul(x_even, sin_odd, half_mask),
+                    half_mask,
+                )
+
+                y, _ = pto.vmi.vintlv(y_even, y_odd, half_mask)
+                pto.vmi.vstore(y, y_ptr, row_off, full_mask)
+
+    pto.set_flag(pto.Pipe.V, pto.Pipe.MTE3, event_id=0)
+    pto.wait_flag(pto.Pipe.V, pto.Pipe.MTE3, event_id=0)
+    pto.mte_ub_gm(y_ptr, y_gm, row_bytes, nburst=(rows, row_bytes, row_bytes))
+    pto.pipe_barrier(pto.Pipe.ALL)
 
 
 @pto.jit(
     name="rope_vmi_bf16",
     target="a5",
+    backend="vpto",
+    mode="explicit",
     kernel_kind="vector",
-    source=str(_PTO_FILE_BF16),
+    insert_sync=False,
 )
 def rope_vmi_bf16(
-    x_ptr: pto.ptr(pto.bf16, "gm"),
-    cos_ptr: pto.ptr(pto.f16, "gm"),
-    sin_ptr: pto.ptr(pto.f16, "gm"),
-    y_ptr: pto.ptr(pto.bf16, "gm"),
+    x_gm: pto.ptr(pto.bf16, "gm"),
+    cos_gm: pto.ptr(pto.f16, "gm"),
+    sin_gm: pto.ptr(pto.f16, "gm"),
+    y_gm: pto.ptr(pto.bf16, "gm"),
     s_count: pto.i32,
     n_count: pto.i32,
-    mode: pto.i32,
+    *,
+    MODE: pto.const_expr = 0,
 ):
-    raise RuntimeError("source-backed PTODSL kernel body should not execute")
+    rows = s_count * n_count
+    row_bytes = SIM_D * 2
+    cs_bytes = SIM_D * 2
+
+    cos_ptr = pto.castptr(pto.const(_UB_BASE_2B_COS, dtype=pto.ui64), pto.ptr(pto.f16, "ub"))
+    sin_ptr = pto.castptr(pto.const(_UB_BASE_2B_SIN, dtype=pto.ui64), pto.ptr(pto.f16, "ub"))
+    x_ptr = pto.castptr(pto.const(_UB_BASE_2B_X, dtype=pto.ui64), pto.ptr(pto.bf16, "ub"))
+    y_ptr = pto.castptr(pto.const(_UB_BASE_2B_Y, dtype=pto.ui64), pto.ptr(pto.bf16, "ub"))
+
+    pto.mte_gm_ub(cos_gm, cos_ptr, 0, cs_bytes, nburst=(s_count, cs_bytes, cs_bytes))
+    pto.mte_gm_ub(sin_gm, sin_ptr, 0, cs_bytes, nburst=(s_count, cs_bytes, cs_bytes))
+    pto.mte_gm_ub(x_gm, x_ptr, 0, row_bytes, nburst=(rows, row_bytes, row_bytes))
+
+    pto.set_flag(pto.Pipe.MTE2, pto.Pipe.V, event_id=0)
+    pto.wait_flag(pto.Pipe.MTE2, pto.Pipe.V, event_id=0)
+
+    half_mask = pto.vmi.create_mask(32, size=64)
+    full_mask = pto.vmi.create_mask(64, size=64)
+    x_s_step = n_count * SIM_D
+
+    if MODE == 0:
+        for s in range(0, s_count, 1):
+            x_s_off = s * x_s_step
+            cs_off = s * SIM_D
+            cs_hi_off = cs_off + 32
+
+            cos_lo = pto.vmi.vcvt(pto.vmi.vload(cos_ptr, cs_off, size=64), pto.f32)
+            cos_hi = pto.vmi.vcvt(pto.vmi.vload(cos_ptr, cs_hi_off, size=64), pto.f32)
+            sin_lo = pto.vmi.vcvt(pto.vmi.vload(sin_ptr, cs_off, size=64), pto.f32)
+            sin_hi = pto.vmi.vcvt(pto.vmi.vload(sin_ptr, cs_hi_off, size=64), pto.f32)
+
+            for n in range(0, n_count, 1):
+                row_off = x_s_off + n * SIM_D
+                x_hi_off = row_off + 32
+
+                x_lo = pto.vmi.vcvt(pto.vmi.vload(x_ptr, row_off, size=64), pto.f32)
+                x_hi = pto.vmi.vcvt(pto.vmi.vload(x_ptr, x_hi_off, size=64), pto.f32)
+
+                y_lo_f32 = pto.vmi.vsub(
+                    pto.vmi.vmul(cos_lo, x_lo, half_mask),
+                    pto.vmi.vmul(sin_lo, x_hi, half_mask),
+                    half_mask,
+                )
+                y_hi_f32 = pto.vmi.vadd(
+                    pto.vmi.vmul(cos_hi, x_hi, half_mask),
+                    pto.vmi.vmul(sin_hi, x_lo, half_mask),
+                    half_mask,
+                )
+
+                y_lo = pto.vmi.vcvt(y_lo_f32, pto.bf16)
+                y_hi = pto.vmi.vcvt(y_hi_f32, pto.bf16)
+
+                pto.vmi.vstore(y_lo, y_ptr, row_off, half_mask)
+                pto.vmi.vstore(y_hi, y_ptr, x_hi_off, half_mask)
+    else:
+        for s in range(0, s_count, 1):
+            x_s_off = s * x_s_step
+            cs_off = s * SIM_D
+
+            cos = pto.vmi.vcvt(pto.vmi.vload(cos_ptr, cs_off, size=64), pto.f32)
+            sin = pto.vmi.vcvt(pto.vmi.vload(sin_ptr, cs_off, size=64), pto.f32)
+            cos_even, cos_odd = pto.vmi.vdintlv(cos, cos, half_mask)
+            sin_even, sin_odd = pto.vmi.vdintlv(sin, sin, half_mask)
+
+            for n in range(0, n_count, 1):
+                row_off = x_s_off + n * SIM_D
+                x = pto.vmi.vcvt(pto.vmi.vload(x_ptr, row_off, size=64), pto.f32)
+                x_even, x_odd = pto.vmi.vdintlv(x, x, half_mask)
+
+                y_even_f32 = pto.vmi.vsub(
+                    pto.vmi.vmul(x_even, cos_even, half_mask),
+                    pto.vmi.vmul(x_odd, sin_even, half_mask),
+                    half_mask,
+                )
+                y_odd_f32 = pto.vmi.vadd(
+                    pto.vmi.vmul(x_odd, cos_odd, half_mask),
+                    pto.vmi.vmul(x_even, sin_odd, half_mask),
+                    half_mask,
+                )
+
+                y_even = pto.vmi.vcvt(y_even_f32, pto.bf16)
+                y_odd = pto.vmi.vcvt(y_odd_f32, pto.bf16)
+
+                y, _ = pto.vmi.vintlv(y_even, y_odd, half_mask)
+                pto.vmi.vstore(y, y_ptr, row_off, full_mask)
+
+    pto.set_flag(pto.Pipe.V, pto.Pipe.MTE3, event_id=0)
+    pto.wait_flag(pto.Pipe.V, pto.Pipe.MTE3, event_id=0)
+    pto.mte_ub_gm(y_ptr, y_gm, row_bytes, nburst=(rows, row_bytes, row_bytes))
+    pto.pipe_barrier(pto.Pipe.ALL)
 
 
 @pto.jit(
     name="rope_vmi_f32",
     target="a5",
+    backend="vpto",
+    mode="explicit",
     kernel_kind="vector",
-    source=str(_PTO_FILE_F32),
+    insert_sync=False,
 )
 def rope_vmi_f32(
-    x_ptr: pto.ptr(pto.f32, "gm"),
-    cos_ptr: pto.ptr(pto.f32, "gm"),
-    sin_ptr: pto.ptr(pto.f32, "gm"),
-    y_ptr: pto.ptr(pto.f32, "gm"),
+    x_gm: pto.ptr(pto.f32, "gm"),
+    cos_gm: pto.ptr(pto.f32, "gm"),
+    sin_gm: pto.ptr(pto.f32, "gm"),
+    y_gm: pto.ptr(pto.f32, "gm"),
     s_count: pto.i32,
     n_count: pto.i32,
-    mode: pto.i32,
+    *,
+    MODE: pto.const_expr = 0,
 ):
-    raise RuntimeError("source-backed PTODSL kernel body should not execute")
+    rows = s_count * n_count
+    row_bytes = SIM_D * 4
+    cs_bytes = SIM_D * 4
+
+    cos_ptr = pto.castptr(pto.const(_UB_BASE_4B_COS, dtype=pto.ui64), pto.ptr(pto.f32, "ub"))
+    sin_ptr = pto.castptr(pto.const(_UB_BASE_4B_SIN, dtype=pto.ui64), pto.ptr(pto.f32, "ub"))
+    x_ptr = pto.castptr(pto.const(_UB_BASE_4B_X, dtype=pto.ui64), pto.ptr(pto.f32, "ub"))
+    y_ptr = pto.castptr(pto.const(_UB_BASE_4B_Y, dtype=pto.ui64), pto.ptr(pto.f32, "ub"))
+
+    pto.mte_gm_ub(cos_gm, cos_ptr, 0, cs_bytes, nburst=(s_count, cs_bytes, cs_bytes))
+    pto.mte_gm_ub(sin_gm, sin_ptr, 0, cs_bytes, nburst=(s_count, cs_bytes, cs_bytes))
+    pto.mte_gm_ub(x_gm, x_ptr, 0, row_bytes, nburst=(rows, row_bytes, row_bytes))
+
+    pto.set_flag(pto.Pipe.MTE2, pto.Pipe.V, event_id=0)
+    pto.wait_flag(pto.Pipe.MTE2, pto.Pipe.V, event_id=0)
+
+    half_mask = pto.vmi.create_mask(32, size=64)
+    full_mask = pto.vmi.create_mask(64, size=64)
+    x_s_step = n_count * SIM_D
+
+    if MODE == 0:
+        for s in range(0, s_count, 1):
+            x_s_off = s * x_s_step
+            cs_off = s * SIM_D
+            cs_hi_off = cs_off + 32
+
+            cos_lo = pto.vmi.vload(cos_ptr, cs_off, size=64)
+            cos_hi = pto.vmi.vload(cos_ptr, cs_hi_off, size=64)
+            sin_lo = pto.vmi.vload(sin_ptr, cs_off, size=64)
+            sin_hi = pto.vmi.vload(sin_ptr, cs_hi_off, size=64)
+
+            for n in range(0, n_count, 1):
+                row_off = x_s_off + n * SIM_D
+                x_hi_off = row_off + 32
+
+                x_lo = pto.vmi.vload(x_ptr, row_off, size=64)
+                x_hi = pto.vmi.vload(x_ptr, x_hi_off, size=64)
+
+                y_lo = pto.vmi.vsub(
+                    pto.vmi.vmul(cos_lo, x_lo, half_mask),
+                    pto.vmi.vmul(sin_lo, x_hi, half_mask),
+                    half_mask,
+                )
+                y_hi = pto.vmi.vadd(
+                    pto.vmi.vmul(cos_hi, x_hi, half_mask),
+                    pto.vmi.vmul(sin_hi, x_lo, half_mask),
+                    half_mask,
+                )
+
+                pto.vmi.vstore(y_lo, y_ptr, row_off, half_mask)
+                pto.vmi.vstore(y_hi, y_ptr, x_hi_off, half_mask)
+    else:
+        for s in range(0, s_count, 1):
+            x_s_off = s * x_s_step
+            cs_off = s * SIM_D
+
+            cos = pto.vmi.vload(cos_ptr, cs_off, size=64)
+            sin = pto.vmi.vload(sin_ptr, cs_off, size=64)
+            cos_even, cos_odd = pto.vmi.vdintlv(cos, cos, half_mask)
+            sin_even, sin_odd = pto.vmi.vdintlv(sin, sin, half_mask)
+
+            for n in range(0, n_count, 1):
+                row_off = x_s_off + n * SIM_D
+                x = pto.vmi.vload(x_ptr, row_off, size=64)
+                x_even, x_odd = pto.vmi.vdintlv(x, x, half_mask)
+
+                y_even = pto.vmi.vsub(
+                    pto.vmi.vmul(x_even, cos_even, half_mask),
+                    pto.vmi.vmul(x_odd, sin_even, half_mask),
+                    half_mask,
+                )
+                y_odd = pto.vmi.vadd(
+                    pto.vmi.vmul(x_odd, cos_odd, half_mask),
+                    pto.vmi.vmul(x_even, sin_odd, half_mask),
+                    half_mask,
+                )
+
+                y, _ = pto.vmi.vintlv(y_even, y_odd, half_mask)
+                pto.vmi.vstore(y, y_ptr, row_off, full_mask)
+
+    pto.set_flag(pto.Pipe.V, pto.Pipe.MTE3, event_id=0)
+    pto.wait_flag(pto.Pipe.V, pto.Pipe.MTE3, event_id=0)
+    pto.mte_ub_gm(y_ptr, y_gm, row_bytes, nburst=(rows, row_bytes, row_bytes))
+    pto.pipe_barrier(pto.Pipe.ALL)
 
 
-_COMPILED: dict[str, object] = {}
+_COMPILED: dict[tuple[str, int], object] = {}
 
 
 def _kernel_for_dtype(dtype: str):
@@ -91,17 +364,18 @@ def _kernel_for_dtype(dtype: str):
     raise ValueError(f"unsupported vmi dtype: {dtype}")
 
 
-def _prepare(dtype: str) -> object:
+def _prepare(dtype: str, mode_value: int) -> object:
     key, kernel = _kernel_for_dtype(dtype)
-    compiled = _COMPILED.get(key)
+    cache_key = (key, mode_value)
+    compiled = _COMPILED.get(cache_key)
     if compiled is None:
-        compiled = kernel.compile()
-        _COMPILED[key] = compiled
+        compiled = kernel.compile(MODE=mode_value)
+        _COMPILED[cache_key] = compiled
     return compiled
 
 
 def _launch(launch_args: RopeLaunchArgs):
-    compiled = _prepare(launch_args.dtype)
+    compiled = _prepare(launch_args.dtype, launch_args.mode_value)
     compiled[1, stream_ptr()](
         launch_args.x.data_ptr(),
         launch_args.cos.data_ptr(),
@@ -109,7 +383,6 @@ def _launch(launch_args: RopeLaunchArgs):
         launch_args.y.data_ptr(),
         launch_args.s_count,
         launch_args.n_count,
-        launch_args.mode_value,
     )
     sync()
     return launch_args.y
@@ -134,7 +407,7 @@ def rope_f32(launch_args: RopeLaunchArgs):
 
 
 class RopeVmiBackend:
-    """Source-backed PTODSL VMI backend for rope."""
+    """Pure-PTODSL VMI backend for rope."""
 
     name = "vmi"
     _launchers = {
@@ -156,9 +429,5 @@ class RopeVmiBackend:
         return self._launchers[launch_args.dtype](launch_args)
 
     def cache_tag(self) -> str:
-        return (
-            f"vmi:"
-            f"{_PTO_FILE_F16}:{os.path.getmtime(_PTO_FILE_F16):.0f}:"
-            f"{_PTO_FILE_BF16}:{os.path.getmtime(_PTO_FILE_BF16):.0f}:"
-            f"{_PTO_FILE_F32}:{os.path.getmtime(_PTO_FILE_F32):.0f}"
-        )
+        backend_py = _VMI_ROOT / "backend.py"
+        return f"vmi:{backend_py}:{os.path.getmtime(backend_py):.0f}"
