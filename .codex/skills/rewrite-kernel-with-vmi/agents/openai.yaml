@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rewrite Kernel With VMI"
+  short_description: "AscendC kernel to PTODSL VMI/MI rewrite"
+  default_prompt: "Use $rewrite-kernel-with-vmi to rewrite this AscendC kernel into PTODSL VMI/MI and validate the generated MLIR."
