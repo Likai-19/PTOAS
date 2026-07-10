@@ -6,15 +6,18 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: not pto-test-opt %s -vmi-to-vpto 2>&1 | FileCheck %s
+// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
 
 module {
-  func.func @vmi_to_vpto_unrealized_cast_residual_invalid(
-      %arg0: i32) {
+  func.func @vmi_to_vpto_unrealized_cast_non_vmi(
+      %arg0: i32) -> f32 {
     %0 = builtin.unrealized_conversion_cast %arg0
-        : i32 to !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
-    return
+        : i32 to f32
+    return %0 : f32
   }
 }
 
-// CHECK: VMI-RESIDUAL-OP: failed to convert all VMI ops/types to VPTO
+// CHECK-LABEL: func.func @vmi_to_vpto_unrealized_cast_non_vmi
+// CHECK: builtin.unrealized_conversion_cast
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: pto.vmi.
