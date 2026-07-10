@@ -19,11 +19,12 @@
 //   vsel            → select
 //   vbrc            → broadcast  (skipped when num_groups is present)
 //
-// Category B — masked elementwise, pmode="zero" only (18 ops):
-//   vadd/vsub/vmul/vdiv/vmin/vmax → legacy type-specific binary + zero + select
-//   vneg/vabs/vsqrt/vexp/vln/vrelu → legacy unary + zero + select
-//   vand/vor/vxor/vshl/vshr/vnot → legacy bitwise + zero + select
-//   pmode="merge" is skipped — merge semantic cannot be expressed in VMI SSA IR.
+// Category B — elementwise arithmetic / bitwise (18 ops):
+//   vadd/vsub/vmul/vdiv/vmin/vmax → legacy type-specific binary op
+//   vneg/vabs/vsqrt/vexp/vln/vrelu → legacy unary op
+//   vand/vor/vxor/vshl/vshr/vnot → legacy bitwise op
+//   Mask/pmode synthesis is intentionally bypassed here so two-stage lowering
+//   does not introduce select chains before layout assignment.
 //
 // Category C1 — compare + seed (2 ops):
 //   vcmp  → cmpf/cmpi + mask_and
@@ -51,7 +52,7 @@
 //
 // Category C5 — vector-scalar ops, one-step to legacy (6 ops):
 //   vadds/vmuls/vmaxs/vmins/vshls/vshrs
-//     → broadcast scalar → legacy binary → zero constant → select
+//     → broadcast scalar → legacy binary
 //
 // Category C3 — unified load/store (2 ops, dispatch by dist_mode/group):
 //   vload → load / deinterleave_load / group_load
@@ -74,11 +75,10 @@
 //   vscatter → scatter
 //
 // Category C9 — fused activation / softmax, decomposed to legacy chains (3 ops):
-//   vexpdif → [extf] + subf + exp + select   (widen f16 x to f32 when needed)
-//   vlrelu  → maxf + minf + broadcast + mulf + addf + select
-//   vprelu  → maxf + minf + mulf + addf + select
-//   The trailing select(mask, raw, zero) applies pmode="zero" predication.
-//   Category C7/C8/C9 all skip pmode="merge".
+//   vexpdif → [extf] + subf + exp   (widen f16 x to f32 when needed)
+//   vlrelu  → maxf + minf + broadcast + mulf + addf
+//   vprelu  → maxf + minf + mulf + addf
+//   Category C7/C8/C9 bypass mask/pmode synthesis here and skip pmode="merge".
 //
 // Category D — no legacy equivalent (explicitly skipped, 6 ops):
 //   vhist vintlv vdintlv vselr vgatherb vmull
@@ -235,53 +235,30 @@ static StringRef classifyCvtDirection(Type srcElem, Type dstElem) {
 }
 
 //===----------------------------------------------------------------------===//
-// Category B: masked elementwise → legacy compute + zero + select
+// Category B: elementwise → legacy compute
 //===----------------------------------------------------------------------===//
 
-/// Lower a masked BINARY unified op (vadd, vsub, …) to legacy chain:
-///   %raw  = legacy.op %lhs, %rhs
-///   %zero = vmi.constant dense<0.0>
-///   %r    = vmi.select %mask, %raw, %zero
-///
-/// \p createLegacy is a callable `(Location, Type, Value, Value) -> Value`
-/// that emits the legacy binary op.
+/// Lower a BINARY unified op (vadd, vsub, …) to its legacy counterpart.
+/// Mask/pmode materialization is intentionally skipped in the two-stage path.
 template <typename UnifiedOp>
 static LogicalResult
 lowerMaskedBinary(UnifiedOp op, OpBuilder &builder,
-                  function_ref<Value(Location, Type, Value, Value)> createLegacy,
-                  bool hasMaskOperand = true) {
+                  function_ref<Value(Location, Type, Value, Value)> createLegacy) {
   if (hasMergePmode(op))
     return failure();
 
   Location loc = op.getLoc();
   Type resultType = op.getResult().getType();
-  auto vmiType = cast<VMIVRegType>(resultType);
   Value lhs = op.getLhs();
   Value rhs = op.getRhs();
 
-  // 1. Legacy binary op.
   Value raw = createLegacy(loc, resultType, lhs, rhs);
-
-  // 2. If the unified op carries an explicit mask operand, wrap in
-  //    select(mask, raw, zero) for lane-level predication.  Otherwise the
-  //    legacy op already computes on all lanes — skip the mask+select chain.
-  if (hasMaskOperand && !op.getMask().empty()) {
-    Value zeroConst = createZeroConstant(builder, loc, vmiType);
-    Value mask = op.getMask().front();
-    Value result =
-        builder.create<VMISelectOp>(loc, resultType, mask, raw, zeroConst);
-    op.getResult().replaceAllUsesWith(result);
-  } else {
-    op.getResult().replaceAllUsesWith(raw);
-  }
+  op.getResult().replaceAllUsesWith(raw);
   op->erase();
   return success();
 }
 
-/// Lower a masked UNARY unified op (vneg, vabs, …) to legacy chain:
-///   %raw  = legacy.op %source
-///   %zero = vmi.constant dense<0.0>
-///   %r    = vmi.select %mask, %raw, %zero
+/// Lower a UNARY unified op (vneg, vabs, …) to its legacy counterpart.
 template <typename UnifiedOp>
 static LogicalResult
 lowerMaskedUnary(UnifiedOp op, OpBuilder &builder,
@@ -291,24 +268,10 @@ lowerMaskedUnary(UnifiedOp op, OpBuilder &builder,
 
   Location loc = op.getLoc();
   Type resultType = op.getResult().getType();
-  auto vmiType = cast<VMIVRegType>(resultType);
   Value source = op.getSource();
 
-  // 1. Legacy unary op.
   Value raw = createLegacy(loc, resultType, source);
-
-  // 2. If the unified op carries an explicit mask operand, wrap in
-  //    select(mask, raw, zero) for lane-level predication.  Otherwise the
-  //    legacy op already computes on all lanes — skip the mask+select chain.
-  if (!op.getMask().empty()) {
-    Value zeroConst = createZeroConstant(builder, loc, vmiType);
-    Value mask = op.getMask().front();
-    Value result =
-        builder.create<VMISelectOp>(loc, resultType, mask, raw, zeroConst);
-    op.getResult().replaceAllUsesWith(result);
-  } else {
-    op.getResult().replaceAllUsesWith(raw);
-  }
+  op.getResult().replaceAllUsesWith(raw);
   op->erase();
   return success();
 }
@@ -693,8 +656,6 @@ static LogicalResult lowerPge(VMIPgeOp op, OpBuilder &builder) {
 /// Lower a unified vector-scalar op (vadds, vmuls, …) to a legacy chain:
 ///   %brc  = vmi.broadcast %scalar
 ///   %raw  = legacy.op %src, %brc
-///   %zero = vmi.constant dense<0.0>
-///   %r    = vmi.select %mask, %raw, %zero
 template <typename VecScalarOp>
 static LogicalResult
 lowerVecScalar(VecScalarOp op, OpBuilder &builder,
@@ -704,25 +665,13 @@ lowerVecScalar(VecScalarOp op, OpBuilder &builder,
 
   Location loc = op.getLoc();
   Type srcVmiType = op.getSrc().getType();
-  auto vmiType = cast<VMIVRegType>(srcVmiType);
   Value src = op.getSrc();
   Value scalar = op.getScalar();
-  Value mask = op.getMask();
 
-  // 1. Broadcast scalar → vector (legacy broadcast).
   Value brc = builder.create<VMIBroadcastOp>(loc, srcVmiType, scalar)
                   .getResult();
-
-  // 2. Legacy binary op.
   Value raw = createLegacy(loc, srcVmiType, src, brc);
-
-  // 3. Zero constant.
-  Value zeroConst = createZeroConstant(builder, loc, vmiType);
-
-  // 4. Select with mask.
-  Value result = builder.create<VMISelectOp>(loc, srcVmiType, mask, raw,
-                                             zeroConst);
-  op.getResult().replaceAllUsesWith(result);
+  op.getResult().replaceAllUsesWith(raw);
   op->erase();
   return success();
 }
@@ -869,7 +818,7 @@ static LogicalResult lowerVcmin(VMIvcminOp op, OpBuilder &builder) {
 // Category C7 helpers: vmula / vaxpy (fused multiply-add → legacy fma)
 //===----------------------------------------------------------------------===//
 
-/// Lower vmula (acc = acc + lhs*rhs) to legacy fma (lhs*rhs + acc) + select.
+/// Lower vmula (acc = acc + lhs*rhs) to legacy fma (lhs*rhs + acc).
 /// Legacy fma is floating-point only; integer vmula has no legacy equivalent
 /// and is skipped (falls through to VMIToVPTO).
 static LogicalResult lowerVmula(VMIVmulaOp op, OpBuilder &builder) {
@@ -887,15 +836,12 @@ static LogicalResult lowerVmula(VMIVmulaOp op, OpBuilder &builder) {
                   .create<VMIFmaOp>(loc, resultType, op.getLhs(), op.getRhs(),
                                     op.getAcc())
                   .getResult();
-  Value zeroConst = createZeroConstant(builder, loc, vmiType);
-  Value result = builder.create<VMISelectOp>(loc, resultType, op.getMask(), raw,
-                                             zeroConst);
-  op.getResult().replaceAllUsesWith(result);
+  op.getResult().replaceAllUsesWith(raw);
   op->erase();
   return success();
 }
 
-/// Lower vaxpy (alpha*x + y) to broadcast(alpha) + legacy fma + select.
+/// Lower vaxpy (alpha*x + y) to broadcast(alpha) + legacy fma.
 /// alpha is a scalar float, broadcast to a vector before the fma.
 static LogicalResult lowerVaxpy(VMIVaxpyOp op, OpBuilder &builder) {
   if (hasMergePmode(op))
@@ -915,10 +861,7 @@ static LogicalResult lowerVaxpy(VMIVaxpyOp op, OpBuilder &builder) {
                   .create<VMIFmaOp>(loc, resultType, alphaVec, op.getX(),
                                     op.getAcc())
                   .getResult();
-  Value zeroConst = createZeroConstant(builder, loc, vmiType);
-  Value result = builder.create<VMISelectOp>(loc, resultType, op.getMask(), raw,
-                                             zeroConst);
-  op.getResult().replaceAllUsesWith(result);
+  op.getResult().replaceAllUsesWith(raw);
   op->erase();
   return success();
 }
@@ -991,7 +934,7 @@ static LogicalResult lowerVscatter(VMIVscatterOp op, OpBuilder &builder) {
 // Category C9 helpers: vexpdif / vlrelu / vprelu (fused → legacy chains)
 //===----------------------------------------------------------------------===//
 
-/// Lower vexpdif (exp(x - max)) to [extf] + subf + exp + select.
+/// Lower vexpdif (exp(x - max)) to [extf] + subf + exp.
 /// x may be f16 while max and result are always f32 — widen x first when its
 /// element type differs from the result type.
 static LogicalResult lowerVexpdif(VMIVexpdifOp op, OpBuilder &builder) {
@@ -1010,15 +953,12 @@ static LogicalResult lowerVexpdif(VMIVexpdifOp op, OpBuilder &builder) {
   Value diff =
       builder.create<VMISubFOp>(loc, resultType, x, op.getMax()).getResult();
   Value raw = builder.create<VMIExpOp>(loc, resultType, diff).getResult();
-  Value zeroConst = createZeroConstant(builder, loc, vmiType);
-  Value result = builder.create<VMISelectOp>(loc, resultType, op.getMask(), raw,
-                                             zeroConst);
-  op.getResult().replaceAllUsesWith(result);
+  op.getResult().replaceAllUsesWith(raw);
   op->erase();
   return success();
 }
 
-/// Lower vlrelu (x>0 ? x : slope*x) to max(x,0) + slope*min(x,0) + select.
+/// Lower vlrelu (x>0 ? x : slope*x) to max(x,0) + slope*min(x,0).
 /// slope is a scalar float broadcast to a vector.
 static LogicalResult lowerVlrelu(VMIVlreluOp op, OpBuilder &builder) {
   if (hasMergePmode(op))
@@ -1041,14 +981,12 @@ static LogicalResult lowerVlrelu(VMIVlreluOp op, OpBuilder &builder) {
       builder.create<VMIMulFOp>(loc, resultType, slopeVec, neg).getResult();
   Value raw =
       builder.create<VMIAddFOp>(loc, resultType, pos, scaledNeg).getResult();
-  Value result = builder.create<VMISelectOp>(loc, resultType, op.getMask(), raw,
-                                             zeroConst);
-  op.getResult().replaceAllUsesWith(result);
+  op.getResult().replaceAllUsesWith(raw);
   op->erase();
   return success();
 }
 
-/// Lower vprelu (max(x,0) + alpha*min(x,0)) to legacy max/min/mul/add + select.
+/// Lower vprelu (max(x,0) + alpha*min(x,0)) to legacy max/min/mul/add.
 /// alpha is a per-lane vector (no broadcast needed).
 static LogicalResult lowerVprelu(VMIVpreluOp op, OpBuilder &builder) {
   if (hasMergePmode(op))
@@ -1068,9 +1006,7 @@ static LogicalResult lowerVprelu(VMIVpreluOp op, OpBuilder &builder) {
       builder.create<VMIMulFOp>(loc, resultType, op.getAlpha(), neg).getResult();
   Value raw =
       builder.create<VMIAddFOp>(loc, resultType, pos, scaledNeg).getResult();
-  Value result = builder.create<VMISelectOp>(loc, resultType, op.getMask(), raw,
-                                             zeroConst);
-  op.getResult().replaceAllUsesWith(result);
+  op.getResult().replaceAllUsesWith(raw);
   op->erase();
   return success();
 }
