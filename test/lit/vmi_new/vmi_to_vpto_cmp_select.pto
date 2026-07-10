@@ -6,16 +6,19 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto | FileCheck %s
 
 module {
   func.func @vmi_to_vpto_cmpf_select(
       %a: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
       %b: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>)
       -> (!pto.mask<b32>, !pto.mask<b32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>) {
-    %mask = pto.vmi.cmpf "lt", %a, %b
+    %seed = pto.vmi.pset "PAT_ALL"
+        : !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
+    %mask = pto.vmi.vcmp %a, %b, %seed {cmp = "lt"}
         : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
-          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
     %selected = pto.vmi.vsel %mask, %a, %b
         : !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>,
@@ -36,9 +39,12 @@ module {
       %a: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
       %b: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>)
       -> (!pto.mask<b32>, !pto.mask<b32>) {
-    %mask = pto.vmi.cmpi "ge", %a, %b
+    %seed = pto.vmi.pset "PAT_ALL"
+        : !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
+    %mask = pto.vmi.vcmp %a, %b, %seed {cmp = "ge"}
         : !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
-          !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>
+          !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
     %m0, %m1 = "pto.vmi.unpack"(%mask)
         : (!pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>)
@@ -50,9 +56,12 @@ module {
       %a: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
       %b: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>)
       -> (!pto.mask<b32>, !pto.mask<b32>) {
-    %mask = pto.vmi.cmpf "olt", %a, %b
+    %seed = pto.vmi.pset "PAT_ALL"
+        : !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
+    %mask = pto.vmi.vcmp %a, %b, %seed {cmp = "olt"}
         : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
-          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
     %m0, %m1 = "pto.vmi.unpack"(%mask)
         : (!pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>)
@@ -64,9 +73,12 @@ module {
       %a: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
       %b: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>)
       -> (!pto.mask<b32>, !pto.mask<b32>) {
-    %mask = pto.vmi.cmpi "slt", %a, %b
+    %seed = pto.vmi.pset "PAT_ALL"
+        : !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
+    %mask = pto.vmi.vcmp %a, %b, %seed {cmp = "slt"}
         : !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
-          !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>
+          !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
     %m0, %m1 = "pto.vmi.unpack"(%mask)
         : (!pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>)
@@ -78,9 +90,12 @@ module {
       %a: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>,
       %b: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>)
       -> !pto.mask<b16> {
-    %mask = pto.vmi.cmpf "oge", %a, %b
+    %seed = pto.vmi.pset "PAT_ALL"
+        : !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+    %mask = pto.vmi.vcmp %a, %b, %seed {cmp = "oge"}
         : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>,
-          !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+          !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
         -> !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
     %part = "pto.vmi.unpack"(%mask)
         : (!pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>)
@@ -92,9 +107,12 @@ module {
       %a: !pto.vmi.vreg<128xui16, #pto.vmi.layout<contiguous>>,
       %b: !pto.vmi.vreg<128xui16, #pto.vmi.layout<contiguous>>)
       -> !pto.mask<b16> {
-    %mask = pto.vmi.cmpi "eq", %a, %b
+    %seed = pto.vmi.pset "PAT_ALL"
+        : !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+    %mask = pto.vmi.vcmp %a, %b, %seed {cmp = "eq"}
         : !pto.vmi.vreg<128xui16, #pto.vmi.layout<contiguous>>,
-          !pto.vmi.vreg<128xui16, #pto.vmi.layout<contiguous>>
+          !pto.vmi.vreg<128xui16, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
         -> !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
     %part = "pto.vmi.unpack"(%mask)
         : (!pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>)

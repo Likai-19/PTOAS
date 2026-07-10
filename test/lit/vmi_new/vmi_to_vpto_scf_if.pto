@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
 
 module {
   func.func @vmi_to_vpto_scf_if(
@@ -15,18 +15,20 @@ module {
       %b: !pto.vmi.vreg<128xf16>) -> !pto.vmi.vreg<128xf32> {
     %value, %mask = scf.if %cond
         -> (!pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>) {
-      %ea = pto.vmi.extf %a
+      %ea = pto.vmi.vcvt %a
           : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
-      %cmpa = pto.vmi.cmpf "olt", %ea, %ea
-          : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
-          -> !pto.vmi.mask<128xpred>
+      %seed_a = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<128xpred>
+      %cmpa = pto.vmi.vcmp %ea, %ea, %seed_a {cmp = "olt"}
+          : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>,
+            !pto.vmi.mask<128xpred> -> !pto.vmi.mask<128xpred>
       scf.yield %ea, %cmpa : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
     } else {
-      %eb = pto.vmi.extf %b
+      %eb = pto.vmi.vcvt %b
           : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
-      %cmpb = pto.vmi.cmpf "olt", %eb, %eb
-          : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
-          -> !pto.vmi.mask<128xpred>
+      %seed_b = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<128xpred>
+      %cmpb = pto.vmi.vcmp %eb, %eb, %seed_b {cmp = "olt"}
+          : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>,
+            !pto.vmi.mask<128xpred> -> !pto.vmi.mask<128xpred>
       scf.yield %eb, %cmpb : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
     }
     %selected = pto.vmi.vsel %mask, %value, %value

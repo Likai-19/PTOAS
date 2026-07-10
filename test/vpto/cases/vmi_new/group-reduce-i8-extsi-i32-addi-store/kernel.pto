@@ -20,20 +20,20 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     %c256_i64 = arith.constant 256 : i64
     %c512_i64 = arith.constant 512 : i64
 
-    %ub_src = pto.castptr %c0_i64 : i64 -> !pto.ptr<i8, ub>
+    %ub_src = pto.castptr %c0_i64 : i64 -> !pto.ptr<si8, ub>
     %ub_dst = pto.castptr %c512_i64 : i64 -> !pto.ptr<i32, ub>
 
     pto.mte_gm_ub %src_gm, %ub_src, %c0_i64, %c256_i64
       nburst(%c1_i64, %c256_i64, %c256_i64)
-      : !pto.ptr<i8, gm>, !pto.ptr<i8, ub>, i64, i64, i64, i64, i64
+      : !pto.ptr<i8, gm>, !pto.ptr<si8, ub>, i64, i64, i64, i64, i64
 
     pto.set_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
     pto.wait_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
 
     pto.vecscope {
       %mask = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<256xpred>
-      %x8 = pto.vmi.vload %ub_src[%c0] : !pto.ptr<i8, ub> -> !pto.vmi.vreg<256xi8>
-      %x32 = pto.vmi.vcvt {sign = "S"} %x8 : !pto.vmi.vreg<256xi8> -> !pto.vmi.vreg<256xi32>
+      %x8 = pto.vmi.vload %ub_src[%c0] : !pto.ptr<si8, ub> -> !pto.vmi.vreg<256xsi8>
+      %x32 = pto.vmi.vcvt %x8 : !pto.vmi.vreg<256xsi8> -> !pto.vmi.vreg<256xi32>
       %sum = pto.vmi.vcadd %x32, %mask {group = 8}
           : !pto.vmi.vreg<256xi32>, !pto.vmi.mask<256xpred>
           -> !pto.vmi.vreg<8xi32>
