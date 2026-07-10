@@ -8,15 +8,14 @@
 // FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
 // for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto | FileCheck %s
 
 module {
   func.func @vmi_to_vpto_extui_u8_to_u32(
       %input: !pto.vmi.vreg<256xui8, #pto.vmi.layout<contiguous>>)
       -> (!pto.vreg<64xui32>, !pto.vreg<64xui32>,
           !pto.vreg<64xui32>, !pto.vreg<64xui32>) {
-    %wide = pto.vmi.extui %input
-        : !pto.vmi.vreg<256xui8, #pto.vmi.layout<contiguous>>
+    %wide = pto.vmi.vcvt %input        : !pto.vmi.vreg<256xui8, #pto.vmi.layout<contiguous>>
         -> !pto.vmi.vreg<256xui32, #pto.vmi.layout<deinterleaved = 4>>
     %p0, %p1, %p2, %p3 = "pto.vmi.unpack"(%wide)
         : (!pto.vmi.vreg<256xui32, #pto.vmi.layout<deinterleaved = 4>>)
@@ -30,8 +29,7 @@ module {
   func.func @vmi_to_vpto_extui_u8_to_u16(
       %input: !pto.vmi.vreg<256xui8, #pto.vmi.layout<contiguous>>)
       -> (!pto.vreg<128xui16>, !pto.vreg<128xui16>) {
-    %wide = pto.vmi.extui %input
-        : !pto.vmi.vreg<256xui8, #pto.vmi.layout<contiguous>>
+    %wide = pto.vmi.vcvt %input        : !pto.vmi.vreg<256xui8, #pto.vmi.layout<contiguous>>
         -> !pto.vmi.vreg<256xui16, #pto.vmi.layout<deinterleaved = 2>>
     %even, %odd = "pto.vmi.unpack"(%wide)
         : (!pto.vmi.vreg<256xui16, #pto.vmi.layout<deinterleaved = 2>>)
@@ -42,7 +40,7 @@ module {
   func.func @vmi_to_vpto_trunci_i32_to_ui8(
       %wide: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>)
       -> !pto.vreg<256xui8> {
-    %narrow = pto.vmi.trunci %wide
+    %narrow = pto.vmi.vcvt %wide
         : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xui8, #pto.vmi.layout<contiguous>>
     %p = "pto.vmi.unpack"(%narrow)
@@ -54,7 +52,7 @@ module {
   func.func @vmi_to_vpto_trunci_i32_d4_to_ui16_d2(
       %wide: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>)
       -> (!pto.vreg<128xui16>, !pto.vreg<128xui16>) {
-    %narrow = pto.vmi.trunci %wide
+    %narrow = pto.vmi.vcvt %wide
         : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xui16, #pto.vmi.layout<deinterleaved = 2>>
     %low, %high = "pto.vmi.unpack"(%narrow)
@@ -67,7 +65,7 @@ module {
       %input: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>)
       -> (!pto.vreg<64xi32>, !pto.vreg<64xi32>,
           !pto.vreg<64xi32>, !pto.vreg<64xi32>) {
-    %wide = pto.vmi.fptosi %input
+    %wide = pto.vmi.vcvt %input
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
     %p0, %p1, %p2, %p3 = "pto.vmi.unpack"(%wide)
@@ -84,10 +82,10 @@ module {
       %dst: !pto.ptr<ui8, ub>,
       %off: index) {
     %c1 = arith.constant 1 : index
-    %narrow = pto.vmi.trunci %wide
+    %narrow = pto.vmi.vcvt %wide
         : !pto.vmi.vreg<8xi32, #pto.vmi.layout<num_groups = 8, slots = 1>>
         -> !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 1>>
-    pto.vmi.group_store %narrow, %dst[%off], %c1 {num_groups = 8}
+    pto.vmi.vstore %narrow, %dst[%off], %c1 {group = 8}
         : !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 1>>,
           !pto.ptr<ui8, ub>
     return
@@ -98,10 +96,10 @@ module {
       %dst: !pto.ptr<ui8, ub>,
       %off: index) {
     %c1 = arith.constant 1 : index
-    %narrow = pto.vmi.trunci %wide
+    %narrow = pto.vmi.vcvt %wide
         : !pto.vmi.vreg<8xi32, #pto.vmi.layout<num_groups = 8, slots = 8>>
         -> !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8>>
-    pto.vmi.group_store %narrow, %dst[%off], %c1 {num_groups = 8}
+    pto.vmi.vstore %narrow, %dst[%off], %c1 {group = 8}
         : !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8>>,
           !pto.ptr<ui8, ub>
     return
@@ -112,10 +110,10 @@ module {
       %dst: !pto.ptr<ui8, ub>,
       %off: index) {
     %c1 = arith.constant 1 : index
-    %narrow = pto.vmi.trunci %wide
+    %narrow = pto.vmi.vcvt %wide
         : !pto.vmi.vreg<8xi32, #pto.vmi.layout<num_groups = 8, slots = 8>>
         -> !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>>
-    pto.vmi.group_store %narrow, %dst[%off], %c1 {num_groups = 8}
+    pto.vmi.vstore %narrow, %dst[%off], %c1 {group = 8}
         : !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>>,
           !pto.ptr<ui8, ub>
     return

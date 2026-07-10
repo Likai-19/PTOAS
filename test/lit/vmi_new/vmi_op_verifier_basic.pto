@@ -6,11 +6,11 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: ptoas --emit-pto-ir %s 2>&1 | FileCheck %s
+// RUN: pto-test-opt %s | FileCheck %s
 
 module {
   func.func @vmi_op_verifier_basic(
-      %ptr: !pto.ptr<f32>,
+      %ptr: !pto.ptr<f32, ub>,
       %layouted: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
       %mask_b16: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>,
       %mask_b32: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>)
@@ -34,28 +34,28 @@ module {
     %const = "pto.vmi.constant"() {
       value = dense<1.000000e+00> : tensor<128xf32>
     } : () -> !pto.vmi.vreg<128xf32>
-    %broadcast = pto.vmi.broadcast %f32 : f32 -> !pto.vmi.vreg<128xf32>
-    %broadcast16 = pto.vmi.broadcast %f16 : f16 -> !pto.vmi.vreg<128xf16>
+    %broadcast = pto.vmi.vbrc %f32 : f32 -> !pto.vmi.vreg<128xf32>
+    %broadcast16 = pto.vmi.vbrc %f16 : f16 -> !pto.vmi.vreg<128xf16>
     %mask = pto.vmi.create_mask %active : index -> !pto.vmi.mask<128xpred>
     %mask_const = "pto.vmi.constant_mask"() {
       value = dense<true> : tensor<128xi1>
     } : () -> !pto.vmi.mask<128xpred>
 
-    %add = pto.vmi.addf %broadcast, %const
+    %add = pto.vmi.vadd %broadcast, %const
         : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
-    %cmp = pto.vmi.cmpf "olt", %broadcast, %const
-        : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32> -> !pto.vmi.mask<128xpred>
+    %cmp = pto.vmi.vcmp %broadcast, %const, %mask {cmp = "olt"}
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred> -> !pto.vmi.mask<128xpred>
     %sel = pto.vmi.vsel %mask, %broadcast, %const
         : !pto.vmi.mask<128xpred>, !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
-    %ext = pto.vmi.extf %broadcast16 : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
-    %trunc = pto.vmi.truncf %ext : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
+    %ext = pto.vmi.vcvt %broadcast16 : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
+    %trunc = pto.vmi.vcvt %ext : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
 
-    %loaded = pto.vmi.load %ptr[%c0] : !pto.ptr<f32> -> !pto.vmi.vreg<128xf32>
+    %loaded = pto.vmi.vload %ptr[%c0] {dist_mode = "continuous"} : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
     %slot_loaded = pto.vmi.group_slot_load %ptr[%c0], %c1 {num_groups = 8}
-        : !pto.ptr<f32> -> !pto.vmi.vreg<8xf32>
-    pto.vmi.group_store %slot_loaded, %ptr[%c0], %c1 {num_groups = 8}
-        : !pto.vmi.vreg<8xf32>, !pto.ptr<f32>
-    pto.vmi.store %loaded, %ptr[%c0] : !pto.vmi.vreg<128xf32>, !pto.ptr<f32>
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<8xf32>
+    pto.vmi.vstore %slot_loaded, %ptr[%c0], %c1 {group = 8}
+        : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
+    pto.vmi.vstore %loaded, %ptr[%c0] {dist_mode = "continuous"} : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
 
     %small = "pto.vmi.shuffle"(%broadcast) {
       indices = array<i64: 0, 1, 2, 3>
@@ -68,11 +68,14 @@ module {
     %ensure = pto.vmi.ensure_layout %layouted
         : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
-    %layouted_ext = pto.vmi.extf %ensure
+    %layouted_trunc = pto.vmi.vcvt %ensure
         : !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
-        -> !pto.vmi.vreg<128xf64, #pto.vmi.layout<deinterleaved = 2>>
-    %layouted_trunc = pto.vmi.truncf %layouted_ext
-        : !pto.vmi.vreg<128xf64, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
+    %layouted_ext = pto.vmi.vcvt %layouted_trunc
+        : !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+    %layouted_roundtrip = pto.vmi.ensure_layout %layouted_ext
+        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
     %mask_layout = pto.vmi.ensure_mask_layout %mask_b32
         : !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
@@ -89,13 +92,13 @@ module {
         -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
 
     %i0 = arith.constant 0 : i32
-    %iv0 = pto.vmi.broadcast %i0 : i32 -> !pto.vmi.vreg<128xi32>
-    %iadd = pto.vmi.addi %iv0, %iv0
+    %iv0 = pto.vmi.vbrc %i0 : i32 -> !pto.vmi.vreg<128xi32>
+    %iadd = pto.vmi.vadd %iv0, %iv0
         : !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32> -> !pto.vmi.vreg<128xi32>
-    %icmp = pto.vmi.cmpi "slt", %iv0, %iv0
-        : !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32> -> !pto.vmi.mask<128xpred>
+    %icmp = pto.vmi.vcmp %iv0, %iv0, %mask {cmp = "slt"}
+        : !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32>, !pto.vmi.mask<128xpred> -> !pto.vmi.mask<128xpred>
 
-    return %add, %cmp, %sel, %trunc, %merged, %layouted_trunc, %mask_layout,
+    return %add, %cmp, %sel, %trunc, %merged, %layouted_roundtrip, %mask_layout,
         %mask_granularity, %packed, %iadd, %icmp
         : !pto.vmi.vreg<128xf32>,
           !pto.vmi.mask<128xpred>,
@@ -112,20 +115,20 @@ module {
 }
 
 // CHECK-LABEL: func.func @vmi_op_verifier_basic
-// CHECK: pto.vmi.broadcast
-// CHECK: pto.vmi.addf
-// CHECK: pto.vmi.cmpf
+// CHECK: pto.vmi.vbrc
+// CHECK: pto.vmi.vadd
+// CHECK: pto.vmi.vcmp
 // CHECK: pto.vmi.vsel
-// CHECK: pto.vmi.extf
-// CHECK: pto.vmi.truncf
-// CHECK: pto.vmi.load
+// CHECK: pto.vmi.vcvt
+// CHECK: pto.vmi.vcvt
+// CHECK: pto.vmi.vload
 // CHECK: pto.vmi.group_slot_load
-// CHECK: pto.vmi.group_store
-// CHECK: pto.vmi.store
+// CHECK: pto.vmi.vstore
+// CHECK: pto.vmi.vstore
 // CHECK: pto.vmi.ensure_layout
 // CHECK: pto.vmi.ensure_mask_layout
 // CHECK: pto.vmi.ensure_mask_granularity
 // CHECK: "pto.vmi.unpack"
 // CHECK: "pto.vmi.pack"
-// CHECK: pto.vmi.addi
-// CHECK: pto.vmi.cmpi
+// CHECK: pto.vmi.vadd
+// CHECK: pto.vmi.vcmp
