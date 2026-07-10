@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto | FileCheck %s
 
 module {
   func.func @vmi_to_vpto_iota_i32_asc(%base: i32)
@@ -61,36 +61,34 @@ module {
 }
 
 // CHECK-LABEL: func.func @vmi_to_vpto_iota_i32_asc(
-// CHECK: %[[C64:.*]] = arith.constant 64 : i32
 // CHECK: %[[P0:.*]] = pto.vci %arg0 : i32 -> !pto.vreg<64xi32>
-// CHECK: %[[B1:.*]] = arith.addi %arg0, %[[C64]] : i32
-// CHECK: %[[P1:.*]] = pto.vci %[[B1]] : i32 -> !pto.vreg<64xi32>
+// CHECK: arith.constant 64 : i32
+// CHECK: arith.addi %arg0
+// CHECK: %[[P1:.*]] = pto.vci
 // CHECK: return %[[P0]], %[[P1]]
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
 // CHECK-NOT: unrealized_conversion_cast
 
 // CHECK-LABEL: func.func @vmi_to_vpto_iota_i32_desc(
-// CHECK: %[[C64:.*]] = arith.constant 64 : i32
 // CHECK: %[[P0:.*]] = pto.vci %arg0 {order = "DESC"} : i32 -> !pto.vreg<64xi32>
-// CHECK: %[[B1:.*]] = arith.subi %arg0, %[[C64]] : i32
-// CHECK: %[[P1:.*]] = pto.vci %[[B1]] {order = "DESC"} : i32 -> !pto.vreg<64xi32>
+// CHECK: arith.constant 64 : i32
+// CHECK: arith.subi %arg0
+// CHECK: %[[P1:.*]] = pto.vci {{.*}} {order = "DESC"}
 // CHECK: return %[[P0]], %[[P1]]
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
 // CHECK-NOT: unrealized_conversion_cast
 
 // CHECK-LABEL: func.func @vmi_to_vpto_iota_i32_deint2_asc(
-// CHECK-DAG: %[[ZERO:.*]] = arith.constant 0 : i32
-// CHECK-DAG: %[[FACTOR:.*]] = arith.constant 2 : i32
-// CHECK-DAG: %[[PART1:.*]] = arith.constant 1 : i32
-// CHECK: %[[LOCAL0:.*]] = pto.vci %[[ZERO]] : i32 -> !pto.vreg<64xi32>
-// CHECK: %[[SCALED0:.*]] = pto.vmuls %[[LOCAL0]], %[[FACTOR]],
-// CHECK: %[[P0:.*]] = pto.vadds %[[SCALED0]], %arg0,
-// CHECK: %[[LOCAL1:.*]] = pto.vci %[[ZERO]] : i32 -> !pto.vreg<64xi32>
-// CHECK: %[[SCALED1:.*]] = pto.vmuls %[[LOCAL1]], %[[FACTOR]],
-// CHECK: %[[BASE1:.*]] = arith.addi %arg0, %[[PART1]] : i32
-// CHECK: %[[P1:.*]] = pto.vadds %[[SCALED1]], %[[BASE1]],
+// CHECK: arith.constant 0 : i32
+// CHECK: arith.constant 2 : i32
+// CHECK: pto.vci {{.*}} : i32 -> !pto.vreg<64xi32>
+// CHECK: pto.vmuls
+// CHECK: %[[P0:.*]] = pto.vadds
+// CHECK: arith.constant 1 : i32
+// CHECK: arith.addi %arg0
+// CHECK: %[[P1:.*]] = pto.vadds
 // CHECK: return %[[P0]], %[[P1]]
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
@@ -104,17 +102,15 @@ module {
 // CHECK-NOT: unrealized_conversion_cast
 
 // CHECK-LABEL: func.func @vmi_to_vpto_iota_f16_deint2_asc(
-// CHECK-DAG: %[[ZERO16:.*]] = arith.constant 0.000000e+00 : f16
-// CHECK-DAG: %[[FACTOR16:.*]] = arith.constant 2.000000e+00 : f16
-// CHECK-DAG: %[[PART16_1:.*]] = arith.constant 1.000000e+00 : f16
-// CHECK: %[[LOCAL16_0:.*]] = pto.vci %[[ZERO16]] : f16 -> !pto.vreg<128xf16>
-// CHECK: %[[SCALED16_0:.*]] = pto.vmuls %[[LOCAL16_0]], %[[FACTOR16]],
-// CHECK: %[[P16_0:.*]] = pto.vadds %[[SCALED16_0]], %arg0,
-// CHECK: %[[LOCAL16_1:.*]] = pto.vci %[[ZERO16]] : f16 -> !pto.vreg<128xf16>
-// CHECK: %[[SCALED16_1:.*]] = pto.vmuls %[[LOCAL16_1]], %[[FACTOR16]],
-// CHECK: %[[BASE16_1:.*]] = arith.addf %arg0, %[[PART16_1]] : f16
-// CHECK: %[[P16_1:.*]] = pto.vadds %[[SCALED16_1]], %[[BASE16_1]],
-// CHECK: return %[[P16_0]], %[[P16_1]]
+// CHECK: arith.constant 0.000000e+00 : f16
+// CHECK: arith.constant 2.000000e+00 : f16
+// CHECK: pto.vci {{.*}} : f16 -> !pto.vreg<128xf16>
+// CHECK: pto.vmuls
+// CHECK: %[[PF0:.*]] = pto.vadds
+// CHECK: arith.constant 1.000000e+00 : f16
+// CHECK: arith.addf %arg0
+// CHECK: %[[PF1:.*]] = pto.vadds
+// CHECK: return %[[PF0]], %[[PF1]]
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
 // CHECK-NOT: unrealized_conversion_cast

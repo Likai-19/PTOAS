@@ -284,6 +284,25 @@ lowerMaskedUnary(UnifiedOp op, OpBuilder &builder,
 // Category C1 helpers: vcmp / vcmps
 //===----------------------------------------------------------------------===//
 
+/// Returns true if `seed` is provably an all-active mask (every lane active),
+/// so `mask_and(x, seed)` is the identity and the AND can be skipped. Covers a
+/// `pset` (all lanes active by definition) and a `create_mask` whose
+/// active_lanes is a constant >= the mask lane count.
+static bool isAllActiveSeed(Value seed) {
+  Operation *def = seed.getDefiningOp();
+  if (!def)
+    return false;
+  if (isa<VMIPsetOp>(def))
+    return true;
+  if (auto cm = dyn_cast<VMICreateMaskOp>(def)) {
+    auto maskTy = cast<VMIMaskType>(cm.getResult().getType());
+    if (auto cst = cm.getActiveLanes().getDefiningOp<arith::ConstantOp>())
+      if (auto ia = dyn_cast<IntegerAttr>(cst.getValue()))
+        return ia.getInt() >= maskTy.getElementCount();
+  }
+  return false;
+}
+
 /// Lower vcmp to cmpf/cmpi + mask_and.
 static LogicalResult lowerVCmp(VMIVcmpOp op, OpBuilder &builder) {
   if (hasMergePmode(op))
@@ -311,11 +330,13 @@ static LogicalResult lowerVCmp(VMIVcmpOp op, OpBuilder &builder) {
                   .getResult();
   }
 
-  // mask_and with seed.
-  Value result = builder
-                     .create<VMIMaskAndOp>(loc, op.getResult().getType(),
-                                           rawMask, op.getSeed())
-                     .getResult();
+  // mask_and with seed — skipped when the seed is all-active (identity AND).
+  Value result = rawMask;
+  if (!isAllActiveSeed(op.getSeed()))
+    result = builder
+                 .create<VMIMaskAndOp>(loc, op.getResult().getType(), rawMask,
+                                       op.getSeed())
+                 .getResult();
 
   op.getResult().replaceAllUsesWith(result);
   op->erase();
@@ -355,11 +376,13 @@ static LogicalResult lowerVCmps(VMIVcmpsOp op, OpBuilder &builder) {
                   .getResult();
   }
 
-  // 3. mask_and with seed.
-  Value result = builder
-                     .create<VMIMaskAndOp>(loc, op.getResult().getType(),
-                                           rawMask, op.getSeed())
-                     .getResult();
+  // 3. mask_and with seed — skipped when the seed is all-active (identity AND).
+  Value result = rawMask;
+  if (!isAllActiveSeed(op.getSeed()))
+    result = builder
+                 .create<VMIMaskAndOp>(loc, op.getResult().getType(), rawMask,
+                                       op.getSeed())
+                 .getResult();
 
   op.getResult().replaceAllUsesWith(result);
   op->erase();
@@ -456,19 +479,31 @@ static LogicalResult lowerVLoad(VMIvLoadOp op, OpBuilder &builder) {
   // Block-stride mode: vload {block_stride, repeat_stride} → stride_load
   if (op.getBlockStride()) {
     auto resultType = op.getResults().front().getType();
-    // Create default all-active mask
-    auto pset = builder.create<VMIPsetOp>(
-        op->getLoc(),
-        VMIMaskType::get(builder.getContext(),
-                         cast<VMIVRegType>(resultType).getElementCount(),
-                         StringAttr::get(builder.getContext(), "pred"),
-                         Attribute()),
-        builder.getStringAttr("PAT_ALL"), IntegerAttr());
+    // Create default all-active mask via create_mask with proper granularity
+    // and layout, so the legacy stride_load passes both-or-neither layout
+    // checks.  pset cannot be used here because pred masks cannot carry
+    // layout.
+    auto resultVMIType = cast<VMIVRegType>(resultType);
+    auto elemType = resultVMIType.getElementType();
+    unsigned bits = 32;
+    if (auto it = dyn_cast<IntegerType>(elemType))
+      bits = it.getWidth();
+    else if (auto ft = dyn_cast<FloatType>(elemType))
+      bits = ft.getWidth();
+    auto gran = StringAttr::get(builder.getContext(),
+                                bits <= 8 ? "b8" : bits <= 16 ? "b16" : "b32");
+    auto maskType = VMIMaskType::get(builder.getContext(),
+                                     resultVMIType.getElementCount(), gran,
+                                     resultVMIType.getLayout());
+    auto fullLanes = builder.create<arith::ConstantOp>(
+        op->getLoc(), builder.getIndexAttr(resultVMIType.getElementCount()));
+    auto mask = builder.create<VMICreateMaskOp>(op->getLoc(), maskType,
+                                                fullLanes.getResult());
     Value bs = op.getBlockStride();
     Value rs = op.getRepeatStride();
     auto strideLoad = builder.create<VMIStrideLoadOp>(
         op->getLoc(), resultType, op.getSource(), op.getOffset(), bs, rs,
-        pset.getResult());
+        mask.getResult());
     op.getResults().front().replaceAllUsesWith(strideLoad.getResult());
     op->erase();
     return success();
@@ -530,19 +565,29 @@ static LogicalResult lowerVStore(VMIvStoreOp op, OpBuilder &builder) {
   // Block-stride mode: vstore {block_stride, repeat_stride} → stride_store
   if (op.getBlockStride()) {
     auto valueType = cast<VMIVRegType>(op.getValues()[0].getType());
-    // Use existing mask or create default all-active
-    Value mask = op.getMask().empty()
-                     ? builder
-                           .create<VMIPsetOp>(
-                               op->getLoc(),
-                               VMIMaskType::get(builder.getContext(),
-                                            valueType.getElementCount(),
-                                            StringAttr::get(builder.getContext(), "pred"),
-                                            Attribute()),
-                               builder.getStringAttr("PAT_ALL"),
-                               IntegerAttr())
-                           .getResult()
-                     : op.getMask()[0];
+    // Use existing mask or create default all-active via create_mask
+    // (pset cannot be used — pred masks cannot carry layout).
+    Value mask;
+    if (!op.getMask().empty()) {
+      mask = op.getMask()[0];
+    } else {
+      auto elemType = valueType.getElementType();
+      unsigned bits = 32;
+      if (auto it = dyn_cast<IntegerType>(elemType))
+        bits = it.getWidth();
+      else if (auto ft = dyn_cast<FloatType>(elemType))
+        bits = ft.getWidth();
+      auto gran = StringAttr::get(builder.getContext(),
+                                  bits <= 8 ? "b8" : bits <= 16 ? "b16" : "b32");
+      auto maskType = VMIMaskType::get(builder.getContext(),
+                                       valueType.getElementCount(), gran,
+                                       valueType.getLayout());
+      auto fullLanes = builder.create<arith::ConstantOp>(
+          op->getLoc(), builder.getIndexAttr(valueType.getElementCount()));
+      mask = builder.create<VMICreateMaskOp>(op->getLoc(), maskType,
+                                             fullLanes.getResult())
+                 .getResult();
+    }
     Value bs = op.getBlockStride();
     Value rs = op.getRepeatStride();
     builder.create<VMIStrideStoreOp>(op->getLoc(), op.getValues()[0],
@@ -590,6 +635,12 @@ static LogicalResult lowerVStore(VMIvStoreOp op, OpBuilder &builder) {
 
 /// Lower pset "PAT_ALL" → create_mask(all_lanes).
 static LogicalResult lowerPset(VMIPsetOp op, OpBuilder &builder) {
+  // If an all-active consumer (e.g. vcmp) elided its use, drop the seed
+  // entirely instead of materialising a dead create_mask.
+  if (op.use_empty()) {
+    op->erase();
+    return success();
+  }
   Location loc = op.getLoc();
   auto maskType = cast<VMIMaskType>(op.getResult().getType());
   int64_t laneCount = maskType.getElementCount();
