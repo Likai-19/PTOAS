@@ -344,4 +344,4 @@ Chapter 11 walks through this example in full detail.
 | 11 | Flash attention walkthrough |
 | 12 | Additional examples |
 | 13 | SIMT micro-ops |
-| 14 | The `pto.vmi` namespace: formal VMI logical vectors, masks, and type-directed authoring |
+| 14 | The Virtual Micro-instruction Set (VMI): logical vector instructions, masks, and type-directed authoring |
