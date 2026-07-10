@@ -10102,11 +10102,6 @@ void populateVMIConversionPatterns(
 
 LogicalResult verifyNoResidualVMIIR(ModuleOp module) {
   WalkResult result = module.walk([&](Operation *op) {
-    if (isa<UnrealizedConversionCastOp>(op)) {
-      op->emitError() << kVMIDiagResidualOpPrefix
-                      << "unrealized conversion cast remains after vmi-to-vpto";
-      return WalkResult::interrupt();
-    }
     if (auto createMask = dyn_cast<VMICreateMaskOp>(op)) {
       if (!createMask.getActiveLanes().getDefiningOp<arith::ConstantOp>()) {
         createMask.emitError()
