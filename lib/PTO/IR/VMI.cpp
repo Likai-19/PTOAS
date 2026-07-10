@@ -3511,8 +3511,7 @@ void VMIvStoreOp::print(OpAsmPrinter &p) {
     p << ", ";
     p.printOperand(getMask()[0]);
   }
-  p.printOptionalAttrDict((*this)->getAttrs(),
-                          {"dist_mode", "group", "pmode", "operandSegmentSizes"});
+  p.printOptionalAttrDict((*this)->getAttrs(), {"operandSegmentSizes"});
   p << " : ";
   for (auto val : getValues())
     p << val.getType() << ", ";
@@ -3874,8 +3873,7 @@ void VMIvLoadOp::print(OpAsmPrinter &p) {
     p << ", ";
     p.printOperand(getRepeatStride());
   }
-  p.printOptionalAttrDict((*this)->getAttrs(),
-                          {"dist_mode", "group", "pmode", "operandSegmentSizes"});
+  p.printOptionalAttrDict((*this)->getAttrs(), {"operandSegmentSizes"});
   p << " : " << getSource().getType() << " -> " << getResults().getTypes();
 }
 
