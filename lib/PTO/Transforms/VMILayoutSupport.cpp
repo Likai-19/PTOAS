@@ -127,9 +127,6 @@ static constexpr ElementCountPattern anyG() { return anyN(); }
 static constexpr MaskGranularityPattern mb8() { return {1u << 0}; }
 static constexpr MaskGranularityPattern mb16() { return {1u << 1}; }
 static constexpr MaskGranularityPattern mb32() { return {1u << 2}; }
-static constexpr MaskGranularityPattern mbAll() {
-  return {static_cast<uint8_t>((1u << 0) | (1u << 1) | (1u << 2))};
-}
 
 static bool matchesElementBitsPattern(ElementBitsPattern pattern,
                                       int64_t bits) {
