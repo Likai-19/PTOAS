@@ -6,23 +6,23 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-layout-rematerialize -canonicalize | FileCheck %s --check-prefix=REMAT
-// RUN: pto-test-opt %s -vmi-layout-rematerialize -canonicalize -vmi-layout-fold -canonicalize -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-rematerialize -canonicalize | FileCheck %s --check-prefix=REMAT
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-rematerialize -canonicalize -vmi-layout-fold -canonicalize -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
 
 module {
   func.func @vmi_layout_rematerialize_direct_ext(
       %src: !pto.ptr<f16, ub>, %off: index)
       -> !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>> {
-    %x16 = pto.vmi.load %src[%off]
+    %x16 = pto.vmi.vload %src[%off]
         : !pto.ptr<f16, ub>
         -> !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
-    %x32_d2 = pto.vmi.extf %x16
+    %x32_d2 = pto.vmi.vcvt %x16
         : !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
         -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
     %x32_d4 = pto.vmi.ensure_layout %x32_d2
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
-    %y = pto.vmi.truncf %x32_d4
+    %y = pto.vmi.vcvt %x32_d4
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
     return %y : !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
@@ -31,26 +31,26 @@ module {
   func.func @vmi_layout_rematerialize_mulf_chain(
       %lhs: !pto.ptr<f16, ub>, %rhs: !pto.ptr<f16, ub>, %off: index)
       -> !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>> {
-    %lhs16 = pto.vmi.load %lhs[%off]
+    %lhs16 = pto.vmi.vload %lhs[%off]
         : !pto.ptr<f16, ub>
         -> !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
-    %rhs16 = pto.vmi.load %rhs[%off]
+    %rhs16 = pto.vmi.vload %rhs[%off]
         : !pto.ptr<f16, ub>
         -> !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
-    %lhs32_d2 = pto.vmi.extf %lhs16
+    %lhs32_d2 = pto.vmi.vcvt %lhs16
         : !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
         -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
-    %rhs32_d2 = pto.vmi.extf %rhs16
+    %rhs32_d2 = pto.vmi.vcvt %rhs16
         : !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
         -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
-    %mul_d2 = pto.vmi.mulf %lhs32_d2, %rhs32_d2
+    %mul_d2 = pto.vmi.vmul %lhs32_d2, %rhs32_d2
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>,
           !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
     %mul_d4 = pto.vmi.ensure_layout %mul_d2
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
-    %y = pto.vmi.truncf %mul_d4
+    %y = pto.vmi.vcvt %mul_d4
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
     return %y : !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
@@ -60,19 +60,19 @@ module {
       %src: !pto.ptr<f16, ub>, %off: index)
       -> (!pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>,
           !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>) {
-    %x16 = pto.vmi.load %src[%off]
+    %x16 = pto.vmi.vload %src[%off]
         : !pto.ptr<f16, ub>
         -> !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
-    %x32_d2 = pto.vmi.extf %x16
+    %x32_d2 = pto.vmi.vcvt %x16
         : !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
         -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
-    %y16 = pto.vmi.truncf %x32_d2
+    %y16 = pto.vmi.vcvt %x32_d2
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
     %x32_d4 = pto.vmi.ensure_layout %x32_d2
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
-    %y8 = pto.vmi.truncf %x32_d4
+    %y8 = pto.vmi.vcvt %x32_d4
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
     return %y16, %y8
@@ -86,7 +86,7 @@ module {
     %x32_d2 = pto.vmi.ensure_layout %x32_d4
         : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>
-    %y16 = pto.vmi.trunci %x32_d2
+    %y16 = pto.vmi.vcvt %x32_d2
         : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<256xui16, #pto.vmi.layout<contiguous>>
     return %y16 : !pto.vmi.vreg<256xui16, #pto.vmi.layout<contiguous>>

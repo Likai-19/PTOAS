@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: not pto-test-opt %s -vmi-to-vpto 2>&1 | FileCheck %s
+// RUN: not pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto 2>&1 | FileCheck %s
 
 module {
   func.func @vmi_to_vpto_relu_bf16_invalid(
@@ -18,5 +18,5 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.vrelu direct lowering requires physical vreg parts with b8/b16/b32 predicate masks and f16/f32 element type
-// CHECK-SAME: pto.vrelu direct lowering supports only f16/f32 VMI floating-point element types
+// vrelu lowers to legacy relu, whose verifier rejects the bf16 element type.
+// CHECK: 'pto.vmi.relu' op requires f16 or f32 VMI element type

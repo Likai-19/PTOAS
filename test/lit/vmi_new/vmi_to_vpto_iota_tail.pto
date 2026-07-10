@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto | FileCheck %s
 
 module {
   func.func @vmi_to_vpto_iota_contiguous_tail(%base: i32)
@@ -35,22 +35,28 @@ module {
 }
 
 // CHECK-LABEL: func.func @vmi_to_vpto_iota_contiguous_tail(
-// CHECK: %[[C64:.*]] = arith.constant 64 : i32
 // CHECK: %[[P0:.*]] = pto.vci %arg0 : i32 -> !pto.vreg<64xi32>
-// CHECK: %[[B1:.*]] = arith.addi %arg0, %[[C64]] : i32
-// CHECK: %[[P1:.*]] = pto.vci %[[B1]] : i32 -> !pto.vreg<64xi32>
+// CHECK: arith.constant 64 : i32
+// CHECK: arith.addi %arg0
+// CHECK: %[[P1:.*]] = pto.vci
 // CHECK: return %[[P0]], %[[P1]]
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
 // CHECK-NOT: unrealized_conversion_cast
 
 // CHECK-LABEL: func.func @vmi_to_vpto_iota_deint2_tail(
-// CHECK-DAG: %[[C128:.*]] = arith.constant 128 : i32
-// CHECK-DAG: %[[C1:.*]] = arith.constant 1 : i32
-// CHECK-DAG: %[[C129:.*]] = arith.constant 129 : i32
-// CHECK: %[[BASE128:.*]] = arith.addi %arg0, %[[C128]] : i32
-// CHECK: %[[BASE1:.*]] = arith.addi %arg0, %[[C1]] : i32
-// CHECK: %[[BASE129:.*]] = arith.addi %arg0, %[[C129]] : i32
+// CHECK: pto.vci
+// CHECK: pto.vmuls
+// CHECK: pto.vadds
+// CHECK: pto.vci
+// CHECK: pto.vmuls
+// CHECK: pto.vadds
+// CHECK: pto.vci
+// CHECK: pto.vmuls
+// CHECK: pto.vadds
+// CHECK: pto.vci
+// CHECK: pto.vmuls
+// CHECK: pto.vadds
 // CHECK: return {{.*}}, {{.*}}, {{.*}}, {{.*}}
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.

@@ -6,13 +6,13 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: not pto-test-opt %s -split-input-file -vmi-to-vpto 2>&1 | FileCheck %s
+// RUN: not pto-test-opt %s -split-input-file -vmi-lower-unified-to-legacy -vmi-to-vpto 2>&1 | FileCheck %s
 
 module {
   func.func @vmi_to_vpto_addf_f8_invalid(
       %lhs: !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>,
       %rhs: !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>) {
-    %out = pto.vmi.addf %lhs, %rhs
+    %out = pto.vmi.vadd %lhs, %rhs
         : !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>,
           !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
         -> !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
@@ -20,8 +20,8 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.addf direct lowering requires f16/bf16/f32 element type
-// CHECK-SAME: requires f16/bf16/f32 element type for direct VPTO lowering
+// vadd lowers to legacy addf, whose verifier rejects the f8 element type.
+// CHECK: 'pto.vmi.addf' op requires f16, bf16, or f32 VMI element type
 
 // -----
 
@@ -37,8 +37,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.vdiv direct lowering requires f16/f32 element type
-// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+// CHECK: 'pto.vmi.divf' op requires f16 or f32 VMI element type
 
 // -----
 
@@ -52,8 +51,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.vsqrt direct lowering requires f16/f32 element type
-// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+// CHECK: 'pto.vmi.sqrt' op requires f16 or f32 VMI element type
 
 // -----
 
@@ -67,8 +65,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.vexp direct lowering requires f16/f32 element type
-// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+// CHECK: 'pto.vmi.exp' op requires f16 or f32 VMI element type
 
 // -----
 
@@ -82,8 +79,7 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.vneg direct lowering requires f16/f32 element type
-// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+// CHECK: 'pto.vmi.negf' op requires f16 or f32 VMI element type
 
 // -----
 
@@ -97,35 +93,34 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.vln direct lowering requires f16/f32 element type
-// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+// CHECK: 'pto.vmi.ln' op requires f16 or f32 VMI element type
 
 // -----
 
 module {
   func.func @vmi_to_vpto_absf_bf16_invalid(
       %source: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>) {
-    %out = pto.vmi.absf %source
+    %out = pto.vmi.vabs %source
         : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
         -> !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
     return
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.absf direct lowering requires f16/f32 element type
-// CHECK-SAME: requires f16/f32 element type for direct VPTO lowering
+// vabs(bf16) lowers to legacy absf, whose verifier rejects bf16.
+// CHECK: 'pto.vmi.absf' op requires f16 or f32 VMI element type
 
 // -----
 
 module {
   func.func @vmi_to_vpto_absi_unsigned_invalid(
       %source: !pto.vmi.vreg<128xui16, #pto.vmi.layout<contiguous>>) {
-    %out = pto.vmi.absi %source
+    %out = pto.vmi.vabs %source
         : !pto.vmi.vreg<128xui16, #pto.vmi.layout<contiguous>>
         -> !pto.vmi.vreg<128xui16, #pto.vmi.layout<contiguous>>
     return
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.absi direct lowering requires signless/signed i8/i16/i32 element type
-// CHECK-SAME: requires signless/signed i8/i16/i32 element type for direct VPTO lowering
+// vabs(ui16) lowers to legacy absi, whose verifier rejects unsigned integers.
+// CHECK: 'pto.vmi.absi' op requires signless or signed i8, i16, or i32 VMI element type

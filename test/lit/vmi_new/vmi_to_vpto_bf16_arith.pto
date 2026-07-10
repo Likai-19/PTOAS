@@ -6,14 +6,14 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto | FileCheck %s
 
 module {
   func.func @vmi_to_vpto_bf16_arith(
       %lhs: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>,
       %rhs: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>)
       -> (!pto.vreg<128xbf16>, !pto.vreg<128xbf16>, !pto.vreg<128xbf16>) {
-    %sum = pto.vmi.addf %lhs, %rhs
+    %sum = pto.vmi.vadd %lhs, %rhs
         : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>,
           !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
         -> !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
