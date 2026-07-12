@@ -3181,7 +3181,6 @@ LogicalResult VMIVmulaOp::verify() {
   auto accType = cast<VMIVRegType>(getAcc().getType());
   auto lhsType = cast<VMIVRegType>(getLhs().getType());
   auto rhsType = cast<VMIVRegType>(getRhs().getType());
-  auto maskType = cast<VMIMaskType>(getMask().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
 
   Type eltTy = accType.getElementType();
@@ -3193,13 +3192,9 @@ LogicalResult VMIVmulaOp::verify() {
     return emitOpError(
         "requires acc, lhs, rhs, and result to have identical VMI vreg types");
 
-  if (failed(verifyMaskMatchesData(getOperation(), maskType, resultType)))
+  if (failed(verifyVMIVariadicPmodeMask(getOperation(), getMask(),
+                                        resultType, getPmode())))
     return failure();
-
-  if (auto pmode = getPmode()) {
-    if (pmode.value() != "merge" && pmode.value() != "zero")
-      return emitOpError("pmode must be 'merge' or 'zero'");
-  }
   return success();
 }
 
