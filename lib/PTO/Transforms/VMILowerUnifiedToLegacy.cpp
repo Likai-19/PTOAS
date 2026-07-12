@@ -906,14 +906,17 @@ static LogicalResult lowerVgather(VMIVgatherOp op, OpBuilder &builder) {
     return failure();
 
   Location loc = op.getLoc();
-  Type resultType = op.getResult().getType();
-  // Reuse the offsets vector as passthru for inactive lanes — semantically
-  // harmless (inactive-lane result is don't-care) and avoids materialising
-  // a zero constant that would require signless element types.
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
+  // pmode="zero" (default): inactive lanes are zeroed. Legacy gather models
+  // inactive lanes with an explicit passthru whose element type must match the
+  // result, so synthesise a zero constant of the result type — the offsets
+  // vector cannot be reused because its element type (e.g. i32) generally
+  // differs from the result element type (e.g. f32).
+  Value passthru = createZeroConstant(builder, loc, resultType);
   Value result = builder
                      .create<VMIGatherOp>(loc, resultType, op.getSource(),
                                           op.getOffsets(), op.getMask(),
-                                          op.getOffsets())
+                                          passthru)
                      .getResult();
   op.getResult().replaceAllUsesWith(result);
   op->erase();
