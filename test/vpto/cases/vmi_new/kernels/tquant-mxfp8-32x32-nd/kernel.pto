@@ -47,7 +47,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.vecscope {
       scf.for %row = %c0 to %c32 step %c8 {
         %elem_off = arith.muli %row, %c32 : index
-        %mask = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<256xpred>
+        %mask = pto.vmi.create_mask %c256 : index -> !pto.vmi.mask<256xpred>
         %x = pto.vmi.vload %ub_src[%elem_off]
             : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
         %abs = pto.vmi.vabs %x

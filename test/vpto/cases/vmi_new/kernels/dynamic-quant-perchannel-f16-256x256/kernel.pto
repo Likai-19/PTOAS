@@ -86,7 +86,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
             : i32 -> !pto.vmi.vreg<256xi32>
         %byte_bias = pto.vmi.vbrc %c256_i32
             : i32 -> !pto.vmi.vreg<256xi32>
-        %cmp_seed = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<256xpred>
+        %cmp_seed = pto.vmi.create_mask %c256 : index -> !pto.vmi.mask<256xpred>
         %neg = pto.vmi.vcmp %i32, %zero_i32, %cmp_seed {cmp = "slt"}
             : !pto.vmi.vreg<256xi32>, !pto.vmi.vreg<256xi32>,
               !pto.vmi.mask<256xpred>

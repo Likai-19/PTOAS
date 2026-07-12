@@ -56,8 +56,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
         %x = pto.vmi.vload %ub_src[%elem_offset]
             : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
         %row_i32 = arith.index_cast %row : index to i32
-        %gather_mask = pto.vmi.pset "PAT_ALL"
-            : !pto.vmi.mask<256xpred>
+        %gather_mask = pto.vmi.create_mask %c256 : index -> !pto.vmi.mask<256xpred>
         %zero = pto.vmi.vbrc %c0_f32
             : f32 -> !pto.vmi.vreg<256xf32>
         %lane = pto.vmi.vci %c0_i32
