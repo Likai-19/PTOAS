@@ -2639,6 +2639,19 @@ LogicalResult VMIVreluOp::verify() {
 }
 
 LogicalResult VMIVandOp::verify() {
+  if (isa<VMIMaskType>(getLhs().getType())) {
+    // Mask logic path: reject predication mask and pmode.
+    if (!getMask().empty())
+      return emitOpError("mask logic op does not support predication mask");
+    if (auto pmode = getPmode())
+      return emitOpError("mask logic op does not support pmode");
+    auto lhsType = cast<VMIMaskType>(getLhs().getType());
+    auto rhsType = cast<VMIMaskType>(getRhs().getType());
+    auto resultType = cast<VMIMaskType>(getResult().getType());
+    return verifyAllSameMaskShapeLayoutAndGranularity(
+        getOperation(), {lhsType, rhsType, resultType});
+  }
+  // VReg path.
   auto lhsType = cast<VMIVRegType>(getLhs().getType());
   auto rhsType = cast<VMIVRegType>(getRhs().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
@@ -2653,6 +2666,19 @@ LogicalResult VMIVandOp::verify() {
 }
 
 LogicalResult VMIVorOp::verify() {
+  if (isa<VMIMaskType>(getLhs().getType())) {
+    // Mask logic path: reject predication mask and pmode.
+    if (!getMask().empty())
+      return emitOpError("mask logic op does not support predication mask");
+    if (auto pmode = getPmode())
+      return emitOpError("mask logic op does not support pmode");
+    auto lhsType = cast<VMIMaskType>(getLhs().getType());
+    auto rhsType = cast<VMIMaskType>(getRhs().getType());
+    auto resultType = cast<VMIMaskType>(getResult().getType());
+    return verifyAllSameMaskShapeLayoutAndGranularity(
+        getOperation(), {lhsType, rhsType, resultType});
+  }
+  // VReg path.
   auto lhsType = cast<VMIVRegType>(getLhs().getType());
   auto rhsType = cast<VMIVRegType>(getRhs().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
@@ -2667,6 +2693,19 @@ LogicalResult VMIVorOp::verify() {
 }
 
 LogicalResult VMIVxorOp::verify() {
+  if (isa<VMIMaskType>(getLhs().getType())) {
+    // Mask logic path: reject predication mask and pmode.
+    if (!getMask().empty())
+      return emitOpError("mask logic op does not support predication mask");
+    if (auto pmode = getPmode())
+      return emitOpError("mask logic op does not support pmode");
+    auto lhsType = cast<VMIMaskType>(getLhs().getType());
+    auto rhsType = cast<VMIMaskType>(getRhs().getType());
+    auto resultType = cast<VMIMaskType>(getResult().getType());
+    return verifyAllSameMaskShapeLayoutAndGranularity(
+        getOperation(), {lhsType, rhsType, resultType});
+  }
+  // VReg path.
   auto lhsType = cast<VMIVRegType>(getLhs().getType());
   auto rhsType = cast<VMIVRegType>(getRhs().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
@@ -2711,6 +2750,18 @@ LogicalResult VMIVshrOp::verify() {
 }
 
 LogicalResult VMIVnotOp::verify() {
+  if (isa<VMIMaskType>(getSource().getType())) {
+    // Mask logic path: reject predication mask and pmode.
+    if (!getMask().empty())
+      return emitOpError("mask logic op does not support predication mask");
+    if (auto pmode = getPmode())
+      return emitOpError("mask logic op does not support pmode");
+    auto sourceType = cast<VMIMaskType>(getSource().getType());
+    auto resultType = cast<VMIMaskType>(getResult().getType());
+    return verifyAllSameMaskShapeLayoutAndGranularity(
+        getOperation(), {sourceType, resultType});
+  }
+  // VReg path.
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
   if (!isVMIIntegerLikeType(sourceType.getElementType()))
