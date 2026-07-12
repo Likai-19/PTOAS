@@ -63,8 +63,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.wait_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
 
     pto.vecscope {
-      %mask_f32 = pto.vmi.pset "PAT_ALL"
-          : !pto.vmi.mask<256xpred>
+      %mask_f32 = pto.vmi.create_mask %c256 : index -> !pto.vmi.mask<256xpred>
       scf.for %row = %c0 to %c32 step %c4 {
         %src_off = arith.muli %row, %c64 : index
         %scale_off = arith.muli %row, %c2 : index
@@ -141,8 +140,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
       pto.vmi.vstore %e8m0_256_u8, %ub_e8m0_nd_u8[%c0]
           : !pto.vmi.vreg<256xui8>, !pto.ptr<ui8, ub>
 
-      %idx_mask = pto.vmi.pge "PAT_VL32"
-          : !pto.vmi.mask<128xpred>
+      %idx_mask = pto.vmi.create_mask %c32 : index -> !pto.vmi.mask<128xpred>
       %idx_vec = pto.vmi.vload %ub_idx_u16[%c0]
           : !pto.ptr<ui16, ub> -> !pto.vmi.vreg<128xui16>
       %e8m0_zz = pto.vmi.vgather %ub_e8m0_nd_u16, %idx_vec, %idx_mask

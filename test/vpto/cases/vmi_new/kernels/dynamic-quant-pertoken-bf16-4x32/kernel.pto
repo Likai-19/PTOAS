@@ -44,7 +44,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
       pto.vmi.vstore %pad_bf16, %ub_src[%c128]
           : !pto.vmi.vreg<256xbf16>, !pto.ptr<bf16, ub>
       pto.mem_bar "VST_VLD"
-      %mask = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<256xpred>
+      %mask = pto.vmi.create_mask %c256 : index -> !pto.vmi.mask<256xpred>
       %x_bf16 = pto.vmi.vload %ub_src[%c0]
           : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
       %x = pto.vmi.vcvt %x_bf16
@@ -82,7 +82,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
           : i32 -> !pto.vmi.vreg<256xi32>
       %byte_bias = pto.vmi.vbrc %c256_i32
           : i32 -> !pto.vmi.vreg<256xi32>
-      %seed = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<256xpred>
+      %seed = pto.vmi.create_mask %c256 : index -> !pto.vmi.mask<256xpred>
       %neg = pto.vmi.vcmp %i32, %zero_i32, %seed {cmp = "slt"}
           : !pto.vmi.vreg<256xi32>, !pto.vmi.vreg<256xi32>,
             !pto.vmi.mask<256xpred>

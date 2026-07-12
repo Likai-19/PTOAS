@@ -44,7 +44,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.vecscope {
       %x = pto.vmi.vload %ub_src[%c0] : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
       %rhs = pto.vmi.vload %ub_rhs[%c0] : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
-      %mask = pto.vmi.pge "PAT_VL48" : !pto.vmi.mask<64xpred>
+      %mask = pto.vmi.create_mask %c48 : index -> !pto.vmi.mask<64xpred>
       %sum = pto.vmi.vadd %x, %rhs
           : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
           -> !pto.vmi.vreg<64xf32>
