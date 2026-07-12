@@ -1239,22 +1239,21 @@ def VMICvtOp : VMI_Op<"vcvt", [Pure]> {
       H=half-up). Valid only when dst bit-width < src bit-width for fp types.
     - `saturate`: saturating behavior on overflow ("SAT"). Valid for any
       narrowing conversion (fp or int).
-    - `sign`: integer extension sign mode ("S"=signed, "U"=unsigned).
-      Required for int→int widening when the source type is signless;
-      optional (checked for consistency) otherwise.
     - `pmode`: predication mode ("merge" | "zero").
+
+    For int→int widening, the source element type must carry signedness
+    (e.g. si8/ui8/si16/ui16); signless integers are rejected.
 
     Example:
     ```mlir
     %w = pto.vmi.vcvt %x : !pto.vmi.vreg<64xf16> -> !pto.vmi.vreg<64xf32>
     %n = pto.vmi.vcvt %y {rounding="H"} : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf16>
-    %z = pto.vmi.vcvt %a {sign="U"} : !pto.vmi.vreg<256xi8> -> !pto.vmi.vreg<256xi16>
+    %z = pto.vmi.vcvt %a : !pto.vmi.vreg<256xui8> -> !pto.vmi.vreg<256xui16>
     ```
   }];
   let arguments = (ins VMI_VRegTypeConstraint:$source,
                    OptionalAttr<StrAttr>:$rounding,
                    OptionalAttr<StrAttr>:$saturate,
-                   OptionalAttr<StrAttr>:$sign,
                    OptionalAttr<StrAttr>:$pmode);
   let results = (outs VMI_VRegTypeConstraint:$result);
   let hasVerifier = 1;

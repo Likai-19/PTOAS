@@ -19,11 +19,13 @@
 //   vsel            → select
 //   vbrc            → broadcast  (skipped when num_groups is present)
 //
-// Category B — masked elementwise, pmode="zero" only (18 ops):
-//   vadd/vsub/vmul/vdiv/vmin/vmax → legacy type-specific binary + zero + select
+// Category B — elementwise (18 ops):
+//   All binary ops discard mask/pmode and lower to a legacy compute op:
+//   vadd/vsub/vmul/vdiv/vmin/vmax/vand/vor/vxor/vshl/vshr
 //   vneg/vabs/vsqrt/vexp/vln/vrelu → legacy unary + zero + select
-//   vand/vor/vxor/vshl/vshr/vnot → legacy bitwise + zero + select
-//   pmode="merge" is skipped — merge semantic cannot be expressed in VMI SSA IR.
+//   vnot → legacy bitwise unary + zero + select
+//   pmode="merge" is skipped for unary ops because merge semantic cannot be
+//   expressed in VMI SSA IR.
 //
 // Category C1 — compare + seed (2 ops):
 //   vcmp  → cmpf/cmpi + mask_and
@@ -51,7 +53,7 @@
 //
 // Category C5 — vector-scalar ops, one-step to legacy (6 ops):
 //   vadds/vmuls/vmaxs/vmins/vshls/vshrs
-//     → broadcast scalar → legacy binary → zero constant → select
+//     → broadcast scalar → legacy binary (mask/pmode discarded)
 //
 // Category C3 — unified load/store (2 ops, dispatch by dist_mode/group):
 //   vload → load / deinterleave_load / group_load
@@ -150,9 +152,10 @@ static Value createZeroConstant(OpBuilder &builder, Location loc,
 ///   max: -INF  (float), INT_MIN (int)
 ///   min: +INF  (float), INT_MAX (int)
 static Value createReduceNeutralInit(OpBuilder &builder, Location loc,
-                                     Type elemType, bool isAdd, bool isMax) {
+                                     Type elemType, bool isAdd, bool isMax,
+                                     Attribute layout = Attribute()) {
   auto oneLaneType =
-      VMIVRegType::get(builder.getContext(), 1, elemType, Attribute());
+      VMIVRegType::get(builder.getContext(), 1, elemType, layout);
   auto shapedType = RankedTensorType::get({1}, elemType);
   DenseElementsAttr attr;
   if (auto floatTy = dyn_cast<FloatType>(elemType)) {
@@ -235,45 +238,26 @@ static StringRef classifyCvtDirection(Type srcElem, Type dstElem) {
 }
 
 //===----------------------------------------------------------------------===//
-// Category B: masked elementwise → legacy compute + zero + select
+// Category B: binary elementwise → legacy compute, mask/pmode discarded
 //===----------------------------------------------------------------------===//
 
-/// Lower a masked BINARY unified op (vadd, vsub, …) to legacy chain:
-///   %raw  = legacy.op %lhs, %rhs
-///   %zero = vmi.constant dense<0.0>
-///   %r    = vmi.select %mask, %raw, %zero
+/// Lower a BINARY unified op (vadd, vsub, ...) to a legacy compute op.
+/// Unified mask and pmode are intentionally discarded.
 ///
 /// \p createLegacy is a callable `(Location, Type, Value, Value) -> Value`
 /// that emits the legacy binary op.
 template <typename UnifiedOp>
 static LogicalResult
-lowerMaskedBinary(UnifiedOp op, OpBuilder &builder,
-                  function_ref<Value(Location, Type, Value, Value)> createLegacy,
-                  bool hasMaskOperand = true) {
-  if (hasMergePmode(op))
-    return failure();
-
+lowerBinaryIgnoringMask(
+    UnifiedOp op,
+    function_ref<Value(Location, Type, Value, Value)> createLegacy) {
   Location loc = op.getLoc();
   Type resultType = op.getResult().getType();
-  auto vmiType = cast<VMIVRegType>(resultType);
   Value lhs = op.getLhs();
   Value rhs = op.getRhs();
 
-  // 1. Legacy binary op.
   Value raw = createLegacy(loc, resultType, lhs, rhs);
-
-  // 2. If the unified op carries an explicit mask operand, wrap in
-  //    select(mask, raw, zero) for lane-level predication.  Otherwise the
-  //    legacy op already computes on all lanes — skip the mask+select chain.
-  if (hasMaskOperand && !op.getMask().empty()) {
-    Value zeroConst = createZeroConstant(builder, loc, vmiType);
-    Value mask = op.getMask().front();
-    Value result =
-        builder.create<VMISelectOp>(loc, resultType, mask, raw, zeroConst);
-    op.getResult().replaceAllUsesWith(result);
-  } else {
-    op.getResult().replaceAllUsesWith(raw);
-  }
+  op.getResult().replaceAllUsesWith(raw);
   op->erase();
   return success();
 }
@@ -433,11 +417,9 @@ static LogicalResult lowerVCvt(VMICvtOp op, OpBuilder &builder) {
     result =
         builder.create<VMISIToFPOp>(loc, resultType, source).getResult();
   } else if (direction == "widen_int") {
-    // Use sign attr to decide signed vs unsigned extension.
+    // Use source type signedness to decide signed vs unsigned extension.
     bool useSigned = true;
-    if (auto signAttr = op.getSignAttr()) {
-      useSigned = (signAttr.getValue() != "U");
-    } else if (auto intTy = dyn_cast<IntegerType>(srcElem)) {
+    if (auto intTy = dyn_cast<IntegerType>(srcElem)) {
       useSigned = intTy.isSigned();
     }
     if (useSigned)
@@ -690,39 +672,23 @@ static LogicalResult lowerPge(VMIPgeOp op, OpBuilder &builder) {
 // Category C5 helpers: vector-scalar ops (one-step to legacy)
 //===----------------------------------------------------------------------===//
 
-/// Lower a unified vector-scalar op (vadds, vmuls, …) to a legacy chain:
+/// Lower a unified vector-scalar op (vadds, vmuls, ...) to a legacy chain:
 ///   %brc  = vmi.broadcast %scalar
 ///   %raw  = legacy.op %src, %brc
-///   %zero = vmi.constant dense<0.0>
-///   %r    = vmi.select %mask, %raw, %zero
+/// Unified mask and pmode are intentionally discarded.
 template <typename VecScalarOp>
 static LogicalResult
 lowerVecScalar(VecScalarOp op, OpBuilder &builder,
                function_ref<Value(Location, Type, Value, Value)> createLegacy) {
-  if (hasMergePmode(op))
-    return failure();
-
   Location loc = op.getLoc();
   Type srcVmiType = op.getSrc().getType();
-  auto vmiType = cast<VMIVRegType>(srcVmiType);
   Value src = op.getSrc();
   Value scalar = op.getScalar();
-  Value mask = op.getMask();
 
-  // 1. Broadcast scalar → vector (legacy broadcast).
   Value brc = builder.create<VMIBroadcastOp>(loc, srcVmiType, scalar)
                   .getResult();
-
-  // 2. Legacy binary op.
   Value raw = createLegacy(loc, srcVmiType, src, brc);
-
-  // 3. Zero constant.
-  Value zeroConst = createZeroConstant(builder, loc, vmiType);
-
-  // 4. Select with mask.
-  Value result = builder.create<VMISelectOp>(loc, srcVmiType, mask, raw,
-                                             zeroConst);
-  op.getResult().replaceAllUsesWith(result);
+  op.getResult().replaceAllUsesWith(raw);
   op->erase();
   return success();
 }
@@ -767,7 +733,8 @@ static LogicalResult lowerVCadd(VMIvcaddOp op, OpBuilder &builder) {
   } else {
     // Full reduce path
     Value init = createReduceNeutralInit(builder, loc, elemType,
-                                         /*isAdd=*/true, /*isMax=*/false);
+                                         /*isAdd=*/true, /*isMax=*/false,
+                                         sourceType.getLayout());
     Value result;
     if (isFloat)
       result =
@@ -826,7 +793,8 @@ static LogicalResult lowerVcmax(VMIvcmaxOp op, OpBuilder &builder) {
     return failure();
 
   Value init = createReduceNeutralInit(builder, loc, elemType,
-                                       /*isAdd=*/false, /*isMax=*/true);
+                                       /*isAdd=*/false, /*isMax=*/true,
+                                       sourceType.getLayout());
   Value result =
       builder
           .create<VMIReduceMaxFOp>(loc, resultType, source, init, mask)
@@ -854,7 +822,8 @@ static LogicalResult lowerVcmin(VMIvcminOp op, OpBuilder &builder) {
 
   Location loc = op.getLoc();
   Value init = createReduceNeutralInit(builder, loc, elemType,
-                                       /*isAdd=*/false, /*isMax=*/false);
+                                       /*isAdd=*/false, /*isMax=*/false,
+                                       sourceType.getLayout());
   Value result =
       builder
           .create<VMIReduceMinFOp>(loc, op.getResult().getType(),
@@ -1379,7 +1348,7 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
       continue;
     }
 
-    // ---- Category B: masked elementwise — binary ----
+    // ---- Category B: binary elementwise, mask/pmode discarded ----
 
     if (auto vop = dyn_cast<VMIVaddOp>(op)) {
       Type elemType = getVMIElementType(vop.getResult());
@@ -1388,7 +1357,7 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
           return builder.create<VMIAddFOp>(loc, ty, lhs, rhs).getResult();
         return builder.create<VMIAddIOp>(loc, ty, lhs, rhs).getResult();
       };
-      (void)lowerMaskedBinary(vop, builder, createLegacy);
+      (void)lowerBinaryIgnoringMask(vop, createLegacy);
       continue;
     }
 
@@ -1399,7 +1368,7 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
           return builder.create<VMISubFOp>(loc, ty, lhs, rhs).getResult();
         return builder.create<VMISubIOp>(loc, ty, lhs, rhs).getResult();
       };
-      (void)lowerMaskedBinary(vop, builder, createLegacy);
+      (void)lowerBinaryIgnoringMask(vop, createLegacy);
       continue;
     }
 
@@ -1410,7 +1379,7 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
           return builder.create<VMIMulFOp>(loc, ty, lhs, rhs).getResult();
         return builder.create<VMIMulIOp>(loc, ty, lhs, rhs).getResult();
       };
-      (void)lowerMaskedBinary(vop, builder, createLegacy);
+      (void)lowerBinaryIgnoringMask(vop, createLegacy);
       continue;
     }
 
@@ -1420,7 +1389,7 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
                               Value rhs) -> Value {
         return builder.create<VMIDivFOp>(loc, ty, lhs, rhs).getResult();
       };
-      (void)lowerMaskedBinary(vop, builder, createLegacy);
+      (void)lowerBinaryIgnoringMask(vop, createLegacy);
       continue;
     }
 
@@ -1429,7 +1398,7 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
                               Value rhs) -> Value {
         return builder.create<VMIMinFOp>(loc, ty, lhs, rhs).getResult();
       };
-      (void)lowerMaskedBinary(vop, builder, createLegacy);
+      (void)lowerBinaryIgnoringMask(vop, createLegacy);
       continue;
     }
 
@@ -1438,7 +1407,7 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
                               Value rhs) -> Value {
         return builder.create<VMIMaxFOp>(loc, ty, lhs, rhs).getResult();
       };
-      (void)lowerMaskedBinary(vop, builder, createLegacy);
+      (void)lowerBinaryIgnoringMask(vop, createLegacy);
       continue;
     }
 
@@ -1447,7 +1416,7 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
                               Value rhs) -> Value {
         return builder.create<VMIAndIOp>(loc, ty, lhs, rhs).getResult();
       };
-      (void)lowerMaskedBinary(vop, builder, createLegacy);
+      (void)lowerBinaryIgnoringMask(vop, createLegacy);
       continue;
     }
 
@@ -1456,7 +1425,7 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
                               Value rhs) -> Value {
         return builder.create<VMIOrIOp>(loc, ty, lhs, rhs).getResult();
       };
-      (void)lowerMaskedBinary(vop, builder, createLegacy);
+      (void)lowerBinaryIgnoringMask(vop, createLegacy);
       continue;
     }
 
@@ -1465,7 +1434,7 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
                               Value rhs) -> Value {
         return builder.create<VMIXOrIOp>(loc, ty, lhs, rhs).getResult();
       };
-      (void)lowerMaskedBinary(vop, builder, createLegacy);
+      (void)lowerBinaryIgnoringMask(vop, createLegacy);
       continue;
     }
 
@@ -1474,7 +1443,7 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
                               Value rhs) -> Value {
         return builder.create<VMIShLIOp>(loc, ty, lhs, rhs).getResult();
       };
-      (void)lowerMaskedBinary(vop, builder, createLegacy);
+      (void)lowerBinaryIgnoringMask(vop, createLegacy);
       continue;
     }
 
@@ -1483,7 +1452,7 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
                               Value rhs) -> Value {
         return builder.create<VMIShRUIOp>(loc, ty, lhs, rhs).getResult();
       };
-      (void)lowerMaskedBinary(vop, builder, createLegacy);
+      (void)lowerBinaryIgnoringMask(vop, createLegacy);
       continue;
     }
 

@@ -3283,31 +3283,14 @@ LogicalResult VMICvtOp::verify() {
   }
 
   // --- sign ---
-  if (auto signAttr = (*this)->getAttrOfType<StringAttr>("sign")) {
-    StringRef sign = signAttr.getValue();
-    if (sign != "S" && sign != "U")
-      return emitOpError("sign must be 'S' (signed) or 'U' (unsigned)");
-
-    if (dir != CvtDirection::IntWiden)
-      return emitOpError("'sign' attribute is only valid for "
-                         "int-widening conversions");
-
-    // When source type carries signedness, check consistency.
-    auto intSrc = cast<IntegerType>(srcElem);
-    if (intSrc.isSigned() && sign == "U")
-      return emitOpError(
-          "'sign=U' contradicts signed integer source element type");
-    if (intSrc.isUnsigned() && sign == "S")
-      return emitOpError(
-          "'sign=S' contradicts unsigned integer source element type");
-  } else {
-    // sign is required when source is a signless integer and direction is
-    // IntWiden (the verifier cannot distinguish sign-ext vs. zero-ext).
-    if (dir == CvtDirection::IntWiden && srcSignlessInt)
-      return emitOpError("'sign' attribute ('S' or 'U') is required for "
-                         "int-widening conversions with a signless integer "
-                         "source element type");
-  }
+  // Int-widening requires a signed/unsigned source element type to
+  // determine sign-extension vs zero-extension. Signless integers are
+  // rejected.
+  if (dir == CvtDirection::IntWiden && srcSignlessInt)
+    return emitOpError("int-widening conversions require a signed or "
+                       "unsigned integer source element type "
+                       "(e.g. si8/ui8/si16/ui16); "
+                       "signless integer is not allowed");
 
   // --- pmode ---
   if (auto pmodeAttr = (*this)->getAttrOfType<StringAttr>("pmode")) {
