@@ -461,7 +461,14 @@ static LogicalResult lowerVLoad(VMIvLoadOp op, OpBuilder &builder) {
   if (op.getGroupAttr()) {
     auto resultType = cast<VMIVRegType>(op.getResults().front().getType());
     int64_t numGroups = op.getGroupAttr().getInt();
-    if (resultType.getElementCount() == numGroups) {
+    // {group, dist_mode="brc"}: group broadcast — one scalar per group
+    // broadcast within each group (e.g. E2B).
+    if (op.getDistMode() && op.getDistMode() == "brc") {
+      auto gbl = builder.create<VMIGroupBroadcastLoadOp>(
+          op->getLoc(), resultType, op.getSource(), op.getOffset(),
+          op.getStride(), op.getGroupAttr());
+      op.getResults().front().replaceAllUsesWith(gbl.getResult());
+    } else if (resultType.getElementCount() == numGroups) {
       auto slotLoad = builder.create<VMIGroupSlotLoadOp>(
           op->getLoc(), resultType, op.getSource(), op.getOffset(),
           op.getStride(), op.getGroupAttr());
@@ -532,16 +539,26 @@ static LogicalResult lowerVLoad(VMIvLoadOp op, OpBuilder &builder) {
     op.getResults()[0].replaceAllUsesWith(dloadOp.getLow());
     op.getResults()[1].replaceAllUsesWith(dloadOp.getHigh());
   } else if (distMode == "brc") {
-    // vload {dist_mode="brc"} -> group_broadcast_load {num_groups=1}.
-    // BRC physical semantics: dst[i] = UB[base] for all i (scalar broadcast),
-    // equivalent to a single-group broadcast load.
+    // vload {dist_mode="brc"} -> group_broadcast_load.
+    //   - no group attr: all-lane scalar broadcast (num_groups=1, stride=0).
+    //   - {group = C, stride}: per-group scalar broadcast — one scalar loaded
+    //     per group and broadcast within each group (e.g. E2B).
     auto resultType = op.getResults().front().getType();
-    Value zeroStride = builder.create<arith::ConstantOp>(
-        loc, builder.getIndexType(), builder.getIndexAttr(0));
-    auto gbl = builder.create<VMIGroupBroadcastLoadOp>(
-        loc, resultType, source, offset, zeroStride,
-        builder.getI64IntegerAttr(1));
-    op.getResults().front().replaceAllUsesWith(gbl.getResult());
+    if (auto groupAttr = op.getGroupAttr()) {
+      int64_t numGroups = groupAttr.getInt();
+      Value stride = op.getStride();
+      auto gbl = builder.create<VMIGroupBroadcastLoadOp>(
+          loc, resultType, source, offset, stride,
+          builder.getI64IntegerAttr(numGroups));
+      op.getResults().front().replaceAllUsesWith(gbl.getResult());
+    } else {
+      Value zeroStride = builder.create<arith::ConstantOp>(
+          loc, builder.getIndexType(), builder.getIndexAttr(0));
+      auto gbl = builder.create<VMIGroupBroadcastLoadOp>(
+          loc, resultType, source, offset, zeroStride,
+          builder.getI64IntegerAttr(1));
+      op.getResults().front().replaceAllUsesWith(gbl.getResult());
+    }
   } else {
     // "unpack" has no legacy equivalent (physical widening, lane count changes).
     return failure();
