@@ -3867,8 +3867,9 @@ void VMIvLoadOp::print(OpAsmPrinter &p) {
 }
 
 LogicalResult VMIvLoadOp::verify() {
-  // group and dist_mode are mutually exclusive
-  if (getGroup() && getDistMode())
+  // group and dist_mode are mutually exclusive, except brc which supports
+  // group broadcast (one scalar per group → broadcast within each group).
+  if (getGroup() && getDistMode() && getDistMode() != "brc")
     return emitOpError("group and dist_mode are mutually exclusive");
   if (getGroup() && !getStride())
     return emitOpError("group requires a stride operand");
