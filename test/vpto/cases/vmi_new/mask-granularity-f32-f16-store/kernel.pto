@@ -38,7 +38,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
 
     pto.vecscope {
       %x = pto.vmi.vload %ub_src[%c0] : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
-      %mask = pto.vmi.pge "PAT_VL96" : !pto.vmi.mask<128xpred>
+      %mask = pto.vmi.create_mask %c96 : index -> !pto.vmi.mask<128xpred>
       pto.vmi.vstore %x, %ub_out32[%c0], %mask {pmode = "merge"}
           : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>, !pto.vmi.mask<128xpred>
       %h = pto.vmi.vcvt %x : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>

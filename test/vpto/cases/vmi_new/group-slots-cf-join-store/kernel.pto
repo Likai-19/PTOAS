@@ -40,7 +40,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.vecscope {
       %cond_true = arith.cmpi eq, %c0, %c0 : index
       %cond_false = arith.cmpi ne, %c0, %c0 : index
-      %mask = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<128xpred>
+      %mask = pto.vmi.create_mask %c128 : index -> !pto.vmi.mask<128xpred>
 
       %reduce_join = scf.if %cond_true -> !pto.vmi.vreg<8xf32> {
         %x = pto.vmi.vload %ub_src[%c0]

@@ -57,7 +57,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.vecscope {
       scf.for %row = %c0 to %c8 step %c1 {
         %elem_off = arith.muli %row, %c256 : index
-        %mask = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<256xpred>
+        %mask = pto.vmi.create_mask %c256 : index -> !pto.vmi.mask<256xpred>
         %x_f16 = pto.vmi.vload %ub_src[%elem_off]
             : !pto.ptr<f16, ub> -> !pto.vmi.vreg<256xf16>
         %x = pto.vmi.vcvt %x_f16
@@ -117,7 +117,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
           -> !pto.vmi.vreg<256xi32>
       %scale2_zero = pto.vmi.vbrc %c0_i32
           : i32 -> !pto.vmi.vreg<256xi32>
-      %seed_scale2 = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<256xpred>
+      %seed_scale2 = pto.vmi.create_mask %c256 : index -> !pto.vmi.mask<256xpred>
       %scale2_even = pto.vmi.vcmp %scale2_parity, %scale2_zero, %seed_scale2 {cmp = "eq"}
           : !pto.vmi.vreg<256xi32>, !pto.vmi.vreg<256xi32>, !pto.vmi.mask<256xpred>
           -> !pto.vmi.mask<256xpred>

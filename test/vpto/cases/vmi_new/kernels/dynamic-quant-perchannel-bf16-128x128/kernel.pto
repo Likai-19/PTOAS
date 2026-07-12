@@ -61,7 +61,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
 
       scf.for %col = %c0 to %c128 step %c1 {
         %col_i32 = arith.index_cast %col : index to i32
-        %mask = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<128xpred>
+        %mask = pto.vmi.create_mask %c128 : index -> !pto.vmi.mask<128xpred>
         %zero = pto.vmi.vbrc %c0_f32
             : f32 -> !pto.vmi.vreg<128xf32>
         %init = pto.vmi.vbrc %c0_f32
@@ -97,7 +97,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
             : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
       }
 
-      %scale_mask = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<128xpred>
+      %scale_mask = pto.vmi.create_mask %c128 : index -> !pto.vmi.mask<128xpred>
       %scale_zero = pto.vmi.vbrc %c0_f32
           : f32 -> !pto.vmi.vreg<128xf32>
       %scale_lane = pto.vmi.vci %c0_i32
@@ -114,7 +114,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
       pto.vmi.vstore %scale_dense, %ub_scale[%c0]
           : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
 
-      %scale_pair_mask = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<256xpred>
+      %scale_pair_mask = pto.vmi.create_mask %c256 : index -> !pto.vmi.mask<256xpred>
       %scale_pair_zero = pto.vmi.vbrc %c0_f32
           : f32 -> !pto.vmi.vreg<256xf32>
       %scale_pair_lane = pto.vmi.vci %c0_i32
@@ -157,7 +157,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
             : i32 -> !pto.vmi.vreg<256xi32>
         %byte_bias = pto.vmi.vbrc %c256_i32
             : i32 -> !pto.vmi.vreg<256xi32>
-        %cmp_seed = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<256xpred>
+        %cmp_seed = pto.vmi.create_mask %c256 : index -> !pto.vmi.mask<256xpred>
         %neg = pto.vmi.vcmp %i32, %zero_i32, %cmp_seed {cmp = "slt"} : !pto.vmi.vreg<256xi32>, !pto.vmi.vreg<256xi32>, !pto.vmi.mask<256xpred> -> !pto.vmi.mask<256xpred>
         %wrapped = pto.vmi.vadd %i32, %byte_bias
             : !pto.vmi.vreg<256xi32>, !pto.vmi.vreg<256xi32>

@@ -62,7 +62,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
         %src_row_off = arith.muli %row, %c512 : index
         %x1_off = arith.addi %src_row_off, %c256 : index
         %out_off = arith.muli %row, %c256 : index
-        %mask = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<256xpred>
+        %mask = pto.vmi.create_mask %c256 : index -> !pto.vmi.mask<256xpred>
         %x2_f16 = pto.vmi.vload %ub_src[%src_row_off]
             : !pto.ptr<f16, ub> -> !pto.vmi.vreg<256xf16>
         %x1_f16 = pto.vmi.vload %ub_src[%x1_off]
