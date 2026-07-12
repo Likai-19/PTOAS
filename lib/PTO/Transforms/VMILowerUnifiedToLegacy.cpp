@@ -1453,6 +1453,16 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
     }
 
     if (auto vop = dyn_cast<VMIVandOp>(op)) {
+      builder.setInsertionPoint(op);
+      if (isa<VMIMaskType>(vop.getLhs().getType())) {
+        // Mask logic path: lower to mask_and.
+        Value result = builder.create<VMIMaskAndOp>(
+            vop.getLoc(), vop.getResult().getType(),
+            vop.getLhs(), vop.getRhs()).getResult();
+        vop.getResult().replaceAllUsesWith(result);
+        op->erase();
+        continue;
+      }
       auto createLegacy = [&](Location loc, Type ty, Value lhs,
                               Value rhs) -> Value {
         return builder.create<VMIAndIOp>(loc, ty, lhs, rhs).getResult();
@@ -1462,6 +1472,16 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
     }
 
     if (auto vop = dyn_cast<VMIVorOp>(op)) {
+      builder.setInsertionPoint(op);
+      if (isa<VMIMaskType>(vop.getLhs().getType())) {
+        // Mask logic path: lower to mask_or.
+        Value result = builder.create<VMIMaskOrOp>(
+            vop.getLoc(), vop.getResult().getType(),
+            vop.getLhs(), vop.getRhs()).getResult();
+        vop.getResult().replaceAllUsesWith(result);
+        op->erase();
+        continue;
+      }
       auto createLegacy = [&](Location loc, Type ty, Value lhs,
                               Value rhs) -> Value {
         return builder.create<VMIOrIOp>(loc, ty, lhs, rhs).getResult();
@@ -1471,6 +1491,16 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
     }
 
     if (auto vop = dyn_cast<VMIVxorOp>(op)) {
+      builder.setInsertionPoint(op);
+      if (isa<VMIMaskType>(vop.getLhs().getType())) {
+        // Mask logic path: lower to mask_xor.
+        Value result = builder.create<VMIMaskXOrOp>(
+            vop.getLoc(), vop.getResult().getType(),
+            vop.getLhs(), vop.getRhs()).getResult();
+        vop.getResult().replaceAllUsesWith(result);
+        op->erase();
+        continue;
+      }
       auto createLegacy = [&](Location loc, Type ty, Value lhs,
                               Value rhs) -> Value {
         return builder.create<VMIXOrIOp>(loc, ty, lhs, rhs).getResult();
@@ -1551,6 +1581,16 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
     }
 
     if (auto vop = dyn_cast<VMIVnotOp>(op)) {
+      builder.setInsertionPoint(op);
+      if (isa<VMIMaskType>(vop.getSource().getType())) {
+        // Mask logic path: lower to mask_not.
+        Value result = builder.create<VMIMaskNotOp>(
+            vop.getLoc(), vop.getResult().getType(),
+            vop.getSource()).getResult();
+        vop.getResult().replaceAllUsesWith(result);
+        op->erase();
+        continue;
+      }
       auto createLegacy = [&](Location loc, Type ty, Value src) -> Value {
         return builder.create<VMINotOp>(loc, ty, src).getResult();
       };
