@@ -2953,6 +2953,17 @@ LogicalResult VMIVgatherOp::verify() {
   if (failed(verifyMaskMatchesData(getOperation(), maskType, resultType)))
     return failure();
 
+  // 16-bit offsets only address the ui16 gather path (pto.vgather2 / b16 mask),
+  // which requires a ui16 result element type. Reject other 16-bit-offset
+  // results here so the error surfaces at the vgather op rather than later in
+  // the legacy gather it lowers to.
+  auto resultIntegerType = dyn_cast<IntegerType>(resultType.getElementType());
+  if (indexElementType.getWidth() == 16 &&
+      (!resultIntegerType || !resultIntegerType.isUnsigned() ||
+       resultIntegerType.getWidth() != 16))
+    return emitOpError(
+        "requires ui16 result element type when using ui16 offsets");
+
   if (auto pmode = getPmode()) {
     if (pmode.value() != "merge" && pmode.value() != "zero")
       return emitOpError("pmode must be 'merge' or 'zero'");
