@@ -12,6 +12,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
                                                     %sum_gm: !pto.ptr<f32, gm>) attributes {pto.kernel} {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
+    %c32 = arith.constant 32 : index
     %c0_i64 = arith.constant 0 : i64
     %c1_i64 = arith.constant 1 : i64
     %c32_i64 = arith.constant 32 : i64
@@ -41,7 +42,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
       pto.vmi.vstore %copy, %ub_copy[%c0]
           : !pto.vmi.vreg<256xf32>, !pto.ptr<f32, ub>
 
-      %mask = pto.vmi.pge "PAT_VL32" {group = 8} : !pto.vmi.mask<256xpred>
+      %mask = pto.vmi.create_group_mask %c32 {num_groups = 8, group_size = 32} : index -> !pto.vmi.mask<256xpred>
       %prod = pto.vmi.vmul %x, %scale_vec
           : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
           -> !pto.vmi.vreg<256xf32>

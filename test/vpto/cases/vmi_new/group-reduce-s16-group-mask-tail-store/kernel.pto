@@ -35,7 +35,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.vecscope {
       %x = pto.vmi.vload %ub_src[%c0], %c16 {group = 8}
           : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
-      %mask = pto.vmi.pge "PAT_VL12" {group = 8} : !pto.vmi.mask<128xpred>
+      %mask = pto.vmi.create_group_mask %c12 {num_groups = 8, group_size = 16} : index -> !pto.vmi.mask<128xpred>
       %sum = pto.vmi.vcadd %x, %mask {group = 8, reassoc}
           : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
           -> !pto.vmi.vreg<8xf32>

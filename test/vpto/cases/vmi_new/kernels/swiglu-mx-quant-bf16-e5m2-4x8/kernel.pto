@@ -66,8 +66,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.wait_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
 
     pto.vecscope {
-      %mask = pto.vmi.pge "PAT_VL4" {group = 8}
-          : !pto.vmi.mask<256xpred>
+      %mask = pto.vmi.create_group_mask %c4 {num_groups = 8, group_size = 32} : index -> !pto.vmi.mask<256xpred>
       %x2_bf16 = pto.vmi.vload %ub_x2[%c0]
           : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
       %x1_bf16 = pto.vmi.vload %ub_x1[%c0]

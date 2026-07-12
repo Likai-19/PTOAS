@@ -20,7 +20,6 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     %c128_i64 = arith.constant 128 : i64
     %c4096_i64 = arith.constant 4096 : i64
     %scale = arith.constant 2.000000e+00 : f32
-    %c1000_i32 = arith.constant 1000 : i32
 
     %ub_src = pto.castptr %c0_i64 : i64 -> !pto.ptr<f16, ub>
     %ub_dst = pto.castptr %c4096_i64 : i64 -> !pto.ptr<f32, ub>
@@ -36,8 +35,8 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.wait_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
 
     pto.vecscope {
-      %_:1 = scf.for %offset = %c0 to %c1024 step %c128 iter_args(%rem = %c1000_i32) -> (i32) {
-        %mask, %next = pto.vmi.plt %rem : i32 -> !pto.vmi.mask<128xpred>, i32
+      %_:1 = scf.for %offset = %c0 to %c1024 step %c128 iter_args(%rem = %c1000) -> (index) {
+        %mask = pto.vmi.create_mask %rem : index -> !pto.vmi.mask<128xpred>
         %packed = pto.vmi.vload %ub_src[%offset] : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
         %wide = pto.vmi.vcvt %packed : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
         %scale_vec = pto.vmi.vbrc %scale : f32 -> !pto.vmi.vreg<128xf32>
@@ -45,7 +44,8 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
             : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
         pto.vmi.vstore %out, %ub_dst[%offset], %mask {pmode = "merge"}
             : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>, !pto.vmi.mask<128xpred>
-        scf.yield %next : i32
+        %next = arith.subi %rem, %c128 : index
+        scf.yield %next : index
       }
     }
 
