@@ -973,30 +973,30 @@ def VMIVreluOp : VMI_Op<"vrelu", [Pure]> {
 
 def VMIVandOp : VMI_Op<"vand", [Pure]> {
   let summary = "VMI elementwise bitwise and";
-  let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs,
+  let arguments = (ins VMI_ValueTypeConstraint:$lhs, VMI_ValueTypeConstraint:$rhs,
                        Variadic<VMI_MaskTypeConstraint>:$mask,
                        OptionalAttr<StrAttr>:$pmode);
-  let results = (outs VMI_VRegTypeConstraint:$result);
+  let results = (outs VMI_ValueTypeConstraint:$result);
   let hasVerifier = 1;
   let assemblyFormat = "$lhs `,` $rhs (`,` $mask^)? attr-dict `:` type($lhs) `,` type($rhs) (`,` type($mask)^)? `->` type($result)";
 }
 
 def VMIVorOp : VMI_Op<"vor", [Pure]> {
   let summary = "VMI elementwise bitwise or";
-  let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs,
+  let arguments = (ins VMI_ValueTypeConstraint:$lhs, VMI_ValueTypeConstraint:$rhs,
                        Variadic<VMI_MaskTypeConstraint>:$mask,
                        OptionalAttr<StrAttr>:$pmode);
-  let results = (outs VMI_VRegTypeConstraint:$result);
+  let results = (outs VMI_ValueTypeConstraint:$result);
   let hasVerifier = 1;
   let assemblyFormat = "$lhs `,` $rhs (`,` $mask^)? attr-dict `:` type($lhs) `,` type($rhs) (`,` type($mask)^)? `->` type($result)";
 }
 
 def VMIVxorOp : VMI_Op<"vxor", [Pure]> {
   let summary = "VMI elementwise bitwise xor";
-  let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs,
+  let arguments = (ins VMI_ValueTypeConstraint:$lhs, VMI_ValueTypeConstraint:$rhs,
                        Variadic<VMI_MaskTypeConstraint>:$mask,
                        OptionalAttr<StrAttr>:$pmode);
-  let results = (outs VMI_VRegTypeConstraint:$result);
+  let results = (outs VMI_ValueTypeConstraint:$result);
   let hasVerifier = 1;
   let assemblyFormat = "$lhs `,` $rhs (`,` $mask^)? attr-dict `:` type($lhs) `,` type($rhs) (`,` type($mask)^)? `->` type($result)";
 }
@@ -1023,10 +1023,10 @@ def VMIVshrOp : VMI_Op<"vshr", [Pure]> {
 
 def VMIVnotOp : VMI_Op<"vnot", [Pure]> {
   let summary = "VMI elementwise bitwise not";
-  let arguments = (ins VMI_VRegTypeConstraint:$source,
+  let arguments = (ins VMI_ValueTypeConstraint:$source,
                        Variadic<VMI_MaskTypeConstraint>:$mask,
                        OptionalAttr<StrAttr>:$pmode);
-  let results = (outs VMI_VRegTypeConstraint:$result);
+  let results = (outs VMI_ValueTypeConstraint:$result);
   let hasVerifier = 1;
   let assemblyFormat = "$source (`,` $mask^)? attr-dict `:` type($source) (`,` type($mask)^)? `->` type($result)";
 }
