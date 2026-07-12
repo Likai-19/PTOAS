@@ -68,7 +68,7 @@
 //            nor reduce_mini)
 //
 // Category C7 — fused multiply-add family → legacy fma (2 ops):
-//   vmula → fma               (float only; int → skipped, no legacy int fma)
+//   vmula → fma               (float only; mask discarded; int → skipped, no legacy int fma)
 //   vaxpy → broadcast + fma   (float only)
 //
 // Category C8 — indexed gather/scatter → legacy gather/scatter (2 ops):
@@ -838,7 +838,8 @@ static LogicalResult lowerVcmin(VMIvcminOp op, OpBuilder &builder) {
 // Category C7 helpers: vmula / vaxpy (fused multiply-add → legacy fma)
 //===----------------------------------------------------------------------===//
 
-/// Lower vmula (acc = acc + lhs*rhs) to legacy fma (lhs*rhs + acc) + select.
+/// Lower vmula (acc = acc + lhs*rhs) to legacy fma (lhs*rhs + acc).
+/// The mask operand (if present) is discarded — legacy fma has no mask.
 /// Legacy fma is floating-point only; integer vmula has no legacy equivalent
 /// and is skipped (falls through to VMIToVPTO).
 static LogicalResult lowerVmula(VMIVmulaOp op, OpBuilder &builder) {
@@ -852,13 +853,10 @@ static LogicalResult lowerVmula(VMIVmulaOp op, OpBuilder &builder) {
 
   Location loc = op.getLoc();
   // fma computes lhs*rhs + acc, matching vmula's acc + lhs*rhs.
-  Value raw = builder
-                  .create<VMIFmaOp>(loc, resultType, op.getLhs(), op.getRhs(),
-                                    op.getAcc())
-                  .getResult();
-  Value zeroConst = createZeroConstant(builder, loc, vmiType);
-  Value result = builder.create<VMISelectOp>(loc, resultType, op.getMask(), raw,
-                                             zeroConst);
+  Value result = builder
+                     .create<VMIFmaOp>(loc, resultType, op.getLhs(), op.getRhs(),
+                                       op.getAcc())
+                     .getResult();
   op.getResult().replaceAllUsesWith(result);
   op->erase();
   return success();
