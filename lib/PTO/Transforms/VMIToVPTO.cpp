@@ -4623,6 +4623,17 @@ struct OneToNVMIConstantOpPattern : OpConversionPattern<VMIConstantOp> {
     if (!splatAttr)
       return rewriter.notifyMatchFailure(op, "splat constant must be typed");
 
+    // arith.constant only accepts signless integer types, whereas VMI vregs may
+    // carry signed/unsigned element types (e.g. ui16). Remap an unsigned/signed
+    // integer splat to its signless equivalent; the downstream pto.vdup accepts
+    // a signless scalar for a signed/unsigned result element.
+    if (auto intAttr = dyn_cast<IntegerAttr>(splatAttr)) {
+      if (auto intTy = dyn_cast<IntegerType>(intAttr.getType());
+          intTy && !intTy.isSignless())
+        splatAttr = IntegerAttr::get(rewriter.getIntegerType(intTy.getWidth()),
+                                     intAttr.getValue());
+    }
+
     Value scalar =
         rewriter.create<arith::ConstantOp>(op.getLoc(), splatAttr).getResult();
     FailureOr<SmallVector<Type>> maybe_resultTypes =
