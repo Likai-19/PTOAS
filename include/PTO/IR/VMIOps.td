@@ -1627,11 +1627,18 @@ def VMIVmulaOp : VMI_Op<"vmula", [Pure]> {
     The accumulator operand comes first to match hardware FMA semantics.
 
     Supports both floating-point (f16/bf16/f32) and integer (i8-i32) types.
+    The mask operand is optional; when present it is only a semantic annotation
+    and is discarded during lowering to legacy fma.
 
     Example:
     ```
     %acc1 = pto.vmi.vmula %acc, %a, %b, %mask
       : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64>
+        -> !pto.vmi.vreg<64xf32>
+
+    // Without mask:
+    %acc2 = pto.vmi.vmula %acc, %a, %b
+      : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
         -> !pto.vmi.vreg<64xf32>
     ```
   }];
@@ -1639,11 +1646,11 @@ def VMIVmulaOp : VMI_Op<"vmula", [Pure]> {
     VMI_VRegTypeConstraint:$acc,
     VMI_VRegTypeConstraint:$lhs,
     VMI_VRegTypeConstraint:$rhs,
-    VMI_MaskTypeConstraint:$mask,
+    Variadic<VMI_MaskTypeConstraint>:$mask,
     OptionalAttr<StrAttr>:$pmode
   );
   let results = (outs VMI_VRegTypeConstraint:$result);
   let hasVerifier = 1;
-  let assemblyFormat = "$acc `,` $lhs `,` $rhs `,` $mask attr-dict `:` type($acc) `,` type($lhs) `,` type($rhs) `,` type($mask) `->` type($result)";
+  let assemblyFormat = "$acc `,` $lhs `,` $rhs (`,` $mask^)? attr-dict `:` type($acc) `,` type($lhs) `,` type($rhs) (`,` type($mask)^)? `->` type($result)";
 }
 #endif // MLIR_DIALECT_PTO_IR_VMIOPS
