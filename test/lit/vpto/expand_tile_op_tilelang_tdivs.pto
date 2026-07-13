@@ -11,8 +11,9 @@
 // CHECK-TILE-SCALAR: pto.vecscope
 // CHECK-TILE-SCALAR: pto.castptr
 // CHECK-TILE-SCALAR: %[[MASK:.+]], %[[SCALAR_OUT:.+]] = pto.plt_b32
-// CHECK-TILE-SCALAR: %[[LD:.+]] = pto.vlds
 // CHECK-TILE-SCALAR: %[[BR:.+]] = pto.vbr
+// CHECK-TILE-SCALAR: scf.for
+// CHECK-TILE-SCALAR: %[[LD:.+]] = pto.vlds
 // CHECK-TILE-SCALAR: %[[DIV:.+]] = pto.vdiv %[[LD]], %[[BR]], %[[MASK]]
 // CHECK-TILE-SCALAR: pto.vsts %[[DIV]]
 
@@ -22,8 +23,9 @@
 // CHECK-SCALAR-TILE: pto.vecscope
 // CHECK-SCALAR-TILE: pto.castptr
 // CHECK-SCALAR-TILE: %[[MASK:.+]], %[[SCALAR_OUT:.+]] = pto.plt_b32
-// CHECK-SCALAR-TILE: %[[LD:.+]] = pto.vlds
 // CHECK-SCALAR-TILE: %[[BR:.+]] = pto.vbr
+// CHECK-SCALAR-TILE: scf.for
+// CHECK-SCALAR-TILE: %[[LD:.+]] = pto.vlds
 // CHECK-SCALAR-TILE: %[[DIV:.+]] = pto.vdiv %[[BR]], %[[LD]], %[[MASK]]
 // CHECK-SCALAR-TILE: pto.vsts %[[DIV]]
 

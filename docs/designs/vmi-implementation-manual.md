@@ -119,8 +119,9 @@ lib/PTO/Transforms/CMakeLists.txt:
   add missing MLIR dialect libraries only when a new source actually includes them
 ```
 
-Driver wiring is explicit and opt-in. `ptoas --enable-vmi` runs the VMI semantic pipeline before the VPTO backend
-pipeline:
+The VPTO backend runs the VMI semantic pipeline by default. Use
+`--enable-vmi=false` only as a temporary compatibility escape hatch. The
+pipeline is ordered around vecscope inference as follows:
 
 ```text
 pto-validate-vmi-ir
@@ -135,14 +136,19 @@ canonicalize/cse
 vmi-legalize-arith-select
 pto-validate-vmi-layout-ir
 vmi-to-vpto
-canonicalize/cse
+SIMT unroll/SCCP/canonicalize/CSE
+vpto pointer/wrapper normalization
+pto-infer-vpto-vecscope
+VMI LICM
+canonicalize/CSE
 ```
 
-`--enable-vmi` requires `--pto-backend=vpto` or `pto.backend = "vpto"` because the pipeline produces physical VPTO
-values and ops. It is not part of the default PTOAS pipeline; existing PTO/VPTO inputs keep their previous behavior
-unless the flag is set.
+The default only applies when the effective backend is VPTO. Explicitly using
+`--enable-vmi` with another backend is rejected because the pipeline produces
+physical VPTO values and ops.
 
-The `ptoas --enable-vmi` user-facing entry also rejects public functions whose signature contains `!pto.vmi.*`.
+The default VPTO/VMI user-facing entry also rejects public functions whose
+signature contains `!pto.vmi.*`.
 Internal/private VMI-typed functions are materialized at explicit boundary
 helpers by baseline `vmi-layout-assignment` and physicalized by `vmi-to-vpto`.
 A later optimization pass may specialize private signatures.  A public VMI ABI
@@ -153,8 +159,8 @@ CLI coverage:
 
 ```text
 vmi_ptoas_cli_pipeline.pto:
-  --pto-backend=vpto + --enable-vmi lowers the VMI pipeline
-  pto.backend = "vpto" also selects the VPTO-compatible path
+  --pto-backend=vpto lowers the VMI pipeline by default
+  pto.backend = "vpto" also selects the default VMI path
   explicit --pto-backend=emitc with --enable-vmi is rejected
   f16->f32 store lowers through the fold-consumers path, proving the driver
   uses the optimized pipeline rather than only the hard skeleton
@@ -257,7 +263,7 @@ Driver/test layer:
   tools/pto-test-opt/
   test/lit/vmi/
 
-  ptoas 只暴露 opt-in pipeline；pto-test-opt 保留单 pass 和中间 IR 的调试入口。
+  ptoas 对 VPTO backend 默认运行完整 pipeline；pto-test-opt 保留单 pass 和中间 IR 的调试入口。
 ```
 
 每层的 MLIR 框架选择如下：
@@ -1195,14 +1201,19 @@ raw VMI producer
   -> vmi-legalize-arith-select
   -> pto-validate-vmi-layout-ir
   -> vmi-to-vpto
-  -> canonicalize/cse
+  -> SIMT unroll/SCCP/canonicalize/CSE
+  -> vpto pointer/wrapper normalization
+  -> pto-infer-vpto-vecscope
+  -> VMI LICM
+  -> canonicalize/CSE
   -> final residual verifier
 ```
 
-The `ptoas --enable-vmi` driver entry uses this sequence before the existing VPTO backend pipeline.
-The test-opt entry remains useful for isolated pass debugging, while the `ptoas` flag proves the same sequence is
-wired through the user-facing compiler driver.  The optimization passes are legal-to-legal VMI rewrites; removing one
-may affect quality or reject fewer/fewer optimized forms, but it must not make `vmi-to-vpto` recover hidden context.
+The `ptoas` VPTO driver uses this sequence by default. The test-opt entry
+remains useful for isolated pass debugging. Optimization after physicalization
+must preserve the inferred resultless vecscope boundary. Pre-emission
+canonicalization remains before inference as input normalization; VMI LICM and
+the final canonicalize/CSE cleanup run after inference.
 
 各阶段之间只通过 IR 传递状态，不通过 pass-private side table 传递语义。也就是说：
 
@@ -2727,7 +2738,7 @@ callee signature/body 可参与 layout constraint solving。
 定义 VMI value 的外部 ABI materialization plan。没有 VMI type 的 external declaration 必须在
 `rewriteFunctionType` 中保持原签名，不能因为没有 entry block arguments 被改写成空签名。
 
-`ptoas --enable-vmi` 额外拒绝 public `func.func` 的 VMI-typed signature：
+`ptoas` 的默认 VPTO/VMI pipeline 拒绝 public `func.func` 的 VMI-typed signature：
 
 ```text
 VMI-LAYOUT-CONTRACT: public VMI typed function requires an explicit external ABI materialization plan

@@ -14,4 +14,4 @@ module attributes {
 }
 
 // CHECK: VMI-PASS-INVARIANT
-// CHECK: VMI or physical VPTO type appears in a non-signature attribute
+// CHECK: VMI type appears in a non-signature attribute
