@@ -588,7 +588,7 @@ performed per group.
 | `mask` | VMI mask | **Required.** Predicate mask gating lane participation |
 | `result_type` | VMI vreg type | **Required.** The result vector type. For full-vector reduction, typically `pto.vmi.vreg(1, dtype)`. For grouped reduction, `pto.vmi.vreg(num_groups, dtype)` |
 | `group` | `int` or `None` | Number of groups for per-group reduction. `None` means full-vector reduction |
-| `reassoc` | `bool` or `None` | For `vcadd` on floating-point data only: set `True` to declare reassociative reduction semantics |
+| `reassoc` | `bool` | For `vcadd` on floating-point data only: PTODSL requires this keyword to be written explicitly as `True` or `False` |
 
 **Returns**:
 
@@ -617,8 +617,11 @@ group_max = pto.vmi.vcmax(
 **Constraints**:
 - `mask` is always required.
 - `result_type` is always required.
-- `reassoc` is only meaningful for `vcadd` on floating-point data. It
-  explicitly declares the intended reassociative sum contract.
+- `reassoc` is only meaningful for `vcadd` on floating-point data.
+- Floating-point `vcadd` must spell `reassoc` explicitly at the PTODSL surface.
+- `reassoc=None` is rejected by PTODSL; use `reassoc=True` or `reassoc=False`.
+- The current VMI op encoding remains presence-based, so `reassoc=False`
+  lowers to the same no-attribute form as legacy callers.
 
 ---
 
