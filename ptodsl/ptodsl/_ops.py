@@ -510,8 +510,8 @@ def _vcvt_contract(requires_rnd, requires_sat, requires_part, *, part_family=Non
 
 
 _VCVT_CONTRACTS = {
-    ("f32", "f8e4m3"): _vcvt_contract(True, True, True, part_family="packed4", allowed_rnd="R"),
-    ("f32", "f8e5m2"): _vcvt_contract(True, True, True, part_family="packed4", allowed_rnd="R"),
+    ("f32", "f8e4m3"): _vcvt_contract(True, True, True, part_family="packed4", allowed_rnd="RAHZ"),
+    ("f32", "f8e5m2"): _vcvt_contract(True, True, True, part_family="packed4", allowed_rnd="RAHZ"),
     ("f32", "hif8"): _vcvt_contract(True, True, True, part_family="packed4", allowed_rnd="AH"),
     ("f32", "f16"): _vcvt_contract(True, True, True),
     ("f32", "bf16"): _vcvt_contract(True, True, True),

@@ -1120,6 +1120,17 @@ def ast_runtime_ifexp_assign_probe(rows: pto.i32):
 
 
 @pto.jit(target="a5")
+def ast_runtime_ifexp_python_literal_assign_probe(rows: pto.i32):
+    limit = pto.const(64, dtype=pto.index)
+    zero = pto.const(0, dtype=pto.index)
+
+    for row in range(rows):
+        cnt = row if row < limit else 64
+        out = cnt + zero
+        _ = out
+
+
+@pto.jit(target="a5")
 def ast_runtime_for_sibling_iv_reuse_probe(rows: pto.i32, cols: pto.i32):
     stride = pto.const(64, dtype=pto.index)
     one = pto.const(1, dtype=pto.index)
@@ -2182,6 +2193,21 @@ def vmi_masked_vcvt_probe():
         size=64,
     )
     _ = pto.vmi.vcvt(src, pto.f16, mask)
+
+
+@pto.jit(target="a5", backend="vpto", mode="explicit")
+def vmi_invalid_rounding_vcvt_probe():
+    src_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
+    src_ptr = src_tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+
+    src = pto.vmi.vload(src_ptr, offset, size=64)
+    _ = pto.vmi.vcvt(
+        src,
+        pto.f8e4m3,
+        rounding=pto.VcvtRoundMode.R,
+        saturate=pto.VcvtSatMode.SAT,
+    )
 
 
 @pto.jit(target="a5", backend="vpto", mode="explicit")
@@ -4700,6 +4726,22 @@ def main() -> None:
         "assign-form Python conditional expressions should normalize through the existing AST if rewrite",
     )
 
+    ast_runtime_ifexp_python_literal_assign_text = (
+        ast_runtime_ifexp_python_literal_assign_probe.compile().mlir_text()
+    )
+    expect_parse_roundtrip_and_verify(
+        ast_runtime_ifexp_python_literal_assign_text,
+        "AST-rewritten runtime IfExp assignment should materialize opposite-branch Python literals",
+    )
+    expect(
+        ast_runtime_ifexp_python_literal_assign_text.count("scf.for") == 1,
+        "assign-form Python conditional expressions with opposite-branch literals should preserve the runtime loop",
+    )
+    expect(
+        ast_runtime_ifexp_python_literal_assign_text.count("scf.if") == 1,
+        "assign-form Python conditional expressions with opposite-branch literals should normalize through the existing AST if rewrite",
+    )
+
     ast_runtime_for_sibling_iv_reuse_text = ast_runtime_for_sibling_iv_reuse_probe.compile().mlir_text()
     expect_parse_roundtrip_and_verify(
         ast_runtime_for_sibling_iv_reuse_text,
@@ -5220,6 +5262,15 @@ def main() -> None:
     expect(
         "masked form" in str(masked_vcvt_error),
         "unsupported VMI backend/binding forms should diagnose the unavailable feature",
+    )
+    invalid_rounding_vcvt_error = expect_raises(
+        ValueError,
+        vmi_invalid_rounding_vcvt_probe.compile,
+        "rounding",
+    )
+    expect(
+        "expected one of A, H, Z" in str(invalid_rounding_vcvt_error),
+        "pto.vmi.vcvt should reject low-level-only rounding tokens before IR verification",
     )
     unpack_missing_dtype_error = expect_raises(
         TypeError,
