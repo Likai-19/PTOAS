@@ -201,12 +201,39 @@ class _NameInfoVisitor(ast.NodeVisitor):
             self.visit(keyword.value)
         self.loads.update(_class_body_free_vars(node))
 
+    def visit_ListComp(self, node):
+        self._visit_comprehension(node.generators, (node.elt,))
+
+    def visit_SetComp(self, node):
+        self._visit_comprehension(node.generators, (node.elt,))
+
+    def visit_GeneratorExp(self, node):
+        self._visit_comprehension(node.generators, (node.elt,))
+
+    def visit_DictComp(self, node):
+        self._visit_comprehension(node.generators, (node.key, node.value))
+
     def _visit_arguments_defaults(self, args):
         for default in args.defaults:
             self.visit(default)
         for default in args.kw_defaults:
             if default is not None:
                 self.visit(default)
+
+    def _visit_comprehension(self, generators, result_nodes):
+        bound = set()
+        for generator in generators:
+            self._visit_comprehension_expr(generator.iter, bound)
+            bound |= _target_stores(generator.target)
+            for if_node in generator.ifs:
+                self._visit_comprehension_expr(if_node, bound)
+        for result_node in result_nodes:
+            self._visit_comprehension_expr(result_node, bound)
+
+    def _visit_comprehension_expr(self, node, bound):
+        info = _name_info(node)
+        self.loads.update(info.loads - set(bound))
+        self.stores.update(info.stores - set(bound))
 
 
 def _name_info(node) -> _NameInfo:
@@ -241,6 +268,18 @@ class _ScopeBindingVisitor(ast.NodeVisitor):
     def visit_ClassDef(self, node):
         self.stores.add(node.name)
 
+    def visit_ListComp(self, node):
+        self._visit_comprehension(node.generators, (node.elt,))
+
+    def visit_SetComp(self, node):
+        self._visit_comprehension(node.generators, (node.elt,))
+
+    def visit_GeneratorExp(self, node):
+        self._visit_comprehension(node.generators, (node.elt,))
+
+    def visit_DictComp(self, node):
+        self._visit_comprehension(node.generators, (node.key, node.value))
+
     def visit_Global(self, node):
         self.globals.update(node.names)
 
@@ -256,6 +295,14 @@ class _ScopeBindingVisitor(ast.NodeVisitor):
             if alias.name == "*":
                 continue
             self.stores.add(alias.asname or alias.name)
+
+    def _visit_comprehension(self, generators, result_nodes):
+        for generator in generators:
+            self.visit(generator.iter)
+            for if_node in generator.ifs:
+                self.visit(if_node)
+        for result_node in result_nodes:
+            self.visit(result_node)
 
 
 def _argument_names(args) -> set[str]:

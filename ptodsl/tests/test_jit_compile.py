@@ -1130,6 +1130,24 @@ def ast_runtime_for_sibling_iv_reuse_probe(rows: pto.i32, cols: pto.i32):
         _ = t
 
 
+@pto.jit(target="a5")
+def ast_runtime_for_static_range_name_reuse_probe(cols: pto.i32):
+    zero = pto.const(0, dtype=pto.index)
+
+    for phase_a_chunk in range(cols):
+        d_heads = [phase_a_chunk + h for h in pto.static_range(4)]
+        acc = zero
+        for h in pto.static_range(4):
+            acc = acc + d_heads[h]
+        for mi in pto.static_range(2):
+            inner = zero
+            for h in pto.static_range(4):
+                inner = inner + d_heads[h]
+            acc = acc + inner
+            _ = mi
+        _ = acc
+
+
 @pto.jit(target="a5", ast_rewrite=False)
 def ast_rewrite_disabled_nested_helper_python_control_probe():
     def helper(enabled):
@@ -4665,6 +4683,16 @@ def main() -> None:
     expect(
         ast_runtime_for_sibling_iv_reuse_text.count("scf.for") >= 3,
         "reusing a sibling runtime loop IV name should not be misdiagnosed as loop-target live-out",
+    )
+
+    ast_runtime_for_static_range_name_reuse_text = ast_runtime_for_static_range_name_reuse_probe.compile().mlir_text()
+    expect_parse_roundtrip_and_verify(
+        ast_runtime_for_static_range_name_reuse_text,
+        "AST-rewritten runtime for static_range/list-comprehension name reuse specialization",
+    )
+    expect(
+        ast_runtime_for_static_range_name_reuse_text.count("scf.for") == 1,
+        "static_range and comprehension-local names should not be inferred as outer runtime loop carry state",
     )
 
     ast_rewrite_disabled_nested_helper_python_control_text = (
