@@ -18,8 +18,9 @@
 // CHECK-NOT: pto.trecip ins
 // CHECK: pto.vecscope
 // CHECK: pto.castptr
-// CHECK: pto.vlds
 // CHECK: pto.vbr
+// CHECK: scf.for
+// CHECK: pto.vlds
 // CHECK: pto.vdiv
 // CHECK: pto.vsts
 

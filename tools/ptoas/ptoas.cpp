@@ -534,9 +534,10 @@ static llvm::cl::opt<bool> disableInferLayout(
 
 static llvm::cl::opt<bool> enableVMI(
     "enable-vmi",
-    llvm::cl::desc("Run the experimental VMI-to-VPTO semantic pipeline "
-                   "(requires --pto-backend=vpto or pto.backend = \"vpto\")"),
-    llvm::cl::init(false));
+    llvm::cl::desc("Run the VMI-to-VPTO semantic pipeline for the VPTO "
+                   "backend (enabled by default; use --enable-vmi=false to "
+                   "disable)"),
+    llvm::cl::init(true));
 
 static llvm::cl::opt<bool> emitAddPtrTrace(
     "emit-addptr-trace",
@@ -2664,6 +2665,8 @@ static void prepareVPTOForEmission(PassManager &pm) {
   kernelModulePM.addPass(createCSEPass());
   kernelModulePM.addNestedPass<func::FuncOp>(
       pto::createPTOInferVPTOVecScopePass());
+  if (enableVMI)
+    kernelModulePM.addPass(createLoopInvariantCodeMotionPass());
   kernelModulePM.addPass(createCanonicalizerPass());
   kernelModulePM.addPass(createCSEPass());
   kernelModulePM.addPass(pto::createPTOValidateVPTOEmissionIRPass());
@@ -2814,10 +2817,6 @@ static void appendVMISemanticPipeline(OpPassManager &pm) {
   pm.addPass(pto::createVMILegalizeArithSelectPass());
   pm.addPass(pto::createPTOValidateVMILayoutIRPass());
   pm.addPass(pto::createVMIToVPTOPass());
-  pm.addPass(pto::createVPTONormalizeEquivalentVcvtPass());
-  pm.addPass(createLoopInvariantCodeMotionPass());
-  pm.addPass(createCanonicalizerPass());
-  pm.addPass(createCSEPass());
 }
 
 int mlir::pto::compilePTOASModule(
@@ -2845,7 +2844,8 @@ int mlir::pto::compilePTOASModule(
                     "--pto-backend=vpto or pto.backend = \"vpto\".\n";
     return 1;
   }
-  if (enableVMI && effectiveBackend != PTOBackend::VPTO) {
+  if (enableVMI && enableVMI.getNumOccurrences() != 0 &&
+      effectiveBackend != PTOBackend::VPTO) {
     llvm::errs() << "Error: --enable-vmi requires --pto-backend=vpto or "
                     "pto.backend = \"vpto\".\n";
     return 1;
