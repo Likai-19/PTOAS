@@ -26,12 +26,9 @@ TOLERANCE = {
 
 _SEED = 42
 _BLOCK_SIZE = 32
-_BLOCKS_PER_HALF = 8
 _BLOCKS_PER_LOOP = 16
-_ELEMS_PER_HALF = _BLOCK_SIZE * _BLOCKS_PER_HALF
 _ELEMS_PER_LOOP = _BLOCK_SIZE * _BLOCKS_PER_LOOP
-_RAW_SCALE_HALF_STRIDE = 32
-_RAW_SCALE_BYTES_PER_LOOP = _RAW_SCALE_HALF_STRIDE * 2
+_RAW_SCALE_BYTES_PER_LOOP = _BLOCKS_PER_LOOP
 _E8M0_BYTES = np.array([0x7E, 0x7F, 0x80, 0x81], dtype=np.uint8)
 
 
@@ -110,10 +107,7 @@ def generate_case(
     for i in range(loop_num2vf):
         src_off = i * _BLOCKS_PER_LOOP
         dst_off = i * _RAW_SCALE_BYTES_PER_LOOP
-        scale_bits_padded[dst_off : dst_off + _BLOCKS_PER_HALF] = scale_bits[src_off : src_off + _BLOCKS_PER_HALF]
-        scale_bits_padded[
-            dst_off + _RAW_SCALE_HALF_STRIDE : dst_off + _RAW_SCALE_HALF_STRIDE + _BLOCKS_PER_HALF
-        ] = scale_bits[src_off + _BLOCKS_PER_HALF : src_off + _BLOCKS_PER_LOOP]
+        scale_bits_padded[dst_off : dst_off + _BLOCKS_PER_LOOP] = scale_bits[src_off : src_off + _BLOCKS_PER_LOOP]
 
     x_bits, x_quantized = _quantize_src_to_bits(src_fmt, x_padded)
     block_scale = np.zeros(padded_block_num, dtype=np.float32)
