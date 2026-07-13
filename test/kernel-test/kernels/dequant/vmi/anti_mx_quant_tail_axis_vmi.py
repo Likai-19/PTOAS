@@ -15,30 +15,31 @@ Source regions:
 Current modeling notes:
   1. ``ComputeScale`` is expressed in terms of the logical e8m0 scale value
      rather than replaying the source's temporary zero-fill + interleave
-     choreography. It materializes `scaleBuffer` as the compact converted scale
-     buffer used by the source CCE: one f32/bf16 scale per 32-element data
-     block.
+     choreography. For the fp8 path we materialize `scaleBuffer` as one
+     contiguous 16-lane compact FP32 scale vector per loop: the 16 raw
+     block-scale bytes are converted to FP32 and kept compact in UB.
   2. The source does ``DIST_DINTLV_B8`` and then immediately interleaves the
      two FP8 registers before FP8-to-FP32 part casts. Logically that is
-     equivalent to rebuilding two contiguous 256-lane FP8 chunks, so the VMI
-     rewrite models this as two dense FP8 loads and lets ``vcvt`` produce the
-     natural deinterleaved=4 FP32 layout directly.
-  3. ``ComputeData`` consumes the compact scale buffer with broadcast-style
-     VMI loads, matching the source's DIST_E2B scale load contract.
+     equivalent to two contiguous 256-lane FP8 halves, so the VMI rewrite
+     models this as two dense loads followed by two `vcvt`s.
+  3. ``scaleBufAddr`` therefore holds one contiguous 16-lane compact scale
+     vector per loop, and ``ComputeData`` reloads each 8-scale half with a
+     grouped ``vload`` before grouped ``vbrc`` expansion and multiply.
   4. The runtime `dequant_vmi_*` kernels now call `ComputeScale` and
      `ComputeData` explicitly, matching the source `Compute(...)` structure.
 """
 
 from ptodsl import pto
 
-_FP8_HALF_LANES = 256
-_BLOCK_SIZE = 32
-_BLOCKS_PER_HALF = _FP8_HALF_LANES // _BLOCK_SIZE
 _ELEMS_PER_LOOP = 512
+_HALF_ELEMS_PER_LOOP = _ELEMS_PER_LOOP // 2
+_BLOCK_SIZE = 32
 _BLOCKS_PER_DATA_LOOP = _ELEMS_PER_LOOP // _BLOCK_SIZE
-_RAW_SCALE_HALF_STRIDE = _BLOCKS_PER_HALF
+_SCALE_LANES_PER_LOOP = _BLOCKS_PER_DATA_LOOP
+_COMPACT_SCALE_LANES_PER_LOOP = _SCALE_LANES_PER_LOOP
+_SCALE_LANES_PER_HALF = _SCALE_LANES_PER_LOOP // 2
+_SCALE_REPEAT_GROUPS = _SCALE_LANES_PER_HALF
 _RAW_SCALE_BYTES_PER_LOOP = _BLOCKS_PER_DATA_LOOP
-_COMPACT_SCALE_LANES_PER_LOOP = _BLOCKS_PER_DATA_LOOP
 
 _X_BASE_ADDR = 0
 _RAW_SCALE_BASE_ADDR = 0x4000
@@ -66,53 +67,33 @@ def _compute_scale_ub(
 
     shift = pto.vmi.vbrc(
         pto.const(23, dtype=pto.i32),
-        result_type=pto.vmi.vreg(_BLOCKS_PER_HALF, pto.i32),
+        result_type=pto.vmi.vreg(_BLOCKS_PER_DATA_LOOP, pto.i32),
     )
+    scale_mask = pto.vmi.create_mask(_SCALE_LANES_PER_LOOP, size=_SCALE_LANES_PER_LOOP)
+
     for i in range(LOOP_NUM2VF):
         raw_scale_off = i * _RAW_SCALE_BYTES_PER_LOOP
         dst_off = i * _COMPACT_SCALE_LANES_PER_LOOP
 
-        raw_scale_lo = pto.vmi.vload(
+        raw_scale = pto.vmi.vload(
             scale_src_ptr,
             raw_scale_off,
-            size=_BLOCKS_PER_HALF,
+            size=_BLOCKS_PER_DATA_LOOP,
         )
-        raw_scale_hi = pto.vmi.vload(
-            scale_src_ptr,
-            raw_scale_off + _RAW_SCALE_HALF_STRIDE,
-            size=_BLOCKS_PER_HALF,
+        scale_u32 = pto.vmi.vcvt(raw_scale, pto.ui32)
+        scale_i32 = pto.vmi.vinterpret_cast(
+            scale_u32,
+            result_type=pto.vmi.vreg(_BLOCKS_PER_DATA_LOOP, pto.i32),
         )
-        scale_u32_lo = pto.vmi.vcvt(raw_scale_lo, pto.ui32)
-        scale_u32_hi = pto.vmi.vcvt(raw_scale_hi, pto.ui32)
-        scale_i32_lo = pto.vmi.vinterpret_cast(
-            scale_u32_lo,
-            result_type=pto.vmi.vreg(_BLOCKS_PER_HALF, pto.i32),
+        scale_bits = pto.vmi.vshl(scale_i32, shift)
+        scale_compact = pto.vmi.vinterpret_cast(
+            scale_bits,
+            result_type=pto.vmi.vreg(_BLOCKS_PER_DATA_LOOP, pto.f32),
         )
-        scale_i32_hi = pto.vmi.vinterpret_cast(
-            scale_u32_hi,
-            result_type=pto.vmi.vreg(_BLOCKS_PER_HALF, pto.i32),
-        )
-        scale_bits_lo = pto.vmi.vshl(scale_i32_lo, shift)
-        scale_bits_hi = pto.vmi.vshl(scale_i32_hi, shift)
-        scale_compact_lo = pto.vmi.vinterpret_cast(
-            scale_bits_lo,
-            result_type=pto.vmi.vreg(_BLOCKS_PER_HALF, pto.f32),
-        )
-        scale_compact_hi = pto.vmi.vinterpret_cast(
-            scale_bits_hi,
-            result_type=pto.vmi.vreg(_BLOCKS_PER_HALF, pto.f32),
-        )
-
         if pto.const_expr(DST_FMT == "f32"):
-            pto.vmi.vstore(scale_compact_lo, scale_dst_ptr, dst_off)
-            pto.vmi.vstore(scale_compact_hi, scale_dst_ptr, dst_off + _BLOCKS_PER_HALF)
+            pto.vmi.vstore(scale_compact, scale_dst_ptr, dst_off, scale_mask)
         else:
-            pto.vmi.vstore(pto.vmi.vcvt(scale_compact_lo, dst_dtype), scale_dst_ptr, dst_off)
-            pto.vmi.vstore(
-                pto.vmi.vcvt(scale_compact_hi, dst_dtype),
-                scale_dst_ptr,
-                dst_off + _BLOCKS_PER_HALF,
-            )
+            pto.vmi.vstore(pto.vmi.vcvt(scale_compact, dst_dtype), scale_dst_ptr, dst_off, scale_mask)
 
 
 def _compute_data_ub(
@@ -145,50 +126,61 @@ def _compute_data_ub(
     else:
         raise ValueError(f"unsupported DST_FMT specialization: {DST_FMT}")
 
-    mask256 = pto.vmi.create_mask(_FP8_HALF_LANES, size=_FP8_HALF_LANES)
+    mask256 = pto.vmi.create_mask(_HALF_ELEMS_PER_LOOP, size=_HALF_ELEMS_PER_LOOP)
 
     for i in range(LOOP_NUM2VF):
         x_off = i * _ELEMS_PER_LOOP
         scale_off = i * _COMPACT_SCALE_LANES_PER_LOOP
         y_off = i * _ELEMS_PER_LOOP
 
-        x_lo_f8 = pto.vmi.vload(x_ptr, x_off, size=_FP8_HALF_LANES)
-        x_hi_f8 = pto.vmi.vload(x_ptr, x_off + _FP8_HALF_LANES, size=_FP8_HALF_LANES)
+        x_lo_f8 = pto.vmi.vload(x_ptr, x_off, size=_HALF_ELEMS_PER_LOOP)
+        x_hi_f8 = pto.vmi.vload(x_ptr, x_off + _HALF_ELEMS_PER_LOOP, size=_HALF_ELEMS_PER_LOOP)
         x_lo_f32 = pto.vmi.vcvt(x_lo_f8, pto.f32)
         x_hi_f32 = pto.vmi.vcvt(x_hi_f8, pto.f32)
-        scale_lo = pto.vmi.vload(
+
+        scale_lo_slots = pto.vmi.vload(
             scale_ptr,
             scale_off,
+            size=1,
             stride=1,
-            dist_mode="brc",
-            group=_BLOCKS_PER_HALF,
-            result_type=pto.vmi.vreg(_FP8_HALF_LANES, pto.f32),
+            group=_SCALE_REPEAT_GROUPS,
+            result_type=pto.vmi.vreg(_SCALE_LANES_PER_HALF, pto.f32),
         )
-        scale_hi = pto.vmi.vload(
+        scale_hi_slots = pto.vmi.vload(
             scale_ptr,
-            scale_off + _BLOCKS_PER_HALF,
+            scale_off + _SCALE_LANES_PER_HALF,
+            size=1,
             stride=1,
-            dist_mode="brc",
-            group=_BLOCKS_PER_HALF,
-            result_type=pto.vmi.vreg(_FP8_HALF_LANES, pto.f32),
+            group=_SCALE_REPEAT_GROUPS,
+            result_type=pto.vmi.vreg(_SCALE_LANES_PER_HALF, pto.f32),
         )
-        y_lo = pto.vmi.vmul(x_lo_f32, scale_lo, mask256)
-        y_hi = pto.vmi.vmul(x_hi_f32, scale_hi, mask256)
+        scale_lo_f32 = pto.vmi.vbrc(
+            scale_lo_slots,
+            result_type=pto.vmi.vreg(_HALF_ELEMS_PER_LOOP, pto.f32),
+            group=_SCALE_REPEAT_GROUPS,
+        )
+        scale_hi_f32 = pto.vmi.vbrc(
+            scale_hi_slots,
+            result_type=pto.vmi.vreg(_HALF_ELEMS_PER_LOOP, pto.f32),
+            group=_SCALE_REPEAT_GROUPS,
+        )
+        y_lo_f32 = pto.vmi.vmul(x_lo_f32, scale_lo_f32, mask256)
+        y_hi_f32 = pto.vmi.vmul(x_hi_f32, scale_hi_f32, mask256)
 
         if pto.const_expr(DST_FMT == "f32"):
-            pto.vmi.vstore(y_lo, y_ptr, y_off, mask256)
-            pto.vmi.vstore(y_hi, y_ptr, y_off + _FP8_HALF_LANES, mask256)
+            pto.vmi.vstore(y_lo_f32, y_ptr, y_off, mask256)
+            pto.vmi.vstore(y_hi_f32, y_ptr, y_off + _HALF_ELEMS_PER_LOOP, mask256)
         else:
             pto.vmi.vstore(
-                pto.vmi.vcvt(y_lo, dst_dtype),
+                pto.vmi.vcvt(y_lo_f32, dst_dtype),
                 y_ptr,
                 y_off,
                 mask256,
             )
             pto.vmi.vstore(
-                pto.vmi.vcvt(y_hi, dst_dtype),
+                pto.vmi.vcvt(y_hi_f32, dst_dtype),
                 y_ptr,
-                y_off + _FP8_HALF_LANES,
+                y_off + _HALF_ELEMS_PER_LOOP,
                 mask256,
             )
 
@@ -206,6 +198,7 @@ def _runtime_entry(
     effective_col_block_num = COL_BLOCK_NUM + (COL_BLOCK_NUM % 2)
     total_scale_num = ROW_BLOCK_NUM * effective_col_block_num
     total_block_num = total_scale_num
+    scale_loop_num = (total_scale_num + _BLOCKS_PER_DATA_LOOP - 1) // _BLOCKS_PER_DATA_LOOP
     loop_num2vf = (total_block_num + _BLOCKS_PER_DATA_LOOP - 1) // _BLOCKS_PER_DATA_LOOP
     padded_total_block_num = loop_num2vf * _BLOCKS_PER_DATA_LOOP
     total_elems = padded_total_block_num * _BLOCK_SIZE
@@ -213,7 +206,7 @@ def _runtime_entry(
     x_ub_ptr = pto.castptr(pto.const(_X_BASE_ADDR, dtype=pto.ui64), pto.ptr(pto.ui8, "ub"))
     scale_ub_ptr = pto.castptr(pto.const(_RAW_SCALE_BASE_ADDR, dtype=pto.ui64), pto.ptr(pto.ui8, "ub"))
     x_bytes = total_elems
-    scale_bytes = loop_num2vf * _RAW_SCALE_BYTES_PER_LOOP
+    scale_bytes = scale_loop_num * _RAW_SCALE_BYTES_PER_LOOP
 
     if pto.const_expr(DST_FMT == "f32"):
         y_ub_ptr = pto.castptr(pto.const(_Y_BASE_ADDR, dtype=pto.ui64), pto.ptr(pto.f32, "ub"))
@@ -234,7 +227,7 @@ def _runtime_entry(
         pto.const(_RAW_SCALE_BASE_ADDR, dtype=pto.i64),
         pto.const(_SCALE_BASE_ADDR, dtype=pto.i64),
         DST_FMT="f32",
-        LOOP_NUM2VF=loop_num2vf,
+        LOOP_NUM2VF=scale_loop_num,
     )
     _compute_data_ub(
         pto.const(_X_BASE_ADDR, dtype=pto.i64),
