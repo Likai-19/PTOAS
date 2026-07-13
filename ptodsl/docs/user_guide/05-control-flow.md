@@ -5,6 +5,7 @@ PTODSL uses a **tracing** compilation model. When you call `kernel.compile(...)`
 This has one critical implication for how you write loops and branches:
 
 - **Python native `for`/`if`** is rewritten to device-side control flow by default in `@pto.jit` bodies and named `@pto.tileop` / `@pto.simt` helpers. A `for i in range(rows)` loop records a device loop, and a runtime `if` records both branches.
+- **Assign-form Python conditional expressions** such as `x = a if cond else b` are normalized through the same AST rewrite path, so runtime conditions lower to device-side branches before the assignment is merged back into `x`.
 - **`pto.const_expr` / `pto.static_range`** keep compile-time Python behavior when you want trace-time specialization or unrolling.
 - **`pto.for_` / `pto.if_`** produce device-side control flow. The loop bound or branch condition can be a runtime value, and the hardware will execute the loop or take the branch dynamically.
 

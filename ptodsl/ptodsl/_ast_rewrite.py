@@ -42,6 +42,7 @@ def rewrite_jit_function(fn):
     closure_vars = inspect.getclosurevars(fn)
     _inject_closure_defaults(function_def, closure_vars.nonlocals)
     _sanitize_signature_for_exec(function_def)
+    function_def = _ConditionalExpressionNormalizer().visit(function_def)
     rewriter = _ControlFlowRewriter()
     function_def.body = rewriter.rewrite_block(function_def.body, live_after=set())
     tree = ast.Module(body=[function_def], type_ignores=[])
@@ -144,6 +145,42 @@ def _sanitize_signature_for_exec(function_def):
     if args.kwarg is not None:
         args.kwarg.annotation = None
     function_def.returns = None
+
+
+def _is_normalizable_ifexp_assign_target(node) -> bool:
+    return isinstance(node, ast.Name)
+
+
+class _ConditionalExpressionNormalizer(ast.NodeTransformer):
+    """Normalize assign-form ``IfExp`` into statement ``if`` before rewrite."""
+
+    def visit_Assign(self, node):
+        node = self.generic_visit(node)
+        if not isinstance(node.value, ast.IfExp):
+            return node
+        if not node.targets or not all(_is_normalizable_ifexp_assign_target(target) for target in node.targets):
+            return node
+        return self._normalize_ifexp_assignment(node, node.value)
+
+    def visit_AnnAssign(self, node):
+        node = self.generic_visit(node)
+        if node.value is None or not isinstance(node.value, ast.IfExp):
+            return node
+        if not _is_normalizable_ifexp_assign_target(node.target):
+            return node
+        return self._normalize_ifexp_assignment(node, node.value)
+
+    def _normalize_ifexp_assignment(self, stmt, value):
+        then_stmt = copy.deepcopy(stmt)
+        then_stmt.value = value.body
+        else_stmt = copy.deepcopy(stmt)
+        else_stmt.value = value.orelse
+        if_stmt = ast.If(
+            test=value.test,
+            body=[then_stmt],
+            orelse=[else_stmt],
+        )
+        return ast.copy_location(self.generic_visit(if_stmt), stmt)
 
 
 @dataclass(frozen=True)
