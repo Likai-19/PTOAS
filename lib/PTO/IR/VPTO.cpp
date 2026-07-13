@@ -5594,9 +5594,10 @@ static LogicalResult verifyGroupReductionVecOp(ReductionOp op) {
   auto inputType = cast<VRegType>(op.getInput().getType());
   Type elemType = inputType.getElementType();
   if (auto intType = dyn_cast<IntegerType>(elemType)) {
-    if (intType.getWidth() < 16 || intType.getWidth() > 32)
+    if (intType.getWidth() != 8 && intType.getWidth() != 16 &&
+        intType.getWidth() != 32)
       return op.emitOpError(
-          "requires 16-bit or 32-bit integer vector element type");
+          "requires 8-bit, 16-bit, or 32-bit integer vector element type");
     return success();
   }
   if (!elemType.isF16() && !elemType.isF32())

@@ -58,13 +58,10 @@
 //   vload → load / deinterleave_load / group_load
 //   vstore → store / masked_store / interleave_store / group_store
 //
-// Category C6 — unified reduce (3 ops, partial coverage):
+// Category C6 — unified reduce (3 ops):
 //   vcadd → reduce_addf/reduce_addi or group_reduce_addf/group_reduce_addi
-//   vcmax → reduce_maxf / group_reduce_maxf/group_reduce_maxi
-//           (full-int → skipped, no legacy reduce_maxi)
-//   vcmin → reduce_minf only (full-float)
-//           (group / full-int → skipped, no legacy group_reduce_min*
-//            nor reduce_mini)
+//   vcmax → reduce_maxf/reduce_maxi or group_reduce_maxf/group_reduce_maxi
+//   vcmin → reduce_minf/reduce_mini or group_reduce_minf/group_reduce_mini
 //
 // Category C7 — fused multiply-add family → legacy fma (2 ops):
 //   vmula → fma               (float only; mask discarded; int → skipped, no legacy int fma)
@@ -174,11 +171,15 @@ static Value createReduceNeutralInit(OpBuilder &builder, Location loc,
       attr = DenseElementsAttr::get(shapedType,
                                     APInt::getZero(intTy.getWidth()));
     else if (isMax)
-      attr = DenseElementsAttr::get(shapedType,
-                                    APInt::getSignedMinValue(intTy.getWidth()));
+      attr = DenseElementsAttr::get(
+          shapedType, intTy.isUnsigned()
+                          ? APInt::getZero(intTy.getWidth())
+                          : APInt::getSignedMinValue(intTy.getWidth()));
     else
-      attr = DenseElementsAttr::get(shapedType,
-                                    APInt::getSignedMaxValue(intTy.getWidth()));
+      attr = DenseElementsAttr::get(
+          shapedType, intTy.isUnsigned()
+                          ? APInt::getMaxValue(intTy.getWidth())
+                          : APInt::getSignedMaxValue(intTy.getWidth()));
   }
   return builder.create<VMIConstantOp>(loc, oneLaneType, attr).getResult();
 }
@@ -803,8 +804,7 @@ static LogicalResult lowerVCadd(VMIvcaddOp op, OpBuilder &builder) {
   return success();
 }
 
-/// Lower vcmax to legacy reduce_maxf / group_reduce_maxf / group_reduce_maxi.
-/// Returns failure for full-integer max (no legacy reduce_maxi).
+/// Lower vcmax to legacy full or grouped float/integer maximum reduction.
 static LogicalResult lowerVcmax(VMIvcmaxOp op, OpBuilder &builder) {
   if (hasMergePmode(op))
     return failure();
@@ -838,47 +838,68 @@ static LogicalResult lowerVcmax(VMIvcmaxOp op, OpBuilder &builder) {
     return success();
   }
 
-  // Full reduce: only float has a legacy equivalent
-  if (!isFloat)
-    return failure();
-
   Value init = createReduceNeutralInit(builder, loc, elemType,
                                        /*isAdd=*/false, /*isMax=*/true,
                                        sourceType.getLayout());
-  Value result =
-      builder
-          .create<VMIReduceMaxFOp>(loc, resultType, source, init, mask)
-          .getResult();
+  Value result;
+  if (isFloat)
+    result = builder
+                 .create<VMIReduceMaxFOp>(loc, resultType, source, init, mask)
+                 .getResult();
+  else
+    result = builder
+                 .create<VMIReduceMaxIOp>(loc, resultType, source, init, mask)
+                 .getResult();
   op.getResult().replaceAllUsesWith(result);
   op->erase();
   return success();
 }
 
-/// Lower vcmin to legacy reduce_minf.
-/// Only the full-float case is lowerable; group and integer cases return
-/// failure and fall through to the direct VMIToVPTO path.
+/// Lower vcmin to legacy full or grouped float/integer minimum reduction.
 static LogicalResult lowerVcmin(VMIvcminOp op, OpBuilder &builder) {
   if (hasMergePmode(op))
     return failure();
 
-  // Only full-float has a legacy equivalent
-  if (op.getGroupAttr())
-    return failure();
-
   auto sourceType = cast<VMIVRegType>(op.getSource().getType());
   Type elemType = sourceType.getElementType();
-  if (!isa<FloatType>(elemType))
-    return failure();
-
+  bool isFloat = isa<FloatType>(elemType);
   Location loc = op.getLoc();
+  Type resultType = op.getResult().getType();
+  Value source = op.getSource();
+  Value mask = op.getMask();
+
+  if (auto groupAttr = op.getGroupAttr()) {
+    int64_t numGroups = groupAttr.getInt();
+    Value result;
+    if (isFloat)
+      result = builder
+                   .create<VMIGroupReduceMinFOp>(
+                       loc, resultType, source, mask,
+                       builder.getI64IntegerAttr(numGroups))
+                   .getResult();
+    else
+      result = builder
+                   .create<VMIGroupReduceMinIOp>(
+                       loc, resultType, source, mask,
+                       builder.getI64IntegerAttr(numGroups))
+                   .getResult();
+    op.getResult().replaceAllUsesWith(result);
+    op->erase();
+    return success();
+  }
+
   Value init = createReduceNeutralInit(builder, loc, elemType,
                                        /*isAdd=*/false, /*isMax=*/false,
                                        sourceType.getLayout());
-  Value result =
-      builder
-          .create<VMIReduceMinFOp>(loc, op.getResult().getType(),
-                                   op.getSource(), init, op.getMask())
-          .getResult();
+  Value result;
+  if (isFloat)
+    result = builder
+                 .create<VMIReduceMinFOp>(loc, resultType, source, init, mask)
+                 .getResult();
+  else
+    result = builder
+                 .create<VMIReduceMinIOp>(loc, resultType, source, init, mask)
+                 .getResult();
   op.getResult().replaceAllUsesWith(result);
   op->erase();
   return success();

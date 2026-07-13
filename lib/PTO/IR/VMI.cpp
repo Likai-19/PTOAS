@@ -1373,6 +1373,33 @@ LogicalResult VMIReduceMaxFOp::verify() { return verifyReduceMinMaxFOp(*this); }
 
 LogicalResult VMIReduceMinFOp::verify() { return verifyReduceMinMaxFOp(*this); }
 
+template <typename OpTy> LogicalResult verifyReduceMinMaxIOp(OpTy op) {
+  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
+  auto initType = cast<VMIVRegType>(op.getInit().getType());
+  auto maskType = cast<VMIMaskType>(op.getMask().getType());
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
+  auto sourceIntegerType = dyn_cast<IntegerType>(sourceType.getElementType());
+  if (!sourceIntegerType ||
+      !isVMIAnyI8I16I32Type(sourceType.getElementType()))
+    return op.emitOpError(
+        "requires 8-bit, 16-bit, or 32-bit integer source element type");
+  if (sourceType.getElementType() != initType.getElementType() ||
+      sourceType.getElementType() != resultType.getElementType())
+    return op.emitOpError(
+        "requires source, init, and result element types to match");
+  if (initType.getElementCount() != 1 || resultType.getElementCount() != 1)
+    return op.emitOpError("requires init and result to be 1-lane VMI vectors");
+  if (failed(verifyAllSameVRegShapeAndLayout(op.getOperation(),
+                                             {initType, resultType},
+                                             /*requireSameElement=*/true)))
+    return failure();
+  return verifyMaskMatchesData(op.getOperation(), maskType, sourceType);
+}
+
+LogicalResult VMIReduceMaxIOp::verify() { return verifyReduceMinMaxIOp(*this); }
+
+LogicalResult VMIReduceMinIOp::verify() { return verifyReduceMinMaxIOp(*this); }
+
 template <typename OpTy>
 static LogicalResult verifyGroupReduceFloatOp(OpTy op, bool requiresReassoc) {
   auto sourceType = cast<VMIVRegType>(op.getSource().getType());
@@ -1427,6 +1454,10 @@ LogicalResult VMIGroupReduceMaxFOp::verify() {
   return verifyGroupReduceFloatOp(*this, /*requiresReassoc=*/false);
 }
 
+LogicalResult VMIGroupReduceMinFOp::verify() {
+  return verifyGroupReduceFloatOp(*this, /*requiresReassoc=*/false);
+}
+
 template <typename OpTy>
 static LogicalResult verifyGroupReduceIntegerOp(OpTy op) {
   auto sourceType = cast<VMIVRegType>(op.getSource().getType());
@@ -1435,11 +1466,9 @@ static LogicalResult verifyGroupReduceIntegerOp(OpTy op) {
   if (!isVMIIntegerLikeType(sourceType.getElementType()))
     return op.emitOpError("requires integer-like VMI source element type");
   auto intType = dyn_cast<IntegerType>(sourceType.getElementType());
-  if (!intType || intType.getWidth() != 32)
+  if (!intType || !isVMIAnyI8I16I32Type(sourceType.getElementType()))
     return op.emitOpError(
-        "requires i32 accumulator element type; cast i8/i16 storage to i32 "
-        "before grouped reduction because integer reduction widens narrow "
-        "inputs");
+        "requires 8-bit, 16-bit, or 32-bit integer source element type");
   if (resultType.getElementCount() != op.getNumGroupsAttr().getInt())
     return op.emitOpError(
         "requires result logical lane count to match num_groups");
@@ -1477,6 +1506,10 @@ LogicalResult VMIGroupReduceAddIOp::verify() {
 }
 
 LogicalResult VMIGroupReduceMaxIOp::verify() {
+  return verifyGroupReduceIntegerOp(*this);
+}
+
+LogicalResult VMIGroupReduceMinIOp::verify() {
   return verifyGroupReduceIntegerOp(*this);
 }
 

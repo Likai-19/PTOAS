@@ -46,7 +46,7 @@ for (int i = 1; i < N; i++)
 ### `pto.vcmax`
 
 - **syntax:** `%result = pto.vcmax %input, %mask : !pto.vreg<NxT>, !pto.mask<G> -> !pto.vreg<NxT>`
-- **A5 types:** i16-i32, f16, f32
+- **A5 types:** i8-i32, f16, f32
 - **semantics:** Find max element with argmax. The lowest destination element
   stores the maximum value, the second-lowest destination element stores the
   index of the first maximum, and all remaining elements are zero-filled.
@@ -78,7 +78,7 @@ for (int i = 2; i < N; i++)
 ### `pto.vcmin`
 
 - **syntax:** `%result = pto.vcmin %input, %mask : !pto.vreg<NxT>, !pto.mask<G> -> !pto.vreg<NxT>`
-- **A5 types:** i16-i32, f16, f32
+- **A5 types:** i8-i32, f16, f32
 - **semantics:** Find min element with argmin. The lowest destination element
   stores the minimum value, the second-lowest destination element stores the
   index of the first minimum, and all remaining elements are zero-filled.
@@ -208,7 +208,7 @@ VLane 4: [32..39] VLane 5: [40..47] VLane 6: [48..55] VLane 7: [56..63]
 ### `pto.vcgadd`
 
 - **syntax:** `%result = pto.vcgadd %input, %mask : !pto.vreg<NxT>, !pto.mask<G> -> !pto.vreg<NxT>`
-- **A5 types:** i16-i32, f16, f32
+- **A5 types:** i8-i32, f16, f32
 - **semantics:** Sum active elements within each 32-byte VLane. The 8 VLane
   sums are written to result elements `0..7`; all other result elements are
   zero.
@@ -240,7 +240,7 @@ for (int i = groups; i < N; i++)
 ### `pto.vcgmax`
 
 - **syntax:** `%result = pto.vcgmax %input, %mask : !pto.vreg<NxT>, !pto.mask<G> -> !pto.vreg<NxT>`
-- **A5 types:** i16-i32, f16, f32
+- **A5 types:** i8-i32, f16, f32
 - **semantics:** Find the maximum active element within each 32-byte VLane. The
   8 VLane maxima are written to result elements `0..7`; all other result
   elements are zero.
@@ -275,7 +275,7 @@ for (int i = groups; i < N; i++)
 ### `pto.vcgmin`
 
 - **syntax:** `%result = pto.vcgmin %input, %mask : !pto.vreg<NxT>, !pto.mask<G> -> !pto.vreg<NxT>`
-- **A5 types:** i16-i32, f16, f32
+- **A5 types:** i8-i32, f16, f32
 - **semantics:** Find the minimum active element within each 32-byte VLane. The
   8 VLane minima are written to result elements `0..7`; all other result
   elements are zero.

@@ -2023,6 +2023,16 @@ VMILayoutSupport::getGroupReduceMaxFSupport(VMIGroupReduceMaxFOp op,
 }
 
 LogicalResult
+VMILayoutSupport::getGroupReduceMinFSupport(VMIGroupReduceMinFOp op,
+                                            std::string *reason) const {
+  return getGroupReduceAddSupportImpl(
+      cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIMaskType>(op.getMask().getType()),
+      cast<VMIVRegType>(op.getResult().getType()),
+      op.getNumGroupsAttr().getInt(), reason);
+}
+
+LogicalResult
 VMILayoutSupport::getGroupReduceAddISupport(VMIGroupReduceAddIOp op,
                                             std::string *reason) const {
   return getGroupReduceAddSupportImpl(
@@ -2034,6 +2044,16 @@ VMILayoutSupport::getGroupReduceAddISupport(VMIGroupReduceAddIOp op,
 
 LogicalResult
 VMILayoutSupport::getGroupReduceMaxISupport(VMIGroupReduceMaxIOp op,
+                                            std::string *reason) const {
+  return getGroupReduceAddSupportImpl(
+      cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIMaskType>(op.getMask().getType()),
+      cast<VMIVRegType>(op.getResult().getType()),
+      op.getNumGroupsAttr().getInt(), reason);
+}
+
+LogicalResult
+VMILayoutSupport::getGroupReduceMinISupport(VMIGroupReduceMinIOp op,
                                             std::string *reason) const {
   return getGroupReduceAddSupportImpl(
       cast<VMIVRegType>(op.getSource().getType()),

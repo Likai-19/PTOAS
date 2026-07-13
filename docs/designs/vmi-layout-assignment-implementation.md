@@ -1299,9 +1299,11 @@ group_reduce_addf:
   layout-assignment/vmi-to-vpto lit coverage; the explicit slots=1 generic
   VCADD row-local lowering is selected locally from the current op attrs and
   assigned layouts.
-  group_reduce_addi is implemented for i32 accumulator values.  i8/i16 storage
-  must be widened explicitly before grouped reduction because narrow integer
-  reduction instructions widen their result.
+  group_reduce_addi is implemented for i8/i16/i32 values over the registered
+  high-performance group-block classes. VCGADD paths preserve the logical
+  element type. Full-chunk row-local paths use widening VCADD intermediates
+  internally and bitcast the final low bits back to the declared VMI result
+  type; widening is not part of the VMI contract.
 
 group_broadcast:
   explicit slots=8/1 source layouts select
@@ -1353,20 +1355,21 @@ Current implementation contract for type-generic grouped reduction:
 ```text
 ODS/verifiers:
   pto.vmi.group_reduce_addi is the integer counterpart to group_reduce_addf.
-  group_reduce_addi accepts i32 accumulator element types; i8/i16 direct
-  grouped reduction is rejected with a diagnostic that points users to
-  extsi/extui.
+  group_reduce_addi, group_reduce_maxi, and group_reduce_mini accept
+  i8/i16/i32 element types when the group shape matches a registered layout
+  table row.
   extsi/extui/trunci carry integer signedness across storage/accumulator
-  boundaries without overloading add semantics.
+  boundaries when an algorithm explicitly wants a wider accumulator.
 
 Layout assignment:
   compute VLaneElems and L from the accumulator/reduce element type:
     VLaneElems = 32B / sizeof(accumulator T)
     L          = 256B / sizeof(accumulator T)
-  use the same S formula for f16/f32/i32 once the typed reduce op and target
+  use the same S formula for f16/f32/i8/i16/i32 once the typed reduce op and target
   capability say the type is legal.
   route f8 storage through extf to f32 before group_reduce_addf.
-  route i8/i16 storage through extsi/extui to i32 before group_reduce_addi.
+  keep direct i8/i16 integer reductions in their declared logical type;
+  extsi/extui remains available for explicitly widened algorithms.
   route integer narrowing to i8 through trunci; direct i8 compute remains
   illegal unless target capability and explicit op semantics define that
   lowering.
@@ -1386,18 +1389,18 @@ Layout fact helpers:
 VMI-to-VPTO:
   lower group_reduce_addi through the same VCGADD/VADD skeleton used for
   floating-point where the target supports the integer accumulator type.
-  materialize integer casts explicitly before reduction; direct i8 group reduce
-  and direct i16 group reduce must not silently become a widening reduction in
-  this pass.
+  for full-chunk i8/i16 rows, use the widening VCADD result only as an internal
+  partial type, combine partials at that width, then bitcast back to the
+  declared slots=1 VMI result type.
   keep VPTO lowering local: it consumes assigned layouts and current-op
   attrs/operands, but does not invent a new global layout plan.
 
 Tests:
-  cover f16 direct and i16-storage-to-i32 grouped reductions.
+  cover direct i8/i16/i32 grouped reductions and explicitly widened variants.
   add i32 S=8/S=16/S=32/S=64 group-reduce cases.
   add f8 storage -> extf -> f32 group_reduce_addf cases.
-  add i8/i16 storage -> extsi/extui -> i32 group_reduce_addi cases.
-  add invalid direct f8/i8/i16 grouped-reduce diagnostics.
+  add i8/i16 full-chunk VCADD plus bitcast cases.
+  retain invalid f8 and unsupported group-shape diagnostics.
 ```
 
 Examples:
