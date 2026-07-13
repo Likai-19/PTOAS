@@ -1108,6 +1108,28 @@ def ast_runtime_for_branch_local_temp_probe(rows: pto.i32):
         _ = out
 
 
+@pto.jit(target="a5")
+def ast_runtime_for_sibling_iv_reuse_probe(rows: pto.i32, cols: pto.i32):
+    stride = pto.const(64, dtype=pto.index)
+    one = pto.const(1, dtype=pto.index)
+    zero = pto.const(0, dtype=pto.index)
+
+    for t in range(rows):
+        for c in range(cols):
+            col = c * stride
+            sink = col + one
+            _ = sink
+
+        for stage in pto.static_range(2):
+            acc = zero
+            for c in range(cols):
+                col = c * stride
+                acc = acc + col
+            _ = acc
+            _ = stage
+        _ = t
+
+
 @pto.jit(target="a5", ast_rewrite=False)
 def ast_rewrite_disabled_nested_helper_python_control_probe():
     def helper(enabled):
@@ -4633,6 +4655,16 @@ def main() -> None:
     expect(
         "iter_args(" not in ast_runtime_for_branch_local_temp_text,
         "branch-local temporaries should not be inferred as loop-carried state",
+    )
+
+    ast_runtime_for_sibling_iv_reuse_text = ast_runtime_for_sibling_iv_reuse_probe.compile().mlir_text()
+    expect_parse_roundtrip_and_verify(
+        ast_runtime_for_sibling_iv_reuse_text,
+        "AST-rewritten sibling runtime for IV reuse specialization",
+    )
+    expect(
+        ast_runtime_for_sibling_iv_reuse_text.count("scf.for") >= 3,
+        "reusing a sibling runtime loop IV name should not be misdiagnosed as loop-target live-out",
     )
 
     ast_rewrite_disabled_nested_helper_python_control_text = (
