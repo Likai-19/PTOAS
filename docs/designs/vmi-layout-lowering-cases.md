@@ -5617,7 +5617,7 @@ i32   8           64   S=8, S=16, S=32           S=64, S=128, ...
 f16   16          128  S=16, S=32, S=64          S=128, S=256, ...
 i16   16          128  S=16, S=32, S=64          S=128, S=256, ...
 f8    32          256  cast to f32 before grouped reduce
-i8    32          256  cast to i16/i32 before grouped reduce
+i8    32          256  S=32, S=64, S=128          S=256, S=512, ...
 ```
 
 These non-f32 cases are part of the type-generic layout/lowering design.  If a
@@ -5625,9 +5625,9 @@ typed reduce op admits the element type and the target capability registry
 accepts it, assignment must use the same `VLaneElems/L/S` formula instead of
 adding per-type shape special cases.  Any f32-only behavior in the current
 implementation is staged implementation status, not the intended design limit.
-For the current baseline, `f8/i8` are storage and cast-boundary types: they are
-valid as load/store element types and as cast source/destination, but compute
-ops such as group reduce consume the post-cast accumulator type.
+For the current baseline, `f8` remains a storage and cast-boundary type for
+group reduction. Integer `i8/i16/i32` grouped reductions are direct VMI
+operations when their group shape matches a registered table row.
 
 ### 3.48 16-bit Typed Group Reduce, `S = VLaneElems = 16`
 
@@ -5637,7 +5637,7 @@ semantic difference:
 
 ```text
 f16: pto.vmi.group_reduce_addf ... {reassoc}
-i16 storage: pto.vmi.extsi/extui ... -> i32 group_reduce_addi ...
+i16: pto.vmi.group_reduce_addi ...
 ```
 
 VMI-shaped input:
@@ -5972,18 +5972,23 @@ VPTO lowering shape:
 
 ```text
 %all_b16 = pto.pge_b16 "PAT_ALL"
-%slot8_b16 = pto.pge_b16 "PAT_VL8"
 %slot1_b16 = pto.pge_b16 "PAT_VL1"
 
 // Repeated for r = 0..7.
 %x_r = pto.vlds %base[%row_off_r] {dist = "NORM"}
   : !pto.ptr<T16, ub> -> !pto.vreg<128xT16>
-%partial_r = pto.vcgadd %x_r, %all_b16
-  : !pto.vreg<128xT16>, !pto.mask<b16> -> !pto.vreg<128xT16>
-%sum_r = pto.vcadd %partial_r, %slot8_b16
-  : !pto.vreg<128xT16>, !pto.mask<b16> -> !pto.vreg<128xT16>
 
-pto.vsts %sum_r, %out[%group_off_plus_r], %slot1_b16 {dist = "NORM_B16"}
+// Floating-point keeps the same physical result type.
+%sumf_r = pto.vcadd %x_r, %all_b16
+  : !pto.vreg<128xf16>, !pto.mask<b16> -> !pto.vreg<128xf16>
+
+// Integer VCADD widens internally; VMI restores the declared i16 type.
+%wide_r = pto.vcadd %x_r, %all_b16
+  : !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<64xi32>
+%sumi_r = pto.vbitcast %wide_r
+  : !pto.vreg<64xi32> -> !pto.vreg<128xi16>
+
+pto.vsts %sum{f|i}_r, %out[%group_off_plus_r], %slot1_b16 {dist = "NORM_B16"}
   : !pto.vreg<128xT16>, !pto.ptr<T16, ub>, !pto.mask<b16>
 ```
 
@@ -6070,8 +6075,8 @@ Required invalid cases:
 ```text
 pto.vmi.group_reduce_addf with integer element type -> verifier error
 pto.vmi.group_reduce_addi with floating-point element type -> verifier error
-pto.vmi.group_reduce_addi i8 -> invalid direct 8-bit accumulator reduce;
-                                 cast to i16/i32 first unless target exposes i8 vcgadd
+pto.vmi.group_reduce_addi with an integer width other than i8/i16/i32
+  -> verifier error
 S not in {VLaneElems, 2*VLaneElems, 4*VLaneElems} and not a full-chunk multiple
   -> layout-contract diagnostic
 ```
@@ -6168,114 +6173,58 @@ pto.vmi.group_reduce_addf %x8, %mask
 
 ### 3.55 8-bit Integer Group Reduce
 
-The current target model has no i8 `vcgadd`.  It does have widening `vcadd` for
-full-vector reductions, but grouped reduction needs one partial result per
-32B VLane.  Since 8-bit integers support cast to wider integer types, the
-baseline grouped path casts before reducing:
+The target exposes same-type i8 `vcgadd` for 32B-block group classes and a
+widening i8-to-i16 `vcadd` for full-row reduction. VMI keeps a same-type i8
+contract in both cases:
 
 ```text
-i8/i16 storage -> signed/unsigned cast to i32 accumulator
-           -> group_reduce_addi on the accumulator type
+i8 source -> group_reduce_addi -> i8 group-slot result
 ```
 
-Here `i8`/`i16` are only cast sources and memory element types.  The reduction
-itself is an i32 accumulator operation, with signedness handled by the cast.
-
-The integer cast operation must carry signedness.  This document uses
-`extsi/extui` as the widening spelling and `trunci` as the narrowing spelling:
-
-```text
-%x32 = pto.vmi.extsi %x8 : !pto.vmi.vreg<Nxi8> -> !pto.vmi.vreg<Nxi32>
-%x32 = pto.vmi.extui %x8 : !pto.vmi.vreg<Nxui8> -> !pto.vmi.vreg<Nxui32>
-%x8  = pto.vmi.trunci %x32 : !pto.vmi.vreg<Nxi32> -> !pto.vmi.vreg<Nxui8>
-```
-
-The last form is unsigned i8 on the current VPTO target: VISA exposes
-VCVTII.s322u8/u322u8 for 32-bit to 8-bit narrowing, not a signed-i8
-destination form.
-
-VMI-shaped input:
+Packed 32B-block example:
 
 ```text
 %x8 = pto.vmi.load %base_i8[%off]
   : memref<256xi8> -> !pto.vmi.vreg<256xi8>
-%x32 = pto.vmi.extsi %x8
-  : !pto.vmi.vreg<256xi8> -> !pto.vmi.vreg<256xi32>
 %mask = pto.vmi.create_group_mask %c32 {num_groups = 8, group_size = 32}
   : index -> !pto.vmi.mask<256xpred>
-%sum = pto.vmi.group_reduce_addi %x32, %mask {num_groups = 8}
-pto.vmi.group_store %sum, %out_i32[%group_off], %c1 {num_groups = 8}
+%sum = pto.vmi.group_reduce_addi %x8, %mask {num_groups = 8}
+pto.vmi.group_store %sum, %out_i8[%group_off], %c1 {num_groups = 8}
 ```
 
 Assigned layouts:
 
 ```text
-%x8:
-  !pto.vmi.vreg<256xi8, #pto.vmi.layout<contiguous>>
-
-%x32, %mask:
-  !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
-  !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4>>
+%x8, %mask:
+  #pto.vmi.layout<contiguous>
 
 %sum:
-  !pto.vmi.vreg<256xi32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xi8, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
-VPTO lowering shape after integer cast materialization:
+VPTO lowering shape:
 
 ```text
-%x32_p0, %x32_p1, %x32_p2, %x32_p3 =
-  materialize signed cast i8 -> i32 with deinterleaved=4 layout
-  : four !pto.vreg<64xi32>
-
-%all_b32 = pto.pge_b32 "PAT_ALL"
-%slot8_b32 = pto.pge_b32 "PAT_VL8"
-
-%s0 = pto.vcgadd %x32_p0, %all_b32 : !pto.vreg<64xi32>
-%s1 = pto.vcgadd %x32_p1, %all_b32 : !pto.vreg<64xi32>
-%s2 = pto.vcgadd %x32_p2, %all_b32 : !pto.vreg<64xi32>
-%s3 = pto.vcgadd %x32_p3, %all_b32 : !pto.vreg<64xi32>
-%s01 = pto.vadd %s0, %s1, %slot8_b32 : !pto.vreg<64xi32>
-%s23 = pto.vadd %s2, %s3, %slot8_b32 : !pto.vreg<64xi32>
-%sum0 = pto.vadd %s01, %s23, %slot8_b32 : !pto.vreg<64xi32>
-
-pto.vsts %sum0, %out_i32[%group_off], %slot8_b32 {dist = "NORM_B32"}
-  : !pto.vreg<64xi32>, !pto.ptr<i32, ub>, !pto.mask<b32>
+%all_b8 = pto.pge_b8 "PAT_ALL"
+%slot8_b8 = pto.pge_b8 "PAT_VL8"
+%sum0 = pto.vcgadd %x8, %all_b8
+  : !pto.vreg<256xi8>, !pto.mask<b8> -> !pto.vreg<256xi8>
+pto.vsts %sum0, %out_i8[%group_off], %slot8_b8 {dist = "NORM_B8"}
 ```
 
-Memory result:
+For an aligned full row (`S = 256`), lowering uses widening only internally:
 
 ```text
-for r = 0..7:
-  out_i32[group_off + r] =
-    reduce_i32(sign_extend(base_i8[off + r * 32 + 0 .. 31]))
+%wide = pto.vcadd %x8, %all_b8
+  : !pto.vreg<256xi8>, !pto.mask<b8> -> !pto.vreg<128xi16>
+%sum_i8 = pto.vbitcast %wide
+  : !pto.vreg<128xi16> -> !pto.vreg<256xi8>
 ```
 
-Direct i8 grouped reduction without the cast is invalid:
-
-```text
-pto.vmi.group_reduce_addi %x8, %mask
-  : !pto.vmi.vreg<256xi8>, !pto.vmi.mask<256xpred>
-  -> verifier or layout-contract diagnostic
-```
-
-An optimized row-local i8 full-chunk lowering path may be added later for
-`S = 256` by using widening `vcadd`, but that requires a widening
-`group_slots` result contract and must not change the baseline cast-to-accumulator
-semantics above.
-
-If the final memory result is i8, narrowing is a separate cast after the
-accumulator computation:
-
-```text
-%sum32 = pto.vmi.group_reduce_addi %x32, %mask {num_groups = 8}
-%sum8  = pto.vmi.trunci %sum32
-pto.vmi.group_store %sum8, %out_i8[%group_off], %c1 {num_groups = 8}
-```
-
-That packed group-slot `trunci` path is not baseline lowering support yet; the
-implementation must either define slot-wise VCVTII lowering support or diagnose at
-layout assignment.
+The low i8 lane contains the same-type wraparound result. Explicit
+`extsi`/`extui` before reduction remains available when the algorithm itself
+requires a wider accumulator, but widening is not required by the direct i8
+group-reduce contract.
 
 ### 3.56 Full 256-Bin Distribution Histogram
 

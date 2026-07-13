@@ -1,0 +1,97 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). Please refer to the License for details. You may not use
+// this file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON
+// AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+// FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+// for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
+
+module {
+  func.func @group_add_i16_full_chunks(
+      %source: !pto.vmi.vreg<512xi16>,
+      %mask: !pto.vmi.mask<512xpred>) {
+    %sum = pto.vmi.vcadd %source, %mask {group = 2}
+        : !pto.vmi.vreg<512xi16>, !pto.vmi.mask<512xpred>
+        -> !pto.vmi.vreg<2xi16>
+    return
+  }
+
+  func.func @group_add_i8_full_chunks(
+      %source: !pto.vmi.vreg<512xi8>,
+      %mask: !pto.vmi.mask<512xpred>) {
+    %sum = pto.vmi.vcadd %source, %mask {group = 1}
+        : !pto.vmi.vreg<512xi8>, !pto.vmi.mask<512xpred>
+        -> !pto.vmi.vreg<1xi8>
+    return
+  }
+
+  func.func @group_min_i8_one_block(
+      %source: !pto.vmi.vreg<256xi8>,
+      %mask: !pto.vmi.mask<256xpred>) {
+    %min = pto.vmi.vcmin %source, %mask {group = 8}
+        : !pto.vmi.vreg<256xi8>, !pto.vmi.mask<256xpred>
+        -> !pto.vmi.vreg<8xi8>
+    return
+  }
+
+  func.func @group_min_f32_two_blocks(
+      %source: !pto.vmi.vreg<128xf32>,
+      %mask: !pto.vmi.mask<128xpred>) {
+    %min = pto.vmi.vcmin %source, %mask {group = 8}
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.mask<128xpred>
+        -> !pto.vmi.vreg<8xf32>
+    return
+  }
+
+  func.func @reduce_max_i8(
+      %source: !pto.vmi.vreg<256xi8>,
+      %mask: !pto.vmi.mask<256xpred>) {
+    %max = pto.vmi.vcmax %source, %mask
+        : !pto.vmi.vreg<256xi8>, !pto.vmi.mask<256xpred>
+        -> !pto.vmi.vreg<1xi8>
+    return
+  }
+
+  func.func @reduce_min_i16(
+      %source: !pto.vmi.vreg<128xi16>,
+      %mask: !pto.vmi.mask<128xpred>) {
+    %min = pto.vmi.vcmin %source, %mask
+        : !pto.vmi.vreg<128xi16>, !pto.vmi.mask<128xpred>
+        -> !pto.vmi.vreg<1xi16>
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @group_add_i16_full_chunks(
+// CHECK: pto.vcadd {{.*}} : !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<64xi32>
+// CHECK: pto.vcadd {{.*}} : !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<64xi32>
+// CHECK: pto.vadd {{.*}} : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+// CHECK: pto.vbitcast {{.*}} : !pto.vreg<64xi32> -> !pto.vreg<128xi16>
+// CHECK: pto.vcadd {{.*}} : !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<64xi32>
+// CHECK: pto.vcadd {{.*}} : !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<64xi32>
+// CHECK: pto.vadd {{.*}} : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+// CHECK: pto.vbitcast {{.*}} : !pto.vreg<64xi32> -> !pto.vreg<128xi16>
+
+// CHECK-LABEL: func.func @group_add_i8_full_chunks(
+// CHECK-COUNT-2: pto.vcadd {{.*}} : !pto.vreg<256xi8>, !pto.mask<b8> -> !pto.vreg<128xi16>
+// CHECK: pto.vadd {{.*}} : !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>
+// CHECK: pto.vbitcast {{.*}} : !pto.vreg<128xi16> -> !pto.vreg<256xi8>
+
+// CHECK-LABEL: func.func @group_min_i8_one_block(
+// CHECK: pto.vcgmin {{.*}} : !pto.vreg<256xi8>, !pto.mask<b8> -> !pto.vreg<256xi8>
+
+// CHECK-LABEL: func.func @group_min_f32_two_blocks(
+// CHECK-COUNT-2: pto.vcgmin {{.*}} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+// CHECK: pto.vmin {{.*}} : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+
+// CHECK-LABEL: func.func @reduce_max_i8(
+// CHECK: pto.vcmax {{.*}} : !pto.vreg<256xi8>, !pto.mask<b8> -> !pto.vreg<256xi8>
+// CHECK: pto.vmax {{.*}} : !pto.vreg<256xi8>, !pto.vreg<256xi8>, !pto.mask<b8> -> !pto.vreg<256xi8>
+
+// CHECK-LABEL: func.func @reduce_min_i16(
+// CHECK: pto.vcmin {{.*}} : !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>
+// CHECK: pto.vmin {{.*}} : !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>

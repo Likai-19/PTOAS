@@ -325,10 +325,16 @@ public:
   LogicalResult getGroupReduceMaxFSupport(VMIGroupReduceMaxFOp op,
                                           std::string *reason = nullptr) const;
 
+  LogicalResult getGroupReduceMinFSupport(VMIGroupReduceMinFOp op,
+                                          std::string *reason = nullptr) const;
+
   LogicalResult getGroupReduceAddISupport(VMIGroupReduceAddIOp op,
                                           std::string *reason = nullptr) const;
 
   LogicalResult getGroupReduceMaxISupport(VMIGroupReduceMaxIOp op,
+                                          std::string *reason = nullptr) const;
+
+  LogicalResult getGroupReduceMinISupport(VMIGroupReduceMinIOp op,
                                           std::string *reason = nullptr) const;
 
   LogicalResult getGroupBroadcastSupport(VMIGroupBroadcastOp op,

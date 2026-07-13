@@ -3125,7 +3125,7 @@ pto.vmi.group_reduce_addf:
     mask use is requested as contiguous with granularity derived from source
     element width
   current direct lowering:
-    source/result element type must be f32
+    source/result element type must be f16 or f32
     source and mask must have compatible full physical chunks. The result is
     `GxT` group-slot data and may have different physical arity from the
     source tile.
@@ -3141,9 +3141,28 @@ pto.vmi.group_reduce_addf:
     are zero.
   unsupported cases:
     missing reassoc attr
-    f16 or integer group reductions until accumulator and result contracts are
-    designed
+    integer element types, which use the corresponding typed integer op
     derived group size S that neither divides nor is a multiple of L
+
+pto.vmi.group_reduce_addi / group_reduce_maxi / group_reduce_mini:
+  semantic:
+    source and result use the same i8/i16/i32 element type
+    the result has one group-slot value per logical group
+    integer addition has same-type wraparound semantics
+  layout assignment:
+    use the same registered group-block table as floating-point group reduction
+    packed 32B-block cases use slots=8
+    aligned full-row cases use slots=1
+  current direct lowering:
+    packed cases use pto.vcgadd/pto.vcgmax/pto.vcgmin and same-type combines
+    aligned full-row max/min cases use pto.vcmax/pto.vcmin
+    aligned full-row i8/i16 add cases use widening pto.vcadd partials and
+    widened pto.vadd combines, then pto.vbitcast the low bits back to the
+    declared VMI result type
+    the widening is internal and is not exposed in the VMI type contract
+  unsupported cases:
+    element types other than i8/i16/i32
+    group sizes outside the registered high-performance group-block classes
 
 pto.vmi.group_broadcast:
   semantic:
@@ -3180,12 +3199,12 @@ pto.vmi.group_broadcast:
     deinterleaved small-group broadcast where one physical result chunk needs
     values from multiple source chunks
 
-pto.vmi.reduce_maxf / pto.vmi.reduce_minf:
+pto.vmi.reduce_maxf / reduce_minf / reduce_maxi / reduce_mini:
   semantic:
     acc = init[0]
     for each active logical lane in logical lane order:
-      reduce_maxf: acc = max(acc, source[lane])
-      reduce_minf: acc = min(acc, source[lane])
+      reduce_max*: acc = max(acc, source[lane])
+      reduce_min*: acc = min(acc, source[lane])
     result[0] = acc
     inactive lanes inside each physical chunk follow VPTO identities:
       reduce_maxf uses pto.vcmax, where inactive FP lanes behave as -INF
@@ -3200,7 +3219,8 @@ pto.vmi.reduce_maxf / pto.vmi.reduce_minf:
     result natural layout is contiguous
     mask use is requested as contiguous with granularity derived from source element width
   current direct lowering:
-    source element type must be f16 or f32
+    source element type must be f16/f32 for the floating ops or i8/i16/i32 for
+    the integer ops
     source must materialize to one or more full physical chunks with no padding logical lanes
     init/result must be 1-lane VMI vectors and each materialize to one physical chunk
     mask must materialize to the same number of physical chunks as source
@@ -3221,7 +3241,7 @@ pto.vmi.reduce_maxf / pto.vmi.reduce_minf:
   unsupported cases:
     bf16/fp8/f64 until VPTO reduction and combine semantics are designed
     partial/tail source chunks because padding lanes must not participate
-    integer min/max until signed/unsigned and inactive identity contracts are explicit
+    integer widths other than i8/i16/i32
 
 pto.vmi.select:
   current direct lowering is a storage-width select rather than a semantic

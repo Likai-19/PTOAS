@@ -605,6 +605,22 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
     return success();
   }
 
+  if (auto reduce = dyn_cast<VMIGroupReduceMinFOp>(op)) {
+    auto resultType = cast<VMIVRegType>(reduce.getResult().getType());
+    VMILayoutAttr layout = resultType.getLayoutAttr();
+    if (!layout || !layout.isGroupSlots())
+      return success();
+
+    std::string reason;
+    if (failed(supports.getGroupReduceMinFSupport(reduce, &reason)))
+      return emitLayoutSupportContract(
+          op, diagOS,
+          "pto.vmi.group_reduce_minf has no registered group_slots layout "
+          "support",
+          reason);
+    return success();
+  }
+
   if (auto reduce = dyn_cast<VMIGroupReduceAddIOp>(op)) {
     auto resultType = cast<VMIVRegType>(reduce.getResult().getType());
     VMILayoutAttr layout = resultType.getLayoutAttr();
@@ -632,6 +648,22 @@ LogicalResult verifyLayoutSemanticSupport(Operation *op,
       return emitLayoutSupportContract(
           op, diagOS,
           "pto.vmi.group_reduce_maxi has no registered group_slots layout "
+          "support",
+          reason);
+    return success();
+  }
+
+  if (auto reduce = dyn_cast<VMIGroupReduceMinIOp>(op)) {
+    auto resultType = cast<VMIVRegType>(reduce.getResult().getType());
+    VMILayoutAttr layout = resultType.getLayoutAttr();
+    if (!layout || !layout.isGroupSlots())
+      return success();
+
+    std::string reason;
+    if (failed(supports.getGroupReduceMinISupport(reduce, &reason)))
+      return emitLayoutSupportContract(
+          op, diagOS,
+          "pto.vmi.group_reduce_mini has no registered group_slots layout "
           "support",
           reason);
     return success();

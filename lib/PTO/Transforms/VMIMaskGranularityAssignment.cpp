@@ -271,6 +271,18 @@ struct MaskGranularitySolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
+      if (auto reduce = dyn_cast<VMIReduceMaxIOp>(op)) {
+        if (failed(requestMaskUseForSource(reduce.getMaskMutable(),
+                                           reduce.getSource(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto reduce = dyn_cast<VMIReduceMinIOp>(op)) {
+        if (failed(requestMaskUseForSource(reduce.getMaskMutable(),
+                                           reduce.getSource(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
       if (auto reduce = dyn_cast<VMIGroupReduceAddFOp>(op)) {
         if (failed(requestMaskUseForSource(reduce.getMaskMutable(),
                                            reduce.getSource(), op)))
@@ -283,6 +295,12 @@ struct MaskGranularitySolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
+      if (auto reduce = dyn_cast<VMIGroupReduceMinFOp>(op)) {
+        if (failed(requestMaskUseForSource(reduce.getMaskMutable(),
+                                           reduce.getSource(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
       if (auto reduce = dyn_cast<VMIGroupReduceAddIOp>(op)) {
         if (failed(requestMaskUseForSource(reduce.getMaskMutable(),
                                            reduce.getSource(), op)))
@@ -290,6 +308,12 @@ struct MaskGranularitySolver {
         return WalkResult::advance();
       }
       if (auto reduce = dyn_cast<VMIGroupReduceMaxIOp>(op)) {
+        if (failed(requestMaskUseForSource(reduce.getMaskMutable(),
+                                           reduce.getSource(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto reduce = dyn_cast<VMIGroupReduceMinIOp>(op)) {
         if (failed(requestMaskUseForSource(reduce.getMaskMutable(),
                                            reduce.getSource(), op)))
           return WalkResult::interrupt();

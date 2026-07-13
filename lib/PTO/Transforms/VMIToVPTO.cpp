@@ -3301,6 +3301,20 @@ FailureOr<Value> bitcastVReg(Location loc, Value value, Type resultType,
   return rewriter.create<VbitcastOp>(loc, outputType, value).getResult();
 }
 
+FailureOr<VRegType> getVcaddResultType(VRegType inputType) {
+  auto inputIntegerType = dyn_cast<IntegerType>(inputType.getElementType());
+  if (!inputIntegerType || inputIntegerType.getWidth() == 32)
+    return inputType;
+  unsigned inputWidth = inputIntegerType.getWidth();
+  if (inputWidth != 8 && inputWidth != 16)
+    return failure();
+  auto resultElementType = IntegerType::get(
+      inputType.getContext(), inputWidth * 2,
+      inputIntegerType.getSignedness());
+  return VRegType::get(inputType.getContext(),
+                       inputType.getElementCount() / 2, resultElementType);
+}
+
 FailureOr<Value> unpackToNextCarrier(Location loc, Value source,
                                      unsigned sourceBits, int64_t partIndex,
                                      PatternRewriter &rewriter) {
@@ -8290,8 +8304,22 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
       if (!resultType || !maskType)
         return rewriter.notifyMatchFailure(
             op, "deinterleaved=2 group_reduce requires physical vreg/mask");
-      FailureOr<Value> firstLaneMask =
-          createPrefixMask(op.getLoc(), maskType, "PAT_VL1", rewriter);
+      auto sourcePartType = dyn_cast<VRegType>(sourceParts.front().getType());
+      if (!sourcePartType)
+        return rewriter.notifyMatchFailure(
+            op, "deinterleaved=2 group_reduce source must be vreg");
+      FailureOr<VRegType> rowResultType =
+          getRowResultType(sourcePartType, resultType);
+      if (failed(rowResultType))
+        return rewriter.notifyMatchFailure(
+            op, "failed to derive deinterleaved=2 row-reduction type");
+      FailureOr<MaskType> rowMaskType =
+          getMaskTypeForVReg(*rowResultType, rewriter.getContext());
+      if (failed(rowMaskType))
+        return rewriter.notifyMatchFailure(
+            op, "failed to derive deinterleaved=2 combine mask type");
+      FailureOr<Value> firstLaneMask = createPrefixMask(
+          op.getLoc(), *rowMaskType, "PAT_VL1", rewriter);
       if (failed(firstLaneMask))
         return rewriter.notifyMatchFailure(
             op, "failed to create deinterleaved=2 group_reduce lane mask");
@@ -8301,8 +8329,8 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
         for (int64_t chunk = 0; chunk < chunksPerGroupPerPart; ++chunk) {
           int64_t loIndex = group * chunksPerGroupPerPart + chunk;
           int64_t hiIndex = chunksPerPart + loIndex;
-          if (sourceParts[loIndex].getType() != resultType ||
-              sourceParts[hiIndex].getType() != resultType ||
+          if (sourceParts[loIndex].getType() != sourcePartType ||
+              sourceParts[hiIndex].getType() != sourcePartType ||
               maskParts[loIndex].getType() != maskType ||
               maskParts[hiIndex].getType() != maskType)
             return rewriter.notifyMatchFailure(
@@ -8311,19 +8339,19 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
 
           Value loReduced =
               rewriter
-                  .create<RowReduceOpTy>(op.getLoc(), resultType,
+                  .create<RowReduceOpTy>(op.getLoc(), *rowResultType,
                                          sourceParts[loIndex],
                                          maskParts[loIndex])
                   .getResult();
           Value hiReduced =
               rewriter
-                  .create<RowReduceOpTy>(op.getLoc(), resultType,
+                  .create<RowReduceOpTy>(op.getLoc(), *rowResultType,
                                          sourceParts[hiIndex],
                                          maskParts[hiIndex])
                   .getResult();
           Value pairReduced =
               rewriter
-                  .create<CombineOpTy>(op.getLoc(), resultType, loReduced,
+                  .create<CombineOpTy>(op.getLoc(), *rowResultType, loReduced,
                                        hiReduced, *firstLaneMask)
                   .getResult();
           if (!accumulator) {
@@ -8332,11 +8360,16 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
           }
           accumulator =
               rewriter
-                  .create<CombineOpTy>(op.getLoc(), resultType, pairReduced,
+                  .create<CombineOpTy>(op.getLoc(), *rowResultType, pairReduced,
                                        accumulator, *firstLaneMask)
                   .getResult();
         }
-        results[group] = accumulator;
+        FailureOr<Value> finalResult =
+            bitcastVReg(op.getLoc(), accumulator, resultType, rewriter);
+        if (failed(finalResult))
+          return rewriter.notifyMatchFailure(
+              op, "failed to restore deinterleaved=2 group result type");
+        results[group] = *finalResult;
       }
 
       replaceOpWithFlatConvertedValues(rewriter, op, results,
@@ -8381,8 +8414,22 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
       return rewriter.notifyMatchFailure(
           op, "group_reduce requires physical vreg result and mask");
 
-    FailureOr<Value> firstLaneMask =
-        createPrefixMask(op.getLoc(), maskType, "PAT_VL1", rewriter);
+    auto sourcePartType = dyn_cast<VRegType>(sourceParts.front().getType());
+    if (!sourcePartType)
+      return rewriter.notifyMatchFailure(op,
+                                         "group_reduce source must be vreg");
+    FailureOr<VRegType> rowResultType =
+        getRowResultType(sourcePartType, resultType);
+    if (failed(rowResultType))
+      return rewriter.notifyMatchFailure(
+          op, "failed to derive group row-reduction type");
+    FailureOr<MaskType> rowMaskType =
+        getMaskTypeForVReg(*rowResultType, rewriter.getContext());
+    if (failed(rowMaskType))
+      return rewriter.notifyMatchFailure(
+          op, "failed to derive group combine mask type");
+    FailureOr<Value> firstLaneMask = createPrefixMask(
+        op.getLoc(), *rowMaskType, "PAT_VL1", rewriter);
     if (failed(firstLaneMask))
       return rewriter.notifyMatchFailure(
           op, "failed to create group_reduce masks");
@@ -8392,13 +8439,13 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
 
       for (int64_t chunk = 0; chunk < chunksPerGroup; ++chunk) {
         int64_t index = group * chunksPerGroup + chunk;
-        if (sourceParts[index].getType() != resultType ||
+        if (sourceParts[index].getType() != sourcePartType ||
             maskParts[index].getType() != maskType)
           return rewriter.notifyMatchFailure(
               op, "group_reduce requires uniform physical chunk types");
         Value reduced =
             rewriter
-                .create<RowReduceOpTy>(op.getLoc(), resultType,
+                .create<RowReduceOpTy>(op.getLoc(), *rowResultType,
                                        sourceParts[index], maskParts[index])
                 .getResult();
         if (!accumulator) {
@@ -8406,17 +8453,24 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
           continue;
         }
         accumulator = rewriter
-                          .create<CombineOpTy>(op.getLoc(), resultType, reduced,
-                                               accumulator, *firstLaneMask)
+                          .create<CombineOpTy>(op.getLoc(), *rowResultType,
+                                               reduced, accumulator,
+                                               *firstLaneMask)
                           .getResult();
       }
 
+      FailureOr<Value> finalResult =
+          bitcastVReg(op.getLoc(), accumulator, resultType, rewriter);
+      if (failed(finalResult))
+        return rewriter.notifyMatchFailure(
+            op, "failed to restore group result type");
+
       int64_t destChunk = rowLocalSlots1Result ? group : group * chunksPerGroup;
       if (rowLocalSlots1Result) {
-        results[destChunk] = accumulator;
+        results[destChunk] = *finalResult;
       } else {
         for (int64_t chunk = 0; chunk < chunksPerGroup; ++chunk)
-          results[destChunk + chunk] = accumulator;
+          results[destChunk + chunk] = *finalResult;
       }
     }
 
@@ -8425,6 +8479,13 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
   }
 
 private:
+  FailureOr<VRegType> getRowResultType(VRegType sourceType,
+                                       VRegType resultType) const {
+    if constexpr (std::is_same_v<OpTy, VMIGroupReduceAddIOp>)
+      return getVcaddResultType(sourceType);
+    return resultType;
+  }
+
   LogicalResult getSupport(VMILayoutSupport &supports, VMIGroupReduceAddFOp op,
                            std::string *reason) const {
     return supports.getGroupReduceAddFSupport(op, reason);
@@ -8443,6 +8504,16 @@ private:
   LogicalResult getSupport(VMILayoutSupport &supports, VMIGroupReduceMaxFOp op,
                            std::string *reason) const {
     return supports.getGroupReduceMaxFSupport(op, reason);
+  }
+
+  LogicalResult getSupport(VMILayoutSupport &supports, VMIGroupReduceMinFOp op,
+                           std::string *reason) const {
+    return supports.getGroupReduceMinFSupport(op, reason);
+  }
+
+  LogicalResult getSupport(VMILayoutSupport &supports, VMIGroupReduceMinIOp op,
+                           std::string *reason) const {
+    return supports.getGroupReduceMinISupport(op, reason);
   }
 
   ;
@@ -8833,7 +8904,7 @@ struct OneToNVMIDhistOpPattern : OpConversionPattern<VMIDhistOp> {
 };
 
 template <typename SourceOp, typename ChunkReduceOp, typename CombineOp>
-struct OneToNVMIReduceMinMaxFOpPattern : OpConversionPattern<SourceOp> {
+struct OneToNVMIReduceMinMaxOpPattern : OpConversionPattern<SourceOp> {
   using OpConversionPattern<SourceOp>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
@@ -8851,32 +8922,32 @@ struct OneToNVMIReduceMinMaxFOpPattern : OpConversionPattern<SourceOp> {
     if (sourceParts.empty() || sourceParts.size() != maskParts.size() ||
         initParts.size() != 1 || resultTypes.size() != 1)
       return rewriter.notifyMatchFailure(
-          op, "floating min/max reduction requires matching source/mask chunks "
+          op, "min/max reduction requires matching source/mask chunks "
               "and one init/result chunk");
 
     auto resultType = dyn_cast<VRegType>(resultTypes.front());
     auto maskType = dyn_cast<MaskType>(maskParts.front().getType());
     if (!resultType || !maskType || initParts.front().getType() != resultType)
       return rewriter.notifyMatchFailure(
-          op, "floating min/max reduction requires matching physical source/"
+          op, "min/max reduction requires matching physical source/"
               "init/result vregs and one mask");
 
     for (Value sourcePart : sourceParts)
       if (sourcePart.getType() != resultType)
         return rewriter.notifyMatchFailure(
-            op, "floating min/max reduction requires every source chunk to "
+            op, "min/max reduction requires every source chunk to "
                 "match result vreg type");
     for (Value maskPart : maskParts)
       if (maskPart.getType() != maskType)
         return rewriter.notifyMatchFailure(
-            op, "floating min/max reduction requires every mask chunk to have "
+            op, "min/max reduction requires every mask chunk to have "
                 "the same predicate type");
 
     FailureOr<Value> firstLaneMask =
         createPrefixMask(op.getLoc(), maskType, "PAT_VL1", rewriter);
     if (failed(firstLaneMask))
       return rewriter.notifyMatchFailure(
-          op, "failed to create floating min/max reduction first-lane mask");
+          op, "failed to create min/max reduction first-lane mask");
 
     Value accumulator = initParts.front();
     for (auto [sourcePart, maskPart] :
@@ -10255,8 +10326,10 @@ void populateVMIConversionPatterns(
       OneToNVMICompressOpPattern, OneToNVMICompressStoreOpPattern,
       OneToNVMIReduceAddIOpPattern, OneToNVMIReduceAddFOpPattern,
       OneToNVMIGroupBroadcastOpPattern, OneToNVMIDhistOpPattern,
-      OneToNVMIReduceMinMaxFOpPattern<VMIReduceMaxFOp, VcmaxOp, VmaxOp>,
-      OneToNVMIReduceMinMaxFOpPattern<VMIReduceMinFOp, VcminOp, VminOp>,
+      OneToNVMIReduceMinMaxOpPattern<VMIReduceMaxFOp, VcmaxOp, VmaxOp>,
+      OneToNVMIReduceMinMaxOpPattern<VMIReduceMinFOp, VcminOp, VminOp>,
+      OneToNVMIReduceMinMaxOpPattern<VMIReduceMaxIOp, VcmaxOp, VmaxOp>,
+      OneToNVMIReduceMinMaxOpPattern<VMIReduceMinIOp, VcminOp, VminOp>,
       OneToNVMIExtFOpPattern, OneToNVMITruncFOpPattern,
       OneToNVMIExtIOpPattern<VMIExtSIOp>, OneToNVMIExtIOpPattern<VMIExtUIOp>,
       OneToNVMITruncIOpPattern, OneToNVMIFPToSIOpPattern,
@@ -10275,7 +10348,11 @@ void populateVMIConversionPatterns(
       OneToNVMIGroupReduceOpPattern<VMIGroupReduceMaxIOp, VcgmaxOp, VcmaxOp,
                                     VmaxOp>,
       OneToNVMIGroupReduceOpPattern<VMIGroupReduceMaxFOp, VcgmaxOp, VcmaxOp,
-                                    VmaxOp>>(typeConverter,
+                                    VmaxOp>,
+      OneToNVMIGroupReduceOpPattern<VMIGroupReduceMinIOp, VcgminOp, VcminOp,
+                                    VminOp>,
+      OneToNVMIGroupReduceOpPattern<VMIGroupReduceMinFOp, VcgminOp, VcminOp,
+                                    VminOp>>(typeConverter,
                                              patterns.getContext());
   patterns.add<OneToNVMIEnsureMaskGranularityOpPattern>(
       typeConverter, patterns.getContext());
@@ -10688,6 +10765,12 @@ checkSupportedGroupReduceShape(OpTy op, std::string *reason = nullptr) {
       return success();
   } else if constexpr (std::is_same_v<OpTy, VMIGroupReduceMaxIOp>) {
     if (succeeded(supports.getGroupReduceMaxISupport(op, reason)))
+      return success();
+  } else if constexpr (std::is_same_v<OpTy, VMIGroupReduceMinFOp>) {
+    if (succeeded(supports.getGroupReduceMinFSupport(op, reason)))
+      return success();
+  } else if constexpr (std::is_same_v<OpTy, VMIGroupReduceMinIOp>) {
+    if (succeeded(supports.getGroupReduceMinISupport(op, reason)))
       return success();
   } else {
     if (succeeded(supports.getGroupReduceAddISupport(op, reason)))
@@ -11380,9 +11463,8 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
       reduce.emitError()
           << kVMIDiagUnsupportedPrefix
           << "pto.vmi.group_reduce_addi lowers through pto.vcgadd/vadd for "
-             "32B blocks or through pto.vcadd for contiguous full chunks; "
-             "i8/i16 storage must be cast to i32 before grouped reduction "
-             "because narrow integer reductions widen their result ("
+             "supported 32B block classes or through an internal widening "
+             "pto.vcadd path for aligned full chunks ("
           << reason << ")";
       return WalkResult::interrupt();
     }
@@ -11395,9 +11477,8 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
       reduce.emitError()
           << kVMIDiagUnsupportedPrefix
           << "pto.vmi.group_reduce_maxi lowers through pto.vcgmax/vmax for "
-             "32B blocks or through pto.vcmax for contiguous full chunks; "
-             "i8/i16 storage must be cast to i32 before grouped reduction "
-             "because narrow integer reductions widen their result ("
+             "supported 32B block classes or through pto.vcmax for aligned "
+             "full chunks ("
           << reason << ")";
       return WalkResult::interrupt();
     }
@@ -11414,6 +11495,32 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
              "matching source/mask chunks, "
              "#pto.vmi.layout<num_groups = G, slots = K> result chunks, and "
              "num_groups deriving a group size aligned to physical chunks ("
+          << reason << ")";
+      return WalkResult::interrupt();
+    }
+
+    if (auto reduce = dyn_cast<VMIGroupReduceMinFOp>(op)) {
+      std::string reason;
+      if (succeeded(checkSupportedGroupReduceShape(reduce, &reason)))
+        return WalkResult::advance();
+      reduce.emitError()
+          << kVMIDiagUnsupportedPrefix
+          << "pto.vmi.group_reduce_minf lowers through pto.vcgmin/vmin for "
+             "supported 32B block classes or through pto.vcmin for aligned "
+             "full chunks ("
+          << reason << ")";
+      return WalkResult::interrupt();
+    }
+
+    if (auto reduce = dyn_cast<VMIGroupReduceMinIOp>(op)) {
+      std::string reason;
+      if (succeeded(checkSupportedGroupReduceShape(reduce, &reason)))
+        return WalkResult::advance();
+      reduce.emitError()
+          << kVMIDiagUnsupportedPrefix
+          << "pto.vmi.group_reduce_mini lowers through pto.vcgmin/vmin for "
+             "supported 32B block classes or through pto.vcmin for aligned "
+             "full chunks ("
           << reason << ")";
       return WalkResult::interrupt();
     }
@@ -11442,6 +11549,34 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
           << "pto.vmi.reduce_minf lowers through pto.vcmin only for f16/f32 "
              "contiguous full source chunks with matching mask chunks and one "
              "init/result chunk ("
+          << reason << ")";
+      return WalkResult::interrupt();
+    }
+
+    if (auto reduce = dyn_cast<VMIReduceMaxIOp>(op)) {
+      std::string reason;
+      if (succeeded(checkSupportedReduceShape(
+              reduce, /*requiresReassoc=*/false, &reason)))
+        return WalkResult::advance();
+      reduce.emitError()
+          << kVMIDiagUnsupportedPrefix
+          << "pto.vmi.reduce_maxi lowers through pto.vcmax only for "
+             "contiguous full integer source chunks with matching mask "
+             "chunks and one init/result chunk ("
+          << reason << ")";
+      return WalkResult::interrupt();
+    }
+
+    if (auto reduce = dyn_cast<VMIReduceMinIOp>(op)) {
+      std::string reason;
+      if (succeeded(checkSupportedReduceShape(
+              reduce, /*requiresReassoc=*/false, &reason)))
+        return WalkResult::advance();
+      reduce.emitError()
+          << kVMIDiagUnsupportedPrefix
+          << "pto.vmi.reduce_mini lowers through pto.vcmin only for "
+             "contiguous full integer source chunks with matching mask "
+             "chunks and one init/result chunk ("
           << reason << ")";
       return WalkResult::interrupt();
     }
