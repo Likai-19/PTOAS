@@ -17,4 +17,6 @@ module {
   }
 }
 
-// CHECK: rounding attr must be A or H
+// truncf shares vcvt's rounding-token parser, so "Z" is also accepted even
+// though this test still exercises the legacy truncf surface spelling.
+// CHECK: rounding attr must be A, H, or Z

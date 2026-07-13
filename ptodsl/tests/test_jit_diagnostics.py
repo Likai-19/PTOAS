@@ -502,6 +502,17 @@ def assign_type_mismatch_probe():
 
 
 @pto.jit(target="a5")
+def assign_untyped_literal_without_anchor_probe():
+    cond = pto.const(1, dtype=pto.i1)
+    with pto.if_(cond) as br:
+        with br.then_:
+            br.assign(val=1)
+        with br.else_:
+            br.assign(val=2)
+    _ = br.val
+
+
+@pto.jit(target="a5")
 def duplicate_assign_probe():
     lhs = pto.const(4, dtype=pto.i32)
     cond = lhs > pto.const(0, dtype=pto.i32)
@@ -1066,6 +1077,12 @@ def main() -> None:
         assign_type_mismatch_probe.compile,
         RuntimeError,
         "br.assign(...) type mismatch for 'val'",
+    )
+    expect_raises(
+        assign_untyped_literal_without_anchor_probe.compile,
+        TypeError,
+        "br.assign(...) cannot infer a PTO type",
+        "materialize one side explicitly with pto.const(...)",
     )
     expect_raises(
         duplicate_assign_probe.compile,

@@ -1516,7 +1516,7 @@ static std::optional<VcvtContract> lookupVcvtContract(VcvtElemKind src,
     case VcvtElemKind::F8E5M2:
       return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/true,
                           /*requiresPart=*/true, VcvtPartFamily::Packed4,
-                          "R"};
+                          "RAHZ"};
     case VcvtElemKind::HiF8:
       return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/true,
                           /*requiresPart=*/true, VcvtPartFamily::Packed4,

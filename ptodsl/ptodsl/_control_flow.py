@@ -23,6 +23,7 @@ Public API
 
 from ._bootstrap import make_context  # noqa: F401
 from ._runtime_index_ops import coerce_runtime_index
+from ._scalar_coercion import coerce_scalar_to_type
 from ._surface_types import const_expr
 from ._tracing.active import current_session
 from ._surface_values import unwrap_surface_value, wrap_like_surface_value, wrap_surface_value
@@ -415,9 +416,10 @@ class _IfCM:
         order = tuple(kwargs.keys())
         for name, value in kwargs.items():
             raw_value = unwrap_surface_value(value)
-            if not hasattr(raw_value, "type"):
+            if not hasattr(raw_value, "type") and not _is_branch_assign_literal(raw_value):
                 raise TypeError(
-                    "br.assign(...) expects PTO runtime values or authored surface values; "
+                    "br.assign(...) expects PTO runtime values, authored surface values, "
+                    "or Python scalar literals that can be inferred from the opposite branch; "
                     f"'{name}' received {type(value).__name__}"
                 )
             raw_values[name] = raw_value
@@ -489,22 +491,37 @@ class _IfCM:
             raise RuntimeError("br.assign(...) names must match across branches; " + "; ".join(pieces))
 
         order = then_assignment["order"]
+        resolved_then_values = {}
+        resolved_else_values = {}
         result_types = []
         for name in order:
             then_value = then_assignment["raw_values"][name]
             else_value = else_assignment["raw_values"][name]
+            then_value, else_value = _reconcile_branch_assignment_values(
+                name,
+                then_value,
+                else_value,
+            )
             if then_value.type != else_value.type:
                 raise RuntimeError(
                     f"br.assign(...) type mismatch for '{name}': "
                     f"then branch yields {then_value.type}, else branch yields {else_value.type}"
                 )
+            resolved_then_values[name] = then_value
+            resolved_else_values[name] = else_value
             result_types.append(then_value.type)
 
         return {
             "order": order,
             "result_types": result_types,
-            "then": then_assignment,
-            "else": else_assignment,
+            "then": {
+                **then_assignment,
+                "raw_values": resolved_then_values,
+            },
+            "else": {
+                **else_assignment,
+                "raw_values": resolved_else_values,
+            },
         }
 
     def _finalize_side_effect_if(self):
@@ -572,6 +589,35 @@ def if_(cond) -> _IfCM:
         x = br.x
     """
     return _IfCM(cond)
+
+
+def _is_branch_assign_literal(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _reconcile_branch_assignment_values(name, then_value, else_value):
+    then_is_typed = hasattr(then_value, "type")
+    else_is_typed = hasattr(else_value, "type")
+
+    if then_is_typed and else_is_typed:
+        return then_value, else_value
+    if then_is_typed:
+        return then_value, coerce_scalar_to_type(
+            else_value,
+            then_value.type,
+            context=f"br.assign(...) else branch value for '{name}'",
+        )
+    if else_is_typed:
+        return coerce_scalar_to_type(
+            then_value,
+            else_value.type,
+            context=f"br.assign(...) then branch value for '{name}'",
+        ), else_value
+
+    raise TypeError(
+        "br.assign(...) cannot infer a PTO type when both branches provide only "
+        f"Python literals for '{name}'; materialize one side explicitly with pto.const(...)"
+    )
 
 
 # ── yield_ ────────────────────────────────────────────────────────────────────

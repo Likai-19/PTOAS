@@ -11,10 +11,10 @@
 module {
   func.func @vmi_truncf_rounding_unsupported_invalid(
       %source: !pto.vmi.vreg<128xf32>) {
-    %result = pto.vmi.truncf %source {rounding = "H"}
+    %result = pto.vmi.truncf %source {rounding = "R"}
         : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
     return
   }
 }
 
-// CHECK: rounding attr is currently only supported for f32 to !pto.hif8 truncf
+// CHECK: rounding attr must be A, H, or Z

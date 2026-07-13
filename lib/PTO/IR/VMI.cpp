@@ -1631,13 +1631,8 @@ LogicalResult VMITruncFOp::verify() {
         "requires result element type to be narrower than source element type");
   if (auto roundingAttr = (*this)->getAttrOfType<StringAttr>("rounding")) {
     StringRef rounding = roundingAttr.getValue();
-    if (rounding != "A" && rounding != "H")
-      return emitOpError("rounding attr must be A or H");
-    if (!sourceType.getElementType().isF32() ||
-        !pto::isPTOHiFloat8Type(resultType.getElementType()))
-      return emitOpError(
-          "rounding attr is currently only supported for f32 to !pto.hif8 "
-          "truncf");
+    if (rounding != "A" && rounding != "H" && rounding != "Z")
+      return emitOpError("rounding attr must be A, H, or Z");
   }
   return success();
 }
