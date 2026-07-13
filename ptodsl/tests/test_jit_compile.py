@@ -1109,6 +1109,17 @@ def ast_runtime_for_branch_local_temp_probe(rows: pto.i32):
 
 
 @pto.jit(target="a5")
+def ast_runtime_ifexp_assign_probe(rows: pto.i32):
+    limit = pto.const(64, dtype=pto.index)
+    zero = pto.const(0, dtype=pto.index)
+
+    for row in range(rows):
+        cnt = row if row < limit else limit
+        out = cnt + zero
+        _ = out
+
+
+@pto.jit(target="a5")
 def ast_runtime_for_sibling_iv_reuse_probe(rows: pto.i32, cols: pto.i32):
     stride = pto.const(64, dtype=pto.index)
     one = pto.const(1, dtype=pto.index)
@@ -4673,6 +4684,20 @@ def main() -> None:
     expect(
         "iter_args(" not in ast_runtime_for_branch_local_temp_text,
         "branch-local temporaries should not be inferred as loop-carried state",
+    )
+
+    ast_runtime_ifexp_assign_text = ast_runtime_ifexp_assign_probe.compile().mlir_text()
+    expect_parse_roundtrip_and_verify(
+        ast_runtime_ifexp_assign_text,
+        "AST-rewritten runtime IfExp assignment specialization",
+    )
+    expect(
+        ast_runtime_ifexp_assign_text.count("scf.for") == 1,
+        "assign-form Python conditional expressions inside runtime loops should preserve the runtime loop",
+    )
+    expect(
+        ast_runtime_ifexp_assign_text.count("scf.if") == 1,
+        "assign-form Python conditional expressions should normalize through the existing AST if rewrite",
     )
 
     ast_runtime_for_sibling_iv_reuse_text = ast_runtime_for_sibling_iv_reuse_probe.compile().mlir_text()
