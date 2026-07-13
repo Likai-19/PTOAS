@@ -9,8 +9,9 @@
 // CHECK: func.func @TANDS
 // CHECK-NOT: pto.tands ins
 // CHECK: pto.vecscope
-// CHECK: pto.vlds
 // CHECK: pto.vbr
+// CHECK: scf.for
+// CHECK: pto.vlds
 // CHECK: pto.vand
 // CHECK: pto.vsts
 

@@ -843,12 +843,13 @@ def PTOInferVPTOVecScope
   let summary =
       "Infer missing pto.vecscope regions for VPTO vector operation clusters";
   let description = [{
-    Runs near the VPTO emission boundary after inlining, canonicalization,
-    CSE, pointer normalization, and wrapper-op expansion have exposed the final
-    SSA shape. The pass greedily clusters contiguous VPTO vector operations
-    into `pto.vecscope` regions while preserving explicit vector-scope carriers
-    and treating DMA/copy/sync, unresolved calls, terminators, and forbidden
-    operations as boundaries.
+    Runs near the VPTO emission boundary after VMI physicalization and the
+    existing pre-emission canonicalization, pointer normalization, and
+    wrapper-op expansion, but before VMI LICM and final cleanup. The pass
+    greedily clusters contiguous VPTO vector operations into `pto.vecscope`
+    regions while preserving explicit vector-scope carriers and treating
+    DMA/copy/sync, unresolved calls, terminators, and forbidden operations as
+    boundaries.
 
     The inferred `pto.vecscope` form remains resultless. Values whose type is
     `!pto.vreg`, `!pto.mask`, or `!pto.align` must not escape the inferred

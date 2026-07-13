@@ -9,8 +9,9 @@
 // CHECK: func.func @TXORS
 // CHECK-NOT: pto.txors ins
 // CHECK: pto.vecscope
-// CHECK: pto.vlds
 // CHECK: pto.vbr
+// CHECK: scf.for
+// CHECK: pto.vlds
 // CHECK: pto.vxor
 // CHECK: pto.vsts
 
