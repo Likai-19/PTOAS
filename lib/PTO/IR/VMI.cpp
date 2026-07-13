@@ -283,6 +283,29 @@ verifyAllSameVRegShapeAndLayout(Operation *op, ArrayRef<VMIVRegType> types,
   return success();
 }
 
+static LogicalResult verifyAllSameVRegShapeAndLayoutPresence(
+    Operation *op, ArrayRef<VMIVRegType> types, bool requireSameElement) {
+  if (types.empty())
+    return success();
+
+  VMIVRegType first = types.front();
+  bool anyLayout = llvm::any_of(
+      types, [](VMIVRegType type) { return isLayoutAssigned(type); });
+
+  for (VMIVRegType type : types) {
+    if (type.getElementCount() != first.getElementCount())
+      return op->emitOpError(
+          "requires all VMI data values to have the same logical lane count");
+    if (requireSameElement && type.getElementType() != first.getElementType())
+      return op->emitOpError(
+          "requires all VMI data values to have the same element type");
+    if (anyLayout && !isLayoutAssigned(type))
+      return op->emitOpError(
+          "requires either all or no VMI data values to carry layout");
+  }
+  return success();
+}
+
 static LogicalResult verifyElementwiseVRegOp(Operation *op, VMIVRegType lhs,
                                              VMIVRegType rhs,
                                              VMIVRegType result) {
@@ -3690,13 +3713,13 @@ LogicalResult VMIVintlvOp::verify() {
   auto rhsType = cast<VMIVRegType>(getRhs().getType());
   auto lowType = cast<VMIVRegType>(getLow().getType());
   auto highType = cast<VMIVRegType>(getHigh().getType());
-  if (failed(verifyAllSameVRegShapeAndLayout(
+  if (failed(verifyAllSameVRegShapeAndLayoutPresence(
           getOperation(), {lhsType, rhsType, lowType, highType},
           /*requireSameElement=*/true)))
     return failure();
   if (failed(verifyVMIPmodeMask(getOperation(),
                                 cast<VMIMaskType>(getMask().getType()),
-                                lowType, getPmode())))
+                                lhsType, getPmode())))
     return failure();
   return success();
 }
@@ -3706,13 +3729,13 @@ LogicalResult VMIVdintlvOp::verify() {
   auto rhsType = cast<VMIVRegType>(getRhs().getType());
   auto lowType = cast<VMIVRegType>(getLow().getType());
   auto highType = cast<VMIVRegType>(getHigh().getType());
-  if (failed(verifyAllSameVRegShapeAndLayout(
+  if (failed(verifyAllSameVRegShapeAndLayoutPresence(
           getOperation(), {lhsType, rhsType, lowType, highType},
           /*requireSameElement=*/true)))
     return failure();
   if (failed(verifyVMIPmodeMask(getOperation(),
                                 cast<VMIMaskType>(getMask().getType()),
-                                lowType, getPmode())))
+                                lhsType, getPmode())))
     return failure();
   return success();
 }

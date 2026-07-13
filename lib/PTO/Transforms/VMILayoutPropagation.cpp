@@ -455,6 +455,70 @@ public:
   }
 };
 
+class VMIInterleaveTransfer final : public VMILayoutTransfer {
+public:
+  FailureOr<SmallVector<VMILayoutRelation, 4>>
+  query(Operation *op, Value changedValue, VMILayoutAttr changedLayout,
+        const VMILayoutPropagator &propagator,
+        OpOperand *changedOperand) const override {
+    if (auto vintlv = dyn_cast<VMIVintlvOp>(op))
+      return queryInterleave(vintlv, /*vintlv=*/true, changedValue,
+                             changedLayout, changedOperand);
+    if (auto vdintlv = dyn_cast<VMIVdintlvOp>(op))
+      return queryInterleave(vdintlv, /*vintlv=*/false, changedValue,
+                             changedLayout, changedOperand);
+    return failure();
+  }
+
+private:
+  template <typename OpTy>
+  FailureOr<SmallVector<VMILayoutRelation, 4>>
+  queryInterleave(OpTy op, bool vintlv, Value changedValue,
+                  VMILayoutAttr changedLayout,
+                  OpOperand *changedOperand) const {
+    auto lowType = dyn_cast<VMIVRegType>(op.getLow().getType());
+    if (!lowType)
+      return failure();
+
+    VMIInterleaveLayoutPort port;
+    if (changedOperand == &op.getLhsMutable() || changedValue == op.getLhs()) {
+      port = VMIInterleaveLayoutPort::Lhs;
+    } else if (changedOperand == &op.getRhsMutable() ||
+               changedValue == op.getRhs()) {
+      port = VMIInterleaveLayoutPort::Rhs;
+    } else if (changedOperand == &op.getMaskMutable() ||
+               changedValue == op.getMask()) {
+      port = VMIInterleaveLayoutPort::Mask;
+    } else if (changedValue == op.getLow()) {
+      port = VMIInterleaveLayoutPort::Low;
+    } else if (changedValue == op.getHigh()) {
+      port = VMIInterleaveLayoutPort::High;
+    } else {
+      return failure();
+    }
+
+    VMILayoutSupport supports;
+    FailureOr<SmallVector<VMIInterleaveLayoutFact, 4>> facts =
+        vintlv ? supports.getVintlvLayoutFactsForLayout(lowType, port,
+                                                        changedLayout)
+               : supports.getVdintlvLayoutFactsForLayout(lowType, port,
+                                                         changedLayout);
+    if (failed(facts) || facts->empty())
+      return failure();
+
+    SmallVector<VMILayoutRelation, 4> relations;
+    for (const VMIInterleaveLayoutFact &fact : *facts) {
+      relations.push_back(makeRelation(SmallVector<VMILayoutFact, 4>{
+          operandFact(op.getLhsMutable(), fact.lhsLayout),
+          operandFact(op.getRhsMutable(), fact.rhsLayout),
+          operandFact(op.getMaskMutable(), fact.maskLayout),
+          valueFact(op.getLow(), fact.lowLayout),
+          valueFact(op.getHigh(), fact.highLayout)}));
+    }
+    return relations;
+  }
+};
+
 class VMIGatherTransfer final : public VMILayoutTransfer {
 public:
   FailureOr<SmallVector<VMILayoutRelation, 4>>
@@ -589,6 +653,7 @@ const VMILayoutTransfer *getTransfer(Operation *op) {
   static VMIGroupSlotLoadTransfer groupSlotLoadTransfer;
   static VMIGroupBroadcastLoadTransfer groupBroadcastLoadTransfer;
   static VMIGroupBroadcastTransfer groupBroadcastTransfer;
+  static VMIInterleaveTransfer interleaveTransfer;
   static VMIGatherTransfer gatherTransfer;
   static VMIStoreTransfer storeTransfer;
   static VMIMaskedLoadTransfer maskedLoadTransfer;
@@ -610,6 +675,8 @@ const VMILayoutTransfer *getTransfer(Operation *op) {
     return &groupBroadcastLoadTransfer;
   if (isa<VMIGroupBroadcastOp>(op))
     return &groupBroadcastTransfer;
+  if (isa<VMIVintlvOp, VMIVdintlvOp>(op))
+    return &interleaveTransfer;
   if (isa<VMIGatherOp>(op))
     return &gatherTransfer;
   if (isSameLayoutOp(op))

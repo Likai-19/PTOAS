@@ -1045,6 +1045,38 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
+      if (auto vintlv = dyn_cast<VMIVintlvOp>(op)) {
+        VMILayoutSupport supports;
+        auto valueType = cast<VMIVRegType>(vintlv.getLow().getType());
+        FailureOr<VMIInterleaveLayoutFact> fact =
+            supports.getPreferredVintlvLayoutFact(valueType);
+        if (failed(fact))
+          return WalkResult::advance();
+        requestDataUse(vintlv.getLhsMutable(), fact->lhsLayout);
+        requestDataUse(vintlv.getRhsMutable(), fact->rhsLayout);
+        if (failed(requestMaskUse(vintlv.getMaskMutable(), fact->maskLayout,
+                                  op)) ||
+            failed(setPreferredLayout(vintlv.getLow(), fact->lowLayout, op)) ||
+            failed(setPreferredLayout(vintlv.getHigh(), fact->highLayout, op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto vdintlv = dyn_cast<VMIVdintlvOp>(op)) {
+        VMILayoutSupport supports;
+        auto valueType = cast<VMIVRegType>(vdintlv.getLow().getType());
+        FailureOr<VMIInterleaveLayoutFact> fact =
+            supports.getPreferredVdintlvLayoutFact(valueType);
+        if (failed(fact))
+          return WalkResult::advance();
+        requestDataUse(vdintlv.getLhsMutable(), fact->lhsLayout);
+        requestDataUse(vdintlv.getRhsMutable(), fact->rhsLayout);
+        if (failed(requestMaskUse(vdintlv.getMaskMutable(), fact->maskLayout,
+                                  op)) ||
+            failed(setPreferredLayout(vdintlv.getLow(), fact->lowLayout, op)) ||
+            failed(setPreferredLayout(vdintlv.getHigh(), fact->highLayout, op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
       if (auto load = dyn_cast<VMIDeinterleaveLoadOp>(op)) {
         if (failed(
                 setNaturalLayout(load.getLow(), getContiguousLayout(), op)) ||
@@ -1699,9 +1731,7 @@ struct LayoutSolver {
                                     DataLayoutSeedPhase phase) {
     for (MaskUseRequest request : maskUseRequests)
       if (request.phase == phase) {
-        if ((phase == DataLayoutSeedPhase::Reduce ||
-             phase == DataLayoutSeedPhase::WeakReduce) &&
-            hasLayoutAssignment(propagator, request.operand->get())) {
+        if (hasLayoutAssignment(propagator, request.operand->get())) {
           VMILayoutAttr assigned =
               propagator.getRequestedOrCurrentLayout(request.operand->get());
           if (propagator.canUseOperandLayout(*request.operand, assigned))

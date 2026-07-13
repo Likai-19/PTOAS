@@ -1,0 +1,102 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). Please refer to the License for details. You may not use
+// this file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON
+// AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+// FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+// for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-layout-assignment | FileCheck %s
+
+module {
+  func.func @vmi_layout_assignment_vintlv(
+      %a: !pto.vmi.vreg<128xf32>,
+      %b: !pto.vmi.vreg<128xf32>,
+      %mask: !pto.vmi.mask<128xb32>,
+      %ptr: !pto.ptr<f32, ub>) {
+    %c0 = arith.constant 0 : index
+    %c128 = arith.constant 128 : index
+    %lo, %hi = pto.vmi.vintlv %a, %b, %mask
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>,
+          !pto.vmi.mask<128xb32>
+        -> !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
+    pto.vmi.store %lo, %ptr[%c0] : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
+    pto.vmi.store %hi, %ptr[%c128] : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
+    return
+  }
+
+  func.func @vmi_layout_assignment_vdintlv(
+      %a: !pto.vmi.vreg<128xf32>,
+      %b: !pto.vmi.vreg<128xf32>,
+      %mask: !pto.vmi.mask<128xb32>,
+      %ptr: !pto.ptr<f32, ub>) {
+    %c0 = arith.constant 0 : index
+    %c128 = arith.constant 128 : index
+    %lo, %hi = pto.vmi.vdintlv %a, %b, %mask
+        : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>,
+          !pto.vmi.mask<128xb32>
+        -> !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
+    pto.vmi.store %lo, %ptr[%c0] : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
+    pto.vmi.store %hi, %ptr[%c128] : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
+    return
+  }
+
+  func.func @vmi_layout_assignment_vintlv_preserves_d2(
+      %a: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>,
+      %b: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>,
+      %mask: !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 2>>) {
+    %lo, %hi = pto.vmi.vintlv %a, %b, %mask
+        : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>,
+           !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
+    return
+  }
+
+  func.func @vmi_layout_assignment_vdintlv_preserves_d4(
+      %a: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>,
+      %b: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>,
+      %mask: !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4>>) {
+    %lo, %hi = pto.vmi.vdintlv %a, %b, %mask
+        : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4>>
+        -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>,
+           !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @vmi_layout_assignment_vintlv(
+// CHECK: pto.vmi.vintlv
+// CHECK-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+// CHECK-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+// CHECK-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+// CHECK-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+// CHECK-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+// CHECK-LABEL: func.func @vmi_layout_assignment_vdintlv(
+// CHECK: pto.vmi.vdintlv
+// CHECK-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+// CHECK-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+// CHECK-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
+// CHECK-SAME: -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+// CHECK-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
+// CHECK-LABEL: func.func @vmi_layout_assignment_vintlv_preserves_d2(
+// CHECK-NOT: pto.vmi.ensure_layout
+// CHECK: pto.vmi.vintlv
+// CHECK-SAME: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
+// CHECK-SAME: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
+// CHECK-SAME: !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 2>>
+// CHECK-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
+// CHECK-SAME: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
+// CHECK-LABEL: func.func @vmi_layout_assignment_vdintlv_preserves_d4(
+// CHECK-NOT: pto.vmi.ensure_layout
+// CHECK: pto.vmi.vdintlv
+// CHECK-SAME: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
+// CHECK-SAME: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
+// CHECK-SAME: !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4>>
+// CHECK-SAME: -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
+// CHECK-SAME: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
