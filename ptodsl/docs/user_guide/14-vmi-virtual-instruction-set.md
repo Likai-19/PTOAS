@@ -624,11 +624,14 @@ group_max = pto.vmi.vcmax(
 
 ## 14.7 Conversion and reinterpretation
 
-### `pto.vmi.vcvt(source, to_dtype=None, *, result_type=None, rounding=None, saturate=None, sign=None) -> VRegType`
+### `pto.vmi.vcvt(source, to_dtype=None, *, result_type=None, rounding=None, saturate=None) -> VRegType`
 
 **Description**: Numeric type conversion between VMI vector element types.
 Converts the element type of `source` to the target element type. PTODSL
 infers the result lane count from the source when `result_type` is omitted.
+
+For int→int widening, the source element type must carry signedness
+(e.g. `si8`/`ui8`/`si16`/`ui16`); signless integers are rejected.
 
 **Parameters**:
 
@@ -639,7 +642,6 @@ infers the result lane count from the source when `result_type` is omitted.
 | `result_type` | VMI vreg type or `None` | Explicit result type. When provided, `to_dtype` is ignored for type inference |
 | `rounding` | rounding mode or `None` | Optional rounding mode token |
 | `saturate` | saturate mode or `None` | Optional saturation mode token |
-| `sign` | sign mode or `None` | Optional sign-control token |
 
 **Returns**:
 
