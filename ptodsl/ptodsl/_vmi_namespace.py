@@ -12,11 +12,19 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from mlir.dialects import pto as _pto
-from mlir.ir import BF16Type, F16Type, F32Type, IntegerType, MemRefType
+from mlir.ir import BF16Type, F16Type, F32Type, Float8E4M3FNType, Float8E5M2Type, IntegerType, MemRefType
 
 from ._scalar_coercion import coerce_scalar_to_type
 from ._surface_values import _coerce_index_value, unwrap_surface_value, wrap_surface_value
 from ._types import _ensure_tensor_storage_dtype, _resolve, vmi_mask_type, vmi_vreg_type
+
+
+class _UnspecifiedArgument:
+    def __repr__(self) -> str:
+        return "UNSPECIFIED"
+
+
+_UNSPECIFIED = _UnspecifiedArgument()
 
 
 def _missing_vmi_support_error(op_name: str) -> NotImplementedError:
@@ -140,6 +148,13 @@ def _type_bit_width(type_obj, *, context: str):
     if F32Type.isinstance(type_obj):
         return 32
     raise TypeError(f"{context} does not support element type {type_obj}")
+
+
+def _is_vmi_float_element_type(type_obj) -> bool:
+    return any(
+        cls.isinstance(type_obj)
+        for cls in (BF16Type, F16Type, F32Type, Float8E4M3FNType, Float8E5M2Type)
+    )
 
 
 def _normalize_vmi_vcvt_rounding(mode, *, context: str):
@@ -295,15 +310,40 @@ def _emit_vec_scalar(op_name: str, source, scalar, mask, *, result_type=None, pm
     )
 
 
-def _emit_reduce(op_name: str, source, mask, *, result_type, group=None, pmode=None, loc=None, ip=None, reassoc=None):
+def _emit_reduce(
+    op_name: str,
+    source,
+    mask,
+    *,
+    result_type,
+    group=None,
+    pmode=None,
+    loc=None,
+    ip=None,
+    reassoc=_UNSPECIFIED,
+):
+    context = f"pto.vmi.{op_name}(...)"
+    if op_name == "vcadd":
+        source_elem_type = _vmi_element_type(_type_of(source), context=context)
+        if reassoc is _UNSPECIFIED:
+            if _is_vmi_float_element_type(source_elem_type):
+                raise TypeError(
+                    f"{context} on floating-point vectors requires an explicit reassoc "
+                    "argument; spell out reassoc=True or reassoc=False"
+                )
+        elif not isinstance(reassoc, bool):
+            raise TypeError(
+                f"{context} requires reassoc to be the Python boolean True or False; "
+                f"received {reassoc!r}"
+            )
     kwargs = {"group": group, "pmode": pmode, "loc": loc, "ip": ip}
-    if reassoc is not None:
+    if reassoc is not _UNSPECIFIED:
         kwargs["reassoc"] = reassoc
     return _call_value(
         op_name,
-        _require_result_type(result_type, context=f"pto.vmi.{op_name}(...)"),
+        _require_result_type(result_type, context=context),
         _raw(source),
-        _required_mask(mask, context=f"pto.vmi.{op_name}(...)"),
+        _required_mask(mask, context=context),
         **kwargs,
     )
 
@@ -486,7 +526,7 @@ class _VMINamespace:
             )
         return _call_value("vbrc", result_type, raw_value, group=group, loc=loc, ip=ip)
 
-    vcadd = staticmethod(lambda source, mask, *, result_type=None, group=None, pmode=None, reassoc=None, loc=None, ip=None: _emit_reduce("vcadd", source, mask, result_type=result_type, group=group, pmode=pmode, reassoc=reassoc, loc=loc, ip=ip))
+    vcadd = staticmethod(lambda source, mask, *, result_type=None, group=None, pmode=None, reassoc=_UNSPECIFIED, loc=None, ip=None: _emit_reduce("vcadd", source, mask, result_type=result_type, group=group, pmode=pmode, reassoc=reassoc, loc=loc, ip=ip))
     vcmax = staticmethod(lambda source, mask, *, result_type=None, group=None, pmode=None, loc=None, ip=None: _emit_reduce("vcmax", source, mask, result_type=result_type, group=group, pmode=pmode, loc=loc, ip=ip))
     vcmin = staticmethod(lambda source, mask, *, result_type=None, group=None, pmode=None, loc=None, ip=None: _emit_reduce("vcmin", source, mask, result_type=result_type, group=group, pmode=pmode, loc=loc, ip=ip))
 

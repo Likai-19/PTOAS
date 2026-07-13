@@ -5337,6 +5337,10 @@ def main() -> None:
         "PTODSL grouped mask probes should materialize grouped logical VMI mask types in MLIR",
     )
     expect(
+        "reassoc" in vmi_wrapper_dispatch_text,
+        "PTODSL VMI vcadd should preserve the reassoc attr in MLIR",
+    )
+    expect(
         "!pto.vmi.vreg<128xi16>" in vmi_unpack_vload_text,
         "PTODSL VMI unpack vload should infer the widened logical VMI vector result type from to_dtype",
     )
