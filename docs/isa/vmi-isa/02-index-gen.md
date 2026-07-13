@@ -1,0 +1,58 @@
+# 2. Index-gen
+
+> **Category:** A. **Mask:** none.
+>
+> Index materialization. Produces an index vector; the single physical reg
+> backing is replicate-read until a Category B/C edge needs the expanded form.
+
+---
+
+## `pto.vmi.vci`
+
+- **semantics:** Generate a per-lane index/counter vector from a single scalar base such as `[base, base±1, base±2, ...]`, lane `i` gets `base + i` (ASC) or `base - i` (DESC). It is the index source for `vgather`/`vscatter` offsets.
+
+  ```c
+  for (int i = 0; i < L; i++)
+      dst[i] = base + (order == "ASC" ? i : -i);
+  ```
+
+- **syntax:**
+  ```mlir
+  %result = pto.vmi.vci %base {order = "ASC"} : T -> !pto.vmi.vreg<L×T>
+  ```
+- **operands:**
+
+  | Operand | Type | Description |
+  |---|---|---|
+  | `base` | integer or float scalar | Starting value |
+
+- **results:**
+
+  | Result | Type | Description |
+  |---|---|---|
+  | `result` | `!pto.vmi.vreg<L×T>` | Index vector |
+
+- **attributes:**
+
+  | Attribute | Values | Default | Description |
+  |---|---|---|---|
+  | `order` | `"ASC"`, `"DESC"` | `"ASC"` | Index generation direction |
+
+- **lowering to `pto.mi`:**
+  ```
+  1 × pto.vci {ASC/DESC} per chunk
+  ```
+  `#mi = 1/chunk`, `dep = 1`.
+
+- **datatypes:** `i8`/`i16`/`i32`, `f16`, `f32`; the result element type also
+  fixes `L` (`i32`/`f32` -> 64, `i16`/`f16` -> 128, `i8` -> 256).
+
+- **example:**
+  ```mlir
+  // Ascending i32 indices for a gather base
+  %idx = pto.vmi.vci %c0 {order = "ASC"} : i32 -> !pto.vmi.vreg<64×i32>
+  // Descending f32 ramp
+  %ramp = pto.vmi.vci %c10 {order = "DESC"} : f32 -> !pto.vmi.vreg<64×f32>
+  %idx = pto.vmi.vci %base {order = "ASC"} : i32 -> !pto.vmi.vreg<64×i32>
+  // → pto.as: pto.vci {order="ASC"}, one op per physical chunk
+  ```
