@@ -32,7 +32,9 @@
 //
 // Category C2 — unified type conversion (1 op):
 //   vcvt → type-dispatch to extf/truncf/fptosi/sitofp/extsi/extui/trunci
-//   Skipped: fp narrowing + saturate (attribute loss).
+//   For fp narrowing, unified saturate=SAT is normalized away because the
+//   legacy truncf -> VPTO lowering already materializes saturating low-level
+//   vcvt forms for supported narrowing result families.
 //
 // Category C3 — unified load/store (2 ops):
 //   vload  → dispatch by dist_mode/group/block_stride to
@@ -414,9 +416,6 @@ static LogicalResult lowerVCvt(VMICvtOp op, OpBuilder &builder) {
   if (direction == "widen_fp") {
     result = builder.create<VMIExtFOp>(loc, resultType, source).getResult();
   } else if (direction == "narrow_fp") {
-    // fp narrowing + saturate → skip (saturate attribute is lost).
-    if (op.getSaturateAttr())
-      return failure();
     StringAttr roundingAttr = op.getRoundingAttr();
     result =
         builder.create<VMITruncFOp>(loc, resultType, source, roundingAttr)

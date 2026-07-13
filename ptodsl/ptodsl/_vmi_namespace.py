@@ -142,6 +142,22 @@ def _type_bit_width(type_obj, *, context: str):
     raise TypeError(f"{context} does not support element type {type_obj}")
 
 
+def _normalize_vmi_vcvt_rounding(mode, *, context: str):
+    token = mode
+    if not isinstance(token, str):
+        token = str(token)
+        if "." in token:
+            token = token.rsplit(".", 1)[-1]
+    normalized = token.strip().upper()
+    allowed = {"A", "H", "Z"}
+    if normalized not in allowed:
+        expected = ", ".join(sorted(allowed))
+        raise ValueError(
+            f"{context} does not support rounding {mode!r}; expected one of {expected}"
+        )
+    return normalized
+
+
 def _derive_vcvt_result_type(source, to_dtype, *, context: str):
     if to_dtype is None:
         raise TypeError(f"{context} requires to_dtype when result_type is omitted")
@@ -493,6 +509,11 @@ class _VMINamespace:
             result_type = _derive_vcvt_result_type(source, to_dtype, context="pto.vmi.vcvt(...)")
         else:
             result_type = _resolve(result_type)
+        if rounding is not None:
+            rounding = _normalize_vmi_vcvt_rounding(
+                rounding,
+                context="pto.vmi.vcvt(..., rounding=...)",
+            )
         return _call_value(
             "vcvt",
             result_type,
