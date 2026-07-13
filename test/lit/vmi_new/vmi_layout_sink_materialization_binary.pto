@@ -112,7 +112,7 @@ module {
         : !pto.vmi.vreg<128xi32, #pto.vmi.layout<contiguous>>
         -> !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>
     %seed = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
-    %mask = pto.vmi.vcmp %lhs_deint, %rhs_deint, %seed {cmp = "slt"}
+    %mask = pto.vmi.vcmp %lhs_deint, %rhs_deint, %seed {cmp = "lt"}
         : !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
           !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
           !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
