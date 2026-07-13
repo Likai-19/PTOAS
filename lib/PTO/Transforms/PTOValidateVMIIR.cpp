@@ -42,49 +42,44 @@ namespace {
 
 bool isVMIType(Type type) { return isa<VMIVRegType, VMIMaskType>(type); }
 
-bool isPhysicalVPTOType(Type type) {
-  return isa<VRegType, MaskType, AlignType>(type);
-}
-
-bool containsVMIOrPhysicalType(Type type) {
-  if (isVMIType(type) || isPhysicalVPTOType(type))
+bool containsVMIType(Type type) {
+  if (isVMIType(type))
     return true;
 
   if (auto functionType = dyn_cast<FunctionType>(type)) {
-    return llvm::any_of(
-               functionType.getInputs(),
-               [](Type input) { return containsVMIOrPhysicalType(input); }) ||
+    return llvm::any_of(functionType.getInputs(),
+                        [](Type input) { return containsVMIType(input); }) ||
            llvm::any_of(functionType.getResults(), [](Type result) {
-             return containsVMIOrPhysicalType(result);
+             return containsVMIType(result);
            });
   }
 
   if (auto shapedType = dyn_cast<ShapedType>(type))
-    return containsVMIOrPhysicalType(shapedType.getElementType());
+    return containsVMIType(shapedType.getElementType());
 
   return false;
 }
 
-bool containsVMIOrPhysicalType(Attribute attr) {
+bool containsVMIType(Attribute attr) {
   if (!attr)
     return false;
 
   if (auto typeAttr = dyn_cast<TypeAttr>(attr))
-    if (containsVMIOrPhysicalType(typeAttr.getValue()))
+    if (containsVMIType(typeAttr.getValue()))
       return true;
 
   if (auto typedAttr = dyn_cast<TypedAttr>(attr))
-    if (containsVMIOrPhysicalType(typedAttr.getType()))
+    if (containsVMIType(typedAttr.getType()))
       return true;
 
   if (auto arrayAttr = dyn_cast<ArrayAttr>(attr))
     return llvm::any_of(arrayAttr, [](Attribute element) {
-      return containsVMIOrPhysicalType(element);
+      return containsVMIType(element);
     });
 
   if (auto dictAttr = dyn_cast<DictionaryAttr>(attr))
     return llvm::any_of(dictAttr, [](NamedAttribute namedAttr) {
-      return containsVMIOrPhysicalType(namedAttr.getValue());
+      return containsVMIType(namedAttr.getValue());
     });
 
   return false;
@@ -133,16 +128,13 @@ bool isStructuralOp(Operation *op) {
          name.starts_with("scf.") || name.starts_with("cf.");
 }
 
-bool hasVMIOrPhysicalType(Operation *op) {
-  auto hasInterestingType = [](Type type) {
-    return isVMIType(type) || isPhysicalVPTOType(type);
-  };
-  if (llvm::any_of(op->getOperandTypes(), hasInterestingType) ||
-      llvm::any_of(op->getResultTypes(), hasInterestingType))
+bool hasVMIType(Operation *op) {
+  if (llvm::any_of(op->getOperandTypes(), isVMIType) ||
+      llvm::any_of(op->getResultTypes(), isVMIType))
     return true;
   for (Region &region : op->getRegions()) {
     for (Block &block : region) {
-      if (llvm::any_of(block.getArgumentTypes(), hasInterestingType))
+      if (llvm::any_of(block.getArgumentTypes(), isVMIType))
         return true;
     }
   }
@@ -233,11 +225,6 @@ emitHelperMaterializationContract(Operation *helper, Type sourceType,
 
 LogicalResult verifyBoundaryType(Operation *owner, Type type,
                                  llvm::raw_ostream *diagOS) {
-  if (isPhysicalVPTOType(type))
-    return emitInvariant(
-        owner, diagOS,
-        "physical VPTO register type appears before VMI-to-VPTO");
-
   if (isVMIType(type) && !isSurfaceVMIType(type))
     return emitInvariant(
         owner, diagOS,
@@ -269,11 +256,6 @@ LogicalResult verifyBoundaryTypeTree(Operation *owner, Type type,
 
 LogicalResult verifyLayoutAssignedType(Operation *owner, Type type,
                                        llvm::raw_ostream *diagOS) {
-  if (isPhysicalVPTOType(type))
-    return emitInvariant(
-        owner, diagOS,
-        "physical VPTO register type appears before VMI-to-VPTO");
-
   if (isVMIType(type) && !isLayoutAssignedVMIType(type))
     return emitInvariant(
         owner, diagOS,
@@ -343,10 +325,9 @@ LogicalResult verifyNoHiddenVMIAttributeType(Operation *op, NamedAttribute attr,
                                              llvm::raw_ostream *diagOS) {
   if (isFunctionTypeAttr(op, attr))
     return success();
-  if (containsVMIOrPhysicalType(attr.getValue()))
-    return emitInvariant(
-        op, diagOS,
-        "VMI or physical VPTO type appears in a non-signature attribute");
+  if (containsVMIType(attr.getValue()))
+    return emitInvariant(op, diagOS,
+                         "VMI type appears in a non-signature attribute");
   return success();
 }
 
@@ -432,7 +413,7 @@ LogicalResult verifyOperationBoundary(Operation *op,
   if (failed(verifyOperationTypes(op, diagOS)))
     return failure();
 
-  if (!hasVMIOrPhysicalType(op))
+  if (!hasVMIType(op))
     return success();
 
   if (isVMIHelperOp(op))
@@ -453,7 +434,7 @@ LogicalResult verifyLayoutAssignedOperation(Operation *op,
   if (failed(verifyLayoutAssignedOperationTypes(op, diagOS)))
     return failure();
 
-  if (!hasVMIOrPhysicalType(op))
+  if (!hasVMIType(op))
     return success();
 
   if (isVMIHelperOp(op)) {
