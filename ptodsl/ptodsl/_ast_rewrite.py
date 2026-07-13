@@ -383,13 +383,17 @@ class _ControlFlowRewriter:
         rewritten_reversed = []
         live = set(live_after)
         for stmt in reversed(stmts):
+            # Compute liveness from the authored AST before rewrite_stmt mutates
+            # sibling statements in-place, otherwise later rewrites can pollute
+            # earlier live-after analysis.
+            live_before = _live_before_stmt(stmt, live)
             rewritten = self.rewrite_stmt(
                 stmt,
                 live_after=live,
                 allow_loop_control=allow_loop_control,
             )
             rewritten_reversed[:0] = rewritten
-            live = _live_before_stmt(stmt, live)
+            live = live_before
         return rewritten_reversed
 
     def rewrite_stmt(self, stmt, *, live_after, allow_loop_control=False):
