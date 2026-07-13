@@ -25,8 +25,13 @@ _VMI_ROOT = Path(__file__).resolve().parent
 _KERNEL_ROOT = _VMI_ROOT.parent
 _GENERATED_DIR = _KERNEL_ROOT / "generated" / "dequant"
 _REPO_ROOT = Path(__file__).resolve().parents[5]
-_PTOAS_BIN = Path(os.environ.get("PTOAS_BIN", str(_REPO_ROOT / "install" / "bin" / "ptoas")))
-_COMPILED: dict[tuple[str, str], object] = {}
+_PTOAS_BIN = Path(
+    os.environ.get(
+        "PTOAS_BIN",
+        str(_REPO_ROOT / "build" / "tools" / "ptoas" / "ptoas"),
+    )
+)
+_COMPILED: dict[tuple[str, str, int, int], object] = {}
 
 
 def _kernel_for_dst(dst_fmt: str):
@@ -41,24 +46,35 @@ def _kernel_for_dst(dst_fmt: str):
 
 def _prepare_runtime_kernel(case: dict) -> object:
     compile_args = prepare_compile_args(case)
-    cache_key = (compile_args.src_fmt, compile_args.dst_fmt, compile_args.loop_num2vf)
+    cache_key = (
+        compile_args.src_fmt,
+        compile_args.dst_fmt,
+        compile_args.row_block_num,
+        compile_args.col_block_num,
+    )
     compiled = _COMPILED.get(cache_key)
     if compiled is None:
         compiled = _kernel_for_dst(compile_args.dst_fmt).compile(
             SRC_FMT=compile_args.src_fmt,
-            LOOP_NUM2VF=compile_args.loop_num2vf,
+            ROW_BLOCK_NUM=compile_args.row_block_num,
+            COL_BLOCK_NUM=compile_args.col_block_num,
         )
         _COMPILED[cache_key] = compiled
     return compiled
 
 
 def _run_lowering(vmi_path: Path, mi_path: Path) -> str:
-    if not _PTOAS_BIN.is_file():
-        raise FileNotFoundError(f"ptoas not found: {_PTOAS_BIN}")
+    ptoas_bin = _PTOAS_BIN
+    if not ptoas_bin.is_file():
+        fallback = _REPO_ROOT / "install" / "bin" / "ptoas"
+        if fallback.is_file():
+            ptoas_bin = fallback
+        else:
+            raise FileNotFoundError(f"ptoas not found: {_PTOAS_BIN}")
 
     result = subprocess.run(
         [
-            str(_PTOAS_BIN),
+            str(ptoas_bin),
             "--pto-arch=a5",
             "--pto-backend=vpto",
             "--enable-vmi",

@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     import torch
 
 ENTRY_SYMBOL = "anti_mx_quant_tail_axis_compute_data_probe"
-DEFAULT_NAMED_STEM = "dequant_compute_data"
+DEFAULT_NAMED_STEM = "dequant"
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,8 @@ class DequantCompileArgs:
     src_fmt: str
     scale_fmt: str
     dst_fmt: str
+    row_block_num: int
+    col_block_num: int
     loop_num2vf: int
     entry_symbol: str
     case_dir_name: str
@@ -43,6 +45,8 @@ class DequantLaunchArgs:
 
     src_fmt: str
     dst_fmt: str
+    row_block_num: int
+    col_block_num: int
     loop_num2vf: int
     x: "torch.Tensor"
     scale: "torch.Tensor"
@@ -52,6 +56,7 @@ class DequantLaunchArgs:
 def case_dir_name(case: dict[str, object]) -> str:
     return (
         f"fp8_{case['src_fmt']}_scale_{case['scale_fmt']}_out_{case['dst_fmt']}"
+        f"_rb{case['row_block_num']}_cb{case['col_block_num']}"
     )
 
 
@@ -62,6 +67,8 @@ def prepare_compile_args(case: dict[str, object]) -> DequantCompileArgs:
         src_fmt=str(case["src_fmt"]),
         scale_fmt=str(case["scale_fmt"]),
         dst_fmt=str(case["dst_fmt"]),
+        row_block_num=int(case["row_block_num"]),
+        col_block_num=int(case["col_block_num"]),
         loop_num2vf=int(case.get("loop_num2vf", 1)),
         entry_symbol=str(case.get("entry_symbol", ENTRY_SYMBOL)),
         case_dir_name=case_dir_name(case),
@@ -96,11 +103,13 @@ def prepare_launch_args(case: dict[str, object]) -> DequantLaunchArgs:
     dev = device_str()
     dst_dtype = torch_dtype(str(case["dst_fmt"]))
     x = torch.from_numpy(case["x_bits"]).to(torch.uint8).to(dev)
-    scale = torch.from_numpy(case["scale"]).to(torch.float32).to(dev)
+    scale = torch.from_numpy(case["scale_bits"]).to(torch.uint8).to(dev)
     y = empty_npu(case["y_expected"].shape, dst_dtype)
     return DequantLaunchArgs(
         src_fmt=str(case["src_fmt"]),
         dst_fmt=str(case["dst_fmt"]),
+        row_block_num=int(case["row_block_num"]),
+        col_block_num=int(case["col_block_num"]),
         loop_num2vf=int(case.get("loop_num2vf", 1)),
         x=x,
         scale=scale,
