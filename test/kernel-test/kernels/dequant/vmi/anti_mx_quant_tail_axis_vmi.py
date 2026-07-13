@@ -6,38 +6,143 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 
-"""VMI rewrite of AntiMxQuantTailAxis::ComputeData for the FP8 + FP32-scale path.
+"""VMI rewrite of AntiMxQuantTailAxis scale/dequant helpers.
 
-Source region:
+Source regions:
+  test/kernel-test/kernels/dequant/anti_mx_quant_tail_axis.h:313
   test/kernel-test/kernels/dequant/anti_mx_quant_tail_axis.h:380
 
 Current modeling notes:
-  1. The source does ``DIST_DINTLV_B8`` and then immediately interleaves the
+  1. ``ComputeScale`` is expressed in terms of the logical e8m0 scale value
+     rather than replaying the source's temporary zero-fill + interleave
+     choreography. For the fp8 path we materialize `scaleBuffer` as the logical
+     per-element scale expansion consumed by `ComputeData`: each 8-scale
+     half-block becomes one dense 256-lane FP32 vector, with every scale
+     repeated across its corresponding 32-element block.
+  2. The source does ``DIST_DINTLV_B8`` and then immediately interleaves the
      two FP8 registers before FP8-to-FP32 part casts. Logically that is
      equivalent to rebuilding two contiguous 256-lane FP8 chunks, so the VMI
      rewrite models this as two dense FP8 loads and lets ``vcvt`` produce the
      natural deinterleaved=4 FP32 layout directly.
-  2. ``scaleBufAddr`` is still modeled as the logical FP32 scale expansion
-     produced by ``ComputeScale(..., float*)``. Each 64-lane scale chunk is
-     expressed as a grouped zero-stride VMI load that expands to the matching
-     256-lane FP32 half consumed by the FP8 payload.
+  3. ``scaleBufAddr`` therefore holds dense 256-lane scale vectors, and
+     ``ComputeData`` consumes them directly as the logical blockwise-dequant
+     multiplier for each FP8 half.
+  4. The runtime `dequant_vmi_*` kernels now call `ComputeScale` and
+     `ComputeData` explicitly, matching the source `Compute(...)` structure.
 """
 
 from ptodsl import pto
 
 _FP8_HALF_LANES = 256
+_SCALE_LANES = 256
 _CHUNK_LANES = 64
+_BLOCK_SIZE = 32
+_BLOCKS_PER_HALF = _FP8_HALF_LANES // _BLOCK_SIZE
 _SCALE_REPEAT_GROUPS = _FP8_HALF_LANES // _CHUNK_LANES
-_SCALE_LANES_PER_LOOP = 128
+_SCALE_LANES_PER_LOOP = 512
 _ELEMS_PER_LOOP = 512
+_BLOCKS_PER_DATA_LOOP = _ELEMS_PER_LOOP // _BLOCK_SIZE
+_RAW_SCALE_HALF_STRIDE = 32
+_RAW_SCALE_BYTES_PER_LOOP = _RAW_SCALE_HALF_STRIDE * 2
 _X_BYTES_PER_LOOP = _ELEMS_PER_LOOP
 _SCALE_BYTES_PER_LOOP = _SCALE_LANES_PER_LOOP * 4
 _F32_Y_BYTES_PER_LOOP = _ELEMS_PER_LOOP * 4
 _B16_Y_BYTES_PER_LOOP = _ELEMS_PER_LOOP * 2
 
 _X_BASE_ADDR = 0
-_SCALE_BASE_ADDR = 0x4000
-_Y_BASE_ADDR = 0x8000
+_RAW_SCALE_BASE_ADDR = 0x4000
+_SCALE_BASE_ADDR = 0x8000
+_Y_BASE_ADDR = 0x10000
+
+
+def _compute_scale_ub(
+    scale_local_addr: pto.i64,
+    scale_buf_addr: pto.i64,
+    *,
+    DST_FMT: pto.const_expr = "f32",
+    LOOP_NUM2VF: pto.const_expr = 1,
+):
+    scale_src_ptr = pto.castptr(scale_local_addr, pto.ptr(pto.ui8, "ub"))
+
+    if pto.const_expr(DST_FMT == "f32"):
+        scale_dst_ptr = pto.castptr(scale_buf_addr, pto.ptr(pto.f32, "ub"))
+        dst_dtype = pto.f32
+    elif pto.const_expr(DST_FMT == "bf16"):
+        scale_dst_ptr = pto.castptr(scale_buf_addr, pto.ptr(pto.bf16, "ub"))
+        dst_dtype = pto.bf16
+    else:
+        raise ValueError(f"unsupported ComputeScale DST_FMT specialization: {DST_FMT}")
+
+    shift = pto.vmi.vbrc(
+        pto.const(23, dtype=pto.i32),
+        result_type=pto.vmi.vreg(_BLOCKS_PER_HALF, pto.i32),
+    )
+    full_mask = pto.vmi.create_mask(_FP8_HALF_LANES, size=_FP8_HALF_LANES)
+
+    for i in range(LOOP_NUM2VF):
+        raw_scale_off = i * _RAW_SCALE_BYTES_PER_LOOP
+        dst_off = i * _SCALE_LANES_PER_LOOP
+
+        raw_scale_lo = pto.vmi.vload(
+            scale_src_ptr,
+            raw_scale_off,
+            size=1,
+            stride=1,
+            group=_BLOCKS_PER_HALF,
+            result_type=pto.vmi.vreg(_BLOCKS_PER_HALF, pto.ui8),
+        )
+        raw_scale_hi = pto.vmi.vload(
+            scale_src_ptr,
+            raw_scale_off + _RAW_SCALE_HALF_STRIDE,
+            size=1,
+            stride=1,
+            group=_BLOCKS_PER_HALF,
+            result_type=pto.vmi.vreg(_BLOCKS_PER_HALF, pto.ui8),
+        )
+        scale_u32_lo = pto.vmi.vcvt(raw_scale_lo, pto.ui32, sign="U")
+        scale_u32_hi = pto.vmi.vcvt(raw_scale_hi, pto.ui32, sign="U")
+        scale_i32_lo = pto.vmi.vinterpret_cast(
+            scale_u32_lo,
+            result_type=pto.vmi.vreg(_BLOCKS_PER_HALF, pto.i32),
+        )
+        scale_i32_hi = pto.vmi.vinterpret_cast(
+            scale_u32_hi,
+            result_type=pto.vmi.vreg(_BLOCKS_PER_HALF, pto.i32),
+        )
+        scale_bits_lo = pto.vmi.vshl(scale_i32_lo, shift)
+        scale_bits_hi = pto.vmi.vshl(scale_i32_hi, shift)
+        scale_compact_lo = pto.vmi.vinterpret_cast(
+            scale_bits_lo,
+            result_type=pto.vmi.vreg(_BLOCKS_PER_HALF, pto.f32),
+        )
+        scale_compact_hi = pto.vmi.vinterpret_cast(
+            scale_bits_hi,
+            result_type=pto.vmi.vreg(_BLOCKS_PER_HALF, pto.f32),
+        )
+        scale_wide_lo = pto.vmi.vbrc(
+            scale_compact_lo,
+            result_type=pto.vmi.vreg(_FP8_HALF_LANES, pto.f32),
+            group=_BLOCKS_PER_HALF,
+        )
+        scale_wide_hi = pto.vmi.vbrc(
+            scale_compact_hi,
+            result_type=pto.vmi.vreg(_FP8_HALF_LANES, pto.f32),
+            group=_BLOCKS_PER_HALF,
+        )
+
+        if pto.const_expr(DST_FMT == "f32"):
+            pto.vmi.vstore(scale_wide_lo, scale_dst_ptr, dst_off, full_mask)
+            pto.vmi.vstore(scale_wide_hi, scale_dst_ptr, dst_off + _FP8_HALF_LANES, full_mask)
+        else:
+            pto.vmi.vstore(pto.vmi.vcvt(scale_wide_lo, dst_dtype), scale_dst_ptr, dst_off, full_mask)
+            pto.vmi.vstore(
+                pto.vmi.vcvt(scale_wide_hi, dst_dtype),
+                scale_dst_ptr,
+                dst_off + _FP8_HALF_LANES,
+                full_mask,
+            )
+
+
 def _compute_data_ub(
     x_local_addr: pto.i64,
     scale_buf_addr: pto.i64,
@@ -79,23 +184,8 @@ def _compute_data_ub(
         x_hi_f8 = pto.vmi.vload(x_ptr, x_off + _FP8_HALF_LANES, size=_FP8_HALF_LANES)
         x_lo_f32 = pto.vmi.vcvt(x_lo_f8, pto.f32)
         x_hi_f32 = pto.vmi.vcvt(x_hi_f8, pto.f32)
-        # `size` is the logical result width. With `stride=0` and `group=4`,
-        # VMI reuses the same 64-lane scale chunk across 4 groups, so the
-        # source footprint is still one VL chunk rather than 256 distinct loads.
-        scale_lo = pto.vmi.vload(
-            scale_ptr,
-            scale_off,
-            size=_FP8_HALF_LANES,
-            stride=0,
-            group=_SCALE_REPEAT_GROUPS,
-        )
-        scale_hi = pto.vmi.vload(
-            scale_ptr,
-            scale_off + _CHUNK_LANES,
-            size=_FP8_HALF_LANES,
-            stride=0,
-            group=_SCALE_REPEAT_GROUPS,
-        )
+        scale_lo = pto.vmi.vload(scale_ptr, scale_off, size=_FP8_HALF_LANES)
+        scale_hi = pto.vmi.vload(scale_ptr, scale_off + _FP8_HALF_LANES, size=_FP8_HALF_LANES)
         y_lo = pto.vmi.vmul(x_lo_f32, scale_lo, mask256)
         y_hi = pto.vmi.vmul(x_hi_f32, scale_hi, mask256)
 
@@ -119,47 +209,83 @@ def _compute_data_ub(
 
 def _runtime_entry(
     x_gm: pto.ptr(pto.ui8, "gm"),
-    scale_gm: pto.ptr(pto.f32, "gm"),
+    scale_gm: pto.ptr(pto.ui8, "gm"),
     y_gm,
     *,
     SRC_FMT: pto.const_expr = "e4m3",
     DST_FMT: pto.const_expr = "f32",
-    LOOP_NUM2VF: pto.const_expr = 1,
+    ROW_BLOCK_NUM: pto.const_expr = 4,
+    COL_BLOCK_NUM: pto.const_expr = 4,
 ):
+    effective_col_block_num = COL_BLOCK_NUM + (COL_BLOCK_NUM % 2)
+    total_scale_num = ROW_BLOCK_NUM * effective_col_block_num
+    total_block_num = total_scale_num
+    loop_num2vf = (total_block_num + _BLOCKS_PER_DATA_LOOP - 1) // _BLOCKS_PER_DATA_LOOP
+    padded_total_block_num = loop_num2vf * _BLOCKS_PER_DATA_LOOP
+    total_elems = padded_total_block_num * _BLOCK_SIZE
+
     x_ub_ptr = pto.castptr(pto.const(_X_BASE_ADDR, dtype=pto.ui64), pto.ptr(pto.ui8, "ub"))
-    scale_ub_ptr = pto.castptr(pto.const(_SCALE_BASE_ADDR, dtype=pto.ui64), pto.ptr(pto.f32, "ub"))
-    x_bytes = LOOP_NUM2VF * _X_BYTES_PER_LOOP
-    scale_bytes = LOOP_NUM2VF * _SCALE_BYTES_PER_LOOP
+    scale_ub_ptr = pto.castptr(pto.const(_RAW_SCALE_BASE_ADDR, dtype=pto.ui64), pto.ptr(pto.ui8, "ub"))
+    x_bytes = total_elems
+    scale_bytes = loop_num2vf * _RAW_SCALE_BYTES_PER_LOOP
 
     if pto.const_expr(DST_FMT == "f32"):
         y_ub_ptr = pto.castptr(pto.const(_Y_BASE_ADDR, dtype=pto.ui64), pto.ptr(pto.f32, "ub"))
-        y_bytes = LOOP_NUM2VF * _F32_Y_BYTES_PER_LOOP
+        y_bytes = total_elems * 4
     else:
         y_ub_ptr = pto.castptr(
             pto.const(_Y_BASE_ADDR, dtype=pto.ui64),
             pto.ptr(pto.bf16 if pto.const_expr(DST_FMT == "bf16") else pto.f16, "ub"),
         )
-        y_bytes = LOOP_NUM2VF * _B16_Y_BYTES_PER_LOOP
+        y_bytes = total_elems * 2
 
     pto.mte_gm_ub(x_gm, x_ub_ptr, 0, x_bytes, nburst=(1, x_bytes, x_bytes))
     pto.mte_gm_ub(scale_gm, scale_ub_ptr, 0, scale_bytes, nburst=(1, scale_bytes, scale_bytes))
 
     pto.set_flag(pto.Pipe.MTE2, pto.Pipe.V, event_id=0)
     pto.wait_flag(pto.Pipe.MTE2, pto.Pipe.V, event_id=0)
-
+    _compute_scale_ub(
+        pto.const(_RAW_SCALE_BASE_ADDR, dtype=pto.i64),
+        pto.const(_SCALE_BASE_ADDR, dtype=pto.i64),
+        DST_FMT="f32",
+        LOOP_NUM2VF=loop_num2vf,
+    )
     _compute_data_ub(
         pto.const(_X_BASE_ADDR, dtype=pto.i64),
         pto.const(_SCALE_BASE_ADDR, dtype=pto.i64),
         pto.const(_Y_BASE_ADDR, dtype=pto.i64),
         SRC_FMT=SRC_FMT,
         DST_FMT=DST_FMT,
-        LOOP_NUM2VF=LOOP_NUM2VF,
+        LOOP_NUM2VF=loop_num2vf,
     )
 
     pto.set_flag(pto.Pipe.V, pto.Pipe.MTE3, event_id=0)
     pto.wait_flag(pto.Pipe.V, pto.Pipe.MTE3, event_id=0)
     pto.mte_ub_gm(y_ub_ptr, y_gm, y_bytes, nburst=(1, y_bytes, y_bytes))
     pto.pipe_barrier(pto.Pipe.ALL)
+
+
+@pto.jit(
+    name="anti_mx_quant_tail_axis_compute_scale_probe",
+    target="a5",
+    backend="vpto",
+    mode="explicit",
+    kernel_kind="vector",
+    insert_sync=False,
+)
+def anti_mx_quant_tail_axis_compute_scale_probe(
+    scale_local_addr: pto.i64 = _X_BASE_ADDR,
+    scale_buf_addr: pto.i64 = _SCALE_BASE_ADDR,
+    *,
+    DST_FMT: pto.const_expr = "f32",
+    LOOP_NUM2VF: pto.const_expr = 1,
+):
+    _compute_scale_ub(
+        scale_local_addr,
+        scale_buf_addr,
+        DST_FMT=DST_FMT,
+        LOOP_NUM2VF=LOOP_NUM2VF,
+    )
 
 
 @pto.jit(
@@ -199,11 +325,12 @@ def anti_mx_quant_tail_axis_compute_data_probe(
 )
 def dequant_vmi_f32(
     x_gm: pto.ptr(pto.ui8, "gm"),
-    scale_gm: pto.ptr(pto.f32, "gm"),
+    scale_gm: pto.ptr(pto.ui8, "gm"),
     y_gm: pto.ptr(pto.f32, "gm"),
     *,
     SRC_FMT: pto.const_expr = "e4m3",
-    LOOP_NUM2VF: pto.const_expr = 1,
+    ROW_BLOCK_NUM: pto.const_expr = 4,
+    COL_BLOCK_NUM: pto.const_expr = 4,
 ):
     _runtime_entry(
         x_gm,
@@ -211,7 +338,8 @@ def dequant_vmi_f32(
         y_gm,
         SRC_FMT=SRC_FMT,
         DST_FMT="f32",
-        LOOP_NUM2VF=LOOP_NUM2VF,
+        ROW_BLOCK_NUM=ROW_BLOCK_NUM,
+        COL_BLOCK_NUM=COL_BLOCK_NUM,
     )
 
 
@@ -225,11 +353,12 @@ def dequant_vmi_f32(
 )
 def dequant_vmi_bf16(
     x_gm: pto.ptr(pto.ui8, "gm"),
-    scale_gm: pto.ptr(pto.f32, "gm"),
+    scale_gm: pto.ptr(pto.ui8, "gm"),
     y_gm: pto.ptr(pto.bf16, "gm"),
     *,
     SRC_FMT: pto.const_expr = "e4m3",
-    LOOP_NUM2VF: pto.const_expr = 1,
+    ROW_BLOCK_NUM: pto.const_expr = 4,
+    COL_BLOCK_NUM: pto.const_expr = 4,
 ):
     _runtime_entry(
         x_gm,
@@ -237,7 +366,8 @@ def dequant_vmi_bf16(
         y_gm,
         SRC_FMT=SRC_FMT,
         DST_FMT="bf16",
-        LOOP_NUM2VF=LOOP_NUM2VF,
+        ROW_BLOCK_NUM=ROW_BLOCK_NUM,
+        COL_BLOCK_NUM=COL_BLOCK_NUM,
     )
 
 
@@ -251,11 +381,12 @@ def dequant_vmi_bf16(
 )
 def dequant_vmi_f16(
     x_gm: pto.ptr(pto.ui8, "gm"),
-    scale_gm: pto.ptr(pto.f32, "gm"),
+    scale_gm: pto.ptr(pto.ui8, "gm"),
     y_gm: pto.ptr(pto.f16, "gm"),
     *,
     SRC_FMT: pto.const_expr = "e4m3",
-    LOOP_NUM2VF: pto.const_expr = 1,
+    ROW_BLOCK_NUM: pto.const_expr = 4,
+    COL_BLOCK_NUM: pto.const_expr = 4,
 ):
     _runtime_entry(
         x_gm,
@@ -263,5 +394,6 @@ def dequant_vmi_f16(
         y_gm,
         SRC_FMT=SRC_FMT,
         DST_FMT="f16",
-        LOOP_NUM2VF=LOOP_NUM2VF,
+        ROW_BLOCK_NUM=ROW_BLOCK_NUM,
+        COL_BLOCK_NUM=COL_BLOCK_NUM,
     )

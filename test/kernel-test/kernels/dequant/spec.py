@@ -31,8 +31,10 @@ def list_cases(workflow: str) -> dict[str, object]:
         cases = {
             f"{src_fmt}_{dst_fmt}": {
                 "src_fmt": src_fmt,
-                "scale_fmt": "f32",
+                "scale_fmt": "e8m0",
                 "dst_fmt": dst_fmt,
+                "row_block_num": 4,
+                "col_block_num": 4,
                 "loop_num2vf": 1,
                 "default_alias": src_fmt == "e4m3" and dst_fmt == "f32",
             }
@@ -86,4 +88,6 @@ def cycle_fields(case_id: str, case: object, backend: object) -> dict[str, objec
         "src": case["src_fmt"],
         "scale": case["scale_fmt"],
         "dst": case["dst_fmt"],
+        "rb": case["row_block_num"],
+        "cb": case["col_block_num"],
     }
