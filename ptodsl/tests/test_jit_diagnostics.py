@@ -83,6 +83,20 @@ def same_width_float_store_probe():
 
 
 @pto.jit(target="a5")
+def vmi_float_vcadd_missing_reassoc_probe():
+    src = pto.vmi.vbrc(0.0, result_type=pto.vmi.vreg(64, pto.f32))
+    mask = pto.vmi.create_mask(64, size=64)
+    _ = pto.vmi.vcadd(src, mask, result_type=pto.vmi.vreg(1, pto.f32))
+
+
+@pto.jit(target="a5")
+def vmi_float_vcadd_none_reassoc_probe():
+    src = pto.vmi.vbrc(0.0, result_type=pto.vmi.vreg(64, pto.f32))
+    mask = pto.vmi.create_mask(64, size=64)
+    _ = pto.vmi.vcadd(src, mask, result_type=pto.vmi.vreg(1, pto.f32), reassoc=None)
+
+
+@pto.jit(target="a5")
 def bool_loop_bound_probe():
     with pto.for_(0, True, step=1):
         pto.pipe_barrier(pto.Pipe.ALL)
@@ -598,6 +612,21 @@ def main() -> None:
         "cannot coerce between different floating-point types of the same width",
         "f16",
         "bf16",
+    )
+    expect_raises(
+        vmi_float_vcadd_missing_reassoc_probe.compile,
+        TypeError,
+        "pto.vmi.vcadd(...)",
+        "floating-point vectors",
+        "reassoc",
+        "reassoc=True or reassoc=False",
+    )
+    expect_raises(
+        vmi_float_vcadd_none_reassoc_probe.compile,
+        TypeError,
+        "pto.vmi.vcadd(...)",
+        "True or False",
+        "received None",
     )
     expect_raises(
         bool_loop_bound_probe.compile,
