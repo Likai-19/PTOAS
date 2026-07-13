@@ -1,0 +1,23 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not ptoas --emit-pto-ir %s 2>&1 | FileCheck %s
+
+module {
+  func.func @vmi_vintlv_lane_mismatch_invalid(
+      %a: !pto.vmi.vreg<64xf32>,
+      %b: !pto.vmi.vreg<32xf32>,
+      %mask: !pto.vmi.mask<64xb32>) {
+    %lo, %hi = pto.vmi.vintlv %a, %b, %mask
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<32xf32>,
+          !pto.vmi.mask<64xb32> -> !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+    return
+  }
+}
+
+// CHECK: requires all VMI data values to have the same logical lane count

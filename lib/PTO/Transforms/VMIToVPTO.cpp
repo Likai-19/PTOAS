@@ -7326,6 +7326,174 @@ struct OneToNVMIBinaryOpPattern : OpConversionPattern<SourceOp> {
   }
 };
 
+template <typename SourceOp, typename TargetOp>
+struct OneToNVMIInterleaveOpPattern : OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+      SourceOp op,
+      typename OpConversionPattern<SourceOp>::OneToNOpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    ValueRange lhsParts = adaptor.getLhs();
+    ValueRange rhsParts = adaptor.getRhs();
+    ValueRange maskParts = adaptor.getMask();
+    FailureOr<SmallVector<Type>> maybeLowTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    FailureOr<SmallVector<Type>> maybeHighTypes =
+        getConvertedResultTypes(op, 1, *this->getTypeConverter());
+    if (failed(maybeLowTypes) || failed(maybeHighTypes))
+      return failure();
+    SmallVector<Type> lowTypes = std::move(*maybeLowTypes);
+    SmallVector<Type> highTypes = std::move(*maybeHighTypes);
+    if (lhsParts.size() != rhsParts.size() ||
+        lhsParts.size() != lowTypes.size() ||
+        lhsParts.size() != highTypes.size())
+      return rewriter.notifyMatchFailure(op,
+                                         "physical interleave arity mismatch");
+    if (!maskParts.empty() && maskParts.size() != lhsParts.size())
+      return rewriter.notifyMatchFailure(
+          op, "physical interleave mask arity mismatch");
+
+    auto lhsType = cast<VMIVRegType>(op.getLhs().getType());
+    auto rhsType = cast<VMIVRegType>(op.getRhs().getType());
+    auto maskType = cast<VMIMaskType>(op.getMask().getType());
+    auto lowType = cast<VMIVRegType>(op.getLow().getType());
+    auto highType = cast<VMIVRegType>(op.getHigh().getType());
+    VMILayoutSupport supports;
+    FailureOr<VMIInterleaveLayoutFact> fact;
+    if constexpr (std::is_same_v<SourceOp, VMIVintlvOp>) {
+      fact = supports.getVintlvLayoutFactForLayouts(
+          lhsType, rhsType, maskType, lowType, highType);
+    } else {
+      fact = supports.getVdintlvLayoutFactForLayouts(
+          lhsType, rhsType, maskType, lowType, highType);
+    }
+    if (failed(fact))
+      return rewriter.notifyMatchFailure(
+          op, "unsupported interleave layout relation");
+
+    auto isContiguous = [](VMILayoutAttr layout) {
+      return layout && layout.isContiguous() && layout.getLaneStride() == 1;
+    };
+    auto getElementDeintFactor = [](VMILayoutAttr layout) -> int64_t {
+      if (layout && layout.isContiguous() && layout.getLaneStride() == 1)
+        return 1;
+      if (layout && layout.isDeinterleaved() &&
+          layout.getBlockElems() == 1 && layout.getLaneStride() == 1)
+        return layout.getFactor();
+      return 0;
+    };
+
+    bool allContiguous = isContiguous(fact->lhsLayout) &&
+                         isContiguous(fact->rhsLayout) &&
+                         isContiguous(fact->maskLayout) &&
+                         isContiguous(fact->lowLayout) &&
+                         isContiguous(fact->highLayout);
+    if (allContiguous) {
+      if (lhsParts.size() != 1 || rhsParts.size() != 1 ||
+          lowTypes.size() != 1 || highTypes.size() != 1)
+        return rewriter.notifyMatchFailure(
+            op, "single-chunk interleave expects one physical part");
+      if (!maskParts.empty() && !isa<MaskType>(maskParts.front().getType()))
+        return rewriter.notifyMatchFailure(
+            op, "single-chunk interleave mask part type mismatch");
+      if (!isa<VRegType>(lowTypes.front()) ||
+          !isa<VRegType>(highTypes.front()) ||
+          lhsParts.front().getType() != lowTypes.front() ||
+          rhsParts.front().getType() != lowTypes.front() ||
+          highTypes.front() != lowTypes.front())
+        return rewriter.notifyMatchFailure(
+            op, "single-chunk interleave part type mismatch");
+      auto interleave = rewriter.create<TargetOp>(
+          op.getLoc(), lowTypes.front(), highTypes.front(), lhsParts.front(),
+          rhsParts.front());
+      SmallVector<Value, 2> directResults = {interleave.getLow(),
+                                             interleave.getHigh()};
+      replaceOpWithFlatConvertedValues(rewriter, op, directResults,
+                                       *this->getTypeConverter());
+      return success();
+    }
+
+    int64_t inputFactor = getElementDeintFactor(fact->lhsLayout);
+    int64_t outputFactor = getElementDeintFactor(fact->lowLayout);
+    bool zeroCopyVintlv = std::is_same_v<SourceOp, VMIVintlvOp> &&
+                          inputFactor > 0 &&
+                          fact->rhsLayout == fact->lhsLayout &&
+                          fact->maskLayout == fact->lhsLayout &&
+                          fact->highLayout == fact->lowLayout &&
+                          outputFactor == 2 * inputFactor;
+    bool zeroCopyVdintlv = std::is_same_v<SourceOp, VMIVdintlvOp> &&
+                           inputFactor > 0 &&
+                           fact->rhsLayout == fact->lhsLayout &&
+                           fact->maskLayout == fact->lhsLayout &&
+                           fact->highLayout == fact->lowLayout &&
+                           inputFactor == 2 * outputFactor;
+    if (!zeroCopyVintlv && !zeroCopyVdintlv)
+      return rewriter.notifyMatchFailure(
+          op, "unsupported interleave physical layout relation");
+
+    SmallVector<Value> results;
+    results.reserve(lhsParts.size() + rhsParts.size());
+    if (zeroCopyVintlv) {
+      if (lhsParts.empty() || lhsParts.size() % (2 * inputFactor) != 0)
+        return rewriter.notifyMatchFailure(
+            op, "zero-copy vintlv expects input groups with even chunk count");
+      size_t groupChunks = lhsParts.size() / inputFactor;
+      size_t halfGroupChunks = groupChunks / 2;
+      for (int64_t group = 0; group < inputFactor; ++group) {
+        size_t offset = group * groupChunks;
+        llvm::append_range(
+            results,
+            lhsParts.slice(offset, halfGroupChunks));
+        llvm::append_range(
+            results,
+            rhsParts.slice(offset, halfGroupChunks));
+      }
+      for (int64_t group = 0; group < inputFactor; ++group) {
+        size_t offset = group * groupChunks + halfGroupChunks;
+        llvm::append_range(
+            results,
+            lhsParts.slice(offset, halfGroupChunks));
+        llvm::append_range(
+            results,
+            rhsParts.slice(offset, halfGroupChunks));
+      }
+    } else {
+      if (lhsParts.empty() || lhsParts.size() % inputFactor != 0)
+        return rewriter.notifyMatchFailure(
+            op, "zero-copy vdintlv expects complete input layout groups");
+      size_t groupChunks = lhsParts.size() / inputFactor;
+      for (int64_t group = 0; group < outputFactor; ++group) {
+        size_t offset = 2 * group * groupChunks;
+        llvm::append_range(results, lhsParts.slice(offset, groupChunks));
+        llvm::append_range(results, rhsParts.slice(offset, groupChunks));
+      }
+      for (int64_t group = 0; group < outputFactor; ++group) {
+        size_t offset = (2 * group + 1) * groupChunks;
+        llvm::append_range(results, lhsParts.slice(offset, groupChunks));
+        llvm::append_range(results, rhsParts.slice(offset, groupChunks));
+      }
+    }
+
+    SmallVector<Type> resultTypes;
+    resultTypes.reserve(lowTypes.size() + highTypes.size());
+    llvm::append_range(resultTypes, lowTypes);
+    llvm::append_range(resultTypes, highTypes);
+    if (results.size() != resultTypes.size())
+      return rewriter.notifyMatchFailure(
+          op, "zero-copy interleave result arity mismatch");
+    for (auto [value, resultType] : llvm::zip_equal(results, resultTypes)) {
+      if (value.getType() != resultType)
+        return rewriter.notifyMatchFailure(
+            op, "zero-copy interleave part type mismatch");
+    }
+
+    replaceOpWithFlatConvertedValues(rewriter, op, results,
+                                     *this->getTypeConverter());
+    return success();
+  }
+};
+
 struct OneToNVMIFmaOpPattern : OpConversionPattern<VMIFmaOp> {
   using OpConversionPattern<VMIFmaOp>::OpConversionPattern;
 
@@ -10093,6 +10261,8 @@ void populateVMIConversionPatterns(
       OneToNVMIExtIOpPattern<VMIExtSIOp>, OneToNVMIExtIOpPattern<VMIExtUIOp>,
       OneToNVMITruncIOpPattern, OneToNVMIFPToSIOpPattern,
       OneToNVMISIToFPOpPattern, OneToNVMIBitcastOpPattern,
+      OneToNVMIInterleaveOpPattern<VMIVintlvOp, VintlvOp>,
+      OneToNVMIInterleaveOpPattern<VMIVdintlvOp, VdintlvOp>,
       OneToNVMIChannelSplitOpPattern, OneToNVMIChannelMergeOpPattern,
       OneToNVMIShuffleOpPattern>(typeConverter, patterns.getContext());
   patterns.add<OneToNVMIGroupBroadcastLoadOpPattern>(

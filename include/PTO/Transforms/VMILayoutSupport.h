@@ -57,11 +57,29 @@ enum class VMICastLayoutPort {
   Result,
 };
 
+enum class VMIInterleaveLayoutPort {
+  Lhs,
+  Rhs,
+  Mask,
+  Low,
+  High,
+};
+
 struct VMICastLayoutFact {
   VMILayoutAttr sourceLayout;
   VMILayoutAttr resultLayout;
   int64_t sourceBits = 0;
   int64_t resultBits = 0;
+};
+
+struct VMIInterleaveLayoutFact {
+  VMILayoutAttr lhsLayout;
+  VMILayoutAttr rhsLayout;
+  VMILayoutAttr maskLayout;
+  VMILayoutAttr lowLayout;
+  VMILayoutAttr highLayout;
+  int64_t elementCount = 0;
+  int64_t lanesPerPart = 0;
 };
 
 struct VMIBitcastLayoutFact {
@@ -206,6 +224,36 @@ public:
   FailureOr<VMILayoutAttr> getWidenSourceLayoutForResultLayout(
       VMIVRegType sourceType, VMIVRegType resultType,
       VMILayoutAttr requestedResultLayout, std::string *reason = nullptr) const;
+
+  FailureOr<VMIInterleaveLayoutFact>
+  getPreferredVintlvLayoutFact(VMIVRegType valueType,
+                               std::string *reason = nullptr) const;
+
+  FailureOr<VMIInterleaveLayoutFact>
+  getPreferredVdintlvLayoutFact(VMIVRegType valueType,
+                                std::string *reason = nullptr) const;
+
+  FailureOr<SmallVector<VMIInterleaveLayoutFact, 4>>
+  getVintlvLayoutFactsForLayout(VMIVRegType valueType,
+                                VMIInterleaveLayoutPort port,
+                                VMILayoutAttr layout,
+                                std::string *reason = nullptr) const;
+
+  FailureOr<SmallVector<VMIInterleaveLayoutFact, 4>>
+  getVdintlvLayoutFactsForLayout(VMIVRegType valueType,
+                                 VMIInterleaveLayoutPort port,
+                                 VMILayoutAttr layout,
+                                 std::string *reason = nullptr) const;
+
+  FailureOr<VMIInterleaveLayoutFact> getVintlvLayoutFactForLayouts(
+      VMIVRegType lhsType, VMIVRegType rhsType, VMIMaskType maskType,
+      VMIVRegType lowType, VMIVRegType highType,
+      std::string *reason = nullptr) const;
+
+  FailureOr<VMIInterleaveLayoutFact> getVdintlvLayoutFactForLayouts(
+      VMIVRegType lhsType, VMIVRegType rhsType, VMIMaskType maskType,
+      VMIVRegType lowType, VMIVRegType highType,
+      std::string *reason = nullptr) const;
 
   FailureOr<VMIGroupSlotLayoutFact>
   getGroupSlotLoadLayoutFact(VMIVRegType resultType, int64_t numGroups,

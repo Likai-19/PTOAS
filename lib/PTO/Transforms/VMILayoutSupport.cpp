@@ -100,6 +100,19 @@ struct MaskGranularityPattern {
   uint8_t mask = 0;
 };
 
+struct PhysicalChunkCountPattern {
+  int64_t values[4] = {};
+  int64_t count = 0;
+};
+
+template <int64_t... Counts>
+static constexpr PhysicalChunkCountPattern chunk() {
+  static_assert(sizeof...(Counts) <= 4, "too many physical chunk counts");
+  static_assert(((Counts == 1 || Counts == 2 || Counts == 4) && ...),
+                "unsupported physical chunk count");
+  return {{Counts...}, static_cast<int64_t>(sizeof...(Counts))};
+}
+
 static constexpr uint64_t elementBitsMask(int64_t bits) {
   return bits == 8    ? 1ull << 0
          : bits == 16 ? 1ull << 1
@@ -385,6 +398,15 @@ struct LegalCastLayoutPattern {
   LayoutPattern resultLayout;
 };
 
+struct InterleaveLayoutPattern {
+  PhysicalChunkCountPattern chunks;
+  LayoutPattern lhsLayout;
+  LayoutPattern rhsLayout;
+  LayoutPattern maskLayout;
+  LayoutPattern lowLayout;
+  LayoutPattern highLayout;
+};
+
 static constexpr PreferredCastLayoutPattern kPreferredCastLayoutPatterns[] = {
     // Exact rows override the default legal relation for small shapes where the
     // compact lane-stride form is the natural cast layout.
@@ -445,6 +467,18 @@ static constexpr LegalCastLayoutPattern kLegalCastLayoutPatterns[] = {
     {bits<32>(), bits<16>(), gs(8), gs(8, 2)},
     {bits<32>(), bits<8>(), gs(1), gs(1)},
     {bits<32>(), bits<8>(), gs(8), gs(8, 4)},
+};
+
+static constexpr InterleaveLayoutPattern kVdintlvLayoutPatterns[] = {
+    {chunk<2, 4>(), d(2, 1), d(2, 1), d(2, 1), c(), c()},
+    {chunk<4>(), d(4, 1), d(4, 1), d(4, 1), d(2, 1), d(2, 1)},
+    {chunk<1>(), c(), c(), c(), c(), c()},
+};
+
+static constexpr InterleaveLayoutPattern kVintlvLayoutPatterns[] = {
+    {chunk<2, 4>(), c(), c(), c(), d(2, 1), d(2, 1)},
+    {chunk<4>(), d(2, 1), d(2, 1), d(2, 1), d(4, 1), d(4, 1)},
+    {chunk<1>(), c(), c(), c(), c(), c()},
 };
 
 struct SupplementalCastLayoutPattern {
@@ -735,6 +769,47 @@ struct GroupLayoutKey {
   VMIGroupBlockClass blockClass = VMIGroupBlockClass::OneBlock;
 };
 
+struct InterleaveLayoutKey {
+  int64_t elementCount = 0;
+  int64_t lanesPerPart = 0;
+  int64_t physicalChunkCount = 0;
+};
+
+static bool matchesPhysicalChunkCountPattern(
+    PhysicalChunkCountPattern pattern, InterleaveLayoutKey key) {
+  if (key.physicalChunkCount <= 0)
+    return false;
+  for (int64_t i = 0; i < pattern.count; ++i)
+    if (pattern.values[i] == key.physicalChunkCount)
+      return true;
+  return false;
+}
+
+static FailureOr<InterleaveLayoutKey>
+buildInterleaveLayoutKey(VMIVRegType valueType, std::string *reason) {
+  auto fail = [&](const Twine &message) -> FailureOr<InterleaveLayoutKey> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  FailureOr<int64_t> lanesPerPart =
+      getDataLanesPerPart(valueType.getElementType());
+  if (failed(lanesPerPart))
+    return fail("interleave layout requires element type with known physical "
+                "lanes per part");
+  int64_t elementCount = valueType.getElementCount();
+  if (elementCount <= 0)
+    return fail("interleave layout requires positive logical lane count");
+  int64_t physicalChunkCount =
+      elementCount <= *lanesPerPart
+          ? 1
+          : (elementCount % *lanesPerPart == 0
+                 ? elementCount / *lanesPerPart
+                 : 0);
+  return InterleaveLayoutKey{elementCount, *lanesPerPart, physicalChunkCount};
+}
+
 static bool matchesGroupBlockPattern(GroupBlockPattern pattern,
                                      GroupLayoutKey key) {
   if (pattern.kind == GroupBlockPatternKind::FullPartMultiple) {
@@ -811,6 +886,20 @@ static VMIGroupBroadcastLayoutFact materializeGroupBroadcastLayoutFact(
   fact.groupSize = groupSize;
   fact.lanesPerPart = lanesPerPart;
   fact.vcgBlockElems = vcgBlockElems;
+  return fact;
+}
+
+static VMIInterleaveLayoutFact materializeInterleaveLayoutFact(
+    MLIRContext *ctx, const InterleaveLayoutPattern &pattern,
+    InterleaveLayoutKey key) {
+  VMIInterleaveLayoutFact fact;
+  fact.lhsLayout = materializeLayoutPattern(ctx, pattern.lhsLayout);
+  fact.rhsLayout = materializeLayoutPattern(ctx, pattern.rhsLayout);
+  fact.maskLayout = materializeLayoutPattern(ctx, pattern.maskLayout);
+  fact.lowLayout = materializeLayoutPattern(ctx, pattern.lowLayout);
+  fact.highLayout = materializeLayoutPattern(ctx, pattern.highLayout);
+  fact.elementCount = key.elementCount;
+  fact.lanesPerPart = key.lanesPerPart;
   return fact;
 }
 
@@ -1346,6 +1435,184 @@ FailureOr<VMILayoutAttr> VMILayoutSupport::getWidenSourceLayoutForResultLayout(
   if (failed(fact))
     return failure();
   return fact->sourceLayout;
+}
+
+static FailureOr<VMIInterleaveLayoutFact> getPreferredInterleaveLayoutFactImpl(
+    ArrayRef<InterleaveLayoutPattern> patterns, VMIVRegType valueType,
+    std::string *reason) {
+  auto fail = [&](const Twine &message) -> FailureOr<VMIInterleaveLayoutFact> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  FailureOr<InterleaveLayoutKey> key =
+      buildInterleaveLayoutKey(valueType, reason);
+  if (failed(key))
+    return failure();
+
+  for (const InterleaveLayoutPattern &pattern : patterns) {
+    if (!matchesPhysicalChunkCountPattern(pattern.chunks, *key))
+      continue;
+    return materializeInterleaveLayoutFact(valueType.getContext(), pattern,
+                                           *key);
+  }
+
+  return fail("requires a preferred interleave layout table row");
+}
+
+static FailureOr<SmallVector<VMIInterleaveLayoutFact, 4>>
+getInterleaveLayoutFactsForLayoutImpl(
+    ArrayRef<InterleaveLayoutPattern> patterns, VMIVRegType valueType,
+    VMIInterleaveLayoutPort port, VMILayoutAttr layout,
+    std::string *reason) {
+  auto fail = [&](const Twine &message)
+      -> FailureOr<SmallVector<VMIInterleaveLayoutFact, 4>> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  if (!layout)
+    return fail("requires assigned interleave layout query port");
+
+  FailureOr<InterleaveLayoutKey> key =
+      buildInterleaveLayoutKey(valueType, reason);
+  if (failed(key))
+    return failure();
+
+  SmallVector<VMIInterleaveLayoutFact, 4> facts;
+  for (const InterleaveLayoutPattern &pattern : patterns) {
+    if (!matchesPhysicalChunkCountPattern(pattern.chunks, *key))
+      continue;
+    VMIInterleaveLayoutFact candidate =
+        materializeInterleaveLayoutFact(valueType.getContext(), pattern, *key);
+
+    VMILayoutAttr candidateLayout;
+    switch (port) {
+    case VMIInterleaveLayoutPort::Lhs:
+      candidateLayout = candidate.lhsLayout;
+      break;
+    case VMIInterleaveLayoutPort::Rhs:
+      candidateLayout = candidate.rhsLayout;
+      break;
+    case VMIInterleaveLayoutPort::Mask:
+      candidateLayout = candidate.maskLayout;
+      break;
+    case VMIInterleaveLayoutPort::Low:
+      candidateLayout = candidate.lowLayout;
+      break;
+    case VMIInterleaveLayoutPort::High:
+      candidateLayout = candidate.highLayout;
+      break;
+    }
+    if (candidateLayout == layout)
+      facts.push_back(candidate);
+  }
+
+  if (facts.empty())
+    return fail("interleave layout query port does not match a legal layout "
+                "table row for the vector shape");
+  return facts;
+}
+
+static FailureOr<VMIInterleaveLayoutFact> getInterleaveLayoutFactForLayoutsImpl(
+    ArrayRef<InterleaveLayoutPattern> patterns, VMIVRegType lhsType,
+    VMIVRegType rhsType, VMIMaskType maskType, VMIVRegType lowType,
+    VMIVRegType highType, std::string *reason) {
+  auto fail = [&](const Twine &message) -> FailureOr<VMIInterleaveLayoutFact> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  if (lhsType.getElementCount() != rhsType.getElementCount() ||
+      lhsType.getElementCount() != lowType.getElementCount() ||
+      lhsType.getElementCount() != highType.getElementCount() ||
+      lhsType.getElementCount() != maskType.getElementCount())
+    return fail("interleave layout requires all ports to share logical lane "
+                "count");
+  if (lhsType.getElementType() != rhsType.getElementType() ||
+      lhsType.getElementType() != lowType.getElementType() ||
+      lhsType.getElementType() != highType.getElementType())
+    return fail("interleave layout requires all data ports to share element "
+                "type");
+
+  VMILayoutAttr lhsLayout = lhsType.getLayoutAttr();
+  VMILayoutAttr rhsLayout = rhsType.getLayoutAttr();
+  VMILayoutAttr maskLayout = maskType.getLayoutAttr();
+  VMILayoutAttr lowLayout = lowType.getLayoutAttr();
+  VMILayoutAttr highLayout = highType.getLayoutAttr();
+  if (!lhsLayout || !rhsLayout || !maskLayout || !lowLayout || !highLayout)
+    return fail("requires assigned lhs/rhs/mask/low/high layouts");
+
+  FailureOr<SmallVector<VMIInterleaveLayoutFact, 4>> facts =
+      getInterleaveLayoutFactsForLayoutImpl(
+          patterns, lhsType, VMIInterleaveLayoutPort::Lhs, lhsLayout, reason);
+  if (failed(facts))
+    return failure();
+
+  std::optional<VMIInterleaveLayoutFact> selected;
+  for (const VMIInterleaveLayoutFact &fact : *facts) {
+    if (fact.rhsLayout != rhsLayout || fact.maskLayout != maskLayout ||
+        fact.lowLayout != lowLayout || fact.highLayout != highLayout)
+      continue;
+    if (selected)
+      return fail("interleave layout query produced ambiguous layout facts");
+    selected = fact;
+  }
+  if (!selected)
+    return fail("lhs/rhs/mask/low/high layouts do not match a legal "
+                "interleave layout table row");
+  return *selected;
+}
+
+FailureOr<VMIInterleaveLayoutFact>
+VMILayoutSupport::getPreferredVintlvLayoutFact(
+    VMIVRegType valueType, std::string *reason) const {
+  return getPreferredInterleaveLayoutFactImpl(kVintlvLayoutPatterns, valueType,
+                                              reason);
+}
+
+FailureOr<VMIInterleaveLayoutFact>
+VMILayoutSupport::getPreferredVdintlvLayoutFact(
+    VMIVRegType valueType, std::string *reason) const {
+  return getPreferredInterleaveLayoutFactImpl(kVdintlvLayoutPatterns, valueType,
+                                              reason);
+}
+
+FailureOr<SmallVector<VMIInterleaveLayoutFact, 4>>
+VMILayoutSupport::getVintlvLayoutFactsForLayout(
+    VMIVRegType valueType, VMIInterleaveLayoutPort port, VMILayoutAttr layout,
+    std::string *reason) const {
+  return getInterleaveLayoutFactsForLayoutImpl(
+      kVintlvLayoutPatterns, valueType, port, layout, reason);
+}
+
+FailureOr<SmallVector<VMIInterleaveLayoutFact, 4>>
+VMILayoutSupport::getVdintlvLayoutFactsForLayout(
+    VMIVRegType valueType, VMIInterleaveLayoutPort port, VMILayoutAttr layout,
+    std::string *reason) const {
+  return getInterleaveLayoutFactsForLayoutImpl(
+      kVdintlvLayoutPatterns, valueType, port, layout, reason);
+}
+
+FailureOr<VMIInterleaveLayoutFact>
+VMILayoutSupport::getVintlvLayoutFactForLayouts(
+    VMIVRegType lhsType, VMIVRegType rhsType, VMIMaskType maskType,
+    VMIVRegType lowType, VMIVRegType highType, std::string *reason) const {
+  return getInterleaveLayoutFactForLayoutsImpl(
+      kVintlvLayoutPatterns, lhsType, rhsType, maskType, lowType, highType,
+      reason);
+}
+
+FailureOr<VMIInterleaveLayoutFact>
+VMILayoutSupport::getVdintlvLayoutFactForLayouts(
+    VMIVRegType lhsType, VMIVRegType rhsType, VMIMaskType maskType,
+    VMIVRegType lowType, VMIVRegType highType, std::string *reason) const {
+  return getInterleaveLayoutFactForLayoutsImpl(
+      kVdintlvLayoutPatterns, lhsType, rhsType, maskType, lowType, highType,
+      reason);
 }
 
 FailureOr<VMILoadLayoutFact>
