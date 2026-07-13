@@ -2939,22 +2939,37 @@ pto.vmi.cmpf / cmpi:
     materialize pto.pset_b8/b16/b32 "PAT_ALL" as the seed predicate
     canonicalize predicate to VPTO cmp_mode eq/ne/lt/le/gt/ge
     emit pto.vcmp(lhs_part, rhs_part, seed_mask, cmp_mode)
-  supported cmpf ordered aliases:
+  supported cmpf predicates:
+    eq/ne/lt/le/gt/ge pass through
     oeq -> eq
     one -> ne
     olt -> lt
     ole -> le
     ogt -> gt
     oge -> ge
-  supported cmpi signed aliases:
+  supported cmpi predicates:
+    eq/ne pass through
+    ult -> lt on unsigned integer carriers
+    ule -> le on unsigned integer carriers
+    ugt -> gt on unsigned integer carriers
+    uge -> ge on unsigned integer carriers
     slt -> lt
     sle -> le
     sgt -> gt
     sge -> ge
+  if the physical vreg element signedness does not match the predicate, insert pto.vbitcast to the matching
+  si/ui integer carrier before pto.vcmp.
+  unsupported cmpi bare relational predicates lt/le/gt/ge must emit VMI-UNSUPPORTED because integer signedness
+  must be explicit.
   unsupported floating-point predicates such as ord/uno/ult/ule/ugt/uge must emit VMI-UNSUPPORTED until NaN-aware
   predicate construction is designed.
-  unsupported unsigned integer predicates ult/ule/ugt/uge must emit VMI-UNSUPPORTED until VPTO integer signedness
-  materialization is explicit.
+
+pto.vmi.vcmp / vcmps:
+  unified vmi_new integer compare uses type-driven signedness:
+    signed/signless integer element types map lt/le/gt/ge to legacy slt/sle/sgt/sge
+    unsigned integer element types map lt/le/gt/ge to legacy ult/ule/ugt/uge
+    explicit integer predicates slt/sle/sgt/sge/ult/ule/ugt/uge are rejected at the unified op level
+  legacy cmpi remains predicate-driven and requires explicit signed/unsigned relational forms.
 
 pto.vmi.active_prefix_index:
   semantic:
@@ -3528,11 +3543,14 @@ for each physical part:
   lower add/cmp/select to corresponding VPTO op sequence
   preserve source/result physical ordering
   cmp predicates must be canonicalized before creating pto.vcmp:
-    eq/ne/lt/le/gt/ge pass through
+    cmpf eq/ne/lt/le/gt/ge pass through
     ordered FP aliases oeq/one/olt/ole/ogt/oge map to eq/ne/lt/le/gt/ge
+    cmpi eq/ne pass through
+    unsigned integer aliases ult/ule/ugt/uge map to lt/le/gt/ge on unsigned carriers
     signed integer aliases slt/sle/sgt/sge map to lt/le/gt/ge
+    insert pto.vbitcast to si/ui integer carriers when the physical vreg element signedness does not match
+    cmpi bare relational predicates lt/le/gt/ge are unsupported because integer signedness must be explicit
     unordered/NaN-sensitive FP predicates are unsupported until represented explicitly
-    unsigned integer predicates are unsupported until signedness is represented explicitly
 ```
 
 Producer lowering：

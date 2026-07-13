@@ -2418,9 +2418,7 @@ static bool isSupportedVCmpPredicate(StringRef cmpMode) {
   return cmpMode == "eq" || cmpMode == "ne" || cmpMode == "lt" ||
          cmpMode == "le" || cmpMode == "gt" || cmpMode == "ge" ||
          cmpMode == "oeq" || cmpMode == "one" || cmpMode == "olt" ||
-         cmpMode == "ole" || cmpMode == "ogt" || cmpMode == "oge" ||
-         cmpMode == "slt" || cmpMode == "sle" || cmpMode == "sgt" ||
-         cmpMode == "sge";
+         cmpMode == "ole" || cmpMode == "ogt" || cmpMode == "oge";
 }
 
 //===----------------------------------------------------------------------===//
@@ -3788,6 +3786,9 @@ LogicalResult VMIVcmpOp::verify() {
   if (!isVMIFloatLikeType(eltTy) && !isVMIIntegerLikeType(eltTy))
     return emitOpError("requires floating-point-like or integer-like VMI "
                        "element type for unified compare");
+  if (isVMIIntegerLikeType(eltTy) && getCmp().starts_with("o"))
+    return emitOpError("requires integer compare predicate eq/ne/lt/le/gt/ge; "
+                       "signedness is selected by the integer element type");
 
   if (failed(verifyAllSameVRegShapeAndLayout(getOperation(), {lhsType, rhsType},
                                              /*requireSameElement=*/true)))
@@ -3797,7 +3798,7 @@ LogicalResult VMIVcmpOp::verify() {
   if (!isSupportedVCmpPredicate(getCmp()))
     return emitOpError("unsupported compare predicate '")
            << getCmp() << "'; expected eq/ne/lt/le/gt/ge, "
-           << "oeq/one/olt/ole/ogt/oge, or slt/sle/sgt/sge";
+           << "or oeq/one/olt/ole/ogt/oge";
 
   // Validate pmode.
   if (auto pmode = getPmode()) {
@@ -3828,6 +3829,9 @@ LogicalResult VMIVcmpsOp::verify() {
   if (!isVMIFloatLikeType(eltTy) && !isVMIIntegerLikeType(eltTy))
     return emitOpError("requires floating-point-like or integer-like VMI "
                        "element type for unified compare");
+  if (isVMIIntegerLikeType(eltTy) && getCmp().starts_with("o"))
+    return emitOpError("requires integer compare predicate eq/ne/lt/le/gt/ge; "
+                       "signedness is selected by the integer element type");
 
   // Scalar type must match vector element type.
   Type scalarTy = getScalar().getType();
@@ -3840,7 +3844,7 @@ LogicalResult VMIVcmpsOp::verify() {
   if (!isSupportedVCmpPredicate(getCmp()))
     return emitOpError("unsupported compare predicate '")
            << getCmp() << "'; expected eq/ne/lt/le/gt/ge, "
-           << "oeq/one/olt/ole/ogt/oge, or slt/sle/sgt/sge";
+           << "or oeq/one/olt/ole/ogt/oge";
 
   // Validate pmode.
   if (auto pmode = getPmode()) {

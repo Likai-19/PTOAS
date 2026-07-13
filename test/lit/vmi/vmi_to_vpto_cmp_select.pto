@@ -36,7 +36,7 @@ module {
       %a: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
       %b: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>)
       -> (!pto.mask<b32>, !pto.mask<b32>) {
-    %mask = pto.vmi.cmpi "ge", %a, %b
+    %mask = pto.vmi.cmpi "sge", %a, %b
         : !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
           !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>

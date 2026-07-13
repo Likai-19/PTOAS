@@ -185,9 +185,10 @@ static Value createReduceNeutralInit(OpBuilder &builder, Location loc,
 }
 
 /// Map a unified vcmp `cmp` mode to the predicate string for legacy
-/// cmpf/cmpi.  Float operands use ordered predicates (olt, oeq, …);
-/// integer operands use signed predicates (slt, seq, …) or bare eq/ne.
-static std::string mapCmpPredicate(StringRef cmp, bool isFloat) {
+/// cmpf/cmpi. Float operands use ordered predicates (olt, oeq, ...);
+/// integer operands select signedness from the element type.
+static std::string mapCmpPredicate(StringRef cmp, Type elemType,
+                                   bool isFloat) {
   if (isFloat) {
     // Already ordered/unordered — pass through.
     if (cmp.starts_with("o") || cmp.starts_with("u"))
@@ -200,7 +201,10 @@ static std::string mapCmpPredicate(StringRef cmp, bool isFloat) {
   // eq/ne are valid for both fp and int without prefix.
   if (cmp == "eq" || cmp == "ne")
     return cmp.str();
-  return ("s" + cmp).str(); // e.g. "lt" → "slt"
+  auto intType = dyn_cast<IntegerType>(elemType);
+  if (intType && intType.isUnsigned())
+    return ("u" + cmp).str(); // e.g. "lt" -> "ult"
+  return ("s" + cmp).str();   // e.g. "lt" -> "slt"
 }
 
 /// Return true when \p elemType is a floating-point type.
@@ -313,7 +317,7 @@ static LogicalResult lowerVCmp(VMIVcmpOp op, OpBuilder &builder) {
   Type elemType = getVMIElementType(op.getLhs());
   bool isFloat = isFloatType(elemType);
   StringRef cmpMode = op.getCmp();
-  std::string predicate = mapCmpPredicate(cmpMode, isFloat);
+  std::string predicate = mapCmpPredicate(cmpMode, elemType, isFloat);
 
   // Build legacy cmpf or cmpi.
   Value rawMask;
@@ -355,7 +359,7 @@ static LogicalResult lowerVCmps(VMIVcmpsOp op, OpBuilder &builder) {
   Type elemType = getVMIElementType(op.getSrc());
   bool isFloat = isFloatType(elemType);
   StringRef cmpMode = op.getCmp();
-  std::string predicate = mapCmpPredicate(cmpMode, isFloat);
+  std::string predicate = mapCmpPredicate(cmpMode, elemType, isFloat);
 
   // 1. Broadcast scalar to vector.
   Value brc = builder.create<VMIBroadcastOp>(loc, srcVmiType, scalar)
