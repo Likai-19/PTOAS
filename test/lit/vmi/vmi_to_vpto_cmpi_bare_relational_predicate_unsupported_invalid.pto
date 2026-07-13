@@ -9,13 +9,13 @@
 // RUN: not pto-test-opt %s -vmi-to-vpto 2>&1 | FileCheck %s
 
 module {
-  func.func @vmi_to_vpto_cmp_predicate_unsupported_invalid(
-      %a: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
-      %b: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>)
+  func.func @vmi_to_vpto_cmpi_bare_relational_predicate_unsupported_invalid(
+      %a: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+      %b: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>)
       -> (!pto.mask<b32>, !pto.mask<b32>) {
-    %mask = pto.vmi.cmpf "uno", %a, %b
-        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
-          !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+    %mask = pto.vmi.cmpi "lt", %a, %b
+        : !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
     %m0, %m1 = "pto.vmi.unpack"(%mask)
         : (!pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>)
@@ -24,5 +24,5 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} compare predicate uno cannot be lowered to pto.vcmp
-// CHECK-SAME: supported predicates are eq/ne/lt/le/gt/ge and ordered FP forms
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} compare predicate lt cannot be lowered to pto.vcmp
+// CHECK-SAME: supported predicates are eq/ne, unsigned integer forms ult/ule/ugt/uge, and signed integer forms slt/sle/sgt/sge

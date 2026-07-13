@@ -9,11 +9,12 @@
 // RUN: not pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto 2>&1 | FileCheck %s
 
 module {
-  func.func @vmi_to_vpto_cmpi_unsigned_predicate_unsupported_invalid(
+  func.func @vmi_new_to_vpto_cmpi_explicit_unsigned_predicate_unsupported_invalid(
       %a: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
-      %b: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
-      %seed: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>)
+      %b: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>)
       -> (!pto.mask<b32>, !pto.mask<b32>) {
+    %seed = pto.vmi.pset "PAT_ALL"
+        : !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
     %mask = pto.vmi.vcmp %a, %b, %seed {cmp = "ult"}
         : !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
           !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
@@ -27,3 +28,4 @@ module {
 }
 
 // CHECK: unsupported compare predicate 'ult'
+// CHECK-SAME: expected eq/ne/lt/le/gt/ge, or oeq/one/olt/ole/ogt/oge

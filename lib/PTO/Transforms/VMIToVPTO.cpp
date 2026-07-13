@@ -3195,42 +3195,86 @@ std::optional<std::string> getPointStoreDistToken(Type elementType) {
   return (Twine("1PT_B") + Twine(elementBits)).str();
 }
 
-std::optional<StringRef> getVPTOCmpMode(StringRef predicate) {
+struct VPTOCmpMode {
+  StringRef mode;
+  std::optional<IntegerType::SignednessSemantics> signedness;
+};
+
+std::optional<VPTOCmpMode> getVPTOCmpFMode(StringRef predicate) {
   if (predicate == "eq" || predicate == "ne" || predicate == "lt" ||
       predicate == "le" || predicate == "gt" || predicate == "ge")
-    return predicate;
+    return VPTOCmpMode{predicate, std::nullopt};
   if (predicate == "oeq")
-    return StringRef("eq");
+    return VPTOCmpMode{StringRef("eq"), std::nullopt};
   if (predicate == "one")
-    return StringRef("ne");
+    return VPTOCmpMode{StringRef("ne"), std::nullopt};
   if (predicate == "olt")
-    return StringRef("lt");
+    return VPTOCmpMode{StringRef("lt"), std::nullopt};
   if (predicate == "ole")
-    return StringRef("le");
+    return VPTOCmpMode{StringRef("le"), std::nullopt};
   if (predicate == "ogt")
-    return StringRef("gt");
+    return VPTOCmpMode{StringRef("gt"), std::nullopt};
   if (predicate == "oge")
-    return StringRef("ge");
-  if (predicate == "slt")
-    return StringRef("lt");
-  if (predicate == "sle")
-    return StringRef("le");
-  if (predicate == "sgt")
-    return StringRef("gt");
-  if (predicate == "sge")
-    return StringRef("ge");
+    return VPTOCmpMode{StringRef("ge"), std::nullopt};
   return std::nullopt;
 }
 
+std::optional<VPTOCmpMode> getVPTOCmpIMode(StringRef predicate) {
+  if (predicate == "eq" || predicate == "ne")
+    return VPTOCmpMode{predicate, std::nullopt};
+  if (predicate == "ult")
+    return VPTOCmpMode{
+        StringRef("lt"), IntegerType::SignednessSemantics::Unsigned};
+  if (predicate == "ule")
+    return VPTOCmpMode{
+        StringRef("le"), IntegerType::SignednessSemantics::Unsigned};
+  if (predicate == "ugt")
+    return VPTOCmpMode{
+        StringRef("gt"), IntegerType::SignednessSemantics::Unsigned};
+  if (predicate == "uge")
+    return VPTOCmpMode{
+        StringRef("ge"), IntegerType::SignednessSemantics::Unsigned};
+  if (predicate == "slt")
+    return VPTOCmpMode{
+        StringRef("lt"), IntegerType::SignednessSemantics::Signed};
+  if (predicate == "sle")
+    return VPTOCmpMode{
+        StringRef("le"), IntegerType::SignednessSemantics::Signed};
+  if (predicate == "sgt")
+    return VPTOCmpMode{
+        StringRef("gt"), IntegerType::SignednessSemantics::Signed};
+  if (predicate == "sge")
+    return VPTOCmpMode{
+        StringRef("ge"), IntegerType::SignednessSemantics::Signed};
+  return std::nullopt;
+}
+
+template <typename SourceOp>
+std::optional<VPTOCmpMode> getVPTOCmpMode(StringRef predicate) {
+  if constexpr (std::is_same_v<SourceOp, VMICmpIOp>)
+    return getVPTOCmpIMode(predicate);
+  else
+    return getVPTOCmpFMode(predicate);
+}
+
+template <typename SourceOp>
+StringRef getSupportedComparePredicateMessage() {
+  if constexpr (std::is_same_v<SourceOp, VMICmpIOp>)
+    return "eq/ne, unsigned integer forms ult/ule/ugt/uge, and signed "
+           "integer forms slt/sle/sgt/sge";
+  else
+    return "eq/ne/lt/le/gt/ge and ordered FP forms oeq/one/olt/ole/ogt/oge";
+}
+
+template <typename SourceOp>
 LogicalResult checkSupportedComparePredicate(Operation *op,
                                              StringRef predicate) {
-  if (getVPTOCmpMode(predicate))
+  if (getVPTOCmpMode<SourceOp>(predicate))
     return success();
   return op->emitError()
          << kVMIDiagUnsupportedPrefix << "compare predicate " << predicate
          << " cannot be lowered to pto.vcmp; supported predicates are "
-            "eq/ne/lt/le/gt/ge, ordered FP forms oeq/one/olt/ole/ogt/oge, "
-            "and signed integer forms slt/sle/sgt/sge";
+         << getSupportedComparePredicateMessage<SourceOp>();
 }
 
 struct OneToNVMIUnpackOpPattern : OpConversionPattern<VMIUnpackOp> {
@@ -3288,6 +3332,23 @@ FailureOr<VRegType> getUnsignedCarrierVRegType(MLIRContext *ctx,
   auto elementType = IntegerType::get(
       ctx, elementBits, IntegerType::SignednessSemantics::Unsigned);
   return VRegType::get(ctx, 2048 / elementBits, elementType);
+}
+
+FailureOr<VRegType>
+getSignednessCarrierVRegType(VRegType inputType,
+                             IntegerType::SignednessSemantics signedness) {
+  auto inputElementType = dyn_cast<IntegerType>(inputType.getElementType());
+  if (!inputElementType)
+    return failure();
+  if ((signedness == IntegerType::SignednessSemantics::Signed &&
+       !inputElementType.isUnsigned()) ||
+      (signedness == IntegerType::SignednessSemantics::Unsigned &&
+       inputElementType.isUnsigned()))
+    return inputType;
+  auto carrierElementType = IntegerType::get(
+      inputType.getContext(), inputElementType.getWidth(), signedness);
+  return VRegType::get(inputType.getContext(), inputType.getElementCount(),
+                       carrierElementType);
 }
 
 FailureOr<Value> bitcastVReg(Location loc, Value value, Type resultType,
@@ -7686,15 +7747,14 @@ struct OneToNVMICmpOpPattern : OpConversionPattern<SourceOp> {
       SourceOp op,
       typename OpConversionPattern<SourceOp>::OneToNOpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    std::optional<StringRef> cmpMode = getVPTOCmpMode(op.getPredicate());
+    std::optional<VPTOCmpMode> cmpMode =
+        getVPTOCmpMode<SourceOp>(op.getPredicate());
     if (!cmpMode)
       return op.emitOpError()
              << kVMIDiagUnsupportedPrefix << "compare predicate "
              << op.getPredicate()
              << " cannot be lowered to pto.vcmp; supported predicates are "
-                "eq/ne/lt/le/gt/ge, ordered FP forms "
-                "oeq/one/olt/ole/ogt/oge, and signed integer forms "
-                "slt/sle/sgt/sge";
+             << getSupportedComparePredicateMessage<SourceOp>();
 
     ValueRange lhsParts = adaptor.getLhs();
     ValueRange rhsParts = adaptor.getRhs();
@@ -7712,8 +7772,8 @@ struct OneToNVMICmpOpPattern : OpConversionPattern<SourceOp> {
     for (auto [lhs, rhs, resultType] :
          llvm::zip_equal(lhsParts, rhsParts, resultTypes)) {
       auto maskType = dyn_cast<MaskType>(resultType);
-      if (!maskType || lhs.getType() != rhs.getType() ||
-          !isa<VRegType>(lhs.getType()))
+      auto lhsType = dyn_cast<VRegType>(lhs.getType());
+      if (!maskType || lhs.getType() != rhs.getType() || !lhsType)
         return rewriter.notifyMatchFailure(op,
                                            "physical cmp part type mismatch");
       FailureOr<Value> seedMask =
@@ -7721,10 +7781,26 @@ struct OneToNVMICmpOpPattern : OpConversionPattern<SourceOp> {
       if (failed(seedMask))
         return rewriter.notifyMatchFailure(
             op, "unsupported mask type for all-true cmp seed");
+      if (cmpMode->signedness) {
+        FailureOr<VRegType> carrierType =
+            getSignednessCarrierVRegType(lhsType, *cmpMode->signedness);
+        if (failed(carrierType))
+          return rewriter.notifyMatchFailure(
+              op, "unsupported integer compare signedness carrier");
+        FailureOr<Value> carrierLhs =
+            bitcastVReg(op.getLoc(), lhs, *carrierType, rewriter);
+        FailureOr<Value> carrierRhs =
+            bitcastVReg(op.getLoc(), rhs, *carrierType, rewriter);
+        if (failed(carrierLhs) || failed(carrierRhs))
+          return rewriter.notifyMatchFailure(
+              op, "failed to materialize integer compare signedness carrier");
+        lhs = *carrierLhs;
+        rhs = *carrierRhs;
+      }
       results.push_back(rewriter
                             .create<VcmpOp>(op.getLoc(), resultType, lhs, rhs,
                                             *seedMask,
-                                            rewriter.getStringAttr(*cmpMode))
+                                            rewriter.getStringAttr(cmpMode->mode))
                             .getResult());
     }
 
@@ -11357,7 +11433,8 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
           op, "pto.vmi.cmpf", cast<VMIVRegType>(cmpf.getLhs().getType()));
       if (physical.wasInterrupted())
         return physical;
-      if (succeeded(checkSupportedComparePredicate(op, cmpf.getPredicate())))
+      if (succeeded(checkSupportedComparePredicate<VMICmpFOp>(
+              op, cmpf.getPredicate())))
         return WalkResult::advance();
       return WalkResult::interrupt();
     }
@@ -11367,7 +11444,8 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
           op, "pto.vmi.cmpi", cast<VMIVRegType>(cmpi.getLhs().getType()));
       if (physical.wasInterrupted())
         return physical;
-      if (succeeded(checkSupportedComparePredicate(op, cmpi.getPredicate())))
+      if (succeeded(checkSupportedComparePredicate<VMICmpIOp>(
+              op, cmpi.getPredicate())))
         return WalkResult::advance();
       return WalkResult::interrupt();
     }

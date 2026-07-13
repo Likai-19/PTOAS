@@ -95,7 +95,7 @@ module {
     %iv0 = pto.vmi.vbrc %i0 : i32 -> !pto.vmi.vreg<128xi32>
     %iadd = pto.vmi.vadd %iv0, %iv0
         : !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32> -> !pto.vmi.vreg<128xi32>
-    %icmp = pto.vmi.vcmp %iv0, %iv0, %mask {cmp = "slt"}
+    %icmp = pto.vmi.vcmp %iv0, %iv0, %mask {cmp = "lt"}
         : !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32>, !pto.vmi.mask<128xpred> -> !pto.vmi.mask<128xpred>
 
     return %add, %cmp, %sel, %trunc, %merged, %layouted_roundtrip, %mask_layout,
