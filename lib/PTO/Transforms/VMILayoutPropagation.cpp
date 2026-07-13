@@ -320,9 +320,13 @@ public:
       return queryReduce(reduce, changedValue, changedLayout, changedOperand);
     if (auto reduce = dyn_cast<VMIGroupReduceMaxFOp>(op))
       return queryReduce(reduce, changedValue, changedLayout, changedOperand);
+    if (auto reduce = dyn_cast<VMIGroupReduceMinFOp>(op))
+      return queryReduce(reduce, changedValue, changedLayout, changedOperand);
     if (auto reduce = dyn_cast<VMIGroupReduceAddIOp>(op))
       return queryReduce(reduce, changedValue, changedLayout, changedOperand);
     if (auto reduce = dyn_cast<VMIGroupReduceMaxIOp>(op))
+      return queryReduce(reduce, changedValue, changedLayout, changedOperand);
+    if (auto reduce = dyn_cast<VMIGroupReduceMinIOp>(op))
       return queryReduce(reduce, changedValue, changedLayout, changedOperand);
     return failure();
   }
@@ -666,8 +670,9 @@ const VMILayoutTransfer *getTransfer(Operation *op) {
     return &loadTransfer;
   if (isa<VMIGroupLoadOp>(op))
     return &groupLoadTransfer;
-  if (isa<VMIGroupReduceAddFOp, VMIGroupReduceMaxFOp, VMIGroupReduceAddIOp,
-          VMIGroupReduceMaxIOp>(op))
+  if (isa<VMIGroupReduceAddFOp, VMIGroupReduceMaxFOp,
+          VMIGroupReduceMinFOp, VMIGroupReduceAddIOp,
+          VMIGroupReduceMaxIOp, VMIGroupReduceMinIOp>(op))
     return &groupReduceTransfer;
   if (isa<VMIGroupSlotLoadOp>(op))
     return &groupSlotLoadTransfer;

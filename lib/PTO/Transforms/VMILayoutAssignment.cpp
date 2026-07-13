@@ -497,8 +497,10 @@ struct LayoutSolver {
       return solved;
     if (value.getDefiningOp<VMIGroupReduceAddFOp>() ||
         value.getDefiningOp<VMIGroupReduceMaxFOp>() ||
+        value.getDefiningOp<VMIGroupReduceMinFOp>() ||
         value.getDefiningOp<VMIGroupReduceAddIOp>() ||
-        value.getDefiningOp<VMIGroupReduceMaxIOp>())
+        value.getDefiningOp<VMIGroupReduceMaxIOp>() ||
+        value.getDefiningOp<VMIGroupReduceMinIOp>())
       return getPreferredGroupSlotsLayout(type, numGroups);
     if (type.getElementCount() == numGroups) {
       std::optional<int64_t> stride = getConstantIndexValue(rowStride);
@@ -833,6 +835,26 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
+      if (auto reduce = dyn_cast<VMIReduceMaxIOp>(op)) {
+        requestDataUse(reduce.getSourceMutable(), getContiguousLayout(),
+                       /*late=*/false, DataLayoutSeedPhase::Reduce);
+        requestDataUse(reduce.getInitMutable(), getContiguousLayout(),
+                       /*late=*/false, DataLayoutSeedPhase::Reduce);
+        if (failed(setNaturalLayout(reduce.getResult(), getContiguousLayout(),
+                                    op, DataLayoutSeedPhase::Reduce)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto reduce = dyn_cast<VMIReduceMinIOp>(op)) {
+        requestDataUse(reduce.getSourceMutable(), getContiguousLayout(),
+                       /*late=*/false, DataLayoutSeedPhase::Reduce);
+        requestDataUse(reduce.getInitMutable(), getContiguousLayout(),
+                       /*late=*/false, DataLayoutSeedPhase::Reduce);
+        if (failed(setNaturalLayout(reduce.getResult(), getContiguousLayout(),
+                                    op, DataLayoutSeedPhase::Reduce)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
       if (auto reduce = dyn_cast<VMIGroupReduceAddFOp>(op)) {
         auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
         auto resultType = cast<VMIVRegType>(reduce.getResult().getType());
@@ -887,6 +909,33 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
+      if (auto reduce = dyn_cast<VMIGroupReduceMinFOp>(op)) {
+        auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
+        auto resultType = cast<VMIVRegType>(reduce.getResult().getType());
+        int64_t numGroups = reduce.getNumGroupsAttr().getInt();
+        VMILayoutSupport supports;
+        FailureOr<VMIGroupReduceLayoutFact> fact =
+            supports.getPreferredGroupReduceLayoutFact(sourceType, numGroups);
+        VMILayoutAttr sourceLayout =
+            succeeded(fact) ? fact->sourceLayout : getContiguousLayout();
+        DataLayoutSeedPhase usePhase =
+            succeeded(fact)
+                ? getGroupReduceUseSeedPhase(sourceType, numGroups, *fact)
+                : DataLayoutSeedPhase::Reduce;
+        requestDataUse(reduce.getSourceMutable(), sourceLayout, /*late=*/false,
+                       usePhase);
+        if (failed(requestMaskUse(reduce.getMaskMutable(), sourceLayout, op,
+                                  usePhase)))
+          return WalkResult::interrupt();
+        if (failed(setNaturalLayout(
+                reduce.getResult(),
+                succeeded(fact)
+                    ? fact->resultLayout
+                    : getPreferredGroupSlotsLayout(resultType, numGroups),
+                op, DataLayoutSeedPhase::Reduce)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
       if (auto reduce = dyn_cast<VMIGroupReduceAddIOp>(op)) {
         auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
         auto resultType = cast<VMIVRegType>(reduce.getResult().getType());
@@ -915,6 +964,33 @@ struct LayoutSolver {
         return WalkResult::advance();
       }
       if (auto reduce = dyn_cast<VMIGroupReduceMaxIOp>(op)) {
+        auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
+        auto resultType = cast<VMIVRegType>(reduce.getResult().getType());
+        int64_t numGroups = reduce.getNumGroupsAttr().getInt();
+        VMILayoutSupport supports;
+        FailureOr<VMIGroupReduceLayoutFact> fact =
+            supports.getPreferredGroupReduceLayoutFact(sourceType, numGroups);
+        VMILayoutAttr sourceLayout =
+            succeeded(fact) ? fact->sourceLayout : getContiguousLayout();
+        DataLayoutSeedPhase usePhase =
+            succeeded(fact)
+                ? getGroupReduceUseSeedPhase(sourceType, numGroups, *fact)
+                : DataLayoutSeedPhase::Reduce;
+        requestDataUse(reduce.getSourceMutable(), sourceLayout, /*late=*/false,
+                       usePhase);
+        if (failed(requestMaskUse(reduce.getMaskMutable(), sourceLayout, op,
+                                  usePhase)))
+          return WalkResult::interrupt();
+        if (failed(setNaturalLayout(
+                reduce.getResult(),
+                succeeded(fact)
+                    ? fact->resultLayout
+                    : getPreferredGroupSlotsLayout(resultType, numGroups),
+                op, DataLayoutSeedPhase::Reduce)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto reduce = dyn_cast<VMIGroupReduceMinIOp>(op)) {
         auto sourceType = cast<VMIVRegType>(reduce.getSource().getType());
         auto resultType = cast<VMIVRegType>(reduce.getResult().getType());
         int64_t numGroups = reduce.getNumGroupsAttr().getInt();

@@ -409,6 +409,26 @@ def VMIReduceMinFOp : VMI_Op<"reduce_minf"> {
   let assemblyFormat = "$source `,` $init `,` $mask attr-dict `:` type($source) `,` type($init) `,` type($mask) `->` type($result)";
 }
 
+def VMIReduceMaxIOp : VMI_Op<"reduce_maxi"> {
+  let summary = "VMI masked integer maximum reduction with a 1-lane vector init";
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                       VMI_VRegTypeConstraint:$init,
+                       VMI_MaskTypeConstraint:$mask);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `,` $init `,` $mask attr-dict `:` type($source) `,` type($init) `,` type($mask) `->` type($result)";
+}
+
+def VMIReduceMinIOp : VMI_Op<"reduce_mini"> {
+  let summary = "VMI masked integer minimum reduction with a 1-lane vector init";
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                       VMI_VRegTypeConstraint:$init,
+                       VMI_MaskTypeConstraint:$mask);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `,` $init `,` $mask attr-dict `:` type($source) `,` type($init) `,` type($mask) `->` type($result)";
+}
+
 def VMIGroupReduceAddFOp : VMI_Op<"group_reduce_addf"> {
   let summary = "VMI masked floating-point add reduction within fixed logical groups";
   let arguments = (ins VMI_VRegTypeConstraint:$source,
@@ -430,6 +450,16 @@ def VMIGroupReduceMaxFOp : VMI_Op<"group_reduce_maxf"> {
   let assemblyFormat = "$source `,` $mask attr-dict `:` type($source) `,` type($mask) `->` type($result)";
 }
 
+def VMIGroupReduceMinFOp : VMI_Op<"group_reduce_minf"> {
+  let summary = "VMI masked floating-point minimum reduction within fixed logical groups";
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                       VMI_MaskTypeConstraint:$mask,
+                       I64Attr:$num_groups);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `,` $mask attr-dict `:` type($source) `,` type($mask) `->` type($result)";
+}
+
 def VMIGroupReduceAddIOp : VMI_Op<"group_reduce_addi"> {
   let summary = "VMI masked integer add reduction within fixed logical groups";
   let arguments = (ins VMI_VRegTypeConstraint:$source,
@@ -442,6 +472,16 @@ def VMIGroupReduceAddIOp : VMI_Op<"group_reduce_addi"> {
 
 def VMIGroupReduceMaxIOp : VMI_Op<"group_reduce_maxi"> {
   let summary = "VMI masked integer maximum reduction within fixed logical groups";
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                       VMI_MaskTypeConstraint:$mask,
+                       I64Attr:$num_groups);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source `,` $mask attr-dict `:` type($source) `,` type($mask) `->` type($result)";
+}
+
+def VMIGroupReduceMinIOp : VMI_Op<"group_reduce_mini"> {
+  let summary = "VMI masked integer minimum reduction within fixed logical groups";
   let arguments = (ins VMI_VRegTypeConstraint:$source,
                        VMI_MaskTypeConstraint:$mask,
                        I64Attr:$num_groups);

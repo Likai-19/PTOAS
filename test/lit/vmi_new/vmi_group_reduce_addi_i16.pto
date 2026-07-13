@@ -8,17 +8,18 @@
 // FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
 // for the full text of the License.
 
-// RUN: not pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment 2>&1 | FileCheck %s
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
 
 module {
-  func.func @direct_i8_group_reduce_invalid(
-      %source: !pto.vmi.vreg<256xi8>,
-      %mask: !pto.vmi.mask<256xpred>) {
+  func.func @group_reduce_addi_i16(
+      %source: !pto.vmi.vreg<128xi16>,
+      %mask: !pto.vmi.mask<128xpred>) {
     %sum = pto.vmi.vcadd %source, %mask {group = 8}
-        : !pto.vmi.vreg<256xi8>, !pto.vmi.mask<256xpred>
-        -> !pto.vmi.vreg<8xi8>
+        : !pto.vmi.vreg<128xi16>, !pto.vmi.mask<128xpred>
+        -> !pto.vmi.vreg<8xi16>
     return
   }
 }
 
-// CHECK: requires i32 accumulator element type; cast i8/i16 storage to i32 before grouped reduction because integer reduction widens narrow inputs
+// CHECK-LABEL: func.func @group_reduce_addi_i16(
+// CHECK: pto.vcgadd {{.*}} : !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>
