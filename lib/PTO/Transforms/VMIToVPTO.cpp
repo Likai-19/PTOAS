@@ -8978,6 +8978,73 @@ struct OneToNVMIDhistOpPattern : OpConversionPattern<VMIDhistOp> {
   }
 };
 
+struct OneToNVMIChistOpPattern : OpConversionPattern<VMIChistOp> {
+  using OpConversionPattern<VMIChistOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(VMIChistOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    ValueRange accParts = adaptor.getAcc();
+    ValueRange sourceParts = adaptor.getSource();
+    ValueRange maskParts = adaptor.getMask();
+    if (accParts.size() != 2 || sourceParts.empty() ||
+        sourceParts.size() != maskParts.size())
+      return rewriter.notifyMatchFailure(
+          op, "expected two accumulator parts and matching source/mask chunks");
+
+    auto loType = dyn_cast<VRegType>(accParts[0].getType());
+    auto hiType = dyn_cast<VRegType>(accParts[1].getType());
+    if (!loType || loType != hiType)
+      return rewriter.notifyMatchFailure(op,
+                                         "expected matching ui16 acc parts");
+    auto sourceType = cast<VMIVRegType>(op.getSource().getType());
+    FailureOr<int64_t> lanesPerPart =
+        getDataLanesPerPart(sourceType.getElementType());
+    if (failed(lanesPerPart))
+      return rewriter.notifyMatchFailure(op, "failed to compute source lanes");
+
+    Location loc = op.getLoc();
+    Value bin0 = createI32Constant(loc, 0, rewriter);
+    Value bin1 = createI32Constant(loc, 1, rewriter);
+    Value lo = accParts[0];
+    Value hi = accParts[1];
+
+    for (size_t index = 0, e = sourceParts.size(); index < e; ++index) {
+      Value source = sourceParts[index];
+      Value userMask = maskParts[index];
+      auto maskType = dyn_cast<MaskType>(userMask.getType());
+      if (!maskType || !maskType.isB8())
+        return rewriter.notifyMatchFailure(op, "expected b8 source mask");
+
+      Value chunkMask = userMask;
+      int64_t firstLane = static_cast<int64_t>(index) * *lanesPerPart;
+      int64_t activeLanes = std::min<int64_t>(
+          *lanesPerPart, sourceType.getElementCount() - firstLane);
+      if (activeLanes < *lanesPerPart) {
+        FailureOr<Value> validMask = createPrefixMaskForActiveLanes(
+            loc, maskType, activeLanes, rewriter);
+        FailureOr<Value> allMask = createAllTrueMask(loc, maskType, rewriter);
+        if (failed(validMask) || failed(allMask))
+          return rewriter.notifyMatchFailure(
+              op, "failed to materialize tail-valid b8 mask");
+        chunkMask =
+            rewriter
+                .create<PandOp>(loc, maskType, chunkMask, *validMask, *allMask)
+                .getResult();
+      }
+
+      lo = rewriter.create<Chistv2Op>(loc, loType, lo, source, chunkMask, bin0)
+               .getResult();
+      hi = rewriter.create<Chistv2Op>(loc, hiType, hi, source, chunkMask, bin1)
+               .getResult();
+    }
+
+    replaceOpWithFlatConvertedValues(rewriter, op, SmallVector<Value>{lo, hi},
+                                     *this->getTypeConverter());
+    return success();
+  }
+};
+
 template <typename SourceOp, typename ChunkReduceOp, typename CombineOp>
 struct OneToNVMIReduceMinMaxOpPattern : OpConversionPattern<SourceOp> {
   using OpConversionPattern<SourceOp>::OpConversionPattern;
@@ -10401,6 +10468,7 @@ void populateVMIConversionPatterns(
       OneToNVMICompressOpPattern, OneToNVMICompressStoreOpPattern,
       OneToNVMIReduceAddIOpPattern, OneToNVMIReduceAddFOpPattern,
       OneToNVMIGroupBroadcastOpPattern, OneToNVMIDhistOpPattern,
+      OneToNVMIChistOpPattern,
       OneToNVMIReduceMinMaxOpPattern<VMIReduceMaxFOp, VcmaxOp, VmaxOp>,
       OneToNVMIReduceMinMaxOpPattern<VMIReduceMinFOp, VcminOp, VminOp>,
       OneToNVMIReduceMinMaxOpPattern<VMIReduceMaxIOp, VcmaxOp, VmaxOp>,
@@ -11098,8 +11166,8 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
         return WalkResult::advance();
       hist.emitError()
           << kVMIDiagUnsupportedPrefix
-          << "pto.vmi.chist requires a verified CHISTv2 range semantics "
-             "contract before lowering ("
+          << "pto.vmi.chist requires contiguous Nxui8 source, contiguous b8 "
+             "mask, and contiguous 256xui16 acc/result ("
           << reason << ")";
       return WalkResult::interrupt();
     }
