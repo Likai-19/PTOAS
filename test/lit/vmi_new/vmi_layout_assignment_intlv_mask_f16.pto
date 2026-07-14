@@ -1,0 +1,49 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+
+module {
+  func.func @vmi_layout_assignment_intlv_mask_f16(
+      %a: !pto.vmi.vreg<64xf16>,
+      %b: !pto.vmi.vreg<64xf16>) {
+    %c64 = arith.constant 64 : index
+    %mask = pto.vmi.create_mask %c64 : index -> !pto.vmi.mask<64xpred>
+    %even, %odd = pto.vmi.vdintlv %a, %b, %mask
+        : !pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16>, !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16>
+    %lo, %hi = pto.vmi.vintlv %even, %odd, %mask
+        : !pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16>, !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16>
+    return
+  }
+}
+
+// ASSIGN-LABEL: func.func @vmi_layout_assignment_intlv_mask_f16(
+// ASSIGN-SAME: %[[A:.*]]: !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous>>, %[[B:.*]]: !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[MASK:.*]] = pto.vmi.create_mask
+// ASSIGN-SAME: -> !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[M16_0:.*]] = pto.vmi.ensure_mask_granularity %[[MASK]]
+// ASSIGN-SAME: !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>> -> !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[EVEN:.*]], %[[ODD:.*]] = pto.vmi.vdintlv %[[A]], %[[B]], %[[M16_0]]
+// ASSIGN-SAME: !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[M16_1:.*]] = pto.vmi.ensure_mask_granularity %[[MASK]]
+// ASSIGN-SAME: !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>> -> !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[LO:.*]], %[[HI:.*]] = pto.vmi.vintlv %[[EVEN]], %[[ODD]], %[[M16_1]]
+// ASSIGN-SAME: !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous>>
+
+// LOWER-LABEL: func.func @vmi_layout_assignment_intlv_mask_f16(
+// LOWER: pto.pge_b32 "PAT_ALL"
+// LOWER: pto.ppack
+// LOWER: pto.vdintlv
+// LOWER: pto.ppack
+// LOWER: pto.vintlv
+// LOWER-NOT: pto.vmi.
+// LOWER-NOT: !pto.vmi.
+// LOWER-NOT: unrealized_conversion_cast
