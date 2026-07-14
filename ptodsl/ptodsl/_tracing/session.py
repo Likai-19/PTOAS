@@ -218,7 +218,13 @@ class TraceSession:
 
     def validate_surface_value_access(self, value) -> None:
         """Reject inline-subkernel SSA values that escaped their outlined helper body."""
-        record = self._escaped_inline_values.get(value)
+        try:
+            record = self._escaped_inline_values.get(value)
+        except TypeError:
+            raw_value = getattr(value, "_value", None)
+            if raw_value is None:
+                return
+            record = self._escaped_inline_values.get(raw_value)
         if record is None:
             return
         role, type_text = record

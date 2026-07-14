@@ -167,6 +167,20 @@ def _maybe_cast_tile_buf_type(type_obj):
         return None
 
 
+def _maybe_cast_mask_type(type_obj):
+    try:
+        return _pto.MaskType(type_obj)
+    except Exception:
+        return None
+
+
+def _maybe_cast_vmi_mask_type(type_obj):
+    try:
+        return _pto.VMIMaskType(type_obj)
+    except Exception:
+        return None
+
+
 def wrap_surface_value(
     value,
     *,
@@ -189,6 +203,8 @@ def wrap_surface_value(
             offsets=offsets,
             sizes=sizes,
         )
+    if _maybe_cast_mask_type(type_obj) is not None or _maybe_cast_vmi_mask_type(type_obj) is not None:
+        return MaskValue(value)
     if _maybe_cast_tile_buf_type(type_obj) is not None:
         return TileValue(value, **(tile_metadata or {}))
     try:
@@ -352,6 +368,10 @@ def _emit_vec_binary_op(op_name: str, lhs, rhs):
     if kind != "float":
         raise TypeError(f"PTODSL VecValue operator '{op_name}' currently supports only floating-point vectors")
     return VecValue(emit_runtime_binary_op(op_name, lhs_raw, rhs_raw))
+
+
+class MaskValue(_SurfaceValue):
+    """Concrete authored wrapper for PTO / VMI mask SSA values."""
 
 
 class MaskResultValue(_SurfaceValue):
