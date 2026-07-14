@@ -75,9 +75,11 @@ def artifact_case_dir(root: Path, case: dict[str, object], *, backend_name: str)
 def prepare_launch_args(case: dict, *, cycle: bool = False) -> RopeLaunchArgs:
     """Convert one rope case into prepared device tensors and launch metadata."""
 
+    import torch
+
     dtype = case["dtype"]
     x_dtype = torch_dtype(dtype)
-    cs_dtype = torch.float16 if dtype == "bf16" else x_dtype
+    cs_dtype = torch_dtype("f16") if dtype == "bf16" else x_dtype
     mode = case["mode"]
     mode_value = 0 if mode == "half" else 1
     dev = device_str()
