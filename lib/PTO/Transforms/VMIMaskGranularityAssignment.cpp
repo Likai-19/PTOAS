@@ -245,6 +245,18 @@ struct MaskGranularitySolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
+      if (auto vintlv = dyn_cast<VMIVintlvOp>(op)) {
+        if (failed(requestMaskUseForSource(vintlv.getMaskMutable(),
+                                           vintlv.getLhs(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto vdintlv = dyn_cast<VMIVdintlvOp>(op)) {
+        if (failed(requestMaskUseForSource(vdintlv.getMaskMutable(),
+                                           vdintlv.getLhs(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
       if (auto reduce = dyn_cast<VMIReduceAddIOp>(op)) {
         if (failed(requestMaskUseForSource(reduce.getMaskMutable(),
                                            reduce.getSource(), op)))
