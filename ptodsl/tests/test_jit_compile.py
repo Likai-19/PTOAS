@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ptodsl"))
 from ptodsl import pto, scalar
 from ptodsl import _types as pto_types
 import ptodsl._vmi_namespace as vmi_namespace
+from ptodsl._ast_rewrite import PTODSLAstRewriteError
 from ptodsl._bootstrap import make_context
 from ptodsl._kernel_signature import DeviceParameterSpec, HelperMarkerParameterSpec, RuntimeScalarParameterSpec
 from ptodsl._tracing.runtime import SignatureTracingRuntime
@@ -1168,6 +1169,45 @@ def ast_runtime_for_static_range_name_reuse_probe(cols: pto.i32):
             acc = acc + inner
             _ = mi
         _ = acc
+
+
+@pto.jit(target="a5")
+def ast_runtime_for_static_slot_carry_probe(cols: pto.i32):
+    zero = pto.const(0, dtype=pto.index)
+    accs = [zero for _ in pto.static_range(4)]
+
+    for c in range(cols):
+        for h in pto.static_range(4):
+            accs[h] = accs[h] + c
+
+    total = zero
+    for h in pto.static_range(4):
+        total = total + accs[h]
+    _ = total
+
+
+@pto.jit(target="a5")
+def ast_runtime_for_dynamic_slot_store_error_probe(cols: pto.i32):
+    zero = pto.const(0, dtype=pto.index)
+    accs = [zero for _ in pto.static_range(4)]
+
+    for idx in range(cols):
+        accs[idx] = zero
+
+
+class _StaticSlotHolder:
+    pass
+
+
+@pto.jit(target="a5")
+def ast_runtime_for_complex_slot_store_error_probe(cols: pto.i32):
+    zero = pto.const(0, dtype=pto.index)
+    holder = _StaticSlotHolder()
+    holder.accs = [zero for _ in pto.static_range(4)]
+
+    for _ in range(cols):
+        for h in pto.static_range(4):
+            holder.accs[h] = zero
 
 
 @pto.jit(target="a5", ast_rewrite=False)
@@ -4760,6 +4800,31 @@ def main() -> None:
     expect(
         ast_runtime_for_static_range_name_reuse_text.count("scf.for") == 1,
         "static_range and comprehension-local names should not be inferred as outer runtime loop carry state",
+    )
+
+    ast_runtime_for_static_slot_carry_text = ast_runtime_for_static_slot_carry_probe.compile().mlir_text()
+    expect_parse_roundtrip_and_verify(
+        ast_runtime_for_static_slot_carry_text,
+        "AST-rewritten runtime for static subscript slot carry specialization",
+    )
+    expect(
+        ast_runtime_for_static_slot_carry_text.count("scf.for") == 1,
+        "static subscript slot carry should preserve the authored runtime loop",
+    )
+    expect(
+        "iter_args(" in ast_runtime_for_static_slot_carry_text
+        and "scf.yield" in ast_runtime_for_static_slot_carry_text,
+        "static subscript slot carry should lower through scf.for iter_args",
+    )
+    expect_raises(
+        PTODSLAstRewriteError,
+        lambda: ast_runtime_for_dynamic_slot_store_error_probe.compile(),
+        "simple_name[static_int_or_static_range_iv]",
+    )
+    expect_raises(
+        PTODSLAstRewriteError,
+        lambda: ast_runtime_for_complex_slot_store_error_probe.compile(),
+        "simple_name[static_int_or_static_range_iv]",
     )
 
     ast_rewrite_disabled_nested_helper_python_control_text = (
