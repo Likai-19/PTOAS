@@ -176,7 +176,7 @@ static bool isSameLayoutOp(Operation *op) {
              VMIShLIOp, VMIShRUIOp, VMINotOp, VMICmpFOp, VMICmpIOp,
              VMISelectOp, VMIBitcastOp, VMIMaskAndOp, VMIMaskOrOp,
              VMIMaskXOrOp, VMIMaskNotOp, VMIActivePrefixIndexOp,
-             VMICompressOp, VMIExpandLoadOp, VMIEnsureMaskGranularityOp>(op);
+             VMICompressOp, VMIExpandLoadOp>(op);
 }
 
 static bool isCastOp(Operation *op) {
@@ -241,6 +241,55 @@ public:
         relations.push_back(makeRelation(SmallVector<VMILayoutFact, 4>{
             operandFact(op->getOpOperand(0), fact.sourceLayout),
             valueFact(op->getResult(0), fact.resultLayout)}));
+      return relations;
+    }
+    return failure();
+  }
+};
+
+class VMIMaskGranularityCastTransfer final : public VMILayoutTransfer {
+public:
+  FailureOr<SmallVector<VMILayoutRelation, 4>>
+  query(Operation *op, Value changedValue, VMILayoutAttr changedLayout,
+        const VMILayoutPropagator &propagator,
+        OpOperand *changedOperand) const override {
+    auto ensure = dyn_cast<VMIEnsureMaskGranularityOp>(op);
+    if (!ensure)
+      return failure();
+
+    auto sourceType = dyn_cast<VMIMaskType>(ensure.getSource().getType());
+    auto resultType = dyn_cast<VMIMaskType>(ensure.getResult().getType());
+    if (!sourceType || !resultType)
+      return failure();
+
+    VMILayoutSupport supports;
+    if (changedValue == ensure.getSource()) {
+      FailureOr<SmallVector<VMIMaskGranularityCastLayoutFact, 4>> facts =
+          supports.getMaskGranularityCastLayoutFactsForLayout(
+              sourceType, resultType, VMICastLayoutPort::Source,
+              changedLayout);
+      if (failed(facts) || facts->empty())
+        return failure();
+      SmallVector<VMILayoutRelation, 4> relations;
+      for (const VMIMaskGranularityCastLayoutFact &fact : *facts)
+        relations.push_back(makeRelation(SmallVector<VMILayoutFact, 4>{
+            operandFact(ensure.getSourceMutable(), fact.sourceLayout),
+            valueFact(ensure.getResult(), fact.resultLayout)}));
+      return relations;
+    }
+
+    if (changedValue == ensure.getResult()) {
+      FailureOr<SmallVector<VMIMaskGranularityCastLayoutFact, 4>> facts =
+          supports.getMaskGranularityCastLayoutFactsForLayout(
+              sourceType, resultType, VMICastLayoutPort::Result,
+              changedLayout);
+      if (failed(facts) || facts->empty())
+        return failure();
+      SmallVector<VMILayoutRelation, 4> relations;
+      for (const VMIMaskGranularityCastLayoutFact &fact : *facts)
+        relations.push_back(makeRelation(SmallVector<VMILayoutFact, 4>{
+            operandFact(ensure.getSourceMutable(), fact.sourceLayout),
+            valueFact(ensure.getResult(), fact.resultLayout)}));
       return relations;
     }
     return failure();
@@ -648,6 +697,7 @@ public:
 const VMILayoutTransfer *getTransfer(Operation *op) {
   static VMISameLayoutTransfer sameLayoutTransfer;
   static VMICastTransfer castTransfer;
+  static VMIMaskGranularityCastTransfer maskGranularityCastTransfer;
   static VMIFreeResultLayoutTransfer freeResultLayoutTransfer;
   static VMILoadTransfer loadTransfer;
   static VMIGroupLoadTransfer groupLoadTransfer;
@@ -684,6 +734,8 @@ const VMILayoutTransfer *getTransfer(Operation *op) {
     return &gatherTransfer;
   if (isSameLayoutOp(op))
     return &sameLayoutTransfer;
+  if (isa<VMIEnsureMaskGranularityOp>(op))
+    return &maskGranularityCastTransfer;
   if (isCastOp(op))
     return &castTransfer;
   if (isa<VMIStoreOp>(op))

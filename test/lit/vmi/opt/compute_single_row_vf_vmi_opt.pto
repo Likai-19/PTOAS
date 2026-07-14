@@ -86,7 +86,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
 // ASSIGN: %[[Q8:.*]] = pto.vmi.truncf %[[Q]]
 // ASSIGN-SAME: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>> -> !pto.vmi.vreg<128xf8E4M3FN, #pto.vmi.layout<contiguous, lane_stride = 2>>
 // ASSIGN-NOT: pto.vmi.ensure_layout %[[Q8]]
-// ASSIGN: %[[MASK:.*]] = pto.vmi.ensure_mask_granularity
+// ASSIGN: %[[MASK:.*]] = pto.vmi.create_mask
 // ASSIGN-SAME: -> !pto.vmi.mask<128xb8, #pto.vmi.layout<contiguous, lane_stride = 2>>
 // ASSIGN: pto.vmi.masked_store %[[Q8]], {{.*}}, %[[MASK]]
 

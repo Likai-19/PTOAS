@@ -606,8 +606,6 @@ struct LayoutSolver {
         return WalkResult::advance();
       }
       if (auto ensure = dyn_cast<VMIEnsureMaskGranularityOp>(op)) {
-        if (failed(uniteMask(ensure.getSource(), ensure.getResult(), op)))
-          return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto addf = dyn_cast<VMIAddFOp>(op)) {
@@ -798,6 +796,9 @@ struct LayoutSolver {
                        /*late=*/false, DataLayoutSeedPhase::Reduce);
         requestDataUse(reduce.getInitMutable(), getContiguousLayout(),
                        /*late=*/false, DataLayoutSeedPhase::Reduce);
+        if (failed(requestMaskUse(reduce.getMaskMutable(),
+                                  getContiguousLayout(), op)))
+          return WalkResult::interrupt();
         if (failed(setNaturalLayout(reduce.getResult(), getContiguousLayout(),
                                     op, DataLayoutSeedPhase::Reduce)))
           return WalkResult::interrupt();
@@ -808,6 +809,9 @@ struct LayoutSolver {
                        /*late=*/false, DataLayoutSeedPhase::Reduce);
         requestDataUse(reduce.getInitMutable(), getContiguousLayout(),
                        /*late=*/false, DataLayoutSeedPhase::Reduce);
+        if (failed(requestMaskUse(reduce.getMaskMutable(),
+                                  getContiguousLayout(), op)))
+          return WalkResult::interrupt();
         if (failed(setNaturalLayout(reduce.getResult(), getContiguousLayout(),
                                     op, DataLayoutSeedPhase::Reduce)))
           return WalkResult::interrupt();
@@ -818,6 +822,9 @@ struct LayoutSolver {
                        /*late=*/false, DataLayoutSeedPhase::Reduce);
         requestDataUse(reduce.getInitMutable(), getContiguousLayout(),
                        /*late=*/false, DataLayoutSeedPhase::Reduce);
+        if (failed(requestMaskUse(reduce.getMaskMutable(),
+                                  getContiguousLayout(), op)))
+          return WalkResult::interrupt();
         if (failed(setNaturalLayout(reduce.getResult(), getContiguousLayout(),
                                     op, DataLayoutSeedPhase::Reduce)))
           return WalkResult::interrupt();
@@ -828,6 +835,9 @@ struct LayoutSolver {
                        /*late=*/false, DataLayoutSeedPhase::Reduce);
         requestDataUse(reduce.getInitMutable(), getContiguousLayout(),
                        /*late=*/false, DataLayoutSeedPhase::Reduce);
+        if (failed(requestMaskUse(reduce.getMaskMutable(),
+                                  getContiguousLayout(), op)))
+          return WalkResult::interrupt();
         if (failed(setNaturalLayout(reduce.getResult(), getContiguousLayout(),
                                     op, DataLayoutSeedPhase::Reduce)))
           return WalkResult::interrupt();
@@ -838,6 +848,9 @@ struct LayoutSolver {
                        /*late=*/false, DataLayoutSeedPhase::Reduce);
         requestDataUse(reduce.getInitMutable(), getContiguousLayout(),
                        /*late=*/false, DataLayoutSeedPhase::Reduce);
+        if (failed(requestMaskUse(reduce.getMaskMutable(),
+                                  getContiguousLayout(), op)))
+          return WalkResult::interrupt();
         if (failed(setNaturalLayout(reduce.getResult(), getContiguousLayout(),
                                     op, DataLayoutSeedPhase::Reduce)))
           return WalkResult::interrupt();
@@ -848,6 +861,9 @@ struct LayoutSolver {
                        /*late=*/false, DataLayoutSeedPhase::Reduce);
         requestDataUse(reduce.getInitMutable(), getContiguousLayout(),
                        /*late=*/false, DataLayoutSeedPhase::Reduce);
+        if (failed(requestMaskUse(reduce.getMaskMutable(),
+                                  getContiguousLayout(), op)))
+          return WalkResult::interrupt();
         if (failed(setNaturalLayout(reduce.getResult(), getContiguousLayout(),
                                     op, DataLayoutSeedPhase::Reduce)))
           return WalkResult::interrupt();

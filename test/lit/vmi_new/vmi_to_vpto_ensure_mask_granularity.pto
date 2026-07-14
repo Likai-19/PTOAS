@@ -28,10 +28,10 @@ module {
 }
 
 // CHECK-LABEL: func.func @vmi_to_vpto_ensure_mask_granularity(
-// CHECK: %[[LO:.*]] = pto.ppack %arg0, "LOWER" : !pto.mask<b32> -> !pto.mask<b16>
-// CHECK: %[[HI:.*]] = pto.ppack %arg1, "HIGHER" : !pto.mask<b32> -> !pto.mask<b16>
-// CHECK: %[[ALL:.*]] = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
-// CHECK: %[[M16:.*]] = pto.por %[[LO]], %[[HI]], %[[ALL]] : !pto.mask<b16>, !pto.mask<b16>, !pto.mask<b16> -> !pto.mask<b16>
+// CHECK: %[[D2_LO:.*]], %[[D2_HI:.*]] = pto.pdintlv_b32 %arg0, %arg1
+// CHECK: %[[LO:.*]] = pto.ppack %[[D2_LO]], "LOWER" : !pto.mask<b32> -> !pto.mask<b16>
+// CHECK: %[[HI:.*]] = pto.ppack %[[D2_HI]], "LOWER" : !pto.mask<b32> -> !pto.mask<b16>
+// CHECK: %[[M16:.*]], %{{.*}} = pto.pintlv_b16 %[[LO]], %[[HI]]
 // CHECK: pto.vsel %arg2, %arg3, %[[M16]]
 // CHECK: pto.vsel %arg4, %arg6, %arg0
 // CHECK: pto.vsel %arg5, %arg7, %arg1

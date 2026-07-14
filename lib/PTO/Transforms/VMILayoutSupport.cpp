@@ -320,10 +320,10 @@ struct EnsureMaskLayoutPattern {
 
 static constexpr EnsureMaskLayoutPattern kEnsureMaskLayoutPatterns[] = {
     {mb16(), N<256>(), c(), d(2, 1)},
-    {mb32(), N<128, 256>(), c(), d(2, 1)},
+    {mb32(), N<128, 256, 512>(), c(), d(2, 1)},
     {mb32(), N<128>(), c(), d(2, 8)},
     {mb16(), N<256>(), d(2, 1), c()},
-    {mb32(), N<128, 256>(), d(2, 1), c()},
+    {mb32(), N<128, 256, 512>(), d(2, 1), c()},
     {mb32(), N<128>(), d(2, 8), c()},
 
     {mb32(), N<256>(), c(), d(4, 1)},
@@ -333,10 +333,10 @@ static constexpr EnsureMaskLayoutPattern kEnsureMaskLayoutPatterns[] = {
 
     {mb8(), N<1, 2, 4, 8, 64, 128>(), c(), ls(2)},
     {mb16(), N<1, 2, 4, 8, 64>(), c(), ls(2)},
-    {mb32(), N<1, 2, 4, 8>(), c(), ls(2)},
+    {mb32(), N<1, 2, 4, 8, 64>(), c(), ls(2)},
     {mb8(), N<1, 2, 4, 8, 64, 128>(), ls(2), c()},
     {mb16(), N<1, 2, 4, 8, 64>(), ls(2), c()},
-    {mb32(), N<1, 2, 4, 8>(), ls(2), c()},
+    {mb32(), N<1, 2, 4, 8, 64>(), ls(2), c()},
 
     {mb8(), N<1, 2, 4, 8, 64>(), c(), ls(4)},
     {mb16(), N<1, 2, 4, 8>(), c(), ls(4)},
@@ -392,6 +392,13 @@ struct PreferredCastLayoutPattern {
 struct LegalCastLayoutPattern {
   ElementBitsPattern sourceBits;
   ElementBitsPattern resultBits;
+  LayoutPattern sourceLayout;
+  LayoutPattern resultLayout;
+};
+
+struct LegalMaskGranularityCastLayoutPattern {
+  MaskGranularityPattern sourceGranularity;
+  MaskGranularityPattern resultGranularity;
   LayoutPattern sourceLayout;
   LayoutPattern resultLayout;
 };
@@ -465,6 +472,49 @@ static constexpr LegalCastLayoutPattern kLegalCastLayoutPatterns[] = {
     {bits<32>(), bits<16>(), gs(8), gs(8, 2)},
     {bits<32>(), bits<8>(), gs(1), gs(1)},
     {bits<32>(), bits<8>(), gs(8), gs(8, 4)},
+};
+
+static constexpr LegalMaskGranularityCastLayoutPattern
+    kLegalMaskGranularityCastLayoutPatterns[] = {
+        // 2x widening.
+        {mb8(), mb16(), c(), d(2)},
+        {mb8(), mb16(), ls(2), c()},
+        {mb8(), mb16(), d(2), d(4)},
+        {mb16(), mb32(), c(), d(2)},
+        {mb16(), mb32(), ls(2), c()},
+        {mb16(), mb32(), d(2), d(4)},
+
+        // 2x narrowing.
+        {mb16(), mb8(), d(2), c()},
+        {mb16(), mb8(), c(), ls(2)},
+        {mb16(), mb8(), d(4), d(2)},
+        {mb32(), mb16(), d(2), c()},
+        {mb32(), mb16(), c(), ls(2)},
+        {mb32(), mb16(), d(4), d(2)},
+
+        // 4x widening/narrowing.
+        {mb8(), mb32(), c(), d(4)},
+        {mb8(), mb32(), ls(2), d(2)},
+        {mb8(), mb32(), ls(4), c()},
+        {mb32(), mb8(), d(4), c()},
+        {mb32(), mb8(), c(), ls(4)},
+        {mb32(), mb8(), d(2), ls(2)},
+
+        // Group-slot casts keep the row-local group layout.
+        {mb8(), mb16(), gs(1), gs(1)},
+        {mb8(), mb16(), gs(8, 2), gs(8)},
+        {mb16(), mb32(), gs(1), gs(1)},
+        {mb16(), mb32(), gs(8, 2), gs(8)},
+        {mb8(), mb32(), gs(1), gs(1)},
+        {mb8(), mb32(), gs(8, 4), gs(8)},
+        {mb16(), mb32(), gs(8), gs(8)},
+        {mb8(), mb32(), gs(8), gs(8)},
+        {mb16(), mb8(), gs(1), gs(1)},
+        {mb16(), mb8(), gs(8), gs(8, 2)},
+        {mb32(), mb16(), gs(1), gs(1)},
+        {mb32(), mb16(), gs(8), gs(8, 2)},
+        {mb32(), mb8(), gs(1), gs(1)},
+        {mb32(), mb8(), gs(8), gs(8, 4)},
 };
 
 static constexpr InterleaveLayoutPattern kVdintlvLayoutPatterns[] = {
@@ -1270,6 +1320,28 @@ static VMICastLayoutFact makeCastLayoutFact(int64_t sourceBits,
   return fact;
 }
 
+static int64_t getMaskGranularityBits(StringRef granularity) {
+  if (granularity == "b8")
+    return 8;
+  if (granularity == "b16")
+    return 16;
+  if (granularity == "b32")
+    return 32;
+  return 0;
+}
+
+static VMIMaskGranularityCastLayoutFact
+makeMaskGranularityCastLayoutFact(int64_t sourceBits, int64_t resultBits,
+                                  VMILayoutAttr sourceLayout,
+                                  VMILayoutAttr resultLayout) {
+  VMIMaskGranularityCastLayoutFact fact;
+  fact.sourceGranularityBits = sourceBits;
+  fact.resultGranularityBits = resultBits;
+  fact.sourceLayout = sourceLayout;
+  fact.resultLayout = resultLayout;
+  return fact;
+}
+
 FailureOr<VMICastLayoutFact> VMILayoutSupport::getPreferredCastLayoutFact(
     VMIVRegType sourceType, VMIVRegType resultType, std::string *reason) const {
   auto [sourceBits, resultBits] = getCastElementBits(sourceType, resultType);
@@ -1424,6 +1496,102 @@ FailureOr<VMICastLayoutFact> VMILayoutSupport::getCastLayoutFactForLayouts(
   }
   if (!selected)
     return fail("source/result layouts do not match a legal cast table row");
+  return *selected;
+}
+
+FailureOr<SmallVector<VMIMaskGranularityCastLayoutFact, 4>>
+VMILayoutSupport::getMaskGranularityCastLayoutFactsForLayout(
+    VMIMaskType sourceType, VMIMaskType resultType, VMICastLayoutPort port,
+    VMILayoutAttr layout, std::string *reason) const {
+  auto fail = [&](const Twine &message)
+      -> FailureOr<SmallVector<VMIMaskGranularityCastLayoutFact, 4>> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  if (sourceType.getElementCount() != resultType.getElementCount())
+    return fail("requires source and result mask lane counts to match");
+  if (!VMIMaskType::isConcreteGranularity(sourceType.getGranularity()) ||
+      !VMIMaskType::isConcreteGranularity(resultType.getGranularity()))
+    return fail("requires concrete b8/b16/b32 source and result "
+                "granularities");
+
+  int64_t sourceBits = getMaskGranularityBits(sourceType.getGranularity());
+  int64_t resultBits = getMaskGranularityBits(resultType.getGranularity());
+  if (sourceBits == 0 || resultBits == 0)
+    return fail("requires supported source/result mask granularities");
+
+  MLIRContext *ctx = sourceType.getContext();
+  int64_t blockElems =
+      layout && layout.isDeinterleaved() ? layout.getBlockElems() : 1;
+  int64_t numGroups =
+      layout && layout.isGroupSlots() ? layout.getNumGroups() : 0;
+  SmallVector<VMIMaskGranularityCastLayoutFact, 4> facts;
+  for (const LegalMaskGranularityCastLayoutPattern &pattern :
+       kLegalMaskGranularityCastLayoutPatterns) {
+    if (!matchesMaskGranularityPattern(pattern.sourceGranularity,
+                                       sourceType.getGranularity()) ||
+        !matchesMaskGranularityPattern(pattern.resultGranularity,
+                                       resultType.getGranularity()))
+      continue;
+
+    VMILayoutAttr sourceLayout = materializeLayoutPattern(
+        ctx, pattern.sourceLayout, blockElems, numGroups);
+    VMILayoutAttr resultLayout = materializeLayoutPattern(
+        ctx, pattern.resultLayout, blockElems, numGroups);
+    if (!sourceLayout || !resultLayout)
+      continue;
+
+    if (port == VMICastLayoutPort::Source && sourceLayout != layout)
+      continue;
+    if (port == VMICastLayoutPort::Result && resultLayout != layout)
+      continue;
+
+    facts.push_back(makeMaskGranularityCastLayoutFact(
+        sourceBits, resultBits, sourceLayout, resultLayout));
+  }
+
+  if (facts.empty()) {
+    if (port == VMICastLayoutPort::Source)
+      return fail("requires a legal mask granularity cast relation for the "
+                  "source layout");
+    return fail("requires a legal mask granularity cast relation for the "
+                "result layout");
+  }
+  return facts;
+}
+
+FailureOr<VMIMaskGranularityCastLayoutFact>
+VMILayoutSupport::getMaskGranularityCastLayoutFactForLayouts(
+    VMIMaskType sourceType, VMIMaskType resultType, VMILayoutAttr sourceLayout,
+    VMILayoutAttr resultLayout, std::string *reason) const {
+  auto fail =
+      [&](const Twine &message) -> FailureOr<VMIMaskGranularityCastLayoutFact> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  FailureOr<SmallVector<VMIMaskGranularityCastLayoutFact, 4>> facts =
+      getMaskGranularityCastLayoutFactsForLayout(
+          sourceType, resultType, VMICastLayoutPort::Source, sourceLayout,
+          reason);
+  if (failed(facts))
+    return failure();
+
+  std::optional<VMIMaskGranularityCastLayoutFact> selected;
+  for (const VMIMaskGranularityCastLayoutFact &fact : *facts) {
+    if (fact.resultLayout != resultLayout)
+      continue;
+    if (selected)
+      return fail("mask granularity cast layout query produced ambiguous "
+                  "layout facts");
+    selected = fact;
+  }
+  if (!selected)
+    return fail("source/result layouts do not match a legal mask granularity "
+                "cast table row");
   return *selected;
 }
 

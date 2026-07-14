@@ -35,13 +35,13 @@ module {
 // -----
 
 module {
-  func.func @vmi_ensure_mask_granularity_layout_mismatch_invalid(
-      %a: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>) {
+  func.func @vmi_ensure_mask_granularity_partial_layout_invalid(
+      %a: !pto.vmi.mask<128xb16>) {
     %r = pto.vmi.ensure_mask_granularity %a
-        : !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+        : !pto.vmi.mask<128xb16>
         -> !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
     return
   }
 }
 
-// CHECK: requires source and result mask layouts to match
+// CHECK: requires either both source and result to carry layout or neither to carry layout
