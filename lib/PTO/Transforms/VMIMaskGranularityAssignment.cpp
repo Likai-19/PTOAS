@@ -329,12 +329,12 @@ struct MaskGranularitySolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto hist = dyn_cast<VMIDhistOp>(op)) {
+      if (auto hist = dyn_cast<VMIVdhistOp>(op)) {
         if (failed(requestMaskUse(hist.getMaskMutable(), "b8", op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto hist = dyn_cast<VMIChistOp>(op)) {
+      if (auto hist = dyn_cast<VMIVchistOp>(op)) {
         if (failed(requestMaskUse(hist.getMaskMutable(), "b8", op)))
           return WalkResult::interrupt();
         return WalkResult::advance();

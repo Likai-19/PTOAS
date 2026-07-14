@@ -654,7 +654,7 @@ struct HistogramLayoutPattern {
   LayoutPattern resultLayout;
 };
 
-static constexpr HistogramLayoutPattern kDhistLayoutPatterns[] = {
+static constexpr HistogramLayoutPattern kVdhistLayoutPatterns[] = {
     {c(), c(), c(), c()},
 };
 
@@ -2279,26 +2279,26 @@ getHistogramLayoutFactImpl(OpTy op, ArrayRef<HistogramLayoutPattern> patterns,
 }
 
 FailureOr<VMIHistogramLayoutFact>
-VMILayoutSupport::getDhistLayoutFact(VMIDhistOp op,
+VMILayoutSupport::getVdhistLayoutFact(VMIVdhistOp op,
                                      std::string *reason) const {
-  return getHistogramLayoutFactImpl(op, kDhistLayoutPatterns, "dhist", reason);
+  return getHistogramLayoutFactImpl(op, kVdhistLayoutPatterns, "vdhist", reason);
 }
 
 FailureOr<VMIHistogramLayoutFact>
-VMILayoutSupport::getChistLayoutFact(VMIChistOp op,
+VMILayoutSupport::getVchistLayoutFact(VMIVchistOp op,
                                      std::string *reason) const {
-  // chist shares the same layout constraints as dhist (same base class, same
-  // signature).  When kDhistLayoutPatterns is updated, review whether chist
+  // vchist shares the same layout constraints as vdhist (same base class, same
+  // signature).  When kVdhistLayoutPatterns is updated, review whether vchist
   // should inherit the new patterns.
-  return getHistogramLayoutFactImpl(op, kDhistLayoutPatterns, "chist", reason);
+  return getHistogramLayoutFactImpl(op, kVdhistLayoutPatterns, "vchist", reason);
 }
 
 LogicalResult
-VMILayoutSupport::getDhistSupport(VMIDhistOp op, std::string *reason) const {
-  return getDhistLayoutFact(op, reason);
+VMILayoutSupport::getVdhistSupport(VMIVdhistOp op, std::string *reason) const {
+  return getVdhistLayoutFact(op, reason);
 }
 
 LogicalResult
-VMILayoutSupport::getChistSupport(VMIChistOp op, std::string *reason) const {
-  return getChistLayoutFact(op, reason);
+VMILayoutSupport::getVchistSupport(VMIVchistOp op, std::string *reason) const {
+  return getVchistLayoutFact(op, reason);
 }

@@ -843,24 +843,49 @@ where the product is computed at the widened precision of `acc`.
 
 ---
 
-### `pto.vmi.vhist(bin_idx, mask, *, result_type) -> VRegType`
+### `pto.vmi.vdhist(acc, source, mask, *, result_type) -> VRegType`
 
-**Description**: Histogram bin accumulation. Treats `bin_idx` as per-lane bin
-indices and accumulates one count per bin into the result vector.
+**Description**: Distribution histogram (dhistv2). Counts per-bin
+occurrences of `source` values and adds them to the accumulator `acc`,
+producing a 256-bin unsigned 16-bit result.
 
 **Parameters**:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `bin_idx` | `VRegType` | Per-lane bin indices (integer vector) |
-| `mask` | VMI mask | **Required.** Predicate mask |
-| `result_type` | VMI vreg type | **Required.** Result vector type (lane count = number of bins) |
+| `acc` | `VRegType` | Accumulator vector (256×ui16) |
+| `source` | `VRegType` | Source values (N×ui8) |
+| `mask` | VMI mask | **Required.** Predicate mask (b8 granularity) |
+| `result_type` | VMI vreg type | **Required.** Result vector type (256×ui16) |
 
 **Returns**:
 
 | Return Value | Type | Description |
 |--------------|------|-------------|
-| `result` | `VRegType` | Histogram counts per bin |
+| `result` | `VRegType` | Distribution histogram counts per bin |
+
+---
+
+### `pto.vmi.vchist(acc, source, mask, *, result_type) -> VRegType`
+
+**Description**: Cumulative histogram (chistv2 half-axis). Same signature
+as `vdhist` but each bin accumulates the sum of counts for all bins ≤ its index
+(cumulative / prefix-sum semantics).
+
+**Parameters**:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `acc` | `VRegType` | Accumulator vector (256×ui16) |
+| `source` | `VRegType` | Source values (N×ui8) |
+| `mask` | VMI mask | **Required.** Predicate mask (b8 granularity) |
+| `result_type` | VMI vreg type | **Required.** Result vector type (256×ui16) |
+
+**Returns**:
+
+| Return Value | Type | Description |
+|--------------|------|-------------|
+| `result` | `VRegType` | Cumulative histogram counts per bin |
 
 ---
 
@@ -1107,7 +1132,7 @@ When inference is not possible, the instruction requires an explicit
 - `vcadd`, `vcmax`, `vcmin` — reduction changes the lane count.
 - `vinterpret_cast` — reinterpretation target type must be explicit.
 - `vmull` — widening product requires explicit widened result type.
-- `vhist` — bin count must be explicit.
+- `vchist`, `vdhist` — bin count must be explicit.
 - `vgather`, `vgatherb` — result shape is independent of the source pointer.
 
 **Ops that infer when given the right hint**:
@@ -1197,7 +1222,8 @@ def vmi_elementwise(
 | Reduction | `vcadd`, `vcmax`, `vcmin` |
 | Conversion | `vcvt`, `vinterpret_cast` |
 | SFU / Fused | `vexpdif`, `vaxpy`, `vlrelu`, `vprelu`, `vmull`, `vmula` |
-| Indexed memory | `vhist`, `vgather`, `vgatherb`, `vscatter` |
+| Histogram | `vchist`, `vdhist` |
+| Indexed memory | `vgather`, `vgatherb`, `vscatter` |
 | Predicate construction | `create_mask`, `create_group_mask` |
 | Data rearrangement | `vintlv`, `vdintlv` |
 

@@ -77,8 +77,8 @@
 //   vprelu  → maxf + minf + mulf + addf
 //   Category C7/C8/C9 bypass mask/pmode synthesis here and skip pmode="merge".
 //
-// Category D — no legacy equivalent (explicitly skipped, 6 ops):
-//   vhist vintlv vdintlv vselr vgatherb vmull
+// Category D — no legacy equivalent (explicitly skipped, 5 ops):
+//   vintlv vdintlv vselr vgatherb vmull
 //
 //===----------------------------------------------------------------------===//
 
@@ -1163,10 +1163,10 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
       worklist.push_back(op);
 
     // Category D — no legacy equivalent (require direct VMIToVPTO lowering):
-    //   plt, vhist, vintlv, vdintlv, vselr, vgatherb, vmull
+    //   plt, vintlv, vdintlv, vselr, vgatherb, vmull
     // These are intentionally NOT added to the worklist — they flow through
     // to VMIToVPTO which must provide direct 1:N lowering patterns.
-    if (isa<VMIHistV2Op, VMIVintlvOp, VMIVdintlvOp, VMIVselrOp,
+    if (isa<VMIVintlvOp, VMIVdintlvOp, VMIVselrOp,
             VMIVgatherbOp, VMIVmullOp>(op)) {
       op->emitRemark("VMI unified op has no legacy equivalent — "
                      "requires direct VMIToVPTO 1:N lowering");

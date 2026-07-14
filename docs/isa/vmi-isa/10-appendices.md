@@ -49,14 +49,15 @@
 | 41 | `pto.vmi.vprelu` | 7: SFU | A | Parametric ReLU |
 | 42 | `pto.vmi.vmull` | 7: SFU | B | Widening 32×32→64 multiply |
 | 43 | `pto.vmi.vmula` | 7: SFU | A | Fused multiply-add |
-| 44 | `pto.vmi.vhist` | 7: SFU | B | Histogram bin count |
-| 45 | `pto.vmi.vgather` | 7: SFU | C | Indexed gather (B32) |
-| 46 | `pto.vmi.vgatherb` | 7: SFU | C | Byte-granularity indexed gather |
-| 47 | `pto.vmi.vscatter` | 7: SFU | C | Indexed scatter |
-| 48 | `pto.vmi.create_mask` | 8: Predicate | gen | Prefix / first-N tail mask |
-| 49 | `pto.vmi.create_group_mask` | 8: Predicate | gen | Grouped predicate mask |
-| 50 | `pto.vmi.vintlv` | 9: Rearrange | A | Interleave two vectors |
-| 51 | `pto.vmi.vdintlv` | 9: Rearrange | A | Deinterleave two vectors |
+| 44 | `pto.vmi.vchist` | 7: SFU | B | Cumulative histogram (half-axis) |
+| 45 | `pto.vmi.vdhist` | 7: SFU | B | Distribution histogram (plain per-bin) |
+| 46 | `pto.vmi.vgather` | 7: SFU | C | Indexed gather (B32) |
+| 47 | `pto.vmi.vgatherb` | 7: SFU | C | Byte-granularity indexed gather |
+| 48 | `pto.vmi.vscatter` | 7: SFU | C | Indexed scatter |
+| 49 | `pto.vmi.create_mask` | 8: Predicate | gen | Prefix / first-N tail mask |
+| 50 | `pto.vmi.create_group_mask` | 8: Predicate | gen | Grouped predicate mask |
+| 51 | `pto.vmi.vintlv` | 9: Rearrange | A | Interleave two vectors |
+| 52 | `pto.vmi.vdintlv` | 9: Rearrange | A | Deinterleave two vectors |
 
 ---
 

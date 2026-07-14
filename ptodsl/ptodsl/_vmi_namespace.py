@@ -657,13 +657,25 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vhist(bin_idx, mask, *, result_type=None, pmode=None, loc=None, ip=None):
+    def vdhist(acc, source, mask, *, result_type=None, loc=None, ip=None):
         return _call_value(
-            "vhist",
-            _require_result_type(result_type, context="pto.vmi.vhist(...)"),
-            _raw(bin_idx),
-            _required_mask(mask, context="pto.vmi.vhist(...)"),
-            pmode=pmode,
+            "vdhist",
+            _require_result_type(result_type, context="pto.vmi.vdhist(...)"),
+            _raw(acc),
+            _raw(source),
+            _required_mask(mask, context="pto.vmi.vdhist(...)"),
+            loc=loc,
+            ip=ip,
+        )
+
+    @staticmethod
+    def vchist(acc, source, mask, *, result_type=None, loc=None, ip=None):
+        return _call_value(
+            "vchist",
+            _require_result_type(result_type, context="pto.vmi.vchist(...)"),
+            _raw(acc),
+            _raw(source),
+            _required_mask(mask, context="pto.vmi.vchist(...)"),
             loc=loc,
             ip=ip,
         )

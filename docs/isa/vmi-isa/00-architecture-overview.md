@@ -171,6 +171,6 @@ type's `C`).
 | 4 | **Broadcast** | `vbrc` | A (ungrouped) / B (grouped) | none |
 | 5 | **Reduce** | `vcadd`, `vcmax`, `vcmin` | B (VLane-aligned) / C (unaligned) | `Pg req` |
 | 6 | **Convert** | `vcvt`, `vinterpret_cast` | B / A | `Pg` / none |
-| 7 | **SFU** | `vexpdif`, `vaxpy`, `vlrelu`, `vprelu`, `vmull`, `vmula`, `vhist`, `vgather`, `vgatherb`, `vscatter` | A (fused) / B (vmull, vhist) / C (gather/scatter) | `Pg` (`vhist`/SFU) / `Pg` (gather/scatter) |
+| 7 | **SFU** | `vexpdif`, `vaxpy`, `vlrelu`, `vprelu`, `vmull`, `vmula`, `vchist`, `vdhist`, `vgather`, `vgatherb`, `vscatter` | A (fused) / B (vmull, vchist, vdhist) / C (gather/scatter) | `Pg` (`vchist`/`vdhist`/SFU) / `Pg` (gather/scatter) |
 | 8 | **Predicate Ops** | `create_mask`, `create_group_mask` | gen | gen |
 | 9 | **Data Rearrange** | `vintlv`, `vdintlv` | A | `Pg` |
