@@ -921,7 +921,7 @@ VPTO 的 histogram 指令一次读取 `256xui8` source，但结果只能写
 VMI surface 不暴露这个物理 split：
 
 ```mlir
-%hist = pto.vmi.dhist %acc, %src, %mask
+%hist = pto.vmi.vdhist %acc, %src, %mask
   : !pto.vmi.vreg<256xui16>,
     !pto.vmi.vreg<Nxui8>,
     !pto.vmi.mask<Nxpred>
@@ -957,7 +957,7 @@ for each 256-lane source chunk:
 accumulation，VMI 还应该隐藏 VPTO 为了物理 vreg 宽度暴露出来的 range
 selector、lo/hi accumulator 和多条物理指令。
 
-`pto.vmi.chist` 可以使用相同 surface 形状，但当前必须先验证 VPTO `CHISTv2`
+`pto.vmi.vchist` 可以使用相同 surface 形状，但当前必须先验证 VPTO `CHISTv2`
 在 high range 上返回的是全局累计还是 range-local 累计。这个差异会影响是否需要
 额外给 high half 加上 low half 的总计数，因此不能只按 op 名字猜 lowering。
 

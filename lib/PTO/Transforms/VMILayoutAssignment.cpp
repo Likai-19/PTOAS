@@ -1023,7 +1023,7 @@ struct LayoutSolver {
             /*late=*/false, DataLayoutSeedPhase::GroupBroadcast);
         return WalkResult::advance();
       }
-      if (auto hist = dyn_cast<VMIDhistOp>(op)) {
+      if (auto hist = dyn_cast<VMIVdhistOp>(op)) {
         requestDataUse(hist.getAccMutable(), getContiguousLayout());
         requestDataUse(hist.getSourceMutable(), getContiguousLayout());
         if (failed(requestMaskUse(hist.getMaskMutable(), getContiguousLayout(),
@@ -1034,7 +1034,7 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
-      if (auto hist = dyn_cast<VMIChistOp>(op)) {
+      if (auto hist = dyn_cast<VMIVchistOp>(op)) {
         requestDataUse(hist.getAccMutable(), getContiguousLayout());
         requestDataUse(hist.getSourceMutable(), getContiguousLayout());
         if (failed(requestMaskUse(hist.getMaskMutable(), getContiguousLayout(),
