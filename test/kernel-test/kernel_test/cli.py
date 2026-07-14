@@ -16,7 +16,7 @@ from typing import Sequence
 
 from .cases import select_cases
 from .registry import RegistryError, load_registry
-from .runners import run_correctness_suite, run_cycle_probe
+from .runners import run_artifact_suite, run_correctness_suite, run_cycle_probe
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,6 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--case", action="append", default=[], help="Case id to run")
     parser.add_argument("--case-filter", help="Substring filter for cases")
     parser.add_argument("--list-cases", action="store_true", help="List cases for one kernel")
+    parser.add_argument(
+        "--emit-mlir",
+        action="store_true",
+        help="Generate PTO artifacts such as vmi.pto/mi.pto under kernels/**/generated",
+    )
     return parser
 
 
@@ -83,6 +88,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.op:
         parser.error("one of --list-ops or --op is required")
 
+    if args.emit_mlir and args.workflow != "correctness":
+        parser.error("--emit-mlir currently requires --workflow correctness")
+
     spec = registry.get(args.op)
     if spec is None:
         parser.error(f"unknown kernel: {args.op}")
@@ -105,6 +113,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(str(exc))
 
     backend = spec.create_backend(backend_name)
+
+    if args.emit_mlir:
+        summary = run_artifact_suite(cases, backend=backend)
+        print(
+            f"SUMMARY total={summary.total} passed={summary.passed} "
+            f"failed={summary.failed} skipped={summary.skipped}"
+        )
+        return 0 if summary.all_passed else 1
 
     if args.workflow == "correctness":
         summary = run_correctness_suite(cases, backend=backend, verify_case=spec.verify)
