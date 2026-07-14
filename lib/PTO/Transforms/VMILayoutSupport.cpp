@@ -2287,10 +2287,10 @@ VMILayoutSupport::getDhistLayoutFact(VMIDhistOp op,
 FailureOr<VMIHistogramLayoutFact>
 VMILayoutSupport::getChistLayoutFact(VMIChistOp op,
                                      std::string *reason) const {
-  // chist currently has no VPTO lowering support.  Keep it wired through the
-  // same histogram query path with an intentionally empty table so diagnostics
-  // stay aligned with dhist.
-  return getHistogramLayoutFactImpl(op, {}, "chist", reason);
+  // chist shares the same layout constraints as dhist (same base class, same
+  // signature).  When kDhistLayoutPatterns is updated, review whether chist
+  // should inherit the new patterns.
+  return getHistogramLayoutFactImpl(op, kDhistLayoutPatterns, "chist", reason);
 }
 
 LogicalResult
