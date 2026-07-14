@@ -12,8 +12,9 @@
 // This pass assigns concrete b8/b16/b32 granularity to VMI mask values before
 // layout assignment.  It deliberately does not choose layouts: mask layout is
 // assigned later by vmi-layout-assignment.  When a mask value has conflicting
-// granularity uses, this pass keeps the value's primary granularity and inserts
-// pto.vmi.ensure_mask_granularity at the use site.
+// granularity uses, this pass keeps the value's primary granularity and either
+// rematerializes cheap mask producers at the use site or inserts
+// pto.vmi.ensure_mask_granularity.
 
 #include "PTO/IR/PTO.h"
 #include "PTO/IR/PTOTypeUtils.h"
@@ -775,11 +776,38 @@ struct MaskGranularitySolver {
       auto resultType = VMIMaskType::get(ctx, sourceType.getElementCount(),
                                          request.granularity,
                                          sourceType.getLayoutAttr());
-      Value current = builder.create<VMIEnsureMaskGranularityOp>(
-          request.operand->getOwner()->getLoc(), resultType, value);
+      Value current = rematerializeMaskProducer(
+          value, resultType, request.operand->getOwner()->getLoc(), builder);
+      if (!current)
+        current = builder.create<VMIEnsureMaskGranularityOp>(
+            request.operand->getOwner()->getLoc(), resultType, value);
       request.operand->set(current);
     }
     return success();
+  }
+
+  Value rematerializeMaskProducer(Value value, VMIMaskType resultType,
+                                  Location loc, OpBuilder &builder) {
+    if (auto createMask = value.getDefiningOp<VMICreateMaskOp>())
+      return builder
+          .create<VMICreateMaskOp>(loc, resultType, createMask.getActiveLanes())
+          .getResult();
+
+    if (auto createGroupMask = value.getDefiningOp<VMICreateGroupMaskOp>())
+      return builder
+          .create<VMICreateGroupMaskOp>(
+              loc, resultType, createGroupMask.getActiveElemsPerGroup(),
+              createGroupMask.getNumGroupsAttr(),
+              createGroupMask.getGroupSizeAttr())
+          .getResult();
+
+    if (auto constantMask = value.getDefiningOp<VMIConstantMaskOp>())
+      return builder
+          .create<VMIConstantMaskOp>(loc, resultType,
+                                     constantMask.getValueAttr())
+          .getResult();
+
+    return {};
   }
 
   LogicalResult run() {

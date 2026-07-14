@@ -34,7 +34,9 @@ module {
 }
 
 // CHECK-LABEL: func.func @typed_group_reduce_assignment(
-// CHECK: %[[MF16_B16:.*]] = pto.vmi.ensure_mask_granularity %arg1
+// CHECK: %[[MF16_D4:.*]] = pto.vmi.ensure_mask_layout %arg1
+// CHECK-SAME: -> !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4>>
+// CHECK: %[[MF16_B16:.*]] = pto.vmi.ensure_mask_granularity %[[MF16_D4]]
 // CHECK-SAME: -> !pto.vmi.mask<256xb16, #pto.vmi.layout<deinterleaved = 2>>
 // CHECK: %[[F16_SPLIT:.*]] = pto.vmi.ensure_layout
 // CHECK-SAME: -> !pto.vmi.vreg<256xf16, #pto.vmi.layout<deinterleaved = 2>>

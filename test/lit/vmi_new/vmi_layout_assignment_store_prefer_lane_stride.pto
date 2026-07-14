@@ -121,14 +121,14 @@ module {
 
 // ASSIGN-LABEL: func.func @f16_masked_store_prefers_lane_stride
 // ASSIGN: %[[MASK:.*]] = pto.vmi.create_mask
-// ASSIGN-SAME: !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous, lane_stride = 2>>
+// ASSIGN-SAME: !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>
 // ASSIGN: %[[X:.*]] = pto.vmi.load
 // ASSIGN-SAME: !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous, lane_stride = 2>>
 // ASSIGN: %[[Y:.*]] = pto.vmi.load
 // ASSIGN-SAME: !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous, lane_stride = 2>>
 // ASSIGN: %[[SUM:.*]] = pto.vmi.addf %[[X]], %[[Y]]
 // ASSIGN-SAME: !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous, lane_stride = 2>>
-// ASSIGN: %[[STORE_MASK:.*]] = pto.vmi.ensure_mask_granularity %[[MASK]]
+// ASSIGN: %[[STORE_MASK:.*]] = pto.vmi.create_mask
 // ASSIGN-SAME: !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous, lane_stride = 2>>
 // ASSIGN: pto.vmi.masked_store %[[SUM]]
 // ASSIGN-SAME: !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous, lane_stride = 2>>

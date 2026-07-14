@@ -10,22 +10,56 @@
 
 module {
   func.func @vmi_to_vpto_ensure_mask_granularity_direct(
-      %m: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>)
-      -> (!pto.mask<b32>, !pto.mask<b32>) {
+      %m: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>)
+      -> !pto.mask<b16> {
     %result = pto.vmi.ensure_mask_granularity %m
-        : !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
-        -> !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
-    %p0, %p1 = "pto.vmi.unpack"(%result)
-        : (!pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>)
-        -> (!pto.mask<b32>, !pto.mask<b32>)
-    return %p0, %p1 : !pto.mask<b32>, !pto.mask<b32>
+        : !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+    %p0 = "pto.vmi.unpack"(%result)
+        : (!pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>)
+        -> !pto.mask<b16>
+    return %p0 : !pto.mask<b16>
+  }
+
+  func.func @vmi_to_vpto_ensure_mask_granularity_changes_layout(
+      %m: !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>)
+      -> !pto.mask<b32> {
+    %result = pto.vmi.ensure_mask_granularity %m
+        : !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous, lane_stride = 2>>
+    %p0 = "pto.vmi.unpack"(%result)
+        : (!pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous, lane_stride = 2>>)
+        -> !pto.mask<b32>
+    return %p0 : !pto.mask<b32>
+  }
+
+  func.func @vmi_to_vpto_ensure_mask_granularity_d2_to_ls2(
+      %m: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>)
+      -> !pto.mask<b16> {
+    %result = pto.vmi.ensure_mask_granularity %m
+        : !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.mask<128xb8, #pto.vmi.layout<contiguous, lane_stride = 2>>
+    %p0 = "pto.vmi.unpack"(%result)
+        : (!pto.vmi.mask<128xb8, #pto.vmi.layout<contiguous, lane_stride = 2>>)
+        -> !pto.mask<b16>
+    return %p0 : !pto.mask<b16>
   }
 }
 
 // CHECK-LABEL: func.func @vmi_to_vpto_ensure_mask_granularity_direct(
-// CHECK: %[[P0:.*]] = pto.punpack %arg0, "LOWER" : !pto.mask<b16> -> !pto.mask<b32>
-// CHECK: %[[P1:.*]] = pto.punpack %arg0, "HIGHER" : !pto.mask<b16> -> !pto.mask<b32>
-// CHECK: return %[[P0]], %[[P1]]
+// CHECK: %[[LO:.*]] = pto.ppack %arg0, "LOWER" : !pto.mask<b32> -> !pto.mask<b16>
+// CHECK: %[[HI:.*]] = pto.ppack %arg1, "LOWER" : !pto.mask<b32> -> !pto.mask<b16>
+// CHECK: %[[P0:.*]], %{{.*}} = pto.pintlv_b16 %[[LO]], %[[HI]]
+// CHECK: return %[[P0]]
+
+// CHECK-LABEL: func.func @vmi_to_vpto_ensure_mask_granularity_changes_layout(
+// CHECK: return %arg0
+
+// CHECK-LABEL: func.func @vmi_to_vpto_ensure_mask_granularity_d2_to_ls2(
+// CHECK: %[[LO2:.*]] = pto.ppack %arg0, "LOWER" : !pto.mask<b32> -> !pto.mask<b16>
+// CHECK: %[[HI2:.*]] = pto.ppack %arg1, "LOWER" : !pto.mask<b32> -> !pto.mask<b16>
+// CHECK: %[[P1:.*]], %{{.*}} = pto.pintlv_b16 %[[LO2]], %[[HI2]]
+// CHECK: return %[[P1]]
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
 // CHECK-NOT: unrealized_conversion_cast

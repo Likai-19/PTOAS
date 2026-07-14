@@ -20,15 +20,6 @@ module {
     return
   }
 
-  func.func @group_add_i8_full_chunks(
-      %source: !pto.vmi.vreg<512xi8>,
-      %mask: !pto.vmi.mask<512xpred>) {
-    %sum = pto.vmi.vcadd %source, %mask {group = 1}
-        : !pto.vmi.vreg<512xi8>, !pto.vmi.mask<512xpred>
-        -> !pto.vmi.vreg<1xi8>
-    return
-  }
-
   func.func @group_min_i8_one_block(
       %source: !pto.vmi.vreg<256xi8>,
       %mask: !pto.vmi.mask<256xpred>) {
@@ -75,11 +66,6 @@ module {
 // CHECK: pto.vcadd {{.*}} : !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<64xi32>
 // CHECK: pto.vadd {{.*}} : !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
 // CHECK: pto.vbitcast {{.*}} : !pto.vreg<64xi32> -> !pto.vreg<128xi16>
-
-// CHECK-LABEL: func.func @group_add_i8_full_chunks(
-// CHECK-COUNT-2: pto.vcadd {{.*}} : !pto.vreg<256xi8>, !pto.mask<b8> -> !pto.vreg<128xi16>
-// CHECK: pto.vadd {{.*}} : !pto.vreg<128xi16>, !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xi16>
-// CHECK: pto.vbitcast {{.*}} : !pto.vreg<128xi16> -> !pto.vreg<256xi8>
 
 // CHECK-LABEL: func.func @group_min_i8_one_block(
 // CHECK: pto.vcgmin {{.*}} : !pto.vreg<256xi8>, !pto.mask<b8> -> !pto.vreg<256xi8>

@@ -70,6 +70,13 @@ struct VMICastLayoutFact {
   int64_t resultBits = 0;
 };
 
+struct VMIMaskGranularityCastLayoutFact {
+  VMILayoutAttr sourceLayout;
+  VMILayoutAttr resultLayout;
+  int64_t sourceGranularityBits = 0;
+  int64_t resultGranularityBits = 0;
+};
+
 struct VMIInterleaveLayoutFact {
   VMILayoutAttr lhsLayout;
   VMILayoutAttr rhsLayout;
@@ -218,6 +225,17 @@ public:
   FailureOr<VMICastLayoutFact> getCastLayoutFactForLayouts(
       VMIVRegType sourceType, VMIVRegType resultType, VMILayoutAttr sourceLayout,
       VMILayoutAttr resultLayout, std::string *reason = nullptr) const;
+
+  FailureOr<SmallVector<VMIMaskGranularityCastLayoutFact, 4>>
+  getMaskGranularityCastLayoutFactsForLayout(
+      VMIMaskType sourceType, VMIMaskType resultType, VMICastLayoutPort port,
+      VMILayoutAttr layout, std::string *reason = nullptr) const;
+
+  FailureOr<VMIMaskGranularityCastLayoutFact>
+  getMaskGranularityCastLayoutFactForLayouts(
+      VMIMaskType sourceType, VMIMaskType resultType,
+      VMILayoutAttr sourceLayout, VMILayoutAttr resultLayout,
+      std::string *reason = nullptr) const;
 
   FailureOr<VMILayoutAttr> getWidenSourceLayoutForResultLayout(
       VMIVRegType sourceType, VMIVRegType resultType,

@@ -959,7 +959,8 @@ def VMIMaskGranularityAssignment
     Assigns b8/b16/b32 granularity to VMI mask values before layout
     assignment. This pass follows VMI semantic op contracts where mask
     granularity is determined by the associated data element width. It does
-    not choose layouts; conflicting use granularities are represented with
+    not choose layouts; conflicting use granularities are represented by
+    rematerializing cheap mask producers when possible, otherwise with
     pto.vmi.ensure_mask_granularity.
   }];
   let constructor = "mlir::pto::createVMIMaskGranularityAssignmentPass()";

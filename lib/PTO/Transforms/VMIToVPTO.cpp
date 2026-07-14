@@ -290,6 +290,44 @@ static FailureOr<Type> getVMIVRegPhysicalElementType(VMIVRegType type) {
   return IntegerType::get(type.getContext(), physicalBits);
 }
 
+static int64_t getMaskGranularityBits(StringRef granularity) {
+  if (granularity == "b8")
+    return 8;
+  if (granularity == "b16")
+    return 16;
+  if (granularity == "b32")
+    return 32;
+  return 0;
+}
+
+static StringRef getMaskGranularityForBits(int64_t bits) {
+  switch (bits) {
+  case 8:
+    return "b8";
+  case 16:
+    return "b16";
+  case 32:
+    return "b32";
+  default:
+    return "";
+  }
+}
+
+static FailureOr<StringRef> getVMIMaskPhysicalGranularity(VMIMaskType type) {
+  int64_t bits = getMaskGranularityBits(type.getGranularity());
+  if (bits == 0)
+    return failure();
+
+  VMILayoutAttr layout = type.getLayoutAttr();
+  int64_t laneStride = layout && layout.hasLaneStride() ? layout.getLaneStride()
+                                                        : 1;
+  int64_t physicalBits = bits * laneStride;
+  StringRef physicalGranularity = getMaskGranularityForBits(physicalBits);
+  if (physicalGranularity.empty())
+    return failure();
+  return physicalGranularity;
+}
+
 class VMIToVPTOTypeConverter final : public TypeConverter {
 public:
   VMIToVPTOTypeConverter() {
@@ -312,11 +350,13 @@ public:
     addConversion(
         [](VMIMaskType type, SmallVectorImpl<Type> &results) -> LogicalResult {
           FailureOr<int64_t> arity = getVMIPhysicalArity(type);
-          if (failed(arity))
+          FailureOr<StringRef> physicalGranularity =
+              getVMIMaskPhysicalGranularity(type);
+          if (failed(arity) || failed(physicalGranularity))
             return failure();
           for (int64_t i = 0; i < *arity; ++i)
             results.push_back(
-                MaskType::get(type.getContext(), type.getGranularity()));
+                MaskType::get(type.getContext(), *physicalGranularity));
           return success();
         });
     TypeConverter::addSourceMaterialization(materializeVPTOToVMI);
@@ -790,8 +830,13 @@ FailureOr<int64_t> getVMITypeLanesPerPart(Type type) {
       return failure();
     return getDataLanesPerPart(*physicalElementType);
   }
-  if (auto maskType = dyn_cast<VMIMaskType>(type))
-    return getMaskLanesPerPart(maskType.getGranularity());
+  if (auto maskType = dyn_cast<VMIMaskType>(type)) {
+    FailureOr<StringRef> physicalGranularity =
+        getVMIMaskPhysicalGranularity(maskType);
+    if (failed(physicalGranularity))
+      return failure();
+    return getMaskLanesPerPart(*physicalGranularity);
+  }
   return failure();
 }
 
@@ -812,7 +857,9 @@ FailureOr<int64_t> getVMITypeChunksInPart(Type type, int64_t part) {
     return failure();
 
   int64_t logicalLanesInPart = (*elementCount + *factor - 1 - part) / *factor;
-  int64_t laneStride = layout.isDense() ? layout.getLaneStride() : 1;
+  int64_t laneStride = 1;
+  if (isa<VMIVRegType>(type) && layout.isDense())
+    laneStride = layout.getLaneStride();
   int64_t physicalLanes =
       logicalLanesInPart == 0 ? 0 : (logicalLanesInPart - 1) * laneStride + 1;
   return ceilDivNonNegative(physicalLanes, *lanesPerPart);
@@ -2169,7 +2216,9 @@ FailureOr<Value> createDenseLaneStrideStorePredicate(
 
   auto lower = rewriter.getStringAttr("LOWER");
   StringRef sourceGranularity = sourceMaskType.getGranularity();
-  if (layout.getLaneStride() == 2) {
+  if (sourceGranularity == targetGranularity) {
+    compactMask = userMask;
+  } else if (layout.getLaneStride() == 2) {
     compactMask =
         rewriter.create<PunpackOp>(loc, targetMaskType, compactMask, lower)
             .getResult();
@@ -2428,8 +2477,12 @@ computeConstantMaskMaterialization(VMIConstantMaskOp op, std::string *reason) {
       !VMIMaskType::isConcreteGranularity(resultVMIType.getGranularity()))
     return fail("requires concrete layout and granularity");
 
+  FailureOr<StringRef> physicalGranularity =
+      getVMIMaskPhysicalGranularity(resultVMIType);
   FailureOr<int64_t> lanesPerPart =
-      getMaskLanesPerPart(resultVMIType.getGranularity());
+      failed(physicalGranularity)
+          ? FailureOr<int64_t>(failure())
+          : getMaskLanesPerPart(*physicalGranularity);
   if (failed(lanesPerPart))
     return fail("requires known physical mask lanes per part");
 
@@ -2491,8 +2544,12 @@ computeGroupMaskMaterializationForType(VMICreateGroupMaskOp op,
       !VMIMaskType::isConcreteGranularity(resultVMIType.getGranularity()))
     return fail("requires concrete layout and granularity");
 
+  FailureOr<StringRef> physicalGranularity =
+      getVMIMaskPhysicalGranularity(resultVMIType);
   FailureOr<int64_t> lanesPerPart =
-      getMaskLanesPerPart(resultVMIType.getGranularity());
+      failed(physicalGranularity)
+          ? FailureOr<int64_t>(failure())
+          : getMaskLanesPerPart(*physicalGranularity);
   if (failed(lanesPerPart))
     return fail("requires known physical mask lanes per part");
 
@@ -2609,8 +2666,12 @@ FailureOr<SmallVector<Value>> materializeDynamicGroupMaskForType(
     return fail("dynamic create_group_mask requires result lane count to "
                 "match num_groups * group_size");
 
+  FailureOr<StringRef> physicalGranularity =
+      getVMIMaskPhysicalGranularity(resultVMIType);
   FailureOr<int64_t> lanesPerPart =
-      getMaskLanesPerPart(resultVMIType.getGranularity());
+      failed(physicalGranularity)
+          ? FailureOr<int64_t>(failure())
+          : getMaskLanesPerPart(*physicalGranularity);
   FailureOr<int64_t> arity = getVMIPhysicalArity(resultVMIType);
   if (failed(lanesPerPart) || failed(arity) || *arity < 1)
     return fail("dynamic create_group_mask requires computable physical "
@@ -4118,30 +4179,88 @@ FailureOr<SmallVector<Value>> materializeMaskLayoutConversion(
 
   if (sourceLayout.isContiguous() && sourceLayout.getLaneStride() != 1 &&
       resultLayout.isContiguous() && resultLayout.getLaneStride() == 1) {
-    if (sourceParts.size() != resultTypes.size())
+    if (sourceParts.empty())
       return rewriter.notifyMatchFailure(
-          op, "dense mask lane_stride pack materialization requires matching "
-              "source/result physical arity");
+          op, "dense mask lane_stride pack materialization requires source "
+              "parts");
     int64_t laneStride = sourceLayout.getLaneStride();
     if (laneStride != 2 && laneStride != 4)
       return rewriter.notifyMatchFailure(
           op, "unsupported dense mask lane_stride pack factor");
+    if (static_cast<int64_t>(sourceParts.size()) >
+        static_cast<int64_t>(resultTypes.size()) * laneStride)
+      return rewriter.notifyMatchFailure(
+          op, "dense mask lane_stride pack materialization source arity does "
+              "not fit result arity");
     SmallVector<Value> results;
     results.reserve(resultTypes.size());
     auto lower = rewriter.getStringAttr("LOWER");
-    for (auto [source, resultType] :
-         llvm::zip_equal(sourceParts, resultTypes)) {
+    auto higher = rewriter.getStringAttr("HIGHER");
+    Value allTrue;
+    auto mergeMasks = [&](Value lhs, Value rhs) -> FailureOr<Value> {
+      if (!allTrue) {
+        FailureOr<Value> mask = createAllTrueMask(
+            op->getLoc(), cast<MaskType>(lhs.getType()), rewriter);
+        if (failed(mask))
+          return failure();
+        allTrue = *mask;
+      }
+      return rewriter.create<PorOp>(op->getLoc(), lhs.getType(), lhs, rhs,
+                                    allTrue)
+          .getResult();
+    };
+    auto packPair = [&](Value lowSource, std::optional<Value> highSource,
+                        MaskType maskType) -> FailureOr<Value> {
+      Value packed =
+          rewriter.create<PpackOp>(op->getLoc(), maskType, lowSource, lower);
+      if (!highSource)
+        return packed;
+      Value higherPacked = rewriter.create<PpackOp>(
+          op->getLoc(), maskType, *highSource, higher);
+      return mergeMasks(packed, higherPacked);
+    };
+    for (auto [resultIndex, resultType] :
+         llvm::enumerate(resultTypes)) {
       auto maskType = dyn_cast<MaskType>(resultType);
       if (!maskType)
         return rewriter.notifyMatchFailure(
             op, "dense mask lane_stride pack requires mask result type");
-      Value current =
-          rewriter.create<PpackOp>(op->getLoc(), maskType, source, lower);
-      if (laneStride == 4)
+      size_t base = resultIndex * static_cast<size_t>(laneStride);
+      if (base >= sourceParts.size())
+        break;
+
+      std::optional<Value> source1;
+      if (base + 1 < sourceParts.size())
+        source1 = sourceParts[base + 1];
+      FailureOr<Value> lowHalf = packPair(sourceParts[base], source1, maskType);
+      if (failed(lowHalf))
+        return failure();
+      Value current = *lowHalf;
+      if (laneStride == 4) {
         current =
             rewriter.create<PpackOp>(op->getLoc(), maskType, current, lower);
+        if (base + 2 < sourceParts.size()) {
+          std::optional<Value> source3;
+          if (base + 3 < sourceParts.size())
+            source3 = sourceParts[base + 3];
+          FailureOr<Value> highHalf =
+              packPair(sourceParts[base + 2], source3, maskType);
+          if (failed(highHalf))
+            return failure();
+          Value higherPacked = rewriter.create<PpackOp>(
+              op->getLoc(), maskType, *highHalf, higher);
+          FailureOr<Value> merged = mergeMasks(current, higherPacked);
+          if (failed(merged))
+            return failure();
+          current = *merged;
+        }
+      }
       results.push_back(current);
     }
+    if (results.size() != resultTypes.size())
+      return rewriter.notifyMatchFailure(
+          op, "dense mask lane_stride pack materialization result arity "
+              "mismatch");
     return results;
   }
 
@@ -4312,9 +4431,12 @@ FailureOr<SmallVector<Value>> materializeMaskGranularityConversion(
 
   int currentRank = getMaskGranularityRank(sourceType.getGranularity());
   int resultRank = getMaskGranularityRank(resultType.getGranularity());
+  if (std::abs(currentRank - resultRank) == 1)
+    return materializeAdjacentMaskGranularityConversion(
+        op, sourceType, resultType, sourceParts, rewriter);
+
   VMIMaskType currentType = sourceType;
   SmallVector<Value> currentParts(sourceParts.begin(), sourceParts.end());
-
   while (currentRank != resultRank) {
     currentRank += currentRank < resultRank ? 1 : -1;
     StringRef nextGranularity = getMaskGranularityForRank(currentRank);
@@ -4336,6 +4458,331 @@ FailureOr<SmallVector<Value>> materializeMaskGranularityConversion(
   }
 
   return currentParts;
+}
+
+FailureOr<SmallVector<Type>> getConvertedMaskPartTypes(VMIMaskType type) {
+  FailureOr<int64_t> arity = getVMIPhysicalArity(type);
+  FailureOr<StringRef> physicalGranularity =
+      getVMIMaskPhysicalGranularity(type);
+  if (failed(arity) || failed(physicalGranularity) || *arity < 0)
+    return failure();
+  SmallVector<Type> types;
+  types.reserve(*arity);
+  Type partType = MaskType::get(type.getContext(), *physicalGranularity);
+  for (int64_t i = 0; i < *arity; ++i)
+    types.push_back(partType);
+  return types;
+}
+
+static FailureOr<VMILayoutAttr>
+getVMIMaskPhysicalCarrierLayout(VMIMaskType type) {
+  VMILayoutAttr layout = type.getLayoutAttr();
+  if (!layout)
+    return failure();
+  MLIRContext *ctx = type.getContext();
+  if (layout.isContiguous())
+    return VMILayoutAttr::getContiguous(ctx);
+  if (layout.isDeinterleaved())
+    return VMILayoutAttr::getDeinterleaved(ctx, layout.getFactor(),
+                                           layout.getBlockElems());
+  if (layout.isGroupSlots())
+    return VMILayoutAttr::getGroupSlots(ctx, layout.getNumGroups(),
+                                        layout.getSlots());
+  return failure();
+}
+
+static FailureOr<VMIMaskType>
+getVMIMaskPhysicalCarrierType(VMIMaskType type) {
+  FailureOr<StringRef> physicalGranularity =
+      getVMIMaskPhysicalGranularity(type);
+  FailureOr<VMILayoutAttr> physicalLayout =
+      getVMIMaskPhysicalCarrierLayout(type);
+  if (failed(physicalGranularity) || failed(physicalLayout))
+    return failure();
+  return VMIMaskType::get(type.getContext(), type.getElementCount(),
+                          *physicalGranularity, *physicalLayout);
+}
+
+static bool isElementDeinterleavedLayout(VMILayoutAttr layout,
+                                         int64_t factor) {
+  return layout && layout.isDeinterleaved() && layout.getFactor() == factor &&
+         layout.getLaneStride() == 1 && layout.getBlockElems() == 1;
+}
+
+FailureOr<Value> createAllFalseMaskLike(Location loc, Value value,
+                                        PatternRewriter &rewriter) {
+  auto maskType = dyn_cast<MaskType>(value.getType());
+  if (!maskType)
+    return failure();
+  return createPrefixMask(loc, maskType, "PAT_ALLF", rewriter);
+}
+
+FailureOr<SmallVector<Value>> materializeStagingDeintToContiguousMaskLayout(
+    Operation *op, ValueRange sourceParts, TypeRange resultTypes,
+    int64_t factor, PatternRewriter &rewriter) {
+  auto fail = [&](const Twine &message) -> FailureOr<SmallVector<Value>> {
+    (void)rewriter.notifyMatchFailure(op, message);
+    return failure();
+  };
+  if ((factor != 2 && factor != 4) || sourceParts.empty() ||
+      sourceParts.size() % factor != 0)
+    return fail("staging deinterleaved mask layout requires grouped source "
+                "parts");
+
+  int64_t groups = sourceParts.size() / factor;
+  SmallVector<Value> results;
+  results.reserve(resultTypes.size());
+  for (int64_t i = 0; i < groups && results.size() < resultTypes.size(); ++i) {
+    auto nextType = [&](int64_t offset) -> Type {
+      size_t index = results.size() + offset;
+      return index < resultTypes.size() ? resultTypes[index]
+                                        : resultTypes[results.size()];
+    };
+    if (factor == 2) {
+      FailureOr<std::pair<Value, Value>> materialized = createPredicateIntlv(
+          op->getLoc(), nextType(0), nextType(1), sourceParts[i],
+          sourceParts[groups + i], rewriter);
+      if (failed(materialized))
+        return fail("unsupported predicate intlv staging mask type");
+      results.push_back(materialized->first);
+      if (results.size() < resultTypes.size())
+        results.push_back(materialized->second);
+      continue;
+    }
+
+    Value p0 = sourceParts[i];
+    Value p1 = sourceParts[groups + i];
+    Value p2 = sourceParts[2 * groups + i];
+    Value p3 = sourceParts[3 * groups + i];
+    FailureOr<std::pair<Value, Value>> even =
+        createPredicateIntlv(op->getLoc(), nextType(0), nextType(1), p0, p2,
+                             rewriter);
+    FailureOr<std::pair<Value, Value>> odd =
+        createPredicateIntlv(op->getLoc(), nextType(0), nextType(1), p1, p3,
+                             rewriter);
+    if (failed(even) || failed(odd))
+      return fail("unsupported predicate intlv staging mask type");
+    FailureOr<std::pair<Value, Value>> low = createPredicateIntlv(
+        op->getLoc(), nextType(0), nextType(1), even->first, odd->first,
+        rewriter);
+    FailureOr<std::pair<Value, Value>> high = createPredicateIntlv(
+        op->getLoc(), nextType(2), nextType(3), even->second, odd->second,
+        rewriter);
+    if (failed(low) || failed(high))
+      return fail("unsupported predicate intlv staging mask type");
+    results.push_back(low->first);
+    if (results.size() < resultTypes.size())
+      results.push_back(low->second);
+    if (results.size() < resultTypes.size())
+      results.push_back(high->first);
+    if (results.size() < resultTypes.size())
+      results.push_back(high->second);
+  }
+  if (results.size() != resultTypes.size())
+    return fail("staging deinterleaved mask layout result arity mismatch");
+  return results;
+}
+
+FailureOr<SmallVector<Value>> materializeStagingContiguousToDeintMaskLayout(
+    Operation *op, ValueRange sourceParts, TypeRange resultTypes,
+    int64_t factor, PatternRewriter &rewriter) {
+  auto fail = [&](const Twine &message) -> FailureOr<SmallVector<Value>> {
+    (void)rewriter.notifyMatchFailure(op, message);
+    return failure();
+  };
+  if ((factor != 2 && factor != 4) || sourceParts.empty() ||
+      resultTypes.size() % factor != 0)
+    return fail("staging contiguous mask layout requires grouped result parts");
+
+  int64_t groups = resultTypes.size() / factor;
+  if (sourceParts.size() > static_cast<size_t>(groups * factor))
+    return fail("staging contiguous mask layout has too many source parts");
+
+  SmallVector<SmallVector<Value, 4>, 4> parts(factor);
+  for (int64_t part = 0; part < factor; ++part)
+    parts[part].reserve(groups);
+
+  for (int64_t i = 0; i < groups; ++i) {
+    size_t sourceBase = static_cast<size_t>(i * factor);
+    if (sourceBase >= sourceParts.size())
+      return fail("staging contiguous mask layout ran out of source parts");
+
+    SmallVector<Value, 4> sources;
+    sources.reserve(factor);
+    for (int64_t lane = 0; lane < factor; ++lane) {
+      size_t index = sourceBase + lane;
+      if (index < sourceParts.size()) {
+        sources.push_back(sourceParts[index]);
+        continue;
+      }
+      FailureOr<Value> zero =
+          createAllFalseMaskLike(op->getLoc(), sourceParts[sourceBase],
+                                 rewriter);
+      if (failed(zero))
+        return fail("failed to create all-false staging mask");
+      sources.push_back(*zero);
+    }
+
+    if (factor == 2) {
+      FailureOr<std::pair<Value, Value>> materialized =
+          createPredicateDintlv(op->getLoc(), resultTypes[i],
+                                resultTypes[groups + i], sources[0],
+                                sources[1], rewriter);
+      if (failed(materialized))
+        return fail("unsupported predicate dintlv staging mask type");
+      parts[0].push_back(materialized->first);
+      parts[1].push_back(materialized->second);
+      continue;
+    }
+
+    FailureOr<std::pair<Value, Value>> low = createPredicateDintlv(
+        op->getLoc(), resultTypes[i], resultTypes[groups + i], sources[0],
+        sources[1], rewriter);
+    FailureOr<std::pair<Value, Value>> high = createPredicateDintlv(
+        op->getLoc(), resultTypes[2 * groups + i],
+        resultTypes[3 * groups + i], sources[2], sources[3], rewriter);
+    if (failed(low) || failed(high))
+      return fail("unsupported predicate dintlv staging mask type");
+    FailureOr<std::pair<Value, Value>> even = createPredicateDintlv(
+        op->getLoc(), resultTypes[i], resultTypes[2 * groups + i], low->first,
+        high->first, rewriter);
+    FailureOr<std::pair<Value, Value>> odd = createPredicateDintlv(
+        op->getLoc(), resultTypes[groups + i], resultTypes[3 * groups + i],
+        low->second, high->second, rewriter);
+    if (failed(even) || failed(odd))
+      return fail("unsupported predicate dintlv staging mask type");
+    parts[0].push_back(even->first);
+    parts[1].push_back(odd->first);
+    parts[2].push_back(even->second);
+    parts[3].push_back(odd->second);
+  }
+
+  SmallVector<Value> results;
+  results.reserve(resultTypes.size());
+  for (int64_t part = 0; part < factor; ++part) {
+    if (parts[part].size() != static_cast<size_t>(groups))
+      return fail("staging contiguous mask layout result arity mismatch");
+    results.append(parts[part]);
+  }
+  return results;
+}
+
+FailureOr<SmallVector<Value>> materializeMaskGranularityCastLayoutConversion(
+    Operation *op, VMIMaskType sourceType, VMIMaskType resultType,
+    ValueRange sourceParts, TypeRange resultTypes, PatternRewriter &rewriter);
+
+FailureOr<SmallVector<Value>>
+materializeMaskGranularityCastLayoutConversionViaContiguous(
+    Operation *op, VMIMaskType sourceType, VMIMaskType resultType,
+    ValueRange sourceParts, TypeRange resultTypes, PatternRewriter &rewriter) {
+  VMILayoutAttr contiguous = VMILayoutAttr::getContiguous(op->getContext());
+  VMIMaskType contiguousType =
+      VMIMaskType::get(op->getContext(), sourceType.getElementCount(),
+                       sourceType.getGranularity(), contiguous);
+  FailureOr<SmallVector<Type>> contiguousTypes =
+      getConvertedMaskPartTypes(contiguousType);
+  if (failed(contiguousTypes))
+    return failure();
+  FailureOr<SmallVector<Value>> contiguousParts =
+      materializeMaskGranularityCastLayoutConversion(
+          op, sourceType, contiguousType, sourceParts, *contiguousTypes,
+          rewriter);
+  if (failed(contiguousParts))
+    return failure();
+  return materializeMaskGranularityCastLayoutConversion(
+      op, contiguousType, resultType, *contiguousParts, resultTypes, rewriter);
+}
+
+FailureOr<SmallVector<Value>> materializeMaskGranularityCastLayoutConversion(
+    Operation *op, VMIMaskType sourceType, VMIMaskType resultType,
+    ValueRange sourceParts, TypeRange resultTypes, PatternRewriter &rewriter) {
+  auto fail = [&](const Twine &message) -> FailureOr<SmallVector<Value>> {
+    (void)rewriter.notifyMatchFailure(op, message);
+    return failure();
+  };
+
+  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  if (!sourceLayout || !resultLayout)
+    return fail("mask granularity cast layout conversion requires layouts");
+
+  if (sourceLayout == resultLayout) {
+    if (failed(verifyIdentityPartForwarding(op, sourceParts, resultTypes,
+                                            rewriter)))
+      return failure();
+    return SmallVector<Value>(sourceParts.begin(), sourceParts.end());
+  }
+
+  FailureOr<SmallVector<Value>> layoutParts = materializeMaskLayoutConversion(
+      op, sourceParts, resultTypes, sourceLayout, resultLayout, rewriter);
+  if (succeeded(layoutParts))
+    return layoutParts;
+
+  bool sourceC = sourceLayout.isContiguous() && sourceLayout.getLaneStride() == 1;
+  bool resultC = resultLayout.isContiguous() && resultLayout.getLaneStride() == 1;
+  if (isElementDeinterleavedLayout(sourceLayout, 2) && resultC)
+    return materializeStagingDeintToContiguousMaskLayout(
+        op, sourceParts, resultTypes, /*factor=*/2, rewriter);
+  if (sourceC && isElementDeinterleavedLayout(resultLayout, 2))
+    return materializeStagingContiguousToDeintMaskLayout(
+        op, sourceParts, resultTypes, /*factor=*/2, rewriter);
+  if (isElementDeinterleavedLayout(sourceLayout, 4) && resultC)
+    return materializeStagingDeintToContiguousMaskLayout(
+        op, sourceParts, resultTypes, /*factor=*/4, rewriter);
+  if (sourceC && isElementDeinterleavedLayout(resultLayout, 4))
+    return materializeStagingContiguousToDeintMaskLayout(
+        op, sourceParts, resultTypes, /*factor=*/4, rewriter);
+
+  if (sourceLayout.isDeinterleaved() || resultLayout.isDeinterleaved())
+    return materializeMaskGranularityCastLayoutConversionViaContiguous(
+        op, sourceType, resultType, sourceParts, resultTypes, rewriter);
+
+  return fail("unsupported mask granularity cast layout conversion");
+}
+
+FailureOr<SmallVector<Value>> materializeMaskGranularityCastConversion(
+    Operation *op, VMIMaskType sourceType, VMIMaskType resultType,
+    ValueRange sourceParts, TypeRange resultTypes, PatternRewriter &rewriter) {
+  auto fail = [&](const Twine &message) -> FailureOr<SmallVector<Value>> {
+    (void)rewriter.notifyMatchFailure(op, message);
+    return failure();
+  };
+
+  if (sourceType.getElementCount() != resultType.getElementCount())
+    return fail("requires source and result mask lane counts to match");
+
+  FailureOr<VMIMaskType> physicalSourceType =
+      getVMIMaskPhysicalCarrierType(sourceType);
+  FailureOr<VMIMaskType> physicalResultType =
+      getVMIMaskPhysicalCarrierType(resultType);
+  if (failed(physicalSourceType) || failed(physicalResultType))
+    return fail("requires source/result mask physical carrier types");
+
+  if (*physicalSourceType == *physicalResultType) {
+    if (failed(verifyIdentityPartForwarding(op, sourceParts, resultTypes,
+                                            rewriter)))
+      return failure();
+    return SmallVector<Value>(sourceParts.begin(), sourceParts.end());
+  }
+
+  if (physicalSourceType->getLayoutAttr() == physicalResultType->getLayoutAttr())
+    return materializeMaskGranularityConversion(op, *physicalSourceType,
+                                                *physicalResultType,
+                                                sourceParts, rewriter);
+
+  VMIMaskType granularityType =
+      VMIMaskType::get(op->getContext(), sourceType.getElementCount(),
+                       physicalResultType->getGranularity(),
+                       physicalSourceType->getLayoutAttr());
+  FailureOr<SmallVector<Value>> granularityParts =
+      materializeMaskGranularityConversion(op, *physicalSourceType,
+                                           granularityType, sourceParts,
+                                           rewriter);
+  if (failed(granularityParts))
+    return failure();
+  return materializeMaskGranularityCastLayoutConversion(
+      op, granularityType, *physicalResultType, *granularityParts, resultTypes,
+      rewriter);
 }
 
 struct OneToNVMIEnsureLayoutOpPattern
@@ -4425,9 +4872,17 @@ struct OneToNVMIEnsureMaskGranularityOpPattern
                   ConversionPatternRewriter &rewriter) const override {
     auto sourceType = cast<VMIMaskType>(op.getSource().getType());
     auto resultType = cast<VMIMaskType>(op.getResult().getType());
-    if (sourceType.getLayout() != resultType.getLayout())
-      return rewriter.notifyMatchFailure(
-          op, "mask granularity helper cannot also change layout");
+    VMILayoutSupport supports;
+    bool identity = sourceType.getGranularity() == resultType.getGranularity() &&
+                    sourceType.getLayoutAttr() == resultType.getLayoutAttr();
+    if (!identity) {
+      std::string reason;
+      if (failed(supports.getMaskGranularityCastLayoutFactForLayouts(
+              sourceType, resultType, sourceType.getLayoutAttr(),
+              resultType.getLayoutAttr(), &reason)))
+        return rewriter.notifyMatchFailure(
+            op, "unsupported mask granularity cast layout relation: " + reason);
+    }
 
     ValueRange sourceParts = adaptor.getSource();
     FailureOr<SmallVector<Type>> maybe_resultTypes =
@@ -4435,27 +4890,21 @@ struct OneToNVMIEnsureMaskGranularityOpPattern
     if (failed(maybe_resultTypes))
       return failure();
     SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
-    if (sourceType.getGranularity() != resultType.getGranularity()) {
-      FailureOr<SmallVector<Value>> results =
-          materializeMaskGranularityConversion(op, sourceType, resultType,
-                                               sourceParts, rewriter);
-      if (failed(results))
-        return failure();
-      if (results->size() != resultTypes.size())
-        return rewriter.notifyMatchFailure(
-            op, "mask granularity result arity mismatch");
-      for (auto [result, type] : llvm::zip_equal(*results, resultTypes))
-        if (result.getType() != type)
-          return rewriter.notifyMatchFailure(
-              op, "mask granularity result type mismatch");
-      replaceOpWithFlatConvertedValues(rewriter, op, *results, *this->getTypeConverter());
-      return success();
-    }
 
-    if (failed(verifyIdentityPartForwarding(op, sourceParts, resultTypes,
-                                            rewriter)))
+    FailureOr<SmallVector<Value>> results =
+        materializeMaskGranularityCastConversion(
+            op, sourceType, resultType, sourceParts, resultTypes, rewriter);
+    if (failed(results))
       return failure();
-    replaceOpWithFlatConvertedValues(rewriter, op, sourceParts, *this->getTypeConverter());
+    if (results->size() != resultTypes.size())
+      return rewriter.notifyMatchFailure(
+          op, "mask granularity cast result arity mismatch");
+    for (auto [result, type] : llvm::zip_equal(*results, resultTypes))
+      if (result.getType() != type)
+        return rewriter.notifyMatchFailure(
+            op, "mask granularity cast result type mismatch");
+    replaceOpWithFlatConvertedValues(rewriter, op, *results,
+                                     *this->getTypeConverter());
     return success();
   }
 
@@ -4797,8 +5246,12 @@ struct OneToNVMICreateMaskOpPattern
         !VMIMaskType::isConcreteGranularity(resultVMIType.getGranularity()))
       return rewriter.notifyMatchFailure(
           op, "create_mask requires concrete layout and granularity");
+    FailureOr<StringRef> physicalGranularity =
+        getVMIMaskPhysicalGranularity(resultVMIType);
     FailureOr<int64_t> lanesPerPart =
-        getMaskLanesPerPart(resultVMIType.getGranularity());
+        failed(physicalGranularity)
+            ? FailureOr<int64_t>(failure())
+            : getMaskLanesPerPart(*physicalGranularity);
     if (failed(lanesPerPart))
       return rewriter.notifyMatchFailure(
           op, "create_mask requires known physical mask lanes per part");
@@ -11401,19 +11854,24 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     if (auto ensure = dyn_cast<VMIEnsureMaskGranularityOp>(op)) {
       auto sourceType = cast<VMIMaskType>(ensure.getSource().getType());
       auto resultType = cast<VMIMaskType>(ensure.getResult().getType());
-      if (sourceType.getGranularity() == resultType.getGranularity())
-        return WalkResult::advance();
+      bool identity =
+          sourceType.getGranularity() == resultType.getGranularity() &&
+          sourceType.getLayoutAttr() == resultType.getLayoutAttr();
+      if (!identity) {
+        VMILayoutSupport supports;
+        std::string reason;
+        if (failed(supports.getMaskGranularityCastLayoutFactForLayouts(
+                sourceType, resultType, sourceType.getLayoutAttr(),
+                resultType.getLayoutAttr(), &reason))) {
+          ensure.emitError()
+              << kVMIDiagUnsupportedPrefix
+              << "mask granularity cast layout relation is unsupported ("
+              << reason << ")";
+          return WalkResult::interrupt();
+        }
+      }
 
-      std::string reason;
-      if (succeeded(checkSupportedMaskGranularityMaterialization(sourceType, resultType, &reason)))
-        return WalkResult::advance();
-
-      ensure.emitError()
-          << kVMIDiagUnsupportedPrefix
-          << "non-identity mask granularity materialization requires concrete "
-             "b8/b16/b32 masks with matching lane count and layout ("
-          << reason << ")";
-      return WalkResult::interrupt();
+      return WalkResult::advance();
     }
 
     if (auto addf = dyn_cast<VMIAddFOp>(op))

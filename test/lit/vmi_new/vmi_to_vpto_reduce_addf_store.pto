@@ -1,0 +1,70 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN --implicit-check-not=pto.vmi.ensure_mask_granularity --implicit-check-not=pto.vmi.ensure_mask_layout
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER --implicit-check-not=pto.ppack --implicit-check-not=pto.por --implicit-check-not=pto.vmi. --implicit-check-not='!pto.vmi.' --implicit-check-not=unrealized_conversion_cast
+
+module {
+  func.func @vmi_to_vpto_reduce_addf_store(
+      %source: !pto.vmi.vreg<64xf32>,
+      %rhs: !pto.vmi.vreg<64xf32>,
+      %dst_bf16: !pto.ptr<bf16, ub>,
+      %dst: !pto.ptr<f32, ub>,
+      %offset: index) {
+    %c64 = arith.constant 64 : index
+    %c1 = arith.constant 1 : index
+    %mask64 = pto.vmi.create_mask %c64 : index -> !pto.vmi.mask<64xpred>
+    %mask1 = pto.vmi.create_mask %c1 : index -> !pto.vmi.mask<1xpred>
+    %sum = pto.vmi.vadd %source, %rhs, %mask64
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>,
+          !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<64xf32>
+    %narrow = pto.vmi.vcvt %sum
+        : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+    pto.vmi.vstore %narrow, %dst_bf16[%offset], %mask64
+        : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>, !pto.vmi.mask<64xpred>
+    %reduce = pto.vmi.vcadd %sum, %mask64 {reassoc}
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<1xf32>
+    pto.vmi.vstore %reduce, %dst[%offset], %mask1
+        : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>, !pto.vmi.mask<1xpred>
+    return
+  }
+}
+
+// ASSIGN-LABEL: func.func @vmi_to_vpto_reduce_addf_store(
+// ASSIGN: %[[C64:.*]] = arith.constant 64 : index
+// ASSIGN: %[[MASK32:.*]] = pto.vmi.create_mask %[[C64]]
+// ASSIGN-SAME: -> !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[SUM:.*]] = pto.vmi.addf
+// ASSIGN: %[[NARROW:.*]] = pto.vmi.truncf %[[SUM]]
+// ASSIGN-SAME: -> !pto.vmi.vreg<64xbf16, #pto.vmi.layout<contiguous, lane_stride = 2>>
+// ASSIGN: %[[MASK16:.*]] = pto.vmi.create_mask %[[C64]]
+// ASSIGN-SAME: -> !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous, lane_stride = 2>>
+// ASSIGN: pto.vmi.masked_store %[[NARROW]]
+// ASSIGN-SAME: !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous, lane_stride = 2>>
+// ASSIGN: pto.vmi.reduce_addf %[[SUM]], {{.*}}, %[[MASK32]]
+// ASSIGN-SAME: !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>
+
+// LOWER-LABEL: func.func @vmi_to_vpto_reduce_addf_store(
+// LOWER-SAME: %[[SRC:[^,]+]]: !pto.vreg<64xf32>
+// LOWER-SAME: %[[RHS:[^,]+]]: !pto.vreg<64xf32>
+// LOWER-SAME: %[[DST_BF16:[^,]+]]: !pto.ptr<bf16, ub>
+// LOWER-SAME: %[[DST:[^,]+]]: !pto.ptr<f32, ub>
+// LOWER-SAME: %[[OFF:[^)]+]]: index
+// LOWER: %[[REDUCE_MASK:.*]] = pto.pge_b32 "PAT_ALL"
+// LOWER: %[[STORE_MASK:.*]] = pto.pge_b32 "PAT_VL1"
+// LOWER: %[[ALL:.*]] = pto.pset_b32 "PAT_ALL"
+// LOWER: %[[SUM:.*]] = pto.vadd %[[SRC]], %[[RHS]], %[[ALL]]
+// LOWER: pto.vsts {{.*}}, %[[DST_BF16]][%[[OFF]]], {{.*}} {dist = "PK_B32"}
+// LOWER: %[[VL1:.*]] = pto.pge_b32 "PAT_VL1" : !pto.mask<b32>
+// LOWER: %[[REDUCED:.*]] = pto.vcadd %[[SUM]], %[[REDUCE_MASK]]
+// LOWER: %[[REDUCED_SUM:.*]] = pto.vadd %[[REDUCED]], {{.*}}, %[[VL1]]
+// LOWER: %[[ONE:.*]] = arith.constant 1 : i32
+// LOWER: %[[PREFIX:.*]], %{{.*}} = pto.plt_b32 %[[ONE]]
+// LOWER: %[[MASKED:.*]] = pto.pand %[[STORE_MASK]], %[[PREFIX]]
+// LOWER: pto.vsts %[[REDUCED_SUM]], %[[DST]][%[[OFF]]], %[[MASKED]]

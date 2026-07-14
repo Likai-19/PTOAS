@@ -14,8 +14,8 @@ module {
       %source: !pto.vmi.vreg<64xf16>,
       %mask: !pto.vmi.mask<64xpred>)
       -> !pto.vmi.vreg<8xf16> {
-    %sum = pto.vmi.vcadd %source, %mask
-        {group = 8, reassoc}
+    %sum = pto.vmi.group_reduce_addf %source, %mask
+        {num_groups = 8, reassoc}
         : !pto.vmi.vreg<64xf16>, !pto.vmi.mask<64xpred>
         -> !pto.vmi.vreg<8xf16>
     return %sum : !pto.vmi.vreg<8xf16>
@@ -24,7 +24,7 @@ module {
 
 // ASSIGN-LABEL: func.func @vmi_layout_assignment_group_reduce_half_block(
 // ASSIGN-SAME: %[[SOURCE:.*]]: !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous>>
-// ASSIGN-SAME: %[[MASK:.*]]: !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous, lane_stride = 2>>
+// ASSIGN-SAME: %[[MASK:.*]]: !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>
 // ASSIGN: %[[MASK_B16:.*]] = pto.vmi.ensure_mask_granularity %[[MASK]]
 // ASSIGN-SAME: -> !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous, lane_stride = 2>>
 // ASSIGN: %[[SOURCE_STRIDE:.*]] = pto.vmi.ensure_layout %[[SOURCE]]
@@ -33,14 +33,11 @@ module {
 // ASSIGN-SAME: -> !pto.vmi.vreg<8xf16, #pto.vmi.layout<num_groups = 8, slots = 8>>
 
 // LOWER-LABEL: func.func @vmi_layout_assignment_group_reduce_half_block(
-// LOWER: %[[MASK_B16:.*]] = pto.ppack %{{.*}}, "LOWER" : !pto.mask<b32> -> !pto.mask<b16>
-// LOWER: %[[MASK_B16_HI:.*]] = pto.ppack %{{.*}}, "HIGHER" : !pto.mask<b32> -> !pto.mask<b16>
-// LOWER: %[[MASK_ALL:.*]] = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
-// LOWER: %[[MASK_STRIDE:.*]] = pto.por %[[MASK_B16]], %[[MASK_B16_HI]], %[[MASK_ALL]]
+// LOWER-SAME: %[[MASK:[^,)]+]]: !pto.mask<b32>
 // LOWER: %[[BITS:.*]] = pto.vbitcast
 // LOWER: %[[UNPACKED:.*]] = pto.vzunpack %[[BITS]]
 // LOWER: %[[SOURCE_STRIDE:.*]] = pto.vbitcast %[[UNPACKED]]
-// LOWER: %[[SUM:.*]] = pto.vcgadd %[[SOURCE_STRIDE]], %[[MASK_STRIDE]]
+// LOWER: %[[SUM:.*]] = pto.vcgadd %[[SOURCE_STRIDE]], %[[MASK]] : !pto.vreg<128xf16>, !pto.mask<b32> -> !pto.vreg<128xf16>
 // LOWER-NOT: pto.vmi.
 // LOWER-NOT: !pto.vmi.
 // LOWER-NOT: unrealized_conversion_cast

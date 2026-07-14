@@ -10,10 +10,10 @@
 
 module {
   func.func @vmi_to_vpto_ensure_mask_granularity_multistep(
-      %m: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>)
+      %m: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 4>>)
       -> !pto.mask<b8> {
     %result = pto.vmi.ensure_mask_granularity %m
-        : !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+        : !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.mask<128xb8, #pto.vmi.layout<contiguous>>
     %part = "pto.vmi.unpack"(%result)
         : (!pto.vmi.mask<128xb8, #pto.vmi.layout<contiguous>>)
@@ -23,11 +23,17 @@ module {
 }
 
 // CHECK-LABEL: func.func @vmi_to_vpto_ensure_mask_granularity_multistep(
-// CHECK: %[[LO16:.*]] = pto.ppack %arg0, "LOWER" : !pto.mask<b32> -> !pto.mask<b16>
-// CHECK: %[[HI16:.*]] = pto.ppack %arg1, "HIGHER" : !pto.mask<b32> -> !pto.mask<b16>
-// CHECK: %[[ALL16:.*]] = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
-// CHECK: %[[M16:.*]] = pto.por %[[LO16]], %[[HI16]], %[[ALL16]] : !pto.mask<b16>, !pto.mask<b16>, !pto.mask<b16> -> !pto.mask<b16>
-// CHECK: %[[M8:.*]] = pto.ppack %[[M16]], "LOWER" : !pto.mask<b16> -> !pto.mask<b8>
+// CHECK: %[[P0_16:.*]] = pto.ppack %arg0, "LOWER" : !pto.mask<b32> -> !pto.mask<b16>
+// CHECK: %[[P1_16:.*]] = pto.ppack %arg1, "LOWER" : !pto.mask<b32> -> !pto.mask<b16>
+// CHECK: %[[P2_16:.*]] = pto.ppack %arg2, "LOWER" : !pto.mask<b32> -> !pto.mask<b16>
+// CHECK: %[[P3_16:.*]] = pto.ppack %arg3, "LOWER" : !pto.mask<b32> -> !pto.mask<b16>
+// CHECK: %[[P0_8:.*]] = pto.ppack %[[P0_16]], "LOWER" : !pto.mask<b16> -> !pto.mask<b8>
+// CHECK: %[[P1_8:.*]] = pto.ppack %[[P1_16]], "LOWER" : !pto.mask<b16> -> !pto.mask<b8>
+// CHECK: %[[P2_8:.*]] = pto.ppack %[[P2_16]], "LOWER" : !pto.mask<b16> -> !pto.mask<b8>
+// CHECK: %[[P3_8:.*]] = pto.ppack %[[P3_16]], "LOWER" : !pto.mask<b16> -> !pto.mask<b8>
+// CHECK: %[[EVEN_LO:.*]], %{{.*}} = pto.pintlv_b8 %[[P0_8]], %[[P2_8]]
+// CHECK: %[[ODD_LO:.*]], %{{.*}} = pto.pintlv_b8 %[[P1_8]], %[[P3_8]]
+// CHECK: %[[M8:.*]], %{{.*}} = pto.pintlv_b8 %[[EVEN_LO]], %[[ODD_LO]]
 // CHECK: return %[[M8]]
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.

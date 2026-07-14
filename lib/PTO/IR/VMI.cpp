@@ -217,25 +217,6 @@ static FailureOr<Type> getVMIPhysicalElementType(VMIVRegType type) {
   return IntegerType::get(type.getContext(), physicalBits);
 }
 
-static FailureOr<int64_t> getPhysicalLanesPerPart(Type type) {
-  if (auto vregType = dyn_cast<VMIVRegType>(type)) {
-    FailureOr<Type> physicalElementType = getVMIPhysicalElementType(vregType);
-    if (failed(physicalElementType))
-      return failure();
-    return getDataLanesPerPart(*physicalElementType);
-  }
-  if (auto maskType = dyn_cast<VMIMaskType>(type))
-    return getMaskLanesPerPart(maskType.getGranularity());
-  return failure();
-}
-
-static FailureOr<int64_t> getDenseLaneStride(Type type) {
-  FailureOr<VMILayoutAttr> layout = getAssignedVMILayout(type);
-  if (failed(layout))
-    return failure();
-  return (*layout).isDense() ? (*layout).getLaneStride() : 1;
-}
-
 static int64_t getMaskGranularityBitWidth(StringRef granularity) {
   if (granularity == "b8")
     return 8;
@@ -244,6 +225,60 @@ static int64_t getMaskGranularityBitWidth(StringRef granularity) {
   if (granularity == "b32")
     return 32;
   return 0;
+}
+
+static StringRef getMaskGranularityForBitWidth(int64_t bits) {
+  switch (bits) {
+  case 8:
+    return "b8";
+  case 16:
+    return "b16";
+  case 32:
+    return "b32";
+  default:
+    return "";
+  }
+}
+
+static FailureOr<StringRef> getVMIMaskPhysicalGranularity(VMIMaskType type) {
+  int64_t bits = getMaskGranularityBitWidth(type.getGranularity());
+  if (bits == 0)
+    return failure();
+
+  VMILayoutAttr layout = type.getLayoutAttr();
+  int64_t laneStride = layout && layout.hasLaneStride() ? layout.getLaneStride()
+                                                        : 1;
+  StringRef physicalGranularity =
+      getMaskGranularityForBitWidth(bits * laneStride);
+  if (physicalGranularity.empty())
+    return failure();
+  return physicalGranularity;
+}
+
+static FailureOr<int64_t> getPhysicalLanesPerPart(Type type) {
+  if (auto vregType = dyn_cast<VMIVRegType>(type)) {
+    FailureOr<Type> physicalElementType = getVMIPhysicalElementType(vregType);
+    if (failed(physicalElementType))
+      return failure();
+    return getDataLanesPerPart(*physicalElementType);
+  }
+  if (auto maskType = dyn_cast<VMIMaskType>(type)) {
+    FailureOr<StringRef> physicalGranularity =
+        getVMIMaskPhysicalGranularity(maskType);
+    if (failed(physicalGranularity))
+      return failure();
+    return getMaskLanesPerPart(*physicalGranularity);
+  }
+  return failure();
+}
+
+static FailureOr<int64_t> getDenseLaneStride(Type type) {
+  FailureOr<VMILayoutAttr> layout = getAssignedVMILayout(type);
+  if (failed(layout))
+    return failure();
+  if (isa<VMIMaskType>(type))
+    return 1;
+  return (*layout).isDense() ? (*layout).getLaneStride() : 1;
 }
 
 static bool isLayoutAssigned(VMIVRegType type) {
@@ -495,14 +530,19 @@ static LogicalResult verifyPhysicalParts(Operation *op, Type vmiType,
   if (maskType.isPred())
     return op->emitOpError(
         "requires layout-assigned mask with concrete granularity");
+  FailureOr<StringRef> physicalGranularity =
+      getVMIMaskPhysicalGranularity(maskType);
+  if (failed(physicalGranularity))
+    return op->emitOpError(
+        "requires mask type with supported physical carrier granularity");
 
   for (Type physicalType : physicalTypes) {
     auto partType = dyn_cast<MaskType>(physicalType);
     if (!partType)
       return op->emitOpError("requires physical mask parts to be !pto.mask");
-    if (partType.getGranularity() != maskType.getGranularity())
+    if (partType.getGranularity() != *physicalGranularity)
       return op->emitOpError(
-          "requires physical mask part granularity to match VMI mask");
+          "requires physical mask part granularity to match VMI mask carrier");
   }
   return success();
 }
@@ -837,12 +877,6 @@ LogicalResult VMIMaskType::verify(function_ref<InFlightDiagnostic()> emitError,
     return emitError() << "'"
                        << formatVMIMaskType(elementCount, granularity, layout)
                        << "' expected layout to be #pto.vmi.layout";
-  if (auto layoutAttr = llvm::dyn_cast_or_null<VMILayoutAttr>(layout)) {
-    if (layoutAttr.isGroupSlots())
-      return emitError() << "'"
-                         << formatVMIMaskType(elementCount, granularity, layout)
-                         << "' mask type must not carry num_groups layout";
-  }
 
   if (granularity == "pred" && layout)
     return emitError() << "'"
@@ -2252,8 +2286,6 @@ LogicalResult VMIEnsureMaskGranularityOp::verify() {
     if (!isLayoutAssigned(sourceType) || !isLayoutAssigned(resultType))
       return emitOpError("requires either both source and result to carry "
                          "layout or neither to carry layout");
-    if (sourceType.getLayout() != resultType.getLayout())
-      return emitOpError("requires source and result mask layouts to match");
   }
   return success();
 }
@@ -4052,7 +4084,10 @@ FailureOr<int64_t> mlir::pto::getVMIPhysicalArity(Type type) {
   int64_t factor = (*layout).isDeinterleaved() ? (*layout).getFactor() : 1;
   int64_t blockElems =
       (*layout).isDeinterleaved() ? (*layout).getBlockElems() : 1;
-  int64_t laneStride = (*layout).isDense() ? (*layout).getLaneStride() : 1;
+  int64_t laneStride =
+      isa<VMIMaskType>(type) ? 1
+                             : ((*layout).isDense() ? (*layout).getLaneStride()
+                                                    : 1);
   int64_t arity = 0;
   for (int64_t part = 0; part < factor; ++part) {
     int64_t lanesInPart =
