@@ -6241,7 +6241,7 @@ VMI-shaped input:
   : index -> !pto.vmi.mask<Nxpred>
 %acc = pto.vmi.load %acc_base[%acc_off]
   : memref<256xui16> -> !pto.vmi.vreg<256xui16>
-%hist = pto.vmi.dhist %acc, %src, %mask
+%hist = pto.vmi.vdhist %acc, %src, %mask
   : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<Nxui8>,
     !pto.vmi.mask<Nxpred> -> !pto.vmi.vreg<256xui16>
 pto.vmi.store %hist, %out[%out_off]
@@ -6352,7 +6352,7 @@ locally emits the low-range and high-range VPTO histogram updates.
 The desired VMI surface shape mirrors `dhist`:
 
 ```text
-%hist = pto.vmi.chist %acc, %src, %mask
+%hist = pto.vmi.vchist %acc, %src, %mask
   : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<Nxui8>,
     !pto.vmi.mask<Nxpred> -> !pto.vmi.vreg<256xui16>
 ```
@@ -6399,7 +6399,7 @@ the low-half total.  Since baseline VMI does not support arbitrary vector
 extract, the range-local CHISTv2 interpretation remains unsupported until that
 materialization path is explicit.
 
-The baseline design therefore treats `pto.vmi.chist` as a semantic op whose
+The baseline design therefore treats `pto.vmi.vchist` as a semantic op whose
 exact lowering is gated by a target semantic capability:
 
 ```text
@@ -6409,10 +6409,10 @@ elif target documents or validation proves CHISTv2 high range is range-local:
   lower as pto.chistv2 low/high plus explicit high-half correction only after
   low-total materialization support is designed
 else:
-  VMI-UNSUPPORTED: pto.vmi.chist requires a verified CHISTv2 range semantics contract
+  VMI-UNSUPPORTED: pto.vmi.vchist requires a verified CHISTv2 range semantics contract
 ```
 
-This boundary is deliberate.  `pto.vmi.dhist` is fully defined because
-distribution bins are independent across the low/high split.  `pto.vmi.chist`
+This boundary is deliberate.  `pto.vmi.vdhist` is fully defined because
+distribution bins are independent across the low/high split.  `pto.vmi.vchist`
 has cross-range prefix semantics, so VMI must not guess the high-half behavior
 from the VPTO op name alone.

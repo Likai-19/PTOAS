@@ -2234,12 +2234,12 @@ pto.vmi.compress_store
 Value-indexed accumulation：
 
 ```text
-pto.vmi.dhist
-pto.vmi.chist
+pto.vmi.vdhist
+pto.vmi.vchist
 ```
 
-`pto.vmi.dhist` is a first-stage semantic op when histogram support is enabled.
-`pto.vmi.chist` may share the surface verifier, but its final lowering must be
+`pto.vmi.vdhist` is a first-stage semantic op when histogram support is enabled.
+`pto.vmi.vchist` may share the surface verifier, but its final lowering must be
 gated until the target CHISTv2 high-range cumulative semantics are verified.
 
 Current implementation scope note:
@@ -3961,7 +3961,7 @@ physicalization:
   part1 represents logical bins 128..255
 ```
 
-`vmi-to-vpto` lowering for `pto.vmi.dhist` is local and deterministic from the
+`vmi-to-vpto` lowering for `pto.vmi.vdhist` is local and deterministic from the
 op and assigned types:
 
 ```text
@@ -3996,17 +3996,17 @@ only when the lowering can construct the valid-lane prefix mask
 Diagnostics:
 
 ```text
-VMI-UNSUPPORTED: pto.vmi.dhist requires contiguous ui8 source, b8 mask, and
+VMI-UNSUPPORTED: pto.vmi.vdhist requires contiguous ui8 source, b8 mask, and
 contiguous 256xui16 accumulator/result
 
-VMI-UNSUPPORTED: pto.vmi.dhist final partial source chunk requires valid-lane
+VMI-UNSUPPORTED: pto.vmi.vdhist final partial source chunk requires valid-lane
 b8 mask materialization
 ```
 
-`pto.vmi.chist` has the same verifier and assignment requirements as `pto.vmi.dhist`.
+`pto.vmi.vchist` has the same verifier and assignment requirements as `pto.vmi.vdhist`.
 A5 hardware `chistv2` high-range semantics have been confirmed as **global cumulative**
-(bin=1 result automatically accumulates bin0's total count), so `pto.vmi.chist` lowers
-via the same template as `pto.vmi.dhist` — the only difference is emitting `pto.chistv2`
+(bin=1 result automatically accumulates bin0's total count), so `pto.vmi.vchist` lowers
+via the same template as `pto.vmi.vdhist` — the only difference is emitting `pto.chistv2`
 in place of `pto.dhistv2`.  No software compensation is needed.
 
 If future hardware switches to range-local cumulative semantics, the chist pattern
@@ -4082,10 +4082,10 @@ Slice 4 完成条件：
 11. Same-family mask logic ops lower through the physical mask granularity instead of assuming b32 masks.
     Covered by vmi_to_vpto_mask_logic.pto for mask_and/mask_or/mask_xor/mask_not on b32 masks produced by
     cmpf and on direct b8/b16 mask operands.
-12. `pto.vmi.dhist` lowers one logical 256-bin histogram into two VPTO low/high
+12. `pto.vmi.vdhist` lowers one logical 256-bin histogram into two VPTO low/high
     bin-range histogram accumulator chains, and tail source chunks are masked
-    with a valid-lane b8 prefix. `pto.vmi.chist` uses the same lowering template
-    as `pto.vmi.dhist` (A5 hardware confirmed global cumulative semantics).
+    with a valid-lane b8 prefix. `pto.vmi.vchist` uses the same lowering template
+    as `pto.vmi.vdhist` (A5 hardware confirmed global cumulative semantics).
     Covered by vmi_to_vpto_dhist.pto, vmi_to_vpto_dhist_tail_mask.pto, and
     vmi_to_vpto_chist.pto.
 ```

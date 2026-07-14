@@ -23,11 +23,11 @@ struct MrgSortExecutedNumList {
 #endif
 
 extern "C" __global__ [aicore] void
-vmi_dhist_tail_mask_store_kernel(__gm__ uint8_t *src, __gm__ uint16_t *acc,
+vmi_vdhist_tail_mask_store_kernel(__gm__ uint8_t *src, __gm__ uint16_t *acc,
                                  __gm__ uint16_t *dst);
 
-void LaunchVmi_dhist_tail_mask_store_kernel(uint8_t *src, uint16_t *acc,
+void LaunchVmi_vdhist_tail_mask_store_kernel(uint8_t *src, uint16_t *acc,
                                             uint16_t *dst, void *stream) {
-  vmi_dhist_tail_mask_store_kernel<<<1, nullptr, stream>>>(
+  vmi_vdhist_tail_mask_store_kernel<<<1, nullptr, stream>>>(
       (__gm__ uint8_t *)src, (__gm__ uint16_t *)acc, (__gm__ uint16_t *)dst);
 }

@@ -7,7 +7,7 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
-  func.func @vmi_dhist_tail_mask_store_kernel(
+  func.func @vmi_vdhist_tail_mask_store_kernel(
       %src_gm: !pto.ptr<ui8, gm>, %acc_gm: !pto.ptr<ui16, gm>,
       %dst_gm: !pto.ptr<ui16, gm>) attributes {pto.kernel} {
     %c0 = arith.constant 0 : index
@@ -38,7 +38,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
       %acc = pto.vmi.load %ub_acc[%c0]
           : !pto.ptr<ui16, ub> -> !pto.vmi.vreg<256xui16>
       %mask = pto.vmi.create_mask %c300 : index -> !pto.vmi.mask<512xpred>
-      %hist = pto.vmi.dhist %acc, %source, %mask
+      %hist = pto.vmi.vdhist %acc, %source, %mask
           : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<512xui8>,
             !pto.vmi.mask<512xpred> -> !pto.vmi.vreg<256xui16>
       pto.vmi.store %hist, %ub_dst[%c0]

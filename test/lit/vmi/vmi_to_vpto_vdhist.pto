@@ -6,15 +6,15 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto | FileCheck %s
+// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
 
 module {
-  func.func @vmi_to_vpto_dhist(
+  func.func @vmi_to_vpto_vdhist(
       %acc: !pto.vmi.vreg<256xui16, #pto.vmi.layout<contiguous>>,
       %source: !pto.vmi.vreg<256xui8, #pto.vmi.layout<contiguous>>,
       %mask: !pto.vmi.mask<256xb8, #pto.vmi.layout<contiguous>>)
       -> (!pto.vreg<128xui16>, !pto.vreg<128xui16>) {
-    %hist = pto.vmi.vhist %acc, %source, %mask
+    %hist = pto.vmi.vdhist %acc, %source, %mask
         : !pto.vmi.vreg<256xui16, #pto.vmi.layout<contiguous>>,
           !pto.vmi.vreg<256xui8, #pto.vmi.layout<contiguous>>,
           !pto.vmi.mask<256xb8, #pto.vmi.layout<contiguous>>
@@ -26,7 +26,7 @@ module {
   }
 }
 
-// CHECK-LABEL: func.func @vmi_to_vpto_dhist(
+// CHECK-LABEL: func.func @vmi_to_vpto_vdhist(
 // CHECK-SAME: %[[ACC0:[^,]+]]: !pto.vreg<128xui16>
 // CHECK-SAME: %[[ACC1:[^,]+]]: !pto.vreg<128xui16>
 // CHECK-SAME: %[[SRC:[^,]+]]: !pto.vreg<256xui8>

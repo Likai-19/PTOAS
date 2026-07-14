@@ -510,11 +510,11 @@ class VMIHistogramOp<string mnemonic, string summaryText>
   let assemblyFormat = "$acc `,` $source `,` $mask attr-dict `:` type($acc) `,` type($source) `,` type($mask) `->` type($result)";
 }
 
-def VMIDhistOp : VMIHistogramOp<"dhist",
-  "VMI full 256-bin distribution histogram over unsigned 8-bit source lanes">;
+def VMIVdhistOp : VMIHistogramOp<"vdhist",
+  "VMI distribution histogram (dhistv2) over unsigned 8-bit source lanes">;
 
-def VMIChistOp : VMIHistogramOp<"chist",
-  "VMI full 256-bin cumulative histogram over unsigned 8-bit source lanes">;
+def VMIVchistOp : VMIHistogramOp<"vchist",
+  "VMI cumulative histogram (chistv2 half-axis) over unsigned 8-bit source lanes">;
 
 def VMIExtFOp : VMI_Op<"extf", [Pure]> {
   let summary = "VMI floating-point elementwise extension";
@@ -1445,32 +1445,6 @@ def VMIVdintlvOp : VMI_Op<"vdintlv"> {
   let assemblyFormat = [{
     $lhs `,` $rhs `,` $mask attr-dict `:` type($lhs) `,` type($rhs) `,` type($mask) `->` type($low) `,` type($high)
   }];
-}
-
-def VMIHistV2Op : VMI_Op<"vhist"> {
-  let summary = "VMI histogram bin count (chistv2)";
-  let description = [{
-    Counts per-bin occurrences over an index vector, producing a half-axis
-    Bin_N0 / Bin_N1 pair accessible through the result's width axis.
-
-    pmode controls inactive-lane behavior:
-    - "zero" (default): inactive lanes contribute 0 to the count.
-    - "merge": inactive lanes preserve the prior accumulator value.
-
-    Example:
-    ```
-    %h = pto.vmi.vhist %bin_idx, %mask
-      : !pto.vmi.vreg<256xi8>, !pto.vmi.mask<256> -> !pto.vmi.vreg<256xi16>
-    ```
-  }];
-  let arguments = (ins
-    VMI_VRegTypeConstraint:$bin_idx,
-    VMI_MaskTypeConstraint:$mask,
-    OptionalAttr<StrAttr>:$pmode
-  );
-  let results = (outs VMI_VRegTypeConstraint:$result);
-  let hasVerifier = 1;
-  let assemblyFormat = "$bin_idx `,` $mask attr-dict `:` type($bin_idx) `,` type($mask) `->` type($result)";
 }
 
 def VMIVgatherOp : VMI_Op<"vgather", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {

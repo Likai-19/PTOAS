@@ -312,10 +312,10 @@ public:
       int64_t numGroups, std::string *reason = nullptr) const;
 
   FailureOr<VMIHistogramLayoutFact>
-  getDhistLayoutFact(VMIDhistOp op, std::string *reason = nullptr) const;
+  getVdhistLayoutFact(VMIVdhistOp op, std::string *reason = nullptr) const;
 
   FailureOr<VMIHistogramLayoutFact>
-  getChistLayoutFact(VMIChistOp op, std::string *reason = nullptr) const;
+  getVchistLayoutFact(VMIVchistOp op, std::string *reason = nullptr) const;
 
   LogicalResult getGroupReduceAddFSupport(VMIGroupReduceAddFOp op,
                                           std::string *reason = nullptr) const;
@@ -368,10 +368,10 @@ public:
   LogicalResult getBitcastSupport(VMIBitcastOp op,
                                   std::string *reason = nullptr) const;
 
-  LogicalResult getDhistSupport(VMIDhistOp op,
+  LogicalResult getVdhistSupport(VMIVdhistOp op,
                                 std::string *reason = nullptr) const;
 
-  LogicalResult getChistSupport(VMIChistOp op,
+  LogicalResult getVchistSupport(VMIVchistOp op,
                                 std::string *reason = nullptr) const;
 };
 

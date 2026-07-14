@@ -8911,11 +8911,11 @@ struct OneToNVMIGroupBroadcastOpPattern
   }
 };
 
-struct OneToNVMIDhistOpPattern : OpConversionPattern<VMIDhistOp> {
-  using OpConversionPattern<VMIDhistOp>::OpConversionPattern;
+struct OneToNVMIVdhistOpPattern : OpConversionPattern<VMIVdhistOp> {
+  using OpConversionPattern<VMIVdhistOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIDhistOp op, OneToNOpAdaptor adaptor,
+  matchAndRewrite(VMIVdhistOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     ValueRange accParts = adaptor.getAcc();
     ValueRange sourceParts = adaptor.getSource();
@@ -8978,11 +8978,11 @@ struct OneToNVMIDhistOpPattern : OpConversionPattern<VMIDhistOp> {
   }
 };
 
-struct OneToNVMIChistOpPattern : OpConversionPattern<VMIChistOp> {
-  using OpConversionPattern<VMIChistOp>::OpConversionPattern;
+struct OneToNVMIVchistOpPattern : OpConversionPattern<VMIVchistOp> {
+  using OpConversionPattern<VMIVchistOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(VMIChistOp op, OneToNOpAdaptor adaptor,
+  matchAndRewrite(VMIVchistOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     ValueRange accParts = adaptor.getAcc();
     ValueRange sourceParts = adaptor.getSource();
@@ -10467,8 +10467,8 @@ void populateVMIConversionPatterns(
       OneToNVMISelectOpPattern, OneToNVMIActivePrefixIndexOpPattern,
       OneToNVMICompressOpPattern, OneToNVMICompressStoreOpPattern,
       OneToNVMIReduceAddIOpPattern, OneToNVMIReduceAddFOpPattern,
-      OneToNVMIGroupBroadcastOpPattern, OneToNVMIDhistOpPattern,
-      OneToNVMIChistOpPattern,
+      OneToNVMIGroupBroadcastOpPattern, OneToNVMIVdhistOpPattern,
+      OneToNVMIVchistOpPattern,
       OneToNVMIReduceMinMaxOpPattern<VMIReduceMaxFOp, VcmaxOp, VmaxOp>,
       OneToNVMIReduceMinMaxOpPattern<VMIReduceMinFOp, VcminOp, VminOp>,
       OneToNVMIReduceMinMaxOpPattern<VMIReduceMaxIOp, VcmaxOp, VmaxOp>,
@@ -11012,18 +11012,18 @@ LogicalResult checkSupportedGroupBroadcastShape(
   return success();
 }
 
-LogicalResult checkSupportedDhistShape(VMIDhistOp op,
+LogicalResult checkSupportedVdhistShape(VMIVdhistOp op,
                                        std::string *reason = nullptr) {
   VMILayoutSupport supports;
-  if (succeeded(supports.getDhistSupport(op, reason)))
+  if (succeeded(supports.getVdhistSupport(op, reason)))
     return success();
   return failure();
 }
 
-LogicalResult checkSupportedChistShape(VMIChistOp op,
+LogicalResult checkSupportedVchistShape(VMIVchistOp op,
                                        std::string *reason = nullptr) {
   VMILayoutSupport supports;
-  if (succeeded(supports.getChistSupport(op, reason)))
+  if (succeeded(supports.getVchistSupport(op, reason)))
     return success();
   return failure();
 }
@@ -11149,24 +11149,24 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
           << reason << ")";
       return WalkResult::interrupt();
     }
-    if (auto hist = dyn_cast<VMIDhistOp>(op)) {
+    if (auto hist = dyn_cast<VMIVdhistOp>(op)) {
       std::string reason;
-      if (succeeded(checkSupportedDhistShape(hist, &reason)))
+      if (succeeded(checkSupportedVdhistShape(hist, &reason)))
         return WalkResult::advance();
       hist.emitError()
           << kVMIDiagUnsupportedPrefix
-          << "pto.vmi.dhist requires contiguous Nxui8 source, contiguous b8 "
+          << "pto.vmi.vdhist requires contiguous Nxui8 source, contiguous b8 "
              "mask, and contiguous 256xui16 acc/result ("
           << reason << ")";
       return WalkResult::interrupt();
     }
-    if (auto hist = dyn_cast<VMIChistOp>(op)) {
+    if (auto hist = dyn_cast<VMIVchistOp>(op)) {
       std::string reason;
-      if (succeeded(checkSupportedChistShape(hist, &reason)))
+      if (succeeded(checkSupportedVchistShape(hist, &reason)))
         return WalkResult::advance();
       hist.emitError()
           << kVMIDiagUnsupportedPrefix
-          << "pto.vmi.chist requires contiguous Nxui8 source, contiguous b8 "
+          << "pto.vmi.vchist requires contiguous Nxui8 source, contiguous b8 "
              "mask, and contiguous 256xui16 acc/result ("
           << reason << ")";
       return WalkResult::interrupt();
