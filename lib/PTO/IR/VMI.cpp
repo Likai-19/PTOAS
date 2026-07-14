@@ -1588,9 +1588,9 @@ template <typename OpTy> static LogicalResult verifyVMIHistogramOp(OpTy op) {
   return success();
 }
 
-LogicalResult VMIDhistOp::verify() { return verifyVMIHistogramOp(*this); }
+LogicalResult VMIVdhistOp::verify() { return verifyVMIHistogramOp(*this); }
 
-LogicalResult VMIChistOp::verify() { return verifyVMIHistogramOp(*this); }
+LogicalResult VMIVchistOp::verify() { return verifyVMIHistogramOp(*this); }
 
 //===----------------------------------------------------------------------===//
 // Group 7: SFU verifiers
@@ -2995,36 +2995,6 @@ LogicalResult VMIvcminOp::verify() {
       return emitOpError("pmode must be \"zero\" or \"merge\", got \"") << val << "\"";
   }
 
-  return success();
-}
-
-LogicalResult VMIHistV2Op::verify() {
-  auto binType = cast<VMIVRegType>(getBinIdx().getType());
-  auto maskType = cast<VMIMaskType>(getMask().getType());
-  auto resultType = cast<VMIVRegType>(getResult().getType());
-
-  auto binElemType = dyn_cast<IntegerType>(binType.getElementType());
-  if (!binElemType || !binElemType.isUnsigned() ||
-      (binElemType.getWidth() != 8 && binElemType.getWidth() != 16 &&
-       binElemType.getWidth() != 32))
-    return emitOpError("requires bin_idx element type to be ui8, ui16, or ui32");
-
-  if (failed(verifyMaskMatchesData(getOperation(), maskType, binType)))
-    return failure();
-
-  auto resultElemType = dyn_cast<IntegerType>(resultType.getElementType());
-  if (!resultElemType || !resultElemType.isUnsigned() ||
-      (resultElemType.getWidth() != 16 && resultElemType.getWidth() != 32))
-    return emitOpError("requires result element type to be ui16 or ui32");
-
-  if (binType.getElementCount() != resultType.getElementCount())
-    return emitOpError(
-        "requires bin_idx and result logical lane counts to match");
-
-  if (auto pmode = getPmode()) {
-    if (pmode.value() != "merge" && pmode.value() != "zero")
-      return emitOpError("pmode must be 'merge' or 'zero'");
-  }
   return success();
 }
 

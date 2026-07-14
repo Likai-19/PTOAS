@@ -1,11 +1,12 @@
 # 7. SFU
 
-> **Category:** A (fused arithmetic), B (`vhist`, `vmull`), C (gather/scatter).
+> **Category:** A (fused arithmetic), B (`vchist`, `vdhist`, `vmull`), C (gather/scatter).
 > **Mask:** `Pg` on all except sort-like ops.
 >
-> Special-function / domain-accelerator ops. Mixed categories: `vhist` produces
-> a `half` axis (B); gather/scatter are Category C tile/permute ops; fused
-> activation/arithmetic ops are Category A `vreg→vreg`.
+> Special-function / domain-accelerator ops. Mixed categories: `vchist`
+> produces a `half` axis (B); `vdhist` yields a plain per-bin count (B);
+> gather/scatter are Category C tile/permute ops; fused activation/arithmetic
+> ops are Category A `vreg→vreg`.
 
 ---
 
@@ -226,18 +227,12 @@
 
 ## 7.2 Histogram
 
-### `pto.vmi.vhist`
+### `pto.vmi.vchist`
 
-- **semantics:** Histogram bin count. The `{mode}` attribute selects the
-  histogram kind:
-  - `{mode = "chist"}` (default): **channel histogram** — the existing
-    `chistv2` semantics. Counts per-bin occurrences over a channel-index
-    vector, producing a `half`-axis (`Bin_N0`/`Bin_N1`) pair accessible
-    through the result's width axis.
-  - `{mode = "dhist"}`: **distribution histogram** — count per bin over a
-    value/index vector, yielding a plain per-bin count vector (no half axis).
-  Both modes share the same operand/result shapes; `mode` only switches the
-  binning strategy and result layout.
+- **semantics:** **Cumulative histogram** — the existing `chistv2`
+  semantics. Counts per-bin occurrences over a bin-index vector and produces
+  a `half`-axis (`Bin_N0`/`Bin_N1`) pair accessible through the result's
+  width axis.
 
   ```c
   // Hardware chistv2: two halves (Bin_N0, Bin_N1), 256 bins total
@@ -250,7 +245,7 @@
 
 - **syntax:**
   ```mlir
-  %h = pto.vmi.vhist %bin_idx, %mask : !pto.vmi.vreg<L×i8>, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×i16>
+  %h = pto.vmi.vchist %bin_idx, %mask : !pto.vmi.vreg<L×i8>, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×i16>
   ```
 - **operands:**
 
@@ -269,9 +264,7 @@
 
   | Attribute | Values | Default | Description |
   |---|---|---|---|
-  | `mode` | `"chist"`, `"dhist"` | `"chist"` | Histogram kind: channel histogram (half-axis `Bin_N0`/`Bin_N1`) vs distribution histogram (plain per-bin count) |
   | `pmode` | `"zero"`, `"merge"` | `"zero"` | Inactive-lane behavior |
-
 - **datatypes:** Bin index: `i8`/`ui8`; result count type: typically `i16`/`i32`
 - **lowering to `pto.mi`:**
   ```
@@ -281,13 +274,59 @@
 
 - **example:**
   ```mlir
-  // chist (default): channel histogram, half-axis Bin_N0/Bin_N1
-  %h = pto.vmi.vhist %bin_idx, %mask
+  // Cumulative histogram, half-axis Bin_N0/Bin_N1
+  %h = pto.vmi.vchist %bin_idx, %mask
       : !pto.vmi.vreg<256×i8>, !pto.vmi.mask<256> -> !pto.vmi.vreg<256×i16>
   // → pto.as: Bin_N0 + Bin_N1 fanout → INTLV merge on vstore
+  ```
 
-  // dhist: distribution histogram, plain per-bin count
-  %d = pto.vmi.vhist %bin_idx, %mask {mode = "dhist"}
+### `pto.vmi.vdhist`
+
+- **semantics:** **Distribution histogram** — count per bin over a
+  value/index vector, yielding a plain per-bin count vector (no `half`
+  axis).
+
+  ```c
+  // Plain per-bin distribution count
+  uint16_t bins[N] = {0};
+  for (int i = 0; i < L; i++)
+      if (mask[i])
+          bins[bin_idx[i]]++;
+  ```
+
+- **syntax:**
+  ```mlir
+  %d = pto.vmi.vdhist %bin_idx, %mask : !pto.vmi.vreg<L×i8>, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×i16>
+  ```
+- **operands:**
+
+  | Operand | Type | Description |
+  |---|---|---|
+  | `bin_idx` | `!pto.vmi.vreg<L×i8>` | Per-lane bin index (unsigned 8-bit) |
+  | `mask` | `!pto.vmi.mask<L>` | Governing predicate |
+
+- **results:**
+
+  | Result | Type | Description |
+  |---|---|---|
+  | `result` | `!pto.vmi.vreg<L×T_count>` | Plain per-bin count vector |
+
+- **attributes:**
+
+  | Attribute | Values | Default | Description |
+  |---|---|---|---|
+  | `pmode` | `"zero"`, `"merge"` | `"zero"` | Inactive-lane behavior |
+- **datatypes:** Bin index: `i8`/`ui8`; result count type: typically `i16`/`i32`
+- **lowering to `pto.mi`:**
+  ```
+  distribution histogram accumulate (no half-axis fanout)
+  ```
+  `#mi ≈ K`, `dep = 2`.
+
+- **example:**
+  ```mlir
+  // Distribution histogram, plain per-bin count
+  %d = pto.vmi.vdhist %bin_idx, %mask
       : !pto.vmi.vreg<256×i8>, !pto.vmi.mask<256> -> !pto.vmi.vreg<256×i16>
   ```
 

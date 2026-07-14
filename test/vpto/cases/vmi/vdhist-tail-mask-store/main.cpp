@@ -25,7 +25,7 @@ using namespace PtoTestCommon;
     }                                                                            \
   } while (0)
 
-void LaunchVmi_dhist_tail_mask_store_kernel(uint8_t *src, uint16_t *acc,
+void LaunchVmi_vdhist_tail_mask_store_kernel(uint8_t *src, uint16_t *acc,
                                             uint16_t *dst, void *stream);
 
 int main() {
@@ -70,7 +70,7 @@ int main() {
   ACL_CHECK(aclrtMemcpy(dstDevice, dstBytes, dstHost, dstBytes,
                         ACL_MEMCPY_HOST_TO_DEVICE));
 
-  LaunchVmi_dhist_tail_mask_store_kernel(srcDevice, accDevice, dstDevice,
+  LaunchVmi_vdhist_tail_mask_store_kernel(srcDevice, accDevice, dstDevice,
                                          stream);
   ACL_CHECK(aclrtSynchronizeStream(stream));
   ACL_CHECK(aclrtMemcpy(dstHost, dstBytes, dstDevice, dstBytes,

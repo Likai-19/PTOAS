@@ -244,10 +244,10 @@ compute boundary:
   f8/i8 are not baseline accumulator/compute element types.
 
 value-indexed accumulation boundary:
-  pto.vmi.dhist consumes ui8 source lanes and produces a logical 256xui16
+  pto.vmi.vdhist consumes ui8 source lanes and produces a logical 256xui16
   accumulator/result.  It is not a group_reduce family member because result
   bins are selected by source values rather than by source lane/group position.
-  pto.vmi.chist uses the same surface shape only after the target CHISTv2
+  pto.vmi.vchist uses the same surface shape only after the target CHISTv2
   range semantics are verified.
 ```
 
@@ -339,7 +339,7 @@ part1 = logical bins 128..255
 ```
 
 The VPTO `#bin` selector is therefore an op-local lowering detail, not a VMI
-layout attribute and not a user-visible operand on `pto.vmi.dhist`.
+layout attribute and not a user-visible operand on `pto.vmi.vdhist`.
 
 ## 3. Lowering Context Must Become Explicit IR Output
 
