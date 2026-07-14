@@ -131,12 +131,13 @@ def template_tfillpad_expand(src: pto.Tile, dst: pto.Tile):
             fill_scalar = pto.i8(0)
 
     # Phase 1: Copy aligned valid blocks
-    for row in range(0, src_valid_rows, 1):
-        remained = aligned_col
-        for col in range(0, aligned_col, lanes):
-            mask, remained = pto.make_mask(dtype, remained)
-            data = pto.vlds(src[row, col:])
-            pto.vsts(data, dst[row, col:], mask)
+    if aligned_col > 0:
+        for row in range(0, src_valid_rows, 1):
+            remained = aligned_col
+            for col in range(0, aligned_col, lanes):
+                mask, remained = pto.make_mask(dtype, remained)
+                data = pto.vlds(src[row, col:])
+                pto.vsts(data, dst[row, col:], mask)
 
     # Phase 2: Fill col padding
     if aligned_col < dst_valid_cols:
