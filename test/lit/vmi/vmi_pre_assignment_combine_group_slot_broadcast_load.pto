@@ -20,7 +20,7 @@ module {
     return %out : !pto.vmi.vreg<256xf16>
   }
 
-  func.func @not_e2b_candidate(%src: !pto.ptr<f32, ub>, %off: index)
+  func.func @e2b_deint4_candidate(%src: !pto.ptr<f32, ub>, %off: index)
       -> !pto.vmi.vreg<256xf32> {
     %c1 = arith.constant 1 : index
     %slots = pto.vmi.group_slot_load %src[%off], %c1 {num_groups = 8}
@@ -30,7 +30,7 @@ module {
     return %out : !pto.vmi.vreg<256xf32>
   }
 
-  func.func @not_e2b_consumer_deint2(%scale: !pto.ptr<f32, ub>,
+  func.func @e2b_deint4_consumer(%scale: !pto.ptr<f32, ub>,
                                      %x: !pto.vmi.vreg<256xf16>, %off: index)
       -> !pto.vmi.vreg<256xf32> {
     %c1 = arith.constant 1 : index
@@ -52,12 +52,12 @@ module {
 // CHECK: pto.vmi.group_broadcast_load
 // CHECK-NOT: pto.vmi.group_broadcast
 
-// CHECK-LABEL: func.func @not_e2b_candidate
+// CHECK-LABEL: func.func @e2b_deint4_candidate
 // CHECK-NOT: pto.vmi.group_slot_load
 // CHECK: pto.vmi.group_broadcast_load
 // CHECK-NOT: pto.vmi.group_broadcast
 
-// CHECK-LABEL: func.func @not_e2b_consumer_deint2
+// CHECK-LABEL: func.func @e2b_deint4_consumer
 // CHECK-NOT: pto.vmi.group_slot_load
 // CHECK: pto.vmi.group_broadcast_load
 // CHECK-NOT: pto.vmi.group_broadcast
@@ -67,14 +67,14 @@ module {
 // LOWER: pto.vsldb
 // LOWER: pto.vselr
 
-// LOWER-LABEL: func.func @not_e2b_candidate
-// LOWER-NOT: E2B_B32
-// LOWER: pto.vsldb
-// LOWER: pto.vselr
+// LOWER-LABEL: func.func @e2b_deint4_candidate
+// LOWER: %[[E2B:.*]] = pto.vlds %{{.*}}[%{{.*}}] {dist = "E2B_B32"} : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+// LOWER-NOT: pto.vselr
+// LOWER: return %[[E2B]], %[[E2B]], %[[E2B]], %[[E2B]] : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.vreg<64xf32>
 // LOWER-NOT: pto.vmi.
 
-// LOWER-LABEL: func.func @not_e2b_consumer_deint2
-// LOWER-NOT: E2B_B32
-// LOWER: pto.vsldb
-// LOWER: pto.vselr
+// LOWER-LABEL: func.func @e2b_deint4_consumer
+// LOWER: %[[E2B2:.*]] = pto.vlds %{{.*}}[%{{.*}}] {dist = "E2B_B32"} : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+// LOWER-NOT: pto.vselr
+// LOWER: pto.vmul %{{.*}}, %[[E2B2]]
 // LOWER-NOT: pto.vmi.

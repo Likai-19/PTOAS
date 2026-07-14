@@ -46,8 +46,10 @@ trying to mirror every source-side physical shuffle:
 
 - `x` is modeled as two dense 256-lane FP8 `vload`s
 - each half is widened by `pto.vmi.vcvt(..., pto.f32)`
-- `scale` is modeled as grouped zero-stride `vload`, which expresses
-  "reuse one VL scale chunk across four VL groups"
+- `ComputeScale` writes a compact converted scale buffer: one scale value per
+  32 input elements
+- `ComputeData` consumes that compact buffer with `vload(dist_mode="brc",
+  group=8)`, matching the source `DIST_E2B_B32` scale-load contract
 - dequant itself is just `vmul`
 - output uses `vstore`, with an extra `vcvt` only for `bf16` / `f16`
 
@@ -88,16 +90,14 @@ For the `f32` path, the generated MI roughly expands into:
 
 - 2 dense `vlds` for FP8 input
 - 8 `vcvt` ops (`P0`..`P3` for each 256-lane half)
-- 2 scale `vlds`
-- multiple `vdintlv` ops to reconstruct the grouped scale broadcast
+- compact scale conversion stores
+- 2 direct `E2B_B32` scale loads for group-broadcast scale consumption
 - 8 `vmul`
 - multiple `vintlv` plus `pintlv_b32`
 - 8 `vsts`
 
-Compared with the source ASC, the extra cost is mainly on:
-
-- scale broadcast materialization
-- store-side re-layout before `vsts`
+Compared with the source ASC, the extra cost is mainly on store-side re-layout
+before `vsts`.
 
 For the `bf16` / `f16` path, the gap is usually larger because lowering still
 has to do more explicit rearrangement before the final packed 16-bit store.
@@ -112,8 +112,6 @@ The current result should be treated as:
 
 The biggest optimization opportunities are likely:
 
-- recognize grouped zero-stride scale load and lower it closer to
-  `DIST_E2B_B32`
 - reduce redundant store-side layout materialization for `bf16` / `f16`
 - improve lowering so the final MI better preserves the compactness of the
   source distribution-based implementation

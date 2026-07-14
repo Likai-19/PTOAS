@@ -7138,13 +7138,14 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
     VMILayoutAttr layout = resultVMIType.getLayoutAttr();
     bool contiguousPacketLayout = layout && layout.isContiguous();
     bool splitPacketLayout = layout && layout.isDeinterleaved() &&
-                             layout.getFactor() == 2 &&
+                             (layout.getFactor() == 2 ||
+                              layout.getFactor() == 4) &&
                              layout.getBlockElems() == 1;
     if (!contiguousPacketLayout && !splitPacketLayout)
       return rewriter.notifyMatchFailure(
           op, "group_broadcast_load E2B lowering requires "
               "contiguous result layout for direct group size or "
-              "deinterleaved=2, block_elems=1 result layout for split "
+              "deinterleaved=2/4, block_elems=1 result layout for split "
               "group size");
 
     unsigned elementBits = directFact->layout.elementBits;

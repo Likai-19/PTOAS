@@ -619,6 +619,8 @@ static constexpr GroupBroadcastLoadDirectPattern
          memContiguous(), c()},
         {VMIGroupBroadcastLoadDirectKind::E2B, G<8>(), gb(2), bits<16, 32>(),
          memContiguous(), d(2, 1)},
+        {VMIGroupBroadcastLoadDirectKind::E2B, G<8>(), gb(4), bits<16, 32>(),
+         memContiguous(), d(4, 1)},
         {VMIGroupBroadcastLoadDirectKind::BRC, anyG(), gbFull(),
          bits<8, 16, 32>(), memAny(), c()},
 };
