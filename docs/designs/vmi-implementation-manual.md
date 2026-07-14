@@ -4003,20 +4003,17 @@ VMI-UNSUPPORTED: pto.vmi.dhist final partial source chunk requires valid-lane
 b8 mask materialization
 ```
 
-`pto.vmi.chist` has the same verifier and assignment requirements, but final
-lowering is capability-gated:
+`pto.vmi.chist` has the same verifier and assignment requirements as `pto.vmi.dhist`.
+A5 hardware `chistv2` high-range semantics have been confirmed as **global cumulative**
+(bin=1 result automatically accumulates bin0's total count), so `pto.vmi.chist` lowers
+via the same template as `pto.vmi.dhist` — the only difference is emitting `pto.chistv2`
+in place of `pto.dhistv2`.  No software compensation is needed.
 
-```text
-if CHISTv2 high-range semantics are verified as global cumulative:
-  replace the two pto.dhistv2 calls above with pto.chistv2 calls
+If future hardware switches to range-local cumulative semantics, the chist pattern
+will need a broadcast+add compensation path.  In that scenario, introduce a
+`-vmi-chist-mode` attribute or runtime probe as a separate evolution step.
 
-elif CHISTv2 high-range semantics are verified as range-local cumulative:
-  lower low/high pto.chistv2 and add the low-half total count to every high-half bin,
-  but only after low-total materialization and broadcast support is explicit
-
-else:
-  VMI-UNSUPPORTED: pto.vmi.chist requires a verified CHISTv2 range semantics contract
-```
+Reference lit tests: `vmi_to_vpto_chist.pto` (mirrors `vmi_to_vpto_dhist.pto`).
 
 Do not classify histogram as `group_reduce`.  Its result location is selected
 by source values, not by lane/group position, and its low/high split is caused
@@ -4087,10 +4084,10 @@ Slice 4 完成条件：
     cmpf and on direct b8/b16 mask operands.
 12. `pto.vmi.dhist` lowers one logical 256-bin histogram into two VPTO low/high
     bin-range histogram accumulator chains, and tail source chunks are masked
-    with a valid-lane b8 prefix. `pto.vmi.chist` is rejected until the target
-    CHISTv2 cumulative range semantics are classified.
+    with a valid-lane b8 prefix. `pto.vmi.chist` uses the same lowering template
+    as `pto.vmi.dhist` (A5 hardware confirmed global cumulative semantics).
     Covered by vmi_to_vpto_dhist.pto, vmi_to_vpto_dhist_tail_mask.pto, and
-    vmi_to_vpto_chist_semantics_invalid.pto.
+    vmi_to_vpto_chist.pto.
 ```
 
 ## 7. Slice 5: Memory Padding
@@ -4324,7 +4321,7 @@ vmi_to_vpto_masked_load_safe_tail_memref.mlir
 vmi_to_vpto_store_tail.mlir
 vmi_to_vpto_dhist.mlir
 vmi_to_vpto_dhist_tail_mask.mlir
-vmi_to_vpto_chist_semantics_invalid.mlir
+vmi_to_vpto_chist.mlir
 vmi_pipeline_hard_gates.mlir
 ```
 
