@@ -2341,7 +2341,7 @@ def vaxpy(alpha, x, y, mask):
 
 
 def vmula(acc, lhs, rhs, mask):
-    """``pto.vmula`` – fused multiply-add: ``acc + lhs * rhs`` (single rounding)."""
+    """``pto.vmula`` – fused ``acc + lhs * rhs`` under mask."""
     _reject_low_precision_vreg_operands(acc, lhs, rhs, context="pto.vmula(...)")
     return wrap_surface_value(
         _pto.VmulaOp(
@@ -2352,7 +2352,6 @@ def vmula(acc, lhs, rhs, mask):
             unwrap_surface_value(mask),
         ).result
     )
-
 
 def vmadd(acc, lhs, rhs, mask):
     """``pto.vmadd`` – fused multiply-add: ``acc * lhs + rhs`` (single rounding)."""
@@ -2366,7 +2365,6 @@ def vmadd(acc, lhs, rhs, mask):
             unwrap_surface_value(mask),
         ).result
     )
-
 
 def vsel(true_v, false_v, mask):
     """``pto.vsel`` – element-wise select under a predicate mask."""
@@ -6090,7 +6088,7 @@ __all__ = [
     "vexp", "vln", "vsqrt", "vabs", "vneg", "vrec", "vrsqrt", "vrelu", "vnot",
     "vcgmax", "vcgadd", "vcgmin", "vcpadd",
     "vadds", "vsubs", "vmuls", "vmaxs", "vmins", "vlrelu",
-    "vaxpy", "vaddrelu", "vsubrelu",
+    "vaxpy", "vmula", "vaddrelu", "vsubrelu",
     "vsel",
     "make_tensor_view", "partition_view",
     "alloc_buffer", "alloc_tile",
