@@ -1663,8 +1663,9 @@ LogicalResult VMITruncFOp::verify() {
         "requires result element type to be narrower than source element type");
   if (auto roundingAttr = (*this)->getAttrOfType<StringAttr>("rounding")) {
     StringRef rounding = roundingAttr.getValue();
-    if (rounding != "A" && rounding != "H" && rounding != "Z")
-      return emitOpError("rounding attr must be A, H, or Z");
+    if (rounding != "R" && rounding != "A" && rounding != "H" &&
+        rounding != "Z")
+      return emitOpError("rounding attr must be R, A, H, or Z");
   }
   return success();
 }
@@ -3374,9 +3375,10 @@ LogicalResult VMICvtOp::verify() {
       return emitOpError("'rounding' attribute is only valid for "
                          "fp-narrowing conversions");
     StringRef rnd = roundingAttr.getValue();
-    if (rnd != "A" && rnd != "H" && rnd != "Z")
-      return emitOpError("rounding must be 'A' (away-from-zero), "
-                         "'H' (half-up), or 'Z' (toward-zero)");
+    if (rnd != "R" && rnd != "A" && rnd != "H" && rnd != "Z")
+      return emitOpError("rounding must be 'R' (nearest-even), "
+                         "'A' (away-from-zero), 'H' (half-up), "
+                         "or 'Z' (toward-zero)");
   }
 
   // --- saturate ---

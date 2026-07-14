@@ -11,12 +11,12 @@
 module {
   func.func @vmi_truncf_rounding_token_invalid(
       %source: !pto.vmi.vreg<256xf32>) {
-    %result = pto.vmi.truncf %source {rounding = "R"}
+    %result = pto.vmi.truncf %source {rounding = "F"}
         : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256x!pto.hif8>
     return
   }
 }
 
-// truncf shares vcvt's rounding-token parser, so "Z" is also accepted even
-// though this test still exercises the legacy truncf surface spelling.
-// CHECK: rounding attr must be A, H, or Z
+// truncf accepts the dedicated fp-narrowing rounding subset R/A/H/Z only,
+// even though this test still exercises the legacy truncf surface spelling.
+// CHECK: rounding attr must be R, A, H, or Z

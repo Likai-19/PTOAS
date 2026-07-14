@@ -343,7 +343,7 @@ The compiler automatically computes the byte offset from the tile's shape, eleme
 | `tile[start:]` | Tile index | 1D tile with starting element (vector-width range) |
 | `buf` | `PtrType` (UB) | Pointer to buffer in UB (pointer form) |
 | `offset` | `Index` | Element offset (pointer form) |
-| `dist` | `VLoadDist` or `None` | Optional load distribution: `NORM` (default), `UNPK_B8`/`UNPK_B16`/`UNPK_B32`, `BRC_B8`/`BRC_B16`/`BRC_B32` |
+| `dist` | `VLoadDist` or `None` | Optional load distribution: `NORM` (default), `UNPK_B8`/`UNPK_B16`/`UNPK_B32`, `BRC_B8`/`BRC_B16`/`BRC_B32`, `BRC_BLK`, `E2B_B16`/`E2B_B32`, `UNPK4`, `SPLT4CHN`, `US_B8`/`US_B16`, `DS_B8`/`DS_B16` |
 | `post_update` | `PostUpdate` | Pointer form only. `OFF` (default) — stateless load. `ON` — returns `(vec, updated_buf)` where `updated_buf` is the buffer pointer advanced past the loaded elements |
 
 **Returns**:
@@ -817,7 +817,7 @@ pto.vstas(align, ub_dst_f32, pto.const(64))
 
 | Enum | Values | Used with |
 |------|--------|-----------|
-| `VLoadDist` | `NORM`, `UNPK_B8`, `UNPK_B16`, `UNPK_B32`, `BRC_B8`, `BRC_B16`, `BRC_B32`, `US_B8`, `US_B16`, `DS_B8`, `DS_B16` | `vlds` |
+| `VLoadDist` | `NORM`, `UNPK_B8`, `UNPK_B16`, `UNPK_B32`, `BRC_B8`, `BRC_B16`, `BRC_B32`, `BRC_BLK`, `E2B_B16`, `E2B_B32`, `UNPK4`, `SPLT4CHN`, `US_B8`, `US_B16`, `DS_B8`, `DS_B16` | `vlds` |
 | `VStoreDist` | `NORM_B8`, `NORM_B16`, `NORM_B32`, `1PT_B8`, `1PT_B16`, `1PT_B32`, `PK_B16`, `PK_B32`, `PK_B64`, `PK4_B32`, `MRG4CHN_B8`, `MRG2CHN_B8`, `MRG2CHN_B16` | `vsts` |
 | `DeinterleaveDist` | `DINTLV_B8`, `DINTLV_B16`, `DINTLV_B32`, `BDINTLV` | `vldsx2` |
 | `InterleaveDist` | `INTLV_B8`, `INTLV_B16`, `INTLV_B32` | `vstsx2` |

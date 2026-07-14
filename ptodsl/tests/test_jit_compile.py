@@ -2545,6 +2545,21 @@ def vmi_invalid_rounding_vcvt_probe():
     _ = pto.vmi.vcvt(
         src,
         pto.f8e4m3,
+        rounding=pto.VcvtRoundMode.F,
+        saturate=pto.VcvtSatMode.SAT,
+    )
+
+
+@pto.jit(target="a5", backend="vpto", mode="explicit")
+def vmi_round_r_vcvt_probe():
+    src_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
+    src_ptr = src_tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+
+    src = pto.vmi.vload(src_ptr, offset, size=64)
+    _ = pto.vmi.vcvt(
+        src,
+        pto.f8e4m3,
         rounding=pto.VcvtRoundMode.R,
         saturate=pto.VcvtSatMode.SAT,
     )
@@ -5891,8 +5906,14 @@ def main() -> None:
         "rounding",
     )
     expect(
-        "expected one of A, H, Z" in str(invalid_rounding_vcvt_error),
-        "pto.vmi.vcvt should reject low-level-only rounding tokens before IR verification",
+        "expected one of A, H, R, Z" in str(invalid_rounding_vcvt_error),
+        "pto.vmi.vcvt should reject unsupported VMI rounding tokens before IR verification",
+    )
+    vmi_round_r_vcvt_text = vmi_round_r_vcvt_probe.compile().mlir_text()
+    expect_parse_roundtrip_and_verify(vmi_round_r_vcvt_text, "VMI R-rounding vcvt specialization")
+    expect(
+        'rounding = "R"' in vmi_round_r_vcvt_text,
+        "pto.vmi.vcvt should preserve the authored R rounding token for fp32->fp8",
     )
     unpack_missing_dtype_error = expect_raises(
         TypeError,

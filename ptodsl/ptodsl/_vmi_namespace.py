@@ -164,7 +164,7 @@ def _normalize_vmi_vcvt_rounding(mode, *, context: str):
         if "." in token:
             token = token.rsplit(".", 1)[-1]
     normalized = token.strip().upper()
-    allowed = {"A", "H", "Z"}
+    allowed = {"R", "A", "H", "Z"}
     if normalized not in allowed:
         expected = ", ".join(sorted(allowed))
         raise ValueError(
