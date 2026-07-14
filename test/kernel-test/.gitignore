@@ -8,4 +8,4 @@
 
 sim_outputs
 **/__pycache__/
-**/generated/
+kernels/**/generated/

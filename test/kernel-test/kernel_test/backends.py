@@ -10,9 +10,32 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, Protocol
 
 RunPurpose = Literal["correctness", "cycle"]
+
+
+@dataclass(frozen=True)
+class ArtifactOutputs:
+    """Normalized artifact emission result for one kernel-test case."""
+
+    case_dir: str
+    message: str
+    paths: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class ArtifactPlan:
+    """Backend-provided compile result that the framework can materialize."""
+
+    generated_dir: Path
+    case_dir: Path
+    vmi_text: str | None = None
+    mi_text: str | None = None
+    alias_stem: str | None = None
 
 
 class BackendAdapter(Protocol):
@@ -25,3 +48,10 @@ class BackendAdapter(Protocol):
 
     def launch(self, case: object, *, purpose: RunPurpose) -> object:
         """Launch one case and return backend-specific outputs."""
+
+
+class ArtifactBackend(Protocol):
+    """Optional extension for backends that can emit PTO artifacts."""
+
+    def build_artifact_plan(self, case_id: str, case: object) -> ArtifactPlan:
+        """Build the backend-specific PTO artifact plan for one case."""

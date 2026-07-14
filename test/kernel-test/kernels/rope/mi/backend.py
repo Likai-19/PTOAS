@@ -13,13 +13,14 @@ from pathlib import Path
 
 from ptodsl import pto
 
-from kernel_test.backends import RunPurpose
+from kernel_test.backends import ArtifactPlan, RunPurpose
 from kernel_test.npu_runtime import ensure_runtime, stream_ptr, sync
 
-from ..runtime import RopeLaunchArgs, prepare_launch_args
+from ..runtime import RopeLaunchArgs, artifact_case_dir, prepare_launch_args
 from ..tile_config import MAX_N, MAX_S, SIM_D
 
 _MI_ROOT = Path(__file__).resolve().parent
+_GENERATED_DIR = _MI_ROOT.parent / "generated"
 _MAX_XY_ROWS = MAX_S * MAX_N
 _CS_ELEMS = MAX_S * SIM_D
 _XY_ELEMS = _MAX_XY_ROWS * SIM_D
@@ -423,6 +424,16 @@ def _launch(launch_args: RopeLaunchArgs):
     return launch_args.y
 
 
+def _build_artifact_plan(case: dict[str, object]) -> ArtifactPlan:
+    compiled = _prepare(case["dtype"], 0 if case["mode"] == "half" else 1)
+    case_dir = artifact_case_dir(_GENERATED_DIR, case, backend_name="mi")
+    return ArtifactPlan(
+        generated_dir=_GENERATED_DIR,
+        case_dir=case_dir,
+        mi_text=compiled.mlir_text(),
+    )
+
+
 def rope_f16(launch_args: RopeLaunchArgs):
     """Launch the local rope f16 MI kernel."""
 
@@ -466,3 +477,7 @@ class RopeMiBackend:
     def cache_tag(self) -> str:
         backend_py = _MI_ROOT / "backend.py"
         return f"mi:{backend_py}:{os.path.getmtime(backend_py):.0f}"
+
+    def build_artifact_plan(self, case_id: str, case: object) -> ArtifactPlan:
+        del case_id
+        return _build_artifact_plan(case)

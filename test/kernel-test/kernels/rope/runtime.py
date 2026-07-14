@@ -11,13 +11,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-import numpy as np
-import torch
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from kernel_test.npu_runtime import device_str, empty_npu
 
 from .tile_config import sim_fn_name
+
+if TYPE_CHECKING:
+    import numpy as np
+    import torch
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,8 @@ class RopeLaunchArgs:
 
 
 def torch_dtype(dtype: str) -> torch.dtype:
+    import torch
+
     if dtype == "f16":
         return torch.float16
     if dtype == "bf16":
@@ -48,7 +53,23 @@ def torch_dtype(dtype: str) -> torch.dtype:
 
 
 def params_tensor(params: np.ndarray) -> torch.Tensor:
+    import numpy as np
+    import torch
+
     return torch.from_numpy(np.asarray(params, dtype=np.int32)).to(device_str())
+
+
+def artifact_case_dir_name(case: dict[str, object]) -> str:
+    """Build a stable per-case artifact directory name for rope."""
+
+    tile = case["tile"]
+    return f"{case['dtype']}_{case['mode']}_s{tile.s}_n{tile.n}"
+
+
+def artifact_case_dir(root: Path, case: dict[str, object], *, backend_name: str) -> Path:
+    """Return the backend-specific rope artifact directory for one case."""
+
+    return root / backend_name / artifact_case_dir_name(case)
 
 
 def prepare_launch_args(case: dict, *, cycle: bool = False) -> RopeLaunchArgs:
