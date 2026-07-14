@@ -110,13 +110,13 @@ def rope_vmi_f16(
 
             cos = pto.vmi.vload(cos_ptr, cs_off, size=64)
             sin = pto.vmi.vload(sin_ptr, cs_off, size=64)
-            cos_even, cos_odd = pto.vmi.vdintlv(cos, cos, half_mask)
-            sin_even, sin_odd = pto.vmi.vdintlv(sin, sin, half_mask)
+            cos_even, cos_odd = pto.vmi.vdintlv(cos, cos, full_mask)
+            sin_even, sin_odd = pto.vmi.vdintlv(sin, sin, full_mask)
 
             for n in range(0, n_count, 1):
                 row_off = x_s_off + n * SIM_D
                 x = pto.vmi.vload(x_ptr, row_off, size=64)
-                x_even, x_odd = pto.vmi.vdintlv(x, x, half_mask)
+                x_even, x_odd = pto.vmi.vdintlv(x, x, full_mask)
 
                 y_even = pto.vmi.vsub(
                     pto.vmi.vmul(x_even, cos_even, half_mask),
@@ -129,7 +129,7 @@ def rope_vmi_f16(
                     half_mask,
                 )
 
-                y, _ = pto.vmi.vintlv(y_even, y_odd, half_mask)
+                y, _ = pto.vmi.vintlv(y_even, y_odd, full_mask)
                 pto.vmi.vstore(y, y_ptr, row_off, full_mask)
 
     pto.set_flag(pto.Pipe.V, pto.Pipe.MTE3, event_id=0)
