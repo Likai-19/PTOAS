@@ -14,7 +14,8 @@ import os
 import time
 from collections.abc import Callable, Mapping
 
-from .backends import BackendAdapter
+from .backends import ArtifactOutputs, BackendAdapter
+from .pto_artifacts import materialize_artifact_plan
 from .results import CaseResult, RunSummary
 
 
@@ -51,6 +52,64 @@ def run_correctness_suite(
                 passed += 1
             else:
                 failed += 1
+
+        status = "SKIP" if result.skipped else ("PASS" if result.ok else "FAIL")
+        print(f"{print_prefix}[{case_id}] {status}: {result.message}", flush=flush)
+
+    return RunSummary(total=total, passed=passed, failed=failed, skipped=skipped)
+
+
+def _emit_backend_artifacts(
+    backend: BackendAdapter,
+    case_id: str,
+    case: object,
+    *,
+    root_alias: bool,
+) -> ArtifactOutputs | None:
+    build_plan = getattr(backend, "build_artifact_plan", None)
+    if build_plan is None:
+        return None
+    return materialize_artifact_plan(case_id, build_plan(case_id, case), root_alias=root_alias)
+
+
+def run_artifact_suite(
+    cases: Mapping[str, object],
+    *,
+    backend: BackendAdapter,
+    print_prefix: str = "",
+    flush: bool = True,
+) -> RunSummary:
+    """Generate PTO artifacts for one or more cases with stable output."""
+
+    total = 0
+    passed = 0
+    failed = 0
+    skipped = 0
+    root_alias = len(cases) == 1
+
+    for case_id in sorted(cases.keys()):
+        total += 1
+        case = cases[case_id]
+        supported, reason = backend.is_supported(case, purpose="correctness")
+        if not supported:
+            skipped += 1
+            result = CaseResult(
+                ok=True,
+                skipped=True,
+                message=reason or "backend not wired for this case",
+            )
+        else:
+            artifacts = _emit_backend_artifacts(backend, case_id, case, root_alias=root_alias)
+            if artifacts is None:
+                skipped += 1
+                result = CaseResult(
+                    ok=True,
+                    skipped=True,
+                    message=f"backend={backend.name} does not implement PTO artifact emission",
+                )
+            else:
+                passed += 1
+                result = CaseResult(ok=True, message=artifacts.message)
 
         status = "SKIP" if result.skipped else ("PASS" if result.ok else "FAIL")
         print(f"{print_prefix}[{case_id}] {status}: {result.message}", flush=flush)

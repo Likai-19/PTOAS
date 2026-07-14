@@ -61,6 +61,12 @@ Run direct Python correctness:
 python kernel-test/run.py --op rope --workflow correctness --backend cce
 ```
 
+Generate PTO artifacts without launching runtime:
+
+```bash
+python kernel-test/run.py --op dequant --backend vmi --case e4m3_f32 --emit-mlir
+```
+
 Run one cycle case directly through Python:
 
 ```bash
@@ -96,6 +102,11 @@ accepts `--python-cmd`.
 
 If you prefer environment variables, both `run.py` and `run_cycle.sh` also honor
 `KERNEL_TEST_KERNEL_DIR`.
+
+`--emit-mlir` uses correctness case selection, asks the selected backend to
+materialize PTO outputs, and writes them under the kernel-local
+`test/kernel-test/kernels/<op>/generated/` directory. Backends that do not
+implement PTO artifact emission are reported as `SKIP`.
 
 `run_cycle.sh` now runs a kernel-local cycle analysis step after successful jobs.
 For `rope`, the primary VF cycle number now comes from `msprof` `RVECEX` pipe

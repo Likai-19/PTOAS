@@ -21,10 +21,11 @@ This directory keeps the PTODSL VMI rewrite for the `dequant` kernel test.
 
 ## Artifact layout
 
-Running the `backend=vmi` correctness path emits artifacts under:
+Running the `backend=vmi` correctness path, or `kernel-test/run.py --emit-mlir`,
+emits artifacts under:
 
 ```text
-test/kernel-test/kernels/dequant/generated/dequant/
+test/kernel-test/kernels/dequant/generated/
 ```
 
 Per-case outputs live in a case directory, and the backend also refreshes a few
@@ -32,8 +33,6 @@ root-level aliases for quick manual inspection:
 
 - `vmi.pto`: latest lowered source VMI IR
 - `mi.pto`: latest lowered MI IR
-- `dequant_compute_data.vmi.pto`: latest named VMI alias
-- `dequant_compute_data.mi.pto`: latest named MI alias
 
 This matches the current manual-debug habit: first open the stable root alias,
 and only jump into the per-case directory when a specific specialization needs
