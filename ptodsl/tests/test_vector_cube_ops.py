@@ -87,8 +87,8 @@ class VectorCubeSurfaceTest(unittest.TestCase):
             "vsub", "vmin", "vand", "vor", "vxor", "vshl", "vshr",
             "vln", "vsqrt", "vabs", "vneg", "vrec", "vrsqrt", "vrelu", "vnot",
             "vcmin", "vcgmin", "vcpadd",
-            "vadds", "vmuls", "vmaxs", "vmins", "vlrelu",
-            "vaxpy", "vaddrelu", "vsubrelu", "vsel",
+            "vadds", "vmuls", "vmaxs", "vmins", "vlrelu", "vshls", "vshrs", "vands", "vors", "vxors",
+            "vaxpy", "vmula", "vci", "vaddrelu", "vsubrelu", "vsel",
             "mte_gm_l1", "mte_l1_ub", "mte_gm_l1_frac", "mte_l1_bt", "mte_l1_fb",
             "mad_acc", "mad_bias", "mad_mx", "mad_mx_acc", "mad_mx_bias",
             "FractalMode", "AccStoreUnitFlagCtrl", "MadUnitFlagMode", "SatMode", "Tf32Mode", "SplitMode",
@@ -278,6 +278,98 @@ class VectorCubeSurfaceTest(unittest.TestCase):
             output = _ops.vsel(vec, other, mask)
         self.assertIs(output, selected)
         self.assertEqual(vsel_op.call_args.args, ("vec_ty", vec, other, mask))
+
+    def test_vector_scalar_helper_dispatches_cover_shift_and_bitwise_scalar_helpers(self):
+        vec = SimpleNamespace(type="vec_ty")
+        mask = SimpleNamespace(type="mask_ty")
+        scalar = SimpleNamespace(type="scalar_ty")
+        scalar_i16 = SimpleNamespace(type="i16_ty")
+        shifted = object()
+        anded = object()
+        ored = object()
+        xored = object()
+        broadcast = object()
+
+        with patch.object(_ops, "unwrap_surface_value", side_effect=_identity), \
+             patch.object(_ops, "wrap_surface_value", side_effect=_identity), \
+             patch.object(_ops, "_reject_low_precision_vreg_operands") as reject_lp, \
+             patch.object(_ops.IntegerType, "get_signless", return_value="i16_ty") as get_signless, \
+             patch.object(_ops, "coerce_scalar_to_type", return_value=scalar_i16) as coerce_i16, \
+             patch.object(_ops._pto, "VshlsOp", return_value=SimpleNamespace(result=shifted)) as vshls_op, \
+             patch.object(_ops._pto, "VshrsOp", return_value=SimpleNamespace(result=shifted)) as vshrs_op:
+            self.assertIs(_ops.vshls(vec, scalar, mask), shifted)
+            self.assertIs(_ops.vshrs(vec, scalar, mask), shifted)
+        self.assertEqual(reject_lp.call_count, 2)
+        self.assertEqual(get_signless.call_count, 2)
+        self.assertEqual(coerce_i16.call_count, 2)
+        self.assertEqual(vshls_op.call_args.args, ("vec_ty", vec, scalar_i16, mask))
+        self.assertEqual(vshrs_op.call_args.args, ("vec_ty", vec, scalar_i16, mask))
+
+        with patch.object(_ops, "_coerce_scalar_like_vector_element", return_value=scalar) as coerce_scalar, \
+             patch.object(_ops, "vbr", return_value=broadcast) as vbr, \
+             patch.object(_ops, "vand", return_value=anded) as vand:
+            self.assertIs(_ops.vands(vec, scalar, mask), anded)
+        coerce_scalar.assert_called_once_with(vec, scalar, context="vands")
+        vbr.assert_called_once_with(scalar)
+        vand.assert_called_once_with(vec, broadcast, mask)
+
+        with patch.object(_ops, "_coerce_scalar_like_vector_element", return_value=scalar) as coerce_scalar, \
+             patch.object(_ops, "vbr", return_value=broadcast) as vbr, \
+             patch.object(_ops, "vor", return_value=ored) as vor:
+            self.assertIs(_ops.vors(vec, scalar, mask), ored)
+        coerce_scalar.assert_called_once_with(vec, scalar, context="vors")
+        vbr.assert_called_once_with(scalar)
+        vor.assert_called_once_with(vec, broadcast, mask)
+
+        with patch.object(_ops, "_coerce_scalar_like_vector_element", return_value=scalar) as coerce_scalar, \
+             patch.object(_ops, "vbr", return_value=broadcast) as vbr, \
+             patch.object(_ops, "vxor", return_value=xored) as vxor:
+            self.assertIs(_ops.vxors(vec, scalar, mask), xored)
+        coerce_scalar.assert_called_once_with(vec, scalar, context="vxors")
+        vbr.assert_called_once_with(scalar)
+        vxor.assert_called_once_with(vec, broadcast, mask)
+
+
+    def test_vlds_accepts_extended_distribution_tokens(self):
+        ptr = SimpleNamespace(type="ptr_ty")
+        vec = object()
+
+        with patch.object(_ops, "unwrap_surface_value", side_effect=_identity), \
+             patch.object(_ops, "wrap_surface_value", side_effect=_identity), \
+             patch.object(_ops, "_infer_vreg_type_from_address_source", return_value="vec_ty"), \
+             patch.object(_ops, "_coerce_index", return_value="idx"), \
+             patch.object(_ops, "_normalize_post_update_mode", return_value="NO_POST_UPDATE"), \
+             patch.object(_ops, "_normalize_dist_token", side_effect=lambda dist, *, allowed, context: dist) as normalize_dist, \
+             patch.object(_ops._pto, "VldsOp", return_value=SimpleNamespace(result=vec)) as vlds_op:
+            self.assertIs(_ops.vlds(ptr, 0, dist="E2B_B16"), vec)
+            self.assertIs(_ops.vlds(ptr, 0, dist="BRC_BLK"), vec)
+        self.assertEqual(normalize_dist.call_args_list[0].args[0], "E2B_B16")
+        self.assertEqual(normalize_dist.call_args_list[1].args[0], "BRC_BLK")
+        self.assertEqual(vlds_op.call_count, 2)
+
+    def test_f32_to_fp8_vcvt_contract_accepts_rahz_rounding(self):
+        contract = _ops._VCVT_CONTRACTS[("f32", "f8e4m3")]
+        for rnd in ("R", "A", "H", "Z"):
+            with self.subTest(rnd=rnd):
+                _ops._validate_vcvt_attrs(
+                    "f32",
+                    "f8e4m3",
+                    contract,
+                    rnd=rnd,
+                    sat="SAT",
+                    part="P0",
+                    context="pto.vcvt",
+                )
+        with self.assertRaisesRegex(ValueError, r"expected one of A, H, R, Z"):
+            _ops._validate_vcvt_attrs(
+                "f32",
+                "f8e4m3",
+                contract,
+                rnd="F",
+                sat="SAT",
+                part="P0",
+                context="pto.vcvt",
+            )
 
     def test_cube_variant_wrappers_dispatch_to_generated_ops(self):
         lhs = object()

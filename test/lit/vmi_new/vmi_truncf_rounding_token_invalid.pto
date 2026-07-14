@@ -11,12 +11,11 @@
 module {
   func.func @vmi_truncf_rounding_token_invalid(
       %source: !pto.vmi.vreg<256xf32>) {
-    %result = pto.vmi.vcvt %source {rounding = "R"}
+    %result = pto.vmi.vcvt %source {rounding = "F"}
         : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256x!pto.hif8>
     return
   }
 }
 
-// vcvt accepts the extra "Z" (toward-zero) token, so the message differs from
-// the legacy truncf wording; "R" is still rejected.
-// CHECK: op rounding must be 'A' (away-from-zero), 'H' (half-up), or 'Z' (toward-zero)
+// VMI fp-narrowing accepts the dedicated R/A/H/Z subset only.
+// CHECK: op rounding must be 'R' (nearest-even), 'A' (away-from-zero), 'H' (half-up), or 'Z' (toward-zero)

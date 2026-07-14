@@ -1408,6 +1408,19 @@ s_shifted = pto.vsubs(s_row, m_next, col_mask)
 
 **Description**: Leaky ReLU — `vec[i] >= 0 ? vec[i] : alpha * vec[i]`.
 
+#### `pto.vshls(vec: VRegType, scalar: ScalarType, mask: MaskType) -> VRegType`
+#### `pto.vshrs(vec: VRegType, scalar: ScalarType, mask: MaskType) -> VRegType`
+
+**Description**: Uniform integer shift by a scalar amount. PTODSL coerces
+`scalar` to signless `i16`, matching the VPTO `vshls`/`vshrs` requirement.
+
+#### `pto.vands(vec: VRegType, scalar: ScalarType, mask: MaskType) -> VRegType`
+#### `pto.vors(vec: VRegType, scalar: ScalarType, mask: MaskType) -> VRegType`
+#### `pto.vxors(vec: VRegType, scalar: ScalarType, mask: MaskType) -> VRegType`
+
+**Description**: Vector/scalar bitwise ops. PTODSL lowers these surface helpers
+as `vbr(scalar)` followed by `vand(...)`, `vor(...)`, or `vxor(...)`.
+
 ---
 
 ### 8.2.3.1 Vector duplication: `pto.vdup`
@@ -1539,6 +1552,11 @@ These combine an arithmetic operation with a math function or activation in a si
 #### `pto.vaxpy(alpha: ScalarType, x: VRegType, y: VRegType, mask: MaskType) -> VRegType`
 
 **Description**: Fused multiply-add: `alpha * x[i] + y[i]`.
+
+#### `pto.vmula(acc: VRegType, lhs: VRegType, rhs: VRegType, mask: MaskType) -> VRegType`
+
+**Description**: Fused multiply-add with an explicit accumulator:
+`acc[i] + lhs[i] * rhs[i]`.
 
 ---
 
@@ -1676,7 +1694,7 @@ These ops change the element type or layout of vector registers. They are distin
 
 **Constraints**:
 - Source and result dtype pair must be a legal hardware conversion. Illegal pairs (e.g., unsupported narrowing/widening combinations) are rejected at frontend time.
-- `f32 -> f8e4m3/f8e5m2` requires `rnd=R`, `sat`, and `part=P0/P1/P2/P3`.
+- `f32 -> f8e4m3/f8e5m2` requires `rnd=R/A/H/Z`, `sat`, and `part=P0/P1/P2/P3`.
 - `f32 -> hif8` requires `rnd=A/H`, `sat`, and `part=P0/P1/P2/P3`.
 - `f16/bf16 -> f8e4m3/f8e5m2` requires `rnd=R/A/F/Z/C`, `sat`, and `part=EVEN/ODD`.
 - `f16 -> hif8` requires `rnd=A/H`, `sat`, and `part=EVEN/ODD`.
@@ -1745,6 +1763,24 @@ vec_f32_roundtrip = pto.vcvt(vec_f8, pto.f32, pto.pset_b8(pto.MaskPattern.ALL), 
 # vec_i32: 64×i32 = 256 bytes
 packed_low  = pto.vpack(vec_i32, pto.VPackPart.LOWER)   # lower 64 lanes -> 128×u16
 packed_high = pto.vpack(vec_i32, pto.VPackPart.HIGHER)  # upper 64 lanes -> 128×u16
+```
+
+---
+
+### 8.2.7.1 Index generation
+
+#### `pto.vci(base: ScalarType | int, order: OrderMode | None = None) -> VRegType`
+
+**Description**: Generate a lane-index vector starting from `base`. When the
+base is a Python `int`, PTODSL defaults it to `i32`. To control the result
+dtype, materialize a typed scalar explicitly before calling `vci`.
+
+**Examples**:
+
+```python
+idx_i32 = pto.vci(0)
+idx_i8 = pto.vci(pto.i8(0), pto.OrderMode.ASC)
+typed_idx = pto.vci(pto.i32(16), order=pto.OrderMode.ASC)
 ```
 
 ---
@@ -1836,7 +1872,7 @@ even_lanes, odd_lanes = pto.vdintlv(packed_low, packed_high)
 |----------|------------|
 | Unary | `vexp`, `vln`, `vsqrt`, `vabs`, `vneg`, `vrec`, `vrsqrt`, `vrelu`, `vnot` |
 | Binary | `vadd`, `vsub`, `vmul`, `vdiv`, `vmax`, `vmin`, `vand`, `vor`, `vxor`, `vshl`, `vshr` |
-| Vector-scalar | `vadds`, `vsubs`, `vmuls`, `vmaxs`, `vmins`, `vlrelu` |
+| Vector-scalar | `vadds`, `vsubs`, `vmuls`, `vmaxs`, `vmins`, `vlrelu`, `vands`, `vors`, `vxors`, `vshls`, `vshrs` |
 | Broadcast | `vbr`, `vdup` |
 | Full reduction | `vcadd`, `vcmax`, `vcmin` |
 | Group reduction | `vcgadd`, `vcgmax`, `vcgmin` |
@@ -1844,6 +1880,7 @@ even_lanes, odd_lanes = pto.vdintlv(packed_low, packed_high)
 | Fused | `vexpdif`, `vaxpy`, `vmula`, `vmadd`, `vaddrelu`, `vsubrelu`, `vmulscvt` |
 | Compare/select | `vcmp`, `vcmps`, `vsel` |
 | Conversion | `vcvt`, `vpack`, `vbitcast`, `pbitcast` |
+| Index generation | `vci` |
 | Rearrangement | `vintlv`, `vdintlv` |
 
 ---

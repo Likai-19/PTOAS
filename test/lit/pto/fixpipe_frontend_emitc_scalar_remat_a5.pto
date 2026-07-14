@@ -1,4 +1,4 @@
-// RUN: ptoas --pto-arch=a5 %s -o - 2>&1 | FileCheck %s --check-prefix=A5
+// RUN: ptoas --pto-arch=a5 %s -o %t && FileCheck %s --check-prefix=A5 < %t
 
 module {
   func.func @cube_kernel() attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {

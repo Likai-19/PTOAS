@@ -662,6 +662,9 @@ narrow = pto.vmi.vcvt(src_f32, pto.f16)
 **Constraints**:
 - The masked form of `vcvt` is not currently supported on this surface.
 - The source and target dtype pair must be legal for the target backend.
+- For `f32 -> f8e4m3/f8e5m2`, PTODSL accepts `rounding="R"`, `"A"`, `"H"`,
+  and `"Z"`; other low-level rounding tokens remain rejected on the VMI
+  surface.
 
 ---
 
