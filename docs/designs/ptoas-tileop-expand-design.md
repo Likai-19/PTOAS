@@ -454,13 +454,16 @@ provider：通过 `OpPipeInterface::getPipe()` 逐个选择实现，`PIPE_V` Til
 PTODSL VMI candidate，`PIPE_MTE1/MTE2/MTE3/FIX/M` 等非向量 TileOp 继续使用现有
 PTODSL TileLib daemon。该 backend 不把非向量 TileOp 回退到 TileLang。
 因此 `tload/tstore` 等 GM/UB 搬运不会要求 VMI candidate，而 UB 内部向量计算不会因
-candidate 缺失而静默回退到 MI。当前 VMI TileLib 已覆盖 FA Online Softmax 所需的
+candidate 缺失而静默回退到 MI。当前 VMI TileLib 已覆盖静态 Softmax compute harness 的
 `tadd/tsub/tmul/tmax/tmov/tmuls/texp/trowmax/trowsum/trowexpandsub/tcvt`：主数据路径使用
 64-lane f32 logical block，`[1,32]` 在线状态使用一个 32-lane logical vector，RowReduce
 使用单个 row loop 并在模板特化期静态展开行内 VL blocks，Convert 支持 f32 到 f16。
 当前仍要求静态 Shape 和静态 valid shape，尚未覆盖动态 tail mask。在新的 VMI Fusion
 pipeline 接入之前，该 provider 会拒绝 `--enable-op-fusion`，防止误入旧的 VPTO/MI
 loop-fusion pass。
+
+该 coverage harness 不是完整 Softmax 验收：尚未覆盖归一化除法、动态 row/column、tail
+mask，以及真实 FA 路径中的全部 Convert/标量算术变体。
 
 RFC 首期还要求每个 `(target, PIPE_V TileOp)` 恰好存在一个 canonical VMI
 implementation。该实现必须在无融合时独立正确执行。PTODSL VMI helper 不做多个模板间
