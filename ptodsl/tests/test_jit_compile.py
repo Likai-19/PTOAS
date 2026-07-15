@@ -3500,6 +3500,7 @@ def main() -> None:
     expect(not hasattr(pto, "vbrc_load"), "pto.vbrc_load should not remain on the public pto namespace")
     expect(not hasattr(pto, "vsts_1pt"), "pto.vsts_1pt should not remain on the public pto namespace")
     expect(not hasattr(pto, "constexpr"), "pto.const_expr should not remain on the public pto namespace")
+    expect(not hasattr(pto, "copy_ubuf_to_ubuf"), "pto.copy_ubuf_to_ubuf should not remain on the public pto namespace")
     expect(not hasattr(pto, "vmi_vreg_type"), "pto.vmi_vreg_type should not remain on the public pto namespace")
     expect(not hasattr(pto, "vmi_mask_type"), "pto.vmi_mask_type should not remain on the public pto namespace")
     expect(not hasattr(scalar, "sts"), "scalar.sts should not remain in the public scalar namespace")
@@ -3535,6 +3536,12 @@ def main() -> None:
         "pto.constexpr is not a supported PTODSL public interface" in str(removed_constexpr)
         and "Use pto.const_expr" in str(removed_constexpr),
         "removed pto.constexpr should diagnose pto.const_expr as the replacement",
+    )
+    removed_copy_ubuf_to_ubuf = expect_raises(AttributeError, lambda: getattr(pto, "copy_ubuf_to_ubuf"))
+    expect(
+        "pto.copy_ubuf_to_ubuf is not a supported PTODSL public interface" in str(removed_copy_ubuf_to_ubuf)
+        and "Use pto.mte_ub_ub" in str(removed_copy_ubuf_to_ubuf),
+        "removed pto.copy_ubuf_to_ubuf should diagnose pto.mte_ub_ub as the replacement",
     )
     for name in ("max", "min", "exp", "log", "sqrt", "abs"):
         expect(hasattr(scalar, name), f"scalar.{name} should be exported from the public scalar namespace")

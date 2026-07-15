@@ -503,6 +503,10 @@ def unsupported_public_surface_error(name: str) -> AttributeError:
         "constexpr": (
             "Use pto.const_expr for compile-time @pto.jit parameters and trace-time control-flow guards."
         ),
+        "copy_ubuf_to_ubuf": (
+            "Use pto.mte_ub_ub(src, dst, len_burst, nburst=(n_burst, src_stride, dst_stride)) "
+            "for authored UB-to-UB DMA instead of the removed raw copy helper."
+        ),
         "tensor_spec": (
             "Host tensor ABI hints were removed from the PTODSL public surface. Use explicit "
             'GM pointers such as pto.ptr(pto.f32, "gm"), pass runtime shape/stride scalars, '

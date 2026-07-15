@@ -164,14 +164,11 @@ def template_tsort32_with_tmp(src: pto.Tile, idx: pto.Tile, tmp: pto.Tile, dst: 
         tmp_last_offset = repeat_num_per_row * BLOCK_SIZE - BLOCK_SIZE
 
         for row in range(0, valid_rows, 1):
-            pto.copy_ubuf_to_ubuf(
+            pto.mte_ub_ub(
                 pto.addptr(src_ptr, row * src_stride),
                 tmp_ptr,
-                0,
-                1,
                 len_burst,
-                0,
-                0,
+                nburst=(1, 0, 0),
             )
             pad_mask, _ = pto.make_mask(dtype, BLOCK_SIZE - src_tail_per_row)
             pad_vec = pto.vdup(pad_value, pad_mask)
@@ -225,14 +222,11 @@ def template_tsort32_with_tmp(src: pto.Tile, idx: pto.Tile, tmp: pto.Tile, dst: 
                     )
                     len_burst = (src_tail_per_row * elem_bytes + BLOCK_SIZE - 1) // BLOCK_SIZE
 
-                    pto.copy_ubuf_to_ubuf(
+                    pto.mte_ub_ub(
                         pto.addptr(src_ptr, row * src_stride + tail_src_offset),
                         tmp_ptr,
-                        0,
-                        1,
                         len_burst,
-                        0,
-                        0,
+                        nburst=(1, 0, 0),
                     )
 
                     tmp_last_offset = (
