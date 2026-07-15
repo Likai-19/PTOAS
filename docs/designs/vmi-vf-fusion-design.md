@@ -46,8 +46,9 @@ TileOp
   -> VPTO
 ```
 
-现有 canonical VMI TileLib 已能让 FA Online Softmax 所需的基础 compute TileOp 独立
-lower，但 Expand + Inline 后每个 TileOp 仍有自己的循环。例如 `tadd -> texp` 会得到：
+现有 canonical VMI TileLib 已能让静态 Softmax compute harness 中的一组基础 TileOp
+独立 lower，但尚不代表完整 FA/Online Softmax 已覆盖。Expand + Inline 后每个 TileOp
+仍有自己的循环。例如 `tadd -> texp` 会得到：
 
 ```mlir
 pto.vecscope {
@@ -416,7 +417,8 @@ tadd(loop=128) + texp(loop=128) + trowmax(loop=32) + tsub(loop=128)
 
 - 现有 PTODSL VMI TileTemplate Python test 保持通过。
 - composite provider 和 no-vector-fallback lit tests 保持通过。
-- FA Online Softmax 完整用例继续完成 Expand、Inline、VMI-to-VPTO。
+- 静态 Softmax compute-op coverage harness 完成 Expand、Inline、VMI-to-VPTO。
+- 完整 FA/Online Softmax 用例在补齐动态 mask、Convert 变体和缺失算术模板后纳入验收。
 - 首期只要求其中结构兼容的 elementwise 子链融合，不以完整算法深融合为门槛。
 
 ## 13. 后续迭代
