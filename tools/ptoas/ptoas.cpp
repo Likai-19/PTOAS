@@ -380,6 +380,9 @@ static llvm::cl::opt<bool> enableTileOpExpand(
 #ifndef PTOAS_DEFAULT_PTODSL_PKG_PATH
 #define PTOAS_DEFAULT_PTODSL_PKG_PATH ""
 #endif
+#ifndef PTOAS_DEFAULT_PTODSL_PYTHON_EXE
+#define PTOAS_DEFAULT_PTODSL_PYTHON_EXE "python3"
+#endif
 
 static llvm::cl::opt<std::string> tilelangPath(
     "tilelang-path",
@@ -399,6 +402,16 @@ static llvm::cl::opt<std::string> ptodslPkgPath(
                    "(default: <source>/ptodsl, baked in at build time)"),
     llvm::cl::init(PTOAS_DEFAULT_PTODSL_PKG_PATH));
 
+static llvm::cl::opt<std::string> ptodslPythonExe(
+    "ptodsl-python-exe",
+    llvm::cl::desc("Python executable matching the PTODSL PTO bindings"),
+    llvm::cl::init(PTOAS_DEFAULT_PTODSL_PYTHON_EXE));
+
+static llvm::cl::opt<std::string> ptodslVMIProviderModule(
+    "ptodsl-vmi-provider-module",
+    llvm::cl::desc("Python module containing canonical PTODSL VMI templates"),
+    llvm::cl::init("ptodsl.vmi_tilelib"));
+
 static llvm::cl::opt<std::string> daemonSocketPath(
     "daemon-socket-path",
     llvm::cl::desc("Path to Unix domain socket for daemon RPC "
@@ -408,6 +421,7 @@ static llvm::cl::opt<std::string> daemonSocketPath(
 enum class TileLibBackend {
   TileLang,
   PTODSL,
+  PTODSLVMI,
 };
 
 static llvm::cl::opt<TileLibBackend> tileLibBackend(
@@ -417,7 +431,9 @@ static llvm::cl::opt<TileLibBackend> tileLibBackend(
         clEnumValN(TileLibBackend::TileLang, "tilelang",
                    "Use the legacy TileLang DSL TileLib"),
         clEnumValN(TileLibBackend::PTODSL, "ptodsl",
-                   "Use the PTODSL TileLib daemon")),
+                   "Use the PTODSL TileLib daemon"),
+        clEnumValN(TileLibBackend::PTODSLVMI, "ptodsl-vmi",
+                   "Use canonical VMI for vector TileOps and PTODSL for other pipes")),
     llvm::cl::init(TileLibBackend::PTODSL));
 
 static pto::ExpandTileOpOptions resolveExpandTileOpOptions(int argc,
@@ -425,7 +441,8 @@ static pto::ExpandTileOpOptions resolveExpandTileOpOptions(int argc,
   pto::ExpandTileOpOptions expandOpts;
   expandOpts.tilelangPath = tilelangPath;
   expandOpts.tilelangPkgPath = tilelangPkgPath;
-  const bool usePTODSLTileLib = tileLibBackend == TileLibBackend::PTODSL;
+  const bool usePTODSLTileLib = tileLibBackend != TileLibBackend::TileLang;
+  const bool useCanonicalVMI = tileLibBackend == TileLibBackend::PTODSLVMI;
   std::string resolvedPtodslPkgPath = ptodslPkgPath;
 
   if (!hasCLIOption(argc, argv, "--ptodsl-pkg-path")) {
@@ -454,13 +471,18 @@ static pto::ExpandTileOpOptions resolveExpandTileOpOptions(int argc,
     }
   }
 
-  expandOpts.tileLibBackend = usePTODSLTileLib ? "ptodsl" : "tilelang";
+  expandOpts.tileLibBackend =
+      useCanonicalVMI ? "ptodsl-vmi"
+                      : (usePTODSLTileLib ? "ptodsl" : "tilelang");
   expandOpts.daemonHelperModule =
       usePTODSLTileLib ? "ptodsl.tilelib.serving.helper"
                        : "tilelang_dsl.daemon_helper";
   expandOpts.tileLibPkgPath =
       usePTODSLTileLib ? resolvedPtodslPkgPath
                        : std::string(expandOpts.tilelangPkgPath);
+  expandOpts.ptodslVMIProviderModule = ptodslVMIProviderModule;
+  if (usePTODSLTileLib)
+    expandOpts.pythonExe = ptodslPythonExe;
 
   // Daemon mode is default (no CLI option needed)
   // Automatically start daemon for instance caching
@@ -480,7 +502,8 @@ static pto::ExpandTileOpOptions resolveExpandTileOpOptions(int argc,
 
     // Try to start daemon automatically
     if (ptoas::DaemonManager::start(socket, daemonModule,
-                                    expandOpts.tileLibPkgPath, templateDir)) {
+                                    expandOpts.tileLibPkgPath, templateDir,
+                                    std::string(expandOpts.pythonExe))) {
       expandOpts.daemonSocketPath = socket;
       llvm::errs() << "Info: " << expandOpts.tileLibBackend
                    << " TileLib daemon started successfully\n";
@@ -2873,8 +2896,21 @@ int mlir::pto::compilePTOASModule(
   }
 
   const bool requestedEnableOpFusion = enableOpFusion == llvm::cl::BOU_TRUE;
+  const bool useCanonicalVMI = tileLibBackend == TileLibBackend::PTODSLVMI;
+  if (useCanonicalVMI && requestedEnableOpFusion) {
+    llvm::errs() << "Error: --tile-lib-backend=ptodsl-vmi cannot use the "
+                    "legacy --enable-op-fusion pipeline; enable fusion after "
+                    "the VMI Fusion passes are wired.\n";
+    return 1;
+  }
+  if (useCanonicalVMI && !enableVMI) {
+    llvm::errs() << "Error: --tile-lib-backend=ptodsl-vmi requires "
+                    "--enable-vmi=true.\n";
+    return 1;
+  }
   const bool defaultEnableOpFusion =
-      enableOpFusion == llvm::cl::BOU_UNSET && arch == "a5";
+      enableOpFusion == llvm::cl::BOU_UNSET && arch == "a5" &&
+      !useCanonicalVMI;
   const bool opFusionEnabled =
       (requestedEnableOpFusion || defaultEnableOpFusion);
 
@@ -3012,7 +3048,7 @@ int mlir::pto::compilePTOASModule(
   const bool hasTileOpsToExpand = hasUnexpandedTileOps(*module);
   std::optional<pto::ExpandTileOpOptions> expandOptions;
   if (effectiveBackend == PTOBackend::VPTO && hasTileOpsToExpand &&
-      tileLibBackend == TileLibBackend::PTODSL)
+      tileLibBackend != TileLibBackend::TileLang)
     expandOptions = resolveExpandTileOpOptions(argc, argv);
 
   if (effectiveBackend == PTOBackend::VPTO && !hasTileOpsToExpand) {
@@ -3055,7 +3091,9 @@ int mlir::pto::compilePTOASModule(
   // PTODSL legality discovery happens on tile-native PTO IR before fusion.
   // Fusion may later filter the ordered `candidates` array; ExpandTileOp
   // consumes the first candidate that remains.
-  if (expandOptions && expandOptions->tileLibBackend == "ptodsl") {
+  if (expandOptions &&
+      (expandOptions->tileLibBackend == "ptodsl" ||
+       expandOptions->tileLibBackend == "ptodsl-vmi")) {
     auto insertOptions =
         buildInsertTemplateAttributesOptions(*expandOptions);
     pm.addPass(

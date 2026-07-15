@@ -31,10 +31,12 @@ std::string DaemonManager::generateSocketPath() {
 bool DaemonManager::start(const std::string &socketPath,
                           const std::string &daemonModule,
                           const std::string &pkgPath,
-                          const std::string &templateDir) {
-  auto pythonPath = llvm::sys::findProgramByName("python3");
+                          const std::string &templateDir,
+                          const std::string &pythonExe) {
+  auto pythonPath = llvm::sys::findProgramByName(pythonExe);
   if (!pythonPath) {
-    llvm::errs() << "Error: Cannot find python3 executable for daemon\n";
+    llvm::errs() << "Error: Cannot find '" << pythonExe
+                 << "' executable for daemon\n";
     return false;
   }
 
