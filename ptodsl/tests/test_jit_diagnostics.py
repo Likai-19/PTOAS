@@ -84,16 +84,53 @@ def same_width_float_store_probe():
 
 @pto.jit(target="a5")
 def vmi_float_vcadd_missing_reassoc_probe():
-    src = pto.vmi.vbrc(0.0, result_type=pto.vmi.vreg(64, pto.f32))
+    src = pto.vmi.vbrc(pto.f32(0.0), size=64)
     mask = pto.vmi.create_mask(64, size=64)
-    _ = pto.vmi.vcadd(src, mask, result_type=pto.vmi.vreg(1, pto.f32))
+    _ = pto.vmi.vcadd(src, mask)
 
 
 @pto.jit(target="a5")
 def vmi_float_vcadd_none_reassoc_probe():
-    src = pto.vmi.vbrc(0.0, result_type=pto.vmi.vreg(64, pto.f32))
+    src = pto.vmi.vbrc(pto.f32(0.0), size=64)
     mask = pto.vmi.create_mask(64, size=64)
-    _ = pto.vmi.vcadd(src, mask, result_type=pto.vmi.vreg(1, pto.f32), reassoc=None)
+    _ = pto.vmi.vcadd(src, mask, reassoc=None)
+
+
+@pto.jit(target="a5")
+def vmi_vbrc_untyped_scalar_probe():
+    _ = pto.vmi.vbrc(0.0, size=64)
+
+
+@pto.jit(target="a5")
+def vmi_vci_untyped_scalar_probe():
+    _ = pto.vmi.vci(0, size=64, order="ASC")
+
+@pto.jit(target="a5")
+def vmi_vinterpret_cast_missing_dtype_probe():
+    src = pto.vmi.vbrc(pto.f32(0.0), size=64)
+    _ = pto.vmi.vinterpret_cast(src)
+
+
+@pto.jit(target="a5")
+def vmi_vinterpret_cast_width_mismatch_probe():
+    src = pto.vmi.vbrc(pto.f32(0.0), size=64)
+    _ = pto.vmi.vinterpret_cast(src, to_dtype=pto.f16)
+
+
+@pto.jit(target="a5")
+def vmi_create_mask_partial_group_args_probe():
+    _ = pto.vmi.create_mask(
+        8,
+        size=64,
+        num_groups=8,
+    )
+
+@pto.jit(target="a5")
+def vmi_vload_missing_size_probe():
+    tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
+    src = tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+    _ = pto.vmi.vload(src, offset)
 
 
 @pto.jit(target="a5")
@@ -627,6 +664,43 @@ def main() -> None:
         "pto.vmi.vcadd(...)",
         "True or False",
         "received None",
+    )
+    expect_raises(
+        vmi_vbrc_untyped_scalar_probe.compile,
+        TypeError,
+        "pto.vmi.vbrc(...)",
+        "typed scalar",
+        "plain Python scalars are ambiguous",
+    )
+    expect_raises(
+        vmi_vci_untyped_scalar_probe.compile,
+        TypeError,
+        "pto.vmi.vci(...)",
+        "typed scalar",
+        "plain Python scalars are ambiguous",
+    )
+    expect_raises(
+        vmi_vinterpret_cast_missing_dtype_probe.compile,
+        TypeError,
+        "pto.vmi.vinterpret_cast(...)",
+        "requires to_dtype",
+    )
+    expect_raises(
+        vmi_vinterpret_cast_width_mismatch_probe.compile,
+        TypeError,
+        "pto.vmi.vinterpret_cast(...)",
+        "element widths to match",
+    )
+    expect_raises(
+        vmi_create_mask_partial_group_args_probe.compile,
+        TypeError,
+        "pto.vmi.create_mask(...)",
+        "num_groups and group_size together",
+    )
+    expect_raises(
+        vmi_vload_missing_size_probe.compile,
+        TypeError,
+        "size",
     )
     expect_raises(
         bool_loop_bound_probe.compile,

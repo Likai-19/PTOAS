@@ -65,10 +65,7 @@ def _compute_scale_ub(
     else:
         raise ValueError(f"unsupported ComputeScale DST_FMT specialization: {DST_FMT}")
 
-    shift = pto.vmi.vbrc(
-        pto.const(23, dtype=pto.i32),
-        result_type=pto.vmi.vreg(_BLOCKS_PER_DATA_LOOP, pto.i32),
-    )
+    shift = pto.vmi.vbrc(pto.i32(23), size=_BLOCKS_PER_DATA_LOOP)
     scale_mask = pto.vmi.create_mask(_SCALE_LANES_PER_LOOP, size=_SCALE_LANES_PER_LOOP)
 
     for i in range(LOOP_NUM2VF):
@@ -83,12 +80,12 @@ def _compute_scale_ub(
         scale_u32 = pto.vmi.vcvt(raw_scale, pto.ui32)
         scale_i32 = pto.vmi.vinterpret_cast(
             scale_u32,
-            result_type=pto.vmi.vreg(_BLOCKS_PER_DATA_LOOP, pto.i32),
+            pto.i32,
         )
         scale_bits = pto.vmi.vshl(scale_i32, shift)
         scale_compact = pto.vmi.vinterpret_cast(
             scale_bits,
-            result_type=pto.vmi.vreg(_BLOCKS_PER_DATA_LOOP, pto.f32),
+            pto.f32,
         )
         if pto.const_expr(DST_FMT == "f32"):
             pto.vmi.vstore(scale_compact, scale_dst_ptr, dst_off, scale_mask)
@@ -141,27 +138,25 @@ def _compute_data_ub(
         scale_lo_slots = pto.vmi.vload(
             scale_ptr,
             scale_off,
-            size=1,
+            size=_SCALE_LANES_PER_HALF,
             stride=1,
             group=_SCALE_REPEAT_GROUPS,
-            result_type=pto.vmi.vreg(_SCALE_LANES_PER_HALF, pto.f32),
         )
         scale_hi_slots = pto.vmi.vload(
             scale_ptr,
             scale_off + _SCALE_LANES_PER_HALF,
-            size=1,
+            size=_SCALE_LANES_PER_HALF,
             stride=1,
             group=_SCALE_REPEAT_GROUPS,
-            result_type=pto.vmi.vreg(_SCALE_LANES_PER_HALF, pto.f32),
         )
         scale_lo_f32 = pto.vmi.vbrc(
             scale_lo_slots,
-            result_type=pto.vmi.vreg(_HALF_ELEMS_PER_LOOP, pto.f32),
+            size=_HALF_ELEMS_PER_LOOP,
             group=_SCALE_REPEAT_GROUPS,
         )
         scale_hi_f32 = pto.vmi.vbrc(
             scale_hi_slots,
-            result_type=pto.vmi.vreg(_HALF_ELEMS_PER_LOOP, pto.f32),
+            size=_HALF_ELEMS_PER_LOOP,
             group=_SCALE_REPEAT_GROUPS,
         )
         y_lo_f32 = pto.vmi.vmul(x_lo_f32, scale_lo_f32, mask256)
