@@ -284,6 +284,8 @@ static FailureOr<Type> getVMIVRegPhysicalElementType(VMIVRegType type) {
   int64_t laneStride = layout.getLaneStride();
   if (elementBits == 0 || laneStride <= 1)
     return failure();
+  if (elementBits == 8 && laneStride == 2)
+    return elementType;
   int64_t physicalBits = static_cast<int64_t>(elementBits) * laneStride;
   if (physicalBits != 16 && physicalBits != 32)
     return failure();
@@ -10122,6 +10124,36 @@ struct OneToNVMIExtIOpPattern : OpConversionPattern<OpT> {
   }
 };
 
+// TruncI lowering support matrix
+//
+// Keep this comment aligned with both:
+//   1. verifySupportedVMIToVPTOOps() diagnostics below, and
+//   2. the actual OneToN lowering implemented in this pattern.
+//
+// Dense logical layouts
+//   - deinterleaved factor 2/4 -> contiguous
+//     Example: 32 -> 16 or 32 -> 8.
+//     Lowering shape: emit vcvt parts EVEN/ODD or P0/P1/P2/P3, then merge
+//     physical results when multiple source chunks contribute to one result.
+//   - deinterleaved factor 4 -> deinterleaved factor 2
+//     Example: 32 -> 16.
+//     Lowering shape: emit vcvt EVEN/ODD per source chunk pair.
+//   - contiguous lane_stride = 1 -> contiguous lane_stride = 2/4
+//     Example: 16 -> 8 lane_stride=2, 32 -> 8 lane_stride=4.
+//     Lowering shape: emit vcvt into the widened physical carrier selected by
+//     the lane-stride result type.
+//
+// Group-slots logical layouts: group_slots(num_groups=G, slots=1 or 8)
+//   - 32-bit integer -> 16-bit integer, same group_slots layout
+//     Lowering shape: direct vcvt with part = EVEN.
+//   - 32-bit integer -> 8-bit integer, same group_slots layout
+//     Lowering shape: direct vcvt with part = P0.
+//   - 16-bit unsigned integer -> 8-bit unsigned integer, slots = 8,
+//     result lane_stride = 2
+//     Lowering shape: direct vcvt with part = EVEN.
+//   - 32-bit integer -> 8-bit integer, result lane_stride = 4
+//     Lowering shape: no vcvt; keep/bitcast the 32-bit carrier and let the
+//     later store consume it as PK4_B32.
 struct OneToNVMITruncIOpPattern : OpConversionPattern<VMITruncIOp> {
   using OpConversionPattern<VMITruncIOp>::OpConversionPattern;
 
@@ -10141,15 +10173,22 @@ struct OneToNVMITruncIOpPattern : OpConversionPattern<VMITruncIOp> {
     VMILayoutAttr resultLayout = resultVMIType.getLayoutAttr();
     if (sourceLayout && resultLayout && sourceLayout.isGroupSlots() &&
         resultLayout.isGroupSlots()) {
+      unsigned sourceLogicalBits =
+          pto::getPTOStorageElemBitWidth(sourceVMIType.getElementType());
+      unsigned resultLogicalBits =
+          pto::getPTOStorageElemBitWidth(resultVMIType.getElementType());
+      bool supportsDirectGroupSlotTrunc =
+          sourceLogicalBits == 32 &&
+          (resultLogicalBits == 16 || resultLogicalBits == 8);
+      bool supportsPackedU16ToU8GroupSlotTrunc =
+          sourceLogicalBits == 16 && resultLogicalBits == 8 &&
+          sourceLayout.getSlots() == 8 && resultLayout.getSlots() == 8 &&
+          resultLayout.hasLaneStride() && resultLayout.getLaneStride() == 2;
       if (sourceLayout.getNumGroups() != resultLayout.getNumGroups() ||
           sourceLayout.getSlots() != resultLayout.getSlots() ||
           (sourceLayout.getSlots() != 1 && sourceLayout.getSlots() != 8) ||
-          pto::getPTOStorageElemBitWidth(sourceVMIType.getElementType()) !=
-              32 ||
-          (pto::getPTOStorageElemBitWidth(resultVMIType.getElementType()) !=
-               16 &&
-           pto::getPTOStorageElemBitWidth(resultVMIType.getElementType()) !=
-               8) ||
+          (!supportsDirectGroupSlotTrunc &&
+           !supportsPackedU16ToU8GroupSlotTrunc) ||
           sourceParts.size() != resultTypes.size())
         return rewriter.notifyMatchFailure(
             op, "unsupported group-slot trunci shape");
@@ -10159,8 +10198,9 @@ struct OneToNVMITruncIOpPattern : OpConversionPattern<VMITruncIOp> {
       StringAttr sat = rewriter.getStringAttr("SAT");
       const char *activeSlotPattern =
           sourceLayout.getSlots() == 1 ? "PAT_VL1" : "PAT_VL8";
+      StringRef activeSlotGranularity = sourceLogicalBits == 16 ? "b16" : "b32";
       FailureOr<Value> activeSlotMask = createPrefixMask(
-          op.getLoc(), MaskType::get(rewriter.getContext(), "b32"),
+          op.getLoc(), MaskType::get(rewriter.getContext(), activeSlotGranularity),
           activeSlotPattern, rewriter);
       if (failed(activeSlotMask))
         return rewriter.notifyMatchFailure(
@@ -10170,10 +10210,21 @@ struct OneToNVMITruncIOpPattern : OpConversionPattern<VMITruncIOp> {
         auto sourceType = dyn_cast<VRegType>(sourcePart.getType());
         auto resultType = dyn_cast<VRegType>(physicalResultType);
         if (!sourceType ||
-            pto::getPTOStorageElemBitWidth(sourceType.getElementType()) != 32 ||
+            pto::getPTOStorageElemBitWidth(sourceType.getElementType()) !=
+                sourceLogicalBits ||
             !resultType)
           return rewriter.notifyMatchFailure(
               op, "unsupported group-slot trunci physical type");
+
+        if (supportsPackedU16ToU8GroupSlotTrunc) {
+          results.push_back(rewriter
+                                .create<VcvtOp>(op.getLoc(), resultType,
+                                                sourcePart, *activeSlotMask,
+                                                /*rnd=*/nullptr, sat,
+                                                rewriter.getStringAttr("EVEN"))
+                                .getResult());
+          continue;
+        }
 
         unsigned physicalResultBits =
             pto::getPTOStorageElemBitWidth(resultType.getElementType());
@@ -12296,7 +12347,9 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
              "whose factor is the 2x/4x narrowing multiple of the contiguous "
              "or deinterleaved result layout factor, or 32-bit integer "
              "group_slots(num_groups=G, slots=1 or 8) to 8/16-bit integer "
-             "group_slots(num_groups=G, slots=1 or 8) ("
+             "group_slots(num_groups=G, slots=1 or 8), or 16-bit unsigned "
+             "integer group_slots(num_groups=G, slots=8) to 8-bit unsigned "
+             "integer group_slots(num_groups=G, slots=8, lane_stride=2) ("
           << reason << ")";
       return WalkResult::interrupt();
     }
