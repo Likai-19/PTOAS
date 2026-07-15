@@ -33,7 +33,12 @@ from ptodsl._tile_template_tracing import (
     vlds,
     vsts,
 )
-from ptodsl.vmi_tilelib import vmi_tadd_block64, vmi_texp_block64
+from ptodsl.tilelib.registry import TileTemplateRegistry
+from ptodsl.vmi_tilelib import (
+    VMI_TILELIB_REGISTRY,
+    vmi_tadd_block64,
+    vmi_texp_block64,
+)
 from ptodsl.vmi_tilelib_helper import instantiate_candidate
 
 
@@ -138,6 +143,16 @@ def check_candidate_ir() -> tuple[str, str]:
 
 
 def check_provider_helper() -> None:
+    registered_tadd = VMI_TILELIB_REGISTRY.lookup("tadd", "a5")
+    expect(
+        len(registered_tadd) == 1,
+        "tadd must have one registered canonical VMI template",
+    )
+    expect(
+        registered_tadd[0] is vmi_tadd_block64,
+        "the registered tadd template must be the exported canonical implementation",
+    )
+
     raw_tile_spec = {
         "kind": "tile",
         "dtype": "f32",
@@ -268,6 +283,7 @@ def check_provider_helper() -> None:
     )
 
     duplicate_module = ModuleType("ptodsl_test_duplicate_vmi_candidates")
+    duplicate_module.VMI_TILELIB_REGISTRY = TileTemplateRegistry()
 
     @tile_template(target="a5", op="tadd", name="duplicate_tadd_a", ir_level="vmi")
     def duplicate_tadd_a(src0: Tile, src1: Tile, dst: Tile):
@@ -277,8 +293,8 @@ def check_provider_helper() -> None:
     def duplicate_tadd_b(src0: Tile, src1: Tile, dst: Tile):
         pass
 
-    duplicate_module.first = duplicate_tadd_a
-    duplicate_module.second = duplicate_tadd_b
+    duplicate_module.VMI_TILELIB_REGISTRY.register(duplicate_tadd_a)
+    duplicate_module.VMI_TILELIB_REGISTRY.register(duplicate_tadd_b)
     sys.modules[duplicate_module.__name__] = duplicate_module
     try:
         expect_raises(
