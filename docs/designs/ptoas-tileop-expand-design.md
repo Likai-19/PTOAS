@@ -455,15 +455,19 @@ PTODSL VMI candidate，`PIPE_MTE1/MTE2/MTE3/FIX/M` 等非向量 TileOp 继续使
 PTODSL TileLib daemon。该 backend 不把非向量 TileOp 回退到 TileLang。
 因此 `tload/tstore` 等 GM/UB 搬运不会要求 VMI candidate，而 UB 内部向量计算不会因
 candidate 缺失而静默回退到 MI。当前 VMI TileLib 已覆盖静态 Softmax compute harness 的
-`tadd/tsub/tmul/tmax/tmov/tmuls/texp/trowmax/trowsum/trowexpandsub/tcvt`：主数据路径使用
-64-lane f32 logical block，`[1,32]` 在线状态使用一个 32-lane logical vector，RowReduce
-使用单个 row loop 并在模板特化期静态展开行内 VL blocks，Convert 支持 f32 到 f16。
+`tadd/tadds/tsub/tmul/tmuls/tmax/tmaxs/tmins/tdivs/tmov/texp/trowmax/trowsum/`
+`trowexpandsub/tcvt`：主数据路径使用 64-lane f32 logical block，`[1,32]` 在线状态使用
+一个 32-lane logical vector，RowReduce 使用单个 row loop 并在模板特化期静态展开行内
+VL blocks，Convert 支持 f32 到 f16。`tdivs` 当前只覆盖 tile/scalar 的 f32 default
+precision，通过 `vbrc + vdiv` 组合实现。
 当前仍要求静态 Shape 和静态 valid shape，尚未覆盖动态 tail mask。在新的 VMI Fusion
 pipeline 接入之前，该 provider 会拒绝 `--enable-op-fusion`，防止误入旧的 VPTO/MI
 loop-fusion pass。
 
-该 coverage harness 不是完整 Softmax 验收：尚未覆盖归一化除法、动态 row/column、tail
-mask，以及真实 FA 路径中的全部 Convert/标量算术变体。
+`test/samples/FlashAttention/flash_attention_softmax.pto` 的静态 `[32,32]xf32` 多项式计算
+路径已经可以完成 Expand、Inline 和 VMI-to-VPTO。该样例不包含标准 Softmax 的 RowReduce
+归一化，因此不能替代完整 FA/Online Softmax 验收；动态 row/column、tail mask、row-wise
+归一化和全部 Convert/高精度除法变体仍未覆盖。
 
 RFC 首期还要求每个 `(target, PIPE_V TileOp)` 恰好存在一个 canonical VMI
 implementation。该实现必须在无融合时独立正确执行。PTODSL VMI helper 不做多个模板间

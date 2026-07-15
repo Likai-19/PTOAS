@@ -223,6 +223,42 @@ def check_provider_helper() -> None:
     expect("%arg1: f32" in tmuls, "tmuls should preserve its runtime scalar parameter")
     expect("pto.vmi.vmuls" in tmuls, "tmuls should lower to VMI scalar multiply")
 
+    scalar_expectations = {
+        "tadds": "pto.vmi.vadds",
+        "tmaxs": "pto.vmi.vmaxs",
+        "tmins": "pto.vmi.vmins",
+    }
+    for op_name, expected_op in scalar_expectations.items():
+        text = instantiate_candidate(
+            target="a5",
+            op_name=f"pto.{op_name}",
+            operand_specs=[raw_tile_spec, scalar_spec, raw_tile_spec],
+            provider_module="ptodsl.vmi_tilelib",
+            context_attrs={},
+        ).mlir_text()
+        expect(expected_op in text, f"{op_name} should lower to {expected_op}")
+
+    tdivs = instantiate_candidate(
+        target="a5",
+        op_name="pto.tdivs",
+        operand_specs=[raw_tile_spec, scalar_spec, raw_tile_spec],
+        provider_module="ptodsl.vmi_tilelib",
+        context_attrs={"precisionType": "default"},
+    ).mlir_text()
+    expect("pto.vmi.vbrc" in tdivs, "tdivs should broadcast its scalar operand")
+    expect("pto.vmi.vdiv" in tdivs, "tdivs should lower to VMI vector divide")
+    expect_raises(
+        lambda: instantiate_candidate(
+            target="a5",
+            op_name="pto.tdivs",
+            operand_specs=[raw_tile_spec, scalar_spec, raw_tile_spec],
+            provider_module="ptodsl.vmi_tilelib",
+            context_attrs={"precisionType": "high_precision"},
+        ),
+        ValueError,
+        "does not support context attrs",
+    )
+
     reduced_tile_spec = {
         **raw_tile_spec,
         "shape": [32, 1],

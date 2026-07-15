@@ -66,7 +66,7 @@ def _parse_context_attrs(spec_text: str | None) -> dict[str, object]:
 def _validate_candidate_context(op_name: str, attrs: dict[str, object]) -> None:
     if not attrs:
         return
-    if op_name == "texp" and attrs == {"precisionType": "default"}:
+    if op_name in {"texp", "tdivs"} and attrs == {"precisionType": "default"}:
         return
     if op_name == "tcvt" and attrs == {"round_mode": "RINT"}:
         return

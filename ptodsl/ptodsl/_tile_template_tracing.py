@@ -972,23 +972,55 @@ def vmi_vmul(lhs: _VectorValue, rhs: _VectorValue, mask: _MaskValue) -> _VectorV
     return _vmi_binary("vmi_vmul", lhs, rhs, mask)
 
 
+def vmi_vdiv(lhs: _VectorValue, rhs: _VectorValue, mask: _MaskValue) -> _VectorValue:
+    return _vmi_binary("vmi_vdiv", lhs, rhs, mask)
+
+
 def vmi_vmax(lhs: _VectorValue, rhs: _VectorValue, mask: _MaskValue) -> _VectorValue:
     return _vmi_binary("vmi_vmax", lhs, rhs, mask)
+
+
+def _vmi_vec_scalar(
+    operation: str,
+    source: _VectorValue,
+    scalar: _Value,
+    mask: _MaskValue,
+) -> _VectorValue:
+    _require_vmi_trace(operation)
+    if source.dtype != mask.dtype:
+        raise TypeError(f"{operation} source and mask must use the same dtype")
+    expected_scalar = str(_resolve(_scalar_descriptor(source.dtype)))
+    if scalar.type_text != expected_scalar:
+        raise TypeError(
+            f"{operation} scalar must use {expected_scalar}, got {scalar.type_text}"
+        )
+    emitter = getattr(_vmi, operation.removeprefix("vmi_"))
+    result = emitter(source.value, scalar.value, mask.value)
+    return _VectorValue(unwrap_surface_value(result), source.dtype)
+
+
+def vmi_vadds(
+    source: _VectorValue, scalar: _Value, mask: _MaskValue
+) -> _VectorValue:
+    return _vmi_vec_scalar("vmi_vadds", source, scalar, mask)
 
 
 def vmi_vmuls(
     source: _VectorValue, scalar: _Value, mask: _MaskValue
 ) -> _VectorValue:
-    _require_vmi_trace("vmi_vmuls")
-    if source.dtype != mask.dtype:
-        raise TypeError("vmi_vmuls source and mask must use the same dtype")
-    expected_scalar = str(_resolve(_scalar_descriptor(source.dtype)))
-    if scalar.type_text != expected_scalar:
-        raise TypeError(
-            f"vmi_vmuls scalar must use {expected_scalar}, got {scalar.type_text}"
-        )
-    result = _vmi.vmuls(source.value, scalar.value, mask.value)
-    return _VectorValue(unwrap_surface_value(result), source.dtype)
+    return _vmi_vec_scalar("vmi_vmuls", source, scalar, mask)
+
+
+def vmi_vmaxs(
+    source: _VectorValue, scalar: _Value, mask: _MaskValue
+) -> _VectorValue:
+    return _vmi_vec_scalar("vmi_vmaxs", source, scalar, mask)
+
+
+def vmi_vmins(
+    source: _VectorValue, scalar: _Value, mask: _MaskValue
+) -> _VectorValue:
+    return _vmi_vec_scalar("vmi_vmins", source, scalar, mask)
 
 
 def vmi_vexp(source: _VectorValue, mask: _MaskValue) -> _VectorValue:
@@ -1008,6 +1040,18 @@ def vmi_vbroadcast(source: _VectorValue, *, lanes: int) -> _VectorValue:
     )
     result = _vmi.vbrc(source.value, result_type=result_type)
     return _VectorValue(unwrap_surface_value(result), source.dtype)
+
+
+def vmi_vbroadcast_scalar(scalar: _Value, *, like: _VectorValue) -> _VectorValue:
+    _require_vmi_trace("vmi_vbroadcast_scalar")
+    expected_scalar = str(_resolve(_scalar_descriptor(like.dtype)))
+    if scalar.type_text != expected_scalar:
+        raise TypeError(
+            "vmi_vbroadcast_scalar scalar must use "
+            f"{expected_scalar}, got {scalar.type_text}"
+        )
+    result = _vmi.vbrc(scalar.value, result_type=like.value.type)
+    return _VectorValue(unwrap_surface_value(result), like.dtype)
 
 
 def vmi_vreduce_max(source: _VectorValue, mask: _MaskValue) -> _VectorValue:
@@ -1180,10 +1224,15 @@ __all__ = [
     "vmi_vadd",
     "vmi_vsub",
     "vmi_vmul",
+    "vmi_vdiv",
     "vmi_vmax",
+    "vmi_vadds",
     "vmi_vmuls",
+    "vmi_vmaxs",
+    "vmi_vmins",
     "vmi_vexp",
     "vmi_vbroadcast",
+    "vmi_vbroadcast_scalar",
     "vmi_vreduce_max",
     "vmi_vreduce_add",
     "vmi_vcvt",

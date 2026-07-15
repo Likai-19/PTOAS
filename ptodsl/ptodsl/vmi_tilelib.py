@@ -5,7 +5,7 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
-"""Initial canonical VMI TileLib candidates for static Softmax compute coverage."""
+"""Initial canonical VMI TileLib candidates for static Softmax-related coverage."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from ._tile_template_tracing import (
     CanonicalBlockMap,
     _MaskValue,
     _TileProxy,
+    _Value,
     _VectorValue,
     f16,
     f32,
@@ -28,12 +29,17 @@ from ._tile_template_tracing import (
     vmi_create_mask_lanes,
     vmi_prepare_tile_access,
     vmi_vadd,
+    vmi_vadds,
     vmi_vbroadcast,
+    vmi_vbroadcast_scalar,
     vmi_vcvt,
+    vmi_vdiv,
     vmi_vexp,
     vmi_vload,
     vmi_vload_linear,
     vmi_vmax,
+    vmi_vmaxs,
+    vmi_vmins,
     vmi_vmuls,
     vmi_vmul,
     vmi_vreduce_add,
@@ -164,6 +170,13 @@ def _move(values: Sequence[_VectorValue], mask: _MaskValue) -> _VectorValue:
     if len(values) != 1:
         raise ValueError("tmov VMI candidate expects one source vector")
     return values[0]
+
+
+def _divide_by_scalar(
+    value: _VectorValue, scalar: _Value, mask: _MaskValue
+) -> _VectorValue:
+    scalar_vector = vmi_vbroadcast_scalar(scalar, like=value)
+    return vmi_vdiv(value, scalar_vector, mask)
 
 
 def _validate_row_reduce_tiles(
@@ -322,6 +335,42 @@ def vmi_tmuls(src: Tile, scale: f32, dst: Tile):
     )
 
 
+@canonical_vmi_template(target="a5", op="tadds", name="vmi_tadds")
+def vmi_tadds(src: Tile, scalar: f32, dst: Tile):
+    emit_elementwise_vmi(
+        dst,
+        (src,),
+        lambda values, mask: vmi_vadds(values[0], scalar, mask),
+    )
+
+
+@canonical_vmi_template(target="a5", op="tmaxs", name="vmi_tmaxs")
+def vmi_tmaxs(src: Tile, scalar: f32, dst: Tile):
+    emit_elementwise_vmi(
+        dst,
+        (src,),
+        lambda values, mask: vmi_vmaxs(values[0], scalar, mask),
+    )
+
+
+@canonical_vmi_template(target="a5", op="tmins", name="vmi_tmins")
+def vmi_tmins(src: Tile, scalar: f32, dst: Tile):
+    emit_elementwise_vmi(
+        dst,
+        (src,),
+        lambda values, mask: vmi_vmins(values[0], scalar, mask),
+    )
+
+
+@canonical_vmi_template(target="a5", op="tdivs", name="vmi_tdivs")
+def vmi_tdivs(src: Tile, scalar: f32, dst: Tile):
+    emit_elementwise_vmi(
+        dst,
+        (src,),
+        lambda values, mask: _divide_by_scalar(values[0], scalar, mask),
+    )
+
+
 @canonical_vmi_template(target="a5", op="trowmax", name="vmi_trowmax")
 def vmi_trowmax(src: Tile, workspace: Tile, dst: Tile):
     emit_row_reduce_vmi(src, workspace, dst, kind="max")
@@ -357,6 +406,10 @@ __all__ = [
     "vmi_tmax",
     "vmi_tmov",
     "vmi_tmuls",
+    "vmi_tadds",
+    "vmi_tmaxs",
+    "vmi_tmins",
+    "vmi_tdivs",
     "vmi_trowmax",
     "vmi_trowsum",
     "vmi_trowexpandsub",
