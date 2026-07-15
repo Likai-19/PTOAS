@@ -981,7 +981,7 @@ class TileLibCatalogTest(unittest.TestCase):
         selected = select("pto.tsort32", "a5", specs)
         self.assertEqual(selected.name, "template_tsort32_with_tmp")
         mlir = selected.specialize(**specs).mlir_text()
-        self.assertIn("pto.copy_ubuf_to_ubuf", mlir)
+        self.assertIn("pto.mte_ub_ub", mlir)
         self.assertIn("pto.vbitsort", mlir)
 
     def test_tsort32_unaligned_tmp_uses_valid_width(self):
@@ -994,7 +994,7 @@ class TileLibCatalogTest(unittest.TestCase):
         selected = select("pto.tsort32", "a5", specs)
         self.assertEqual(selected.name, "template_tsort32_with_tmp")
         mlir = selected.specialize(**specs).mlir_text()
-        self.assertIn("pto.copy_ubuf_to_ubuf", mlir)
+        self.assertIn("pto.mte_ub_ub", mlir)
         self.assertIn("pto.vbitsort", mlir)
         self.assertIn("%c130", mlir)
 

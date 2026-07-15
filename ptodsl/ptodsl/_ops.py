@@ -2176,19 +2176,6 @@ def vmrgsort4(destination, source0, source1, source2, source3, count, config):
     )
 
 
-def copy_ubuf_to_ubuf(source, destination, sid, n_burst, len_burst, src_stride, dst_stride):
-    """``pto.copy_ubuf_to_ubuf`` – raw UB-to-UB DMA primitive."""
-    _pto.CopyUbufToUbufOp(
-        unwrap_surface_value(source),
-        unwrap_surface_value(destination),
-        _coerce_i64(sid, context="copy_ubuf_to_ubuf(sid)"),
-        _coerce_i64(n_burst, context="copy_ubuf_to_ubuf(n_burst)"),
-        _coerce_i64(len_burst, context="copy_ubuf_to_ubuf(len_burst)"),
-        _coerce_i64(src_stride, context="copy_ubuf_to_ubuf(src_stride)"),
-        _coerce_i64(dst_stride, context="copy_ubuf_to_ubuf(dst_stride)"),
-    )
-
-
 def load_scalar(ptr_value, offset=0, result_type=None):
     """``pto.load_scalar`` – load one scalar from a pointer-like value."""
     if result_type is None:
