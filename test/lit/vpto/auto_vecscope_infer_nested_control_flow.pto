@@ -55,9 +55,13 @@ module attributes {pto.target_arch = "a5"} {
 }
 
 // CHECK-LABEL: func.func @auto_vecscope_atomic_control_flow
+// CHECK-DAG: %[[LOOP_LB:.*]] = arith.constant 0 : i16
+// CHECK-DAG: %[[LOOP_UB:.*]] = arith.constant 2 : i16
+// CHECK-DAG: %[[LOOP_STEP:.*]] = arith.constant 1 : i16
 // CHECK: pto.vecscope {
 // CHECK: pto.plt_b32
-// CHECK: scf.for
+// CHECK: scf.for %[[LOOP_IV:.*]] = %[[LOOP_LB]] to %[[LOOP_UB]] step %[[LOOP_STEP]]{{.*}}: i16 {
+// CHECK-NEXT: arith.index_cast %[[LOOP_IV]] : i16 to index
 // CHECK: pto.vlds
 // CHECK: pto.vadds
 // CHECK: pto.vsts

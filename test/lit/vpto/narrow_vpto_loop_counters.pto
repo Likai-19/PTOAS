@@ -1,0 +1,130 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -pto-narrow-vpto-loop-counters | FileCheck %s
+
+module {
+  func.func private @sink_index(index)
+  func.func private @sink_i32(i32)
+
+  func.func @eligible_index_loop() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c8 = arith.constant 8 : index
+    %c0_i32 = arith.constant 0 : i32
+    pto.vecscope {
+      %result = scf.for %i = %c0 to %c8 step %c1
+          iter_args(%acc = %c0_i32) -> (i32) {
+        %offset = arith.addi %i, %c1 : index
+        func.call @sink_index(%offset) : (index) -> ()
+        %offset_i32 = arith.index_cast %offset : index to i32
+        %next = arith.addi %acc, %offset_i32 : i32
+        scf.yield %next : i32
+      }
+      func.call @sink_i32(%result) : (i32) -> ()
+    }
+    return
+  }
+
+  func.func @eligible_i32_loop() {
+    pto.strict_vecscope() {
+    ^bb0:
+      %c0_i32 = arith.constant 0 : i32
+      %c1_i32 = arith.constant 1 : i32
+      %c4_i32 = arith.constant 4 : i32
+      scf.for %i = %c0_i32 to %c4_i32 step %c1_i32 : i32 {
+        %use = arith.addi %i, %c1_i32 : i32
+        func.call @sink_i32(%use) : (i32) -> ()
+      }
+    } : () -> ()
+    return
+  }
+
+  func.func @dynamic_upper_bound(%upper: index) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    pto.vecscope {
+      scf.for %i = %c0 to %upper step %c1 {
+        %use = arith.addi %i, %c1 : index
+        func.call @sink_index(%use) : (index) -> ()
+      }
+    }
+    return
+  }
+
+  func.func @out_of_range_upper_bound() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c32768 = arith.constant 32768 : index
+    pto.vecscope {
+      scf.for %i = %c0 to %c32768 step %c1 {
+        %use = arith.addi %i, %c1 : index
+        func.call @sink_index(%use) : (index) -> ()
+      }
+    }
+    return
+  }
+
+  func.func @overflowing_exit_value() {
+    %c0 = arith.constant 0 : index
+    %c2 = arith.constant 2 : index
+    %c32767 = arith.constant 32767 : index
+    pto.vecscope {
+      scf.for %i = %c0 to %c32767 step %c2 {
+        func.call @sink_index(%i) : (index) -> ()
+      }
+    }
+    return
+  }
+
+  func.func @outside_vecscope() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c4 = arith.constant 4 : index
+    scf.for %i = %c0 to %c4 step %c1 {
+      %use = arith.addi %i, %c1 : index
+      func.call @sink_index(%use) : (index) -> ()
+    }
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @eligible_index_loop
+// CHECK-DAG: %[[LB:.*]] = arith.constant 0 : i16
+// CHECK-DAG: %[[UB:.*]] = arith.constant 8 : i16
+// CHECK-DAG: %[[STEP:.*]] = arith.constant 1 : i16
+// CHECK: pto.vecscope {
+// CHECK: %[[RESULT:.*]] = scf.for %[[IV:.*]] = %[[LB]] to %[[UB]] step %[[STEP]] iter_args({{.*}}) -> (i32){{.*}}: i16 {
+// CHECK-NEXT: %[[INDEX_IV:.*]] = arith.index_cast %[[IV]] : i16 to index
+// CHECK: arith.addi %[[INDEX_IV]], {{.*}} : index
+// CHECK: scf.yield
+
+// CHECK-LABEL: func.func @eligible_i32_loop
+// CHECK: pto.strict_vecscope
+// CHECK-DAG: %[[I32_LB:.*]] = arith.constant 0 : i16
+// CHECK-DAG: %[[I32_UB:.*]] = arith.constant 4 : i16
+// CHECK-DAG: %[[I32_STEP:.*]] = arith.constant 1 : i16
+// CHECK: scf.for %[[I32_IV:.*]] = %[[I32_LB]] to %[[I32_UB]] step %[[I32_STEP]]{{.*}}: i16 {
+// CHECK-NEXT: %[[RESTORED_I32:.*]] = arith.extsi %[[I32_IV]] : i16 to i32
+// CHECK: arith.addi %[[RESTORED_I32]], {{.*}} : i32
+
+// CHECK-LABEL: func.func @dynamic_upper_bound
+// CHECK: scf.for %{{.*}} = %{{.*}} to %arg0 step %{{.*}} {
+// CHECK-NOT: : i16 {
+
+// CHECK-LABEL: func.func @out_of_range_upper_bound
+// CHECK: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} {
+// CHECK-NOT: : i16 {
+
+// CHECK-LABEL: func.func @overflowing_exit_value
+// CHECK: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} {
+// CHECK-NOT: : i16 {
+
+// CHECK-LABEL: func.func @outside_vecscope
+// CHECK: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} {
+// CHECK-NOT: : i16 {

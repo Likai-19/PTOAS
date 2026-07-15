@@ -838,6 +838,35 @@ def PTOUnrollSIMTFor : Pass<"pto-unroll-simt-for", "func::FuncOp"> {
   ];
 }
 
+def PTONarrowVPTOLoopCounters
+    : Pass<"pto-narrow-vpto-loop-counters", "func::FuncOp"> {
+  let summary =
+      "Narrow constant-bounded scf.for counters inside VPTO vecscope regions to i16";
+  let description = [{
+    Rewrites `scf.for` operations nested under `pto.vecscope` or
+    `pto.strict_vecscope` when the lower bound, upper bound, positive step, and
+    post-loop induction value are compile-time integer constants representable
+    as signed i16 values.
+
+    The rewritten loop uses i16 bounds and induction variable. The induction
+    variable is cast back to its original index or wider integer type at the
+    start of the body, preserving the authored body and result types while
+    exposing the narrow counter form expected by the A5 hardware-loop backend.
+
+    Loops with dynamic bounds, out-of-range constants, an overflowing final
+    increment, non-positive steps, counters already 16 bits or narrower, or
+    loops outside VPTO vecscope regions are left unchanged.
+  }];
+  let constructor =
+      "mlir::pto::createPTONarrowVPTOLoopCountersPass()";
+  let dependentDialects = [
+    "mlir::func::FuncDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::arith::ArithDialect",
+    "mlir::pto::PTODialect"
+  ];
+}
+
 def PTOInferVPTOVecScope
     : Pass<"pto-infer-vpto-vecscope", "func::FuncOp"> {
   let summary =
