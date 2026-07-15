@@ -82,35 +82,10 @@ def _type_of(value):
     return _raw(value).type
 
 
-def _result_type_or(value, result_type, *, context: str):
-    if result_type is None:
-        return _type_of(value)
-    return _resolve(result_type)
-
-
 def _require_result_type(result_type, *, context: str):
     if result_type is None:
         raise TypeError(f"{context} requires explicit result_type")
     return _resolve(result_type)
-
-
-def _result_type_list(result_type, *, context: str, duplicate_for_dintlv: bool = False):
-    if result_type is None:
-        raise TypeError(f"{context} requires explicit result_type")
-    if _is_sequence(result_type):
-        return [_resolve(item) for item in result_type]
-    resolved = _resolve(result_type)
-    if duplicate_for_dintlv:
-        return [resolved, resolved]
-    return [resolved]
-
-
-def _two_result_types(result_types, lhs, rhs):
-    if result_types is None:
-        return _type_of(lhs), _type_of(rhs)
-    if not _is_sequence(result_types) or len(result_types) != 2:
-        raise TypeError("result_types must be a two-item sequence")
-    return _resolve(result_types[0]), _resolve(result_types[1])
 
 
 def _as_vmi_vreg_type(type_obj, *, context: str):
@@ -125,6 +100,41 @@ def _as_vmi_vreg_type(type_obj, *, context: str):
 
 def _vmi_element_type(type_obj, *, context: str):
     return _as_vmi_vreg_type(type_obj, context=context).element_type
+
+
+def _as_vmi_mask_type(type_obj, *, context: str):
+    mask_type_cls = getattr(_pto, "VMIMaskType", None)
+    if mask_type_cls is None:
+        raise _missing_vmi_support_error("!pto.vmi.mask")
+    try:
+        return mask_type_cls(type_obj)
+    except Exception as exc:
+        raise TypeError(f"{context} expects a !pto.vmi.mask value, got {type_obj}") from exc
+
+
+def _vmi_mask_element_count(mask_type, *, context: str):
+    for attr in ("element_count", "elementCount"):
+        value = getattr(mask_type, attr, None)
+        if value is not None:
+            return int(value)
+    getter = getattr(mask_type, "getElementCount", None)
+    if callable(getter):
+        return int(getter())
+    raise TypeError(f"{context} could not determine VMI mask lane count from {mask_type}")
+
+
+def _vmi_layout_attr(type_obj):
+    for attr in ("layout", "layout_attr"):
+        value = getattr(type_obj, attr, None)
+        if value is not None:
+            return value
+    for getter_name in ("getLayout", "getLayoutAttr"):
+        getter = getattr(type_obj, getter_name, None)
+        if callable(getter):
+            value = getter()
+            if value is not None:
+                return value
+    return None
 
 
 def _pointer_element_type(type_obj, *, context: str):
@@ -143,6 +153,8 @@ def _pointer_element_type(type_obj, *, context: str):
 def _type_bit_width(type_obj, *, context: str):
     if IntegerType.isinstance(type_obj):
         return IntegerType(type_obj).width
+    if Float8E4M3FNType.isinstance(type_obj) or Float8E5M2Type.isinstance(type_obj):
+        return 8
     if F16Type.isinstance(type_obj) or BF16Type.isinstance(type_obj):
         return 16
     if F32Type.isinstance(type_obj):
@@ -175,7 +187,7 @@ def _normalize_vmi_vcvt_rounding(mode, *, context: str):
 
 def _derive_vcvt_result_type(source, to_dtype, *, context: str):
     if to_dtype is None:
-        raise TypeError(f"{context} requires to_dtype when result_type is omitted")
+        raise TypeError(f"{context} requires to_dtype")
     source_type = _as_vmi_vreg_type(_type_of(source), context=context)
     elem_type = _ensure_tensor_storage_dtype(to_dtype, context=context)
     return _pto.VMIVRegType.get(
@@ -183,6 +195,110 @@ def _derive_vcvt_result_type(source, to_dtype, *, context: str):
         elem_type,
         layout=source_type.layout,
     )
+
+
+def _derive_vinterpret_cast_result_type(source, to_dtype, *, context: str):
+    if to_dtype is None:
+        raise TypeError(f"{context} requires to_dtype")
+    source_type = _as_vmi_vreg_type(_type_of(source), context=context)
+    source_elem_type = source_type.element_type
+    target_elem_type = _ensure_tensor_storage_dtype(to_dtype, context=context)
+    source_bits = _type_bit_width(source_elem_type, context=context)
+    target_bits = _type_bit_width(target_elem_type, context=context)
+    if source_bits != target_bits:
+        raise TypeError(
+            f"{context} requires source and target element widths to match; got "
+            f"{source_elem_type} -> {target_elem_type}"
+        )
+    return _pto.VMIVRegType.get(
+        source_type.element_count,
+        target_elem_type,
+        layout=source_type.layout,
+    )
+
+
+def _derive_vbrc_result_type(value, size, *, context: str):
+    if size is None:
+        raise TypeError(f"{context} requires size")
+    raw_value = _raw(value)
+    if not hasattr(raw_value, "type"):
+        raise TypeError(
+            f"{context} requires a typed scalar such as pto.f32(0.0) or "
+            "a VMI vector input; plain Python scalars are ambiguous"
+        )
+    value_type = raw_value.type
+    if _is_vmi_vreg_type(value_type):
+        elem_type = _vmi_element_type(value_type, context=context)
+    else:
+        elem_type = value_type
+    return _pto.VMIVRegType.get(size, elem_type)
+
+
+def _derive_vci_result_type(base, size, *, context: str):
+    if size is None:
+        raise TypeError(f"{context} requires size")
+    raw_base = _raw(base)
+    if not hasattr(raw_base, "type"):
+        raise TypeError(
+            f"{context} requires a typed scalar such as pto.i32(0) or "
+            "pto.f32(0.0); plain Python scalars are ambiguous"
+        )
+    return _pto.VMIVRegType.get(size, raw_base.type)
+
+
+def _derive_vmull_result_type(a, *, context: str):
+    source_type = _as_vmi_vreg_type(_type_of(a), context=context)
+    element_type = source_type.element_type
+    if not IntegerType.isinstance(element_type):
+        raise TypeError(f"{context} requires 32-bit integer vectors")
+    integer_type = IntegerType(element_type)
+    if integer_type.width != 32:
+        raise TypeError(f"{context} requires 32-bit integer vectors")
+    if integer_type.is_unsigned:
+        result_element_type = IntegerType.get_unsigned(64)
+    elif integer_type.is_signed:
+        result_element_type = IntegerType.get_signed(64)
+    else:
+        result_element_type = IntegerType.get_signless(64)
+    return _pto.VMIVRegType.get(source_type.element_count, result_element_type)
+
+
+def _derive_hist_result_type(acc, *, context: str):
+    return _as_vmi_vreg_type(_type_of(acc), context=context)
+
+
+def _derive_vgather_result_type(source, offsets, *, context: str):
+    offsets_type = _as_vmi_vreg_type(_type_of(offsets), context=context)
+    result_type = _pointer_element_type(_type_of(source), context=context)
+    return _pto.VMIVRegType.get(
+        offsets_type.element_count,
+        result_type,
+        layout=offsets_type.layout,
+    )
+
+
+def _derive_vgatherb_result_type(source, mask, *, context: str):
+    mask_type = _as_vmi_mask_type(_type_of(mask), context=context)
+    result_element_type = _pointer_element_type(_type_of(source), context=context)
+    result_layout = _vmi_layout_attr(mask_type)
+    return _pto.VMIVRegType.get(
+        _vmi_mask_element_count(mask_type, context=context),
+        result_element_type,
+        layout=result_layout,
+    )
+
+
+def _derive_vmi_reduce_result_type(source, group, *, context: str):
+    source_type = _as_vmi_vreg_type(_type_of(source), context=context)
+    result_lanes = 1
+    if group is not None:
+        try:
+            result_lanes = int(group)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"{context} requires group to be an integer when provided") from exc
+        if result_lanes <= 0:
+            raise TypeError(f"{context} requires group to be positive, got {group!r}")
+    return _pto.VMIVRegType.get(result_lanes, source_type.element_type)
 
 
 def _coerce_scalar_like_vmi_element(vector_value, scalar_value, *, context: str):
@@ -208,19 +324,15 @@ def _i16_value(value, *, context: str):
     return coerce_scalar_to_type(value, IntegerType.get_signless(16), context=context)
 
 
-def _resolve_vmi_mask_result_type(size, result_type, *, context: str):
-    if result_type is not None:
-        return _resolve(result_type)
+def _resolve_vmi_mask_type(size, *, context: str):
     if size is None:
-        raise TypeError(f"{context} requires size when result_type is omitted")
+        raise TypeError(f"{context} requires size")
     return _resolve(vmi_mask_type(size))
 
 
 def _resolve_vmi_unpack_result_type(source, size, to_dtype, *, context: str):
     if to_dtype is None:
-        raise TypeError(
-            f'{context} requires to_dtype when dist_mode="unpack" and result_type is omitted'
-        )
+        raise TypeError(f'{context} requires to_dtype when dist_mode="unpack"')
     source_type = _pointer_element_type(_type_of(source), context=context)
     result_type = _ensure_tensor_storage_dtype(to_dtype, context=context)
     source_bits = _type_bit_width(source_type, context=context)
@@ -233,31 +345,11 @@ def _resolve_vmi_unpack_result_type(source, size, to_dtype, *, context: str):
     return _pto.VMIVRegType.get(size, result_type)
 
 
-def _resolve_vmi_vload_result_types(source, size, result_type, *, dist_mode, to_dtype, context: str):
+def _resolve_vmi_vload_result_types(source, size, *, dist_mode, to_dtype, context: str):
     if to_dtype is not None and dist_mode != "unpack":
         raise TypeError(f'{context} accepts to_dtype only when dist_mode="unpack"')
-    if result_type is not None:
-        resolved_types = _result_type_list(
-            result_type,
-            context=context,
-            duplicate_for_dintlv=(dist_mode == "dintlv"),
-        )
-        if dist_mode == "unpack" and to_dtype is not None:
-            unpack_type = _as_vmi_vreg_type(resolved_types[0], context=context)
-            expected_elem_type = _ensure_tensor_storage_dtype(to_dtype, context=context)
-            if unpack_type.element_type != expected_elem_type:
-                raise TypeError(
-                    f"{context} result_type element type {unpack_type.element_type} "
-                    f"does not match to_dtype {expected_elem_type}"
-                )
-            if size is not None and unpack_type.element_count != size:
-                raise TypeError(
-                    f"{context} result_type lane count {unpack_type.element_count} "
-                    f"does not match size {size}"
-                )
-        return resolved_types
     if size is None:
-        raise TypeError(f"{context} requires size when result_type is omitted")
+        raise TypeError(f"{context} requires size")
     if dist_mode == "unpack":
         return [_resolve_vmi_unpack_result_type(source, size, to_dtype, context=context)]
     element_type = _pointer_element_type(_type_of(source), context=context)
@@ -271,10 +363,10 @@ def _call_value(op_name: str, *args, **kwargs):
     return _wrap_result(_generated(op_name)(*args, **kwargs))
 
 
-def _emit_binary(op_name: str, lhs, rhs, mask=None, *, result_type=None, pmode=None, loc=None, ip=None):
+def _emit_binary(op_name: str, lhs, rhs, mask=None, *, pmode=None, loc=None, ip=None):
     return _call_value(
         op_name,
-        _result_type_or(lhs, result_type, context=f"pto.vmi.{op_name}(...)"),
+        _type_of(lhs),
         _raw(lhs),
         _raw(rhs),
         _optional_mask(mask),
@@ -284,10 +376,10 @@ def _emit_binary(op_name: str, lhs, rhs, mask=None, *, result_type=None, pmode=N
     )
 
 
-def _emit_unary(op_name: str, source, mask=None, *, result_type=None, pmode=None, loc=None, ip=None):
+def _emit_unary(op_name: str, source, mask=None, *, pmode=None, loc=None, ip=None):
     return _call_value(
         op_name,
-        _result_type_or(source, result_type, context=f"pto.vmi.{op_name}(...)"),
+        _type_of(source),
         _raw(source),
         _optional_mask(mask),
         pmode=pmode,
@@ -296,11 +388,11 @@ def _emit_unary(op_name: str, source, mask=None, *, result_type=None, pmode=None
     )
 
 
-def _emit_vec_scalar(op_name: str, source, scalar, mask, *, result_type=None, pmode=None, loc=None, ip=None):
+def _emit_vec_scalar(op_name: str, source, scalar, mask, *, pmode=None, loc=None, ip=None):
     context = f"pto.vmi.{op_name}(...)"
     return _call_value(
         op_name,
-        _result_type_or(source, result_type, context=context),
+        _type_of(source),
         _raw(source),
         _coerce_scalar_like_vmi_element(source, scalar, context=context),
         _required_mask(mask, context=context),
@@ -315,7 +407,6 @@ def _emit_reduce(
     source,
     mask,
     *,
-    result_type,
     group=None,
     pmode=None,
     loc=None,
@@ -341,7 +432,7 @@ def _emit_reduce(
         kwargs["reassoc"] = reassoc
     return _call_value(
         op_name,
-        _require_result_type(result_type, context=context),
+        _derive_vmi_reduce_result_type(source, group, context=context),
         _raw(source),
         _required_mask(mask, context=context),
         **kwargs,
@@ -357,9 +448,8 @@ class _VMINamespace:
         source,
         offset,
         *,
-        size=None,
+        size,
         to_dtype=None,
-        result_type=None,
         stride=None,
         block_stride=None,
         repeat_stride=None,
@@ -372,7 +462,6 @@ class _VMINamespace:
         result_types = _resolve_vmi_vload_result_types(
             source,
             size,
-            result_type,
             dist_mode=dist_mode,
             to_dtype=to_dtype,
             context="pto.vmi.vload(...)",
@@ -424,8 +513,8 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vci(base, *, result_type=None, order=None, loc=None, ip=None):
-        result_type = _require_result_type(result_type, context="pto.vmi.vci(...)")
+    def vci(base, *, size, order=None, loc=None, ip=None):
+        result_type = _derive_vci_result_type(base, size, context="pto.vmi.vci(...)")
         base = coerce_scalar_to_type(
             base,
             _vmi_element_type(result_type, context="pto.vmi.vci(...)"),
@@ -461,10 +550,10 @@ class _VMINamespace:
     vshrs = staticmethod(lambda source, scalar, mask, **kw: _emit_vec_scalar("vshrs", source, scalar, mask, **kw))
 
     @staticmethod
-    def vcmp(lhs, rhs, seed, cmp, *, result_type=None, pmode=None, loc=None, ip=None):
+    def vcmp(lhs, rhs, seed, cmp, *, pmode=None, loc=None, ip=None):
         return _call_value(
             "vcmp",
-            _result_type_or(seed, result_type, context="pto.vmi.vcmp(...)"),
+            _type_of(seed),
             _raw(lhs),
             _raw(rhs),
             _raw(seed),
@@ -475,11 +564,11 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vcmps(source, scalar, seed, cmp, *, result_type=None, pmode=None, loc=None, ip=None):
+    def vcmps(source, scalar, seed, cmp, *, pmode=None, loc=None, ip=None):
         context = "pto.vmi.vcmps(...)"
         return _call_value(
             "vcmps",
-            _result_type_or(seed, result_type, context=context),
+            _type_of(seed),
             _raw(source),
             _coerce_scalar_like_vmi_element(source, scalar, context=context),
             _raw(seed),
@@ -490,10 +579,10 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vsel(mask, true_value, false_value, *, result_type=None, pmode=None, loc=None, ip=None):
+    def vsel(mask, true_value, false_value, *, pmode=None, loc=None, ip=None):
         return _call_value(
             "vsel",
-            _result_type_or(true_value, result_type, context="pto.vmi.vsel(...)"),
+            _type_of(true_value),
             _raw(mask),
             _raw(true_value),
             _raw(false_value),
@@ -503,10 +592,10 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vselr(source, index, *, result_type=None, loc=None, ip=None):
+    def vselr(source, index, *, loc=None, ip=None):
         return _call_value(
             "vselr",
-            _require_result_type(result_type, context="pto.vmi.vselr(...)"),
+            _type_of(source),
             _raw(source),
             _raw(index),
             loc=loc,
@@ -514,10 +603,12 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vbrc(value, *, result_type=None, group=None, loc=None, ip=None):
+    def vbrc(value, *, size, group=None, loc=None, ip=None):
         context = "pto.vmi.vbrc(...)"
-        result_type = _require_result_type(result_type, context=context)
+        result_type = _derive_vbrc_result_type(value, size, context=context)
         raw_value = _raw(value)
+        if group is not None and (not hasattr(raw_value, "type") or not _is_vmi_vreg_type(raw_value.type)):
+            raise TypeError(f"{context} with group=... requires a VMI vector input")
         if not hasattr(raw_value, "type") or not _is_vmi_vreg_type(raw_value.type):
             raw_value = coerce_scalar_to_type(
                 value,
@@ -526,9 +617,9 @@ class _VMINamespace:
             )
         return _call_value("vbrc", result_type, raw_value, group=group, loc=loc, ip=ip)
 
-    vcadd = staticmethod(lambda source, mask, *, result_type=None, group=None, pmode=None, reassoc=_UNSPECIFIED, loc=None, ip=None: _emit_reduce("vcadd", source, mask, result_type=result_type, group=group, pmode=pmode, reassoc=reassoc, loc=loc, ip=ip))
-    vcmax = staticmethod(lambda source, mask, *, result_type=None, group=None, pmode=None, loc=None, ip=None: _emit_reduce("vcmax", source, mask, result_type=result_type, group=group, pmode=pmode, loc=loc, ip=ip))
-    vcmin = staticmethod(lambda source, mask, *, result_type=None, group=None, pmode=None, loc=None, ip=None: _emit_reduce("vcmin", source, mask, result_type=result_type, group=group, pmode=pmode, loc=loc, ip=ip))
+    vcadd = staticmethod(lambda source, mask, *, group=None, pmode=None, reassoc=_UNSPECIFIED, loc=None, ip=None: _emit_reduce("vcadd", source, mask, group=group, pmode=pmode, reassoc=reassoc, loc=loc, ip=ip))
+    vcmax = staticmethod(lambda source, mask, *, group=None, pmode=None, loc=None, ip=None: _emit_reduce("vcmax", source, mask, group=group, pmode=pmode, loc=loc, ip=ip))
+    vcmin = staticmethod(lambda source, mask, *, group=None, pmode=None, loc=None, ip=None: _emit_reduce("vcmin", source, mask, group=group, pmode=pmode, loc=loc, ip=ip))
 
     @staticmethod
     def vcvt(
@@ -536,7 +627,6 @@ class _VMINamespace:
         to_dtype=None,
         mask=None,
         *,
-        result_type=None,
         rounding=None,
         saturate=None,
         pmode=None,
@@ -545,10 +635,7 @@ class _VMINamespace:
     ):
         if mask is not None:
             raise _unsupported_vmi_feature_error("pto.vmi.vcvt", "masked form")
-        if result_type is None:
-            result_type = _derive_vcvt_result_type(source, to_dtype, context="pto.vmi.vcvt(...)")
-        else:
-            result_type = _resolve(result_type)
+        result_type = _derive_vcvt_result_type(source, to_dtype, context="pto.vmi.vcvt(...)")
         if rounding is not None:
             rounding = _normalize_vmi_vcvt_rounding(
                 rounding,
@@ -566,20 +653,24 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vinterpret_cast(source, *, result_type=None, loc=None, ip=None):
+    def vinterpret_cast(source, to_dtype=None, *, loc=None, ip=None):
         return _call_value(
             "vinterpret_cast",
-            _require_result_type(result_type, context="pto.vmi.vinterpret_cast(...)"),
+            _derive_vinterpret_cast_result_type(
+                source,
+                to_dtype,
+                context="pto.vmi.vinterpret_cast(...)",
+            ),
             _raw(source),
             loc=loc,
             ip=ip,
         )
 
     @staticmethod
-    def vexpdif(x, max_value, mask, *, result_type=None, pmode=None, loc=None, ip=None):
+    def vexpdif(x, max_value, mask, *, pmode=None, loc=None, ip=None):
         return _call_value(
             "vexpdif",
-            _result_type_or(max_value, result_type, context="pto.vmi.vexpdif(...)"),
+            _type_of(max_value),
             _raw(x),
             _raw(max_value),
             _required_mask(mask, context="pto.vmi.vexpdif(...)"),
@@ -589,11 +680,11 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vaxpy(x, acc, alpha, mask, *, result_type=None, pmode=None, loc=None, ip=None):
+    def vaxpy(x, acc, alpha, mask, *, pmode=None, loc=None, ip=None):
         context = "pto.vmi.vaxpy(...)"
         return _call_value(
             "vaxpy",
-            _result_type_or(acc, result_type, context=context),
+            _type_of(acc),
             _raw(x),
             _raw(acc),
             _coerce_scalar_like_vmi_element(x, alpha, context=context),
@@ -604,10 +695,10 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vlrelu(x, slope, mask, *, result_type=None, pmode=None, loc=None, ip=None):
+    def vlrelu(x, slope, mask, *, pmode=None, loc=None, ip=None):
         return _call_value(
             "vlrelu",
-            _result_type_or(x, result_type, context="pto.vmi.vlrelu(...)"),
+            _type_of(x),
             _raw(x),
             _coerce_scalar_like_vmi_element(x, slope, context="pto.vmi.vlrelu(...)"),
             _required_mask(mask, context="pto.vmi.vlrelu(...)"),
@@ -617,10 +708,10 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vprelu(x, alpha, mask, *, result_type=None, pmode=None, loc=None, ip=None):
+    def vprelu(x, alpha, mask, *, pmode=None, loc=None, ip=None):
         return _call_value(
             "vprelu",
-            _result_type_or(x, result_type, context="pto.vmi.vprelu(...)"),
+            _type_of(x),
             _raw(x),
             _raw(alpha),
             _required_mask(mask, context="pto.vmi.vprelu(...)"),
@@ -630,10 +721,10 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vmull(a, b, mask, *, result_type=None, pmode=None, loc=None, ip=None):
+    def vmull(a, b, mask, *, pmode=None, loc=None, ip=None):
         return _call_value(
             "vmull",
-            _require_result_type(result_type, context="pto.vmi.vmull(...)"),
+            _derive_vmull_result_type(a, context="pto.vmi.vmull(...)"),
             _raw(a),
             _raw(b),
             _required_mask(mask, context="pto.vmi.vmull(...)"),
@@ -643,10 +734,10 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vmula(acc, lhs, rhs, mask, *, result_type=None, pmode=None, loc=None, ip=None):
+    def vmula(acc, lhs, rhs, mask, *, pmode=None, loc=None, ip=None):
         return _call_value(
             "vmula",
-            _result_type_or(acc, result_type, context="pto.vmi.vmula(...)"),
+            _type_of(acc),
             _raw(acc),
             _raw(lhs),
             _raw(rhs),
@@ -657,10 +748,10 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vdhist(acc, source, mask, *, result_type=None, loc=None, ip=None):
+    def vdhist(acc, source, mask, *, loc=None, ip=None):
         return _call_value(
             "vdhist",
-            _require_result_type(result_type, context="pto.vmi.vdhist(...)"),
+            _derive_hist_result_type(acc, context="pto.vmi.vdhist(...)"),
             _raw(acc),
             _raw(source),
             _required_mask(mask, context="pto.vmi.vdhist(...)"),
@@ -669,10 +760,10 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vchist(acc, source, mask, *, result_type=None, loc=None, ip=None):
+    def vchist(acc, source, mask, *, loc=None, ip=None):
         return _call_value(
             "vchist",
-            _require_result_type(result_type, context="pto.vmi.vchist(...)"),
+            _derive_hist_result_type(acc, context="pto.vmi.vchist(...)"),
             _raw(acc),
             _raw(source),
             _required_mask(mask, context="pto.vmi.vchist(...)"),
@@ -681,10 +772,10 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vgather(source, offsets, mask, *, result_type=None, pmode=None, loc=None, ip=None):
+    def vgather(source, offsets, mask, *, pmode=None, loc=None, ip=None):
         return _call_value(
             "vgather",
-            _require_result_type(result_type, context="pto.vmi.vgather(...)"),
+            _derive_vgather_result_type(source, offsets, context="pto.vmi.vgather(...)"),
             _raw(source),
             _raw(offsets),
             _required_mask(mask, context="pto.vmi.vgather(...)"),
@@ -694,10 +785,10 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vgatherb(source, offsets, mask, *, result_type=None, pmode=None, loc=None, ip=None):
+    def vgatherb(source, offsets, mask, *, pmode=None, loc=None, ip=None):
         return _call_value(
             "vgatherb",
-            _require_result_type(result_type, context="pto.vmi.vgatherb(...)"),
+            _derive_vgatherb_result_type(source, mask, context="pto.vmi.vgatherb(...)"),
             _raw(source),
             _raw(offsets),
             _required_mask(mask, context="pto.vmi.vgatherb(...)"),
@@ -719,30 +810,31 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def create_mask(active_lanes, *, size=None, result_type=None, loc=None, ip=None):
-        return _call_value(
-            "create_mask",
-            _resolve_vmi_mask_result_type(size, result_type, context="pto.vmi.create_mask(...)"),
-            _coerce_index_value(active_lanes),
-            loc=loc,
-            ip=ip,
-        )
-
-    @staticmethod
-    def create_group_mask(
-        active_elems_per_group,
+    def create_mask(
+        active_lanes,
         *,
-        size=None,
-        result_type=None,
-        num_groups,
-        group_size,
+        size,
+        num_groups=None,
+        group_size=None,
         loc=None,
         ip=None,
     ):
+        context = "pto.vmi.create_mask(...)"
+        result_type = _resolve_vmi_mask_type(size, context=context)
+        if (num_groups is None) != (group_size is None):
+            raise TypeError(f"{context} requires num_groups and group_size together")
+        if num_groups is None:
+            return _call_value(
+                "create_mask",
+                result_type,
+                _coerce_index_value(active_lanes),
+                loc=loc,
+                ip=ip,
+            )
         return _call_value(
             "create_group_mask",
-            _resolve_vmi_mask_result_type(size, result_type, context="pto.vmi.create_group_mask(...)"),
-            _coerce_index_value(active_elems_per_group),
+            result_type,
+            _coerce_index_value(active_lanes),
             num_groups,
             group_size,
             loc=loc,
@@ -750,12 +842,11 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vintlv(lhs, rhs, mask, *, result_types=None, pmode=None, loc=None, ip=None):
-        low, high = _two_result_types(result_types, lhs, rhs)
+    def vintlv(lhs, rhs, mask, *, pmode=None, loc=None, ip=None):
         return _call_value(
             "vintlv",
-            low,
-            high,
+            _type_of(lhs),
+            _type_of(rhs),
             _raw(lhs),
             _raw(rhs),
             _required_mask(mask, context="pto.vmi.vintlv(...)"),
@@ -765,12 +856,11 @@ class _VMINamespace:
         )
 
     @staticmethod
-    def vdintlv(lhs, rhs, mask, *, result_types=None, pmode=None, loc=None, ip=None):
-        low, high = _two_result_types(result_types, lhs, rhs)
+    def vdintlv(lhs, rhs, mask, *, pmode=None, loc=None, ip=None):
         return _call_value(
             "vdintlv",
-            low,
-            high,
+            _type_of(lhs),
+            _type_of(rhs),
             _raw(lhs),
             _raw(rhs),
             _required_mask(mask, context="pto.vmi.vdintlv(...)"),
