@@ -1168,9 +1168,14 @@ struct LayoutSolver {
         return WalkResult::advance();
       }
       if (auto load = dyn_cast<VMIDeinterleaveLoadOp>(op)) {
-        if (failed(
-                setNaturalLayout(load.getLow(), getContiguousLayout(), op)) ||
-            failed(setNaturalLayout(load.getHigh(), getContiguousLayout(), op)))
+        VMILayoutSupport supports;
+        FailureOr<VMIDeinterleaveLoadLayoutFact> fact =
+            supports.getPreferredDeinterleaveLoadLayoutFact(
+                cast<VMIVRegType>(load.getLow().getType()));
+        if (failed(fact))
+          return WalkResult::advance();
+        if (failed(setNaturalLayout(load.getLow(), fact->lowLayout, op)) ||
+            failed(setNaturalLayout(load.getHigh(), fact->highLayout, op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }

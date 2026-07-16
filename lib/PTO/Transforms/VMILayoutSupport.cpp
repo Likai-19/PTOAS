@@ -560,6 +560,17 @@ static constexpr DenseMemoryLayoutPattern kDenseLoadLayoutPatterns[] = {
     {bits<8, 16, 32>(), d(2)}, {bits<8, 16, 32>(), d(4)},
 };
 
+struct DeinterleaveLoadLayoutPattern {
+  ElementBitsPattern elementBits;
+  LayoutPattern lowLayout;
+  LayoutPattern highLayout;
+};
+
+static constexpr DeinterleaveLoadLayoutPattern
+    kDeinterleaveLoadLayoutPatterns[] = {
+        {bits<8, 16, 32>(), c(), c()},
+};
+
 static constexpr DenseMemoryLayoutPattern kDenseStoreLayoutPatterns[] = {
     {bits<8, 16, 32>(), c()},
     {bits<8>(), ls(4), N<64>(), /*preferred=*/true},
@@ -720,6 +731,13 @@ static constexpr WidthChangingBitcastLayoutPattern
 //===----------------------------------------------------------------------===//
 // Table matching and materialization helpers
 //===----------------------------------------------------------------------===//
+
+static VMIDeinterleaveLoadLayoutFact materializeDeinterleaveLoadLayoutFact(
+    MLIRContext *ctx, const DeinterleaveLoadLayoutPattern &pattern) {
+  return VMIDeinterleaveLoadLayoutFact{
+      materializeLayoutPattern(ctx, pattern.lowLayout),
+      materializeLayoutPattern(ctx, pattern.highLayout)};
+}
 
 static bool isSameGroupBlockPattern(GroupBlockPattern lhs,
                                     GroupBlockPattern rhs) {
@@ -1808,6 +1826,91 @@ VMILayoutSupport::getLoadLayoutFact(VMIVRegType resultType,
   }
 
   return fail("result layout does not match a supported dense load table row");
+}
+
+FailureOr<VMIDeinterleaveLoadLayoutFact>
+VMILayoutSupport::getPreferredDeinterleaveLoadLayoutFact(
+    VMIVRegType valueType, std::string *reason) const {
+  auto fail =
+      [&](const Twine &message) -> FailureOr<VMIDeinterleaveLoadLayoutFact> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  for (const DeinterleaveLoadLayoutPattern &pattern :
+       kDeinterleaveLoadLayoutPatterns) {
+    if (!matchesElementBitsPattern(pattern.elementBits,
+                                   valueType.getElementType()))
+      continue;
+    return materializeDeinterleaveLoadLayoutFact(valueType.getContext(),
+                                                 pattern);
+  }
+  return fail("requires a preferred deinterleave_load layout table row");
+}
+
+FailureOr<SmallVector<VMIDeinterleaveLoadLayoutFact, 4>>
+VMILayoutSupport::getDeinterleaveLoadLayoutFactsForLayout(
+    VMIVRegType valueType, VMIDeinterleaveLoadLayoutPort port,
+    VMILayoutAttr layout, std::string *reason) const {
+  auto fail = [&](const Twine &message)
+      -> FailureOr<SmallVector<VMIDeinterleaveLoadLayoutFact, 4>> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+  if (!layout)
+    return fail("requires assigned deinterleave_load layout query port");
+
+  SmallVector<VMIDeinterleaveLoadLayoutFact, 4> facts;
+  for (const DeinterleaveLoadLayoutPattern &pattern :
+       kDeinterleaveLoadLayoutPatterns) {
+    if (!matchesElementBitsPattern(pattern.elementBits,
+                                   valueType.getElementType()))
+      continue;
+    VMIDeinterleaveLoadLayoutFact candidate =
+        materializeDeinterleaveLoadLayoutFact(valueType.getContext(), pattern);
+    VMILayoutAttr candidateLayout =
+        port == VMIDeinterleaveLoadLayoutPort::Low ? candidate.lowLayout
+                                                   : candidate.highLayout;
+    if (candidateLayout == layout)
+      facts.push_back(candidate);
+  }
+  if (facts.empty())
+    return fail("deinterleave_load layout query port does not match a legal "
+                "layout table row");
+  return facts;
+}
+
+FailureOr<VMIDeinterleaveLoadLayoutFact>
+VMILayoutSupport::getDeinterleaveLoadLayoutFactForLayouts(
+    VMIVRegType lowType, VMIVRegType highType, std::string *reason) const {
+  auto fail =
+      [&](const Twine &message) -> FailureOr<VMIDeinterleaveLoadLayoutFact> {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+  if (lowType.getElementCount() != highType.getElementCount() ||
+      lowType.getElementType() != highType.getElementType())
+    return fail("deinterleave_load layout requires low/high to share shape "
+                "and element type");
+
+  VMILayoutAttr lowLayout = lowType.getLayoutAttr();
+  VMILayoutAttr highLayout = highType.getLayoutAttr();
+  if (!lowLayout || !highLayout)
+    return fail("requires assigned low/high layouts");
+
+  FailureOr<SmallVector<VMIDeinterleaveLoadLayoutFact, 4>> facts =
+      getDeinterleaveLoadLayoutFactsForLayout(
+          lowType, VMIDeinterleaveLoadLayoutPort::Low, lowLayout, reason);
+  if (failed(facts))
+    return failure();
+  for (const VMIDeinterleaveLoadLayoutFact &fact : *facts)
+    if (fact.highLayout == highLayout)
+      return fact;
+  return fail("low/high layouts do not match a legal deinterleave_load layout "
+              "table row");
 }
 
 FailureOr<VMIStoreLayoutFact>
