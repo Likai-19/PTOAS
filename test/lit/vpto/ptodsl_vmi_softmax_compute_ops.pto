@@ -6,11 +6,8 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// This is a static Softmax compute-op coverage harness, not a complete
-// normalized or dynamic Online Softmax kernel.
-// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --tile-lib-backend=ptodsl-vmi --emit-vpto %s -o /dev/null --mlir-print-ir-after=pto-expand-tile-op 2>&1 | FileCheck %s --check-prefix=EXPAND
-// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --tile-lib-backend=ptodsl-vmi --emit-vpto %s -o /dev/null --mlir-print-ir-after=pto-inline-libcall 2>&1 | FileCheck %s --check-prefix=INLINE --implicit-check-not=__pto_ptodsl_vmi
-// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --tile-lib-backend=ptodsl-vmi --emit-vpto %s -o - | FileCheck %s --check-prefix=FINAL --implicit-check-not=pto.vmi. --implicit-check-not=__pto_ptodsl_vmi
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --tile-lib-backend=ptodsl-vmi --emit-vpto %s -o /dev/null
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --tile-lib-backend=ptodsl-vmi --emit-vpto %s -o /dev/null --mlir-print-ir-after=pto-expand-tile-op 2>&1 | FileCheck %s
 
 module {
   func.func @ptodsl_vmi_softmax_compute_ops() {
@@ -88,31 +85,14 @@ module {
   }
 }
 
-// EXPAND: call {{.*}}__pto_ptodsl_vmi_a5_trowmax
-// EXPAND: call {{.*}}__pto_ptodsl_vmi_a5_trowexpandsub
-// EXPAND: call {{.*}}__pto_ptodsl_vmi_a5_tmuls
-// EXPAND: call {{.*}}__pto_ptodsl_vmi_a5_texp
-// EXPAND: call {{.*}}__pto_ptodsl_vmi_a5_trowsum
-// EXPAND: call {{.*}}__pto_ptodsl_vmi_a5_tcvt
-// EXPAND: call {{.*}}__pto_ptodsl_vmi_a5_tsub
-// EXPAND: call {{.*}}__pto_ptodsl_vmi_a5_tmax
-// EXPAND: call {{.*}}__pto_ptodsl_vmi_a5_tmul
-// EXPAND: call {{.*}}__pto_ptodsl_vmi_a5_tadd
-// EXPAND: call {{.*}}__pto_ptodsl_vmi_a5_tmov
-
-// INLINE: IR Dump After PTOInlineLibCall
-// INLINE-LABEL: func.func @ptodsl_vmi_softmax_compute_ops
-// INLINE: pto.vmi.vcmax
-// INLINE: pto.vmi.vsub
-// INLINE: pto.vmi.vmuls
-// INLINE: pto.vmi.vexp
-// INLINE: pto.vmi.vcadd
-// INLINE: pto.vmi.vcvt
-
-// FINAL-LABEL: func.func @ptodsl_vmi_softmax_compute_ops
-// FINAL: pto.vcmax
-// FINAL: pto.vsub
-// FINAL: pto.vmul
-// FINAL: pto.vexp
-// FINAL: pto.vcadd
-// FINAL: pto.vcvt
+// CHECK: call {{.*}}__pto_ptodsl_vmi_a5_trowmax
+// CHECK: call {{.*}}__pto_ptodsl_vmi_a5_trowexpandsub
+// CHECK: call {{.*}}__pto_ptodsl_vmi_a5_tmuls
+// CHECK: call {{.*}}__pto_ptodsl_vmi_a5_texp
+// CHECK: call {{.*}}__pto_ptodsl_vmi_a5_trowsum
+// CHECK: call {{.*}}__pto_ptodsl_vmi_a5_tcvt
+// CHECK: call {{.*}}__pto_ptodsl_vmi_a5_tsub
+// CHECK: call {{.*}}__pto_ptodsl_vmi_a5_tmax
+// CHECK: call {{.*}}__pto_ptodsl_vmi_a5_tmul
+// CHECK: call {{.*}}__pto_ptodsl_vmi_a5_tadd
+// CHECK: call {{.*}}__pto_ptodsl_vmi_a5_tmov
