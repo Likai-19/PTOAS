@@ -154,6 +154,11 @@ def check_provider_helper() -> None:
         registered_tadd[0] is vmi_tadd_block64,
         "the registered tadd template must be the exported canonical implementation",
     )
+    expect(
+        dict(vmi_texp_block64.context_constraints)
+        == {"precisionType": ("default",)},
+        "texp must declare its supported context attrs on the candidate",
+    )
 
     raw_tile_spec = {
         "kind": "tile",
@@ -189,6 +194,17 @@ def check_provider_helper() -> None:
     expect(
         "pto.vmi.vexp" in exp_artifact.mlir_text(),
         "provider helper should accept the default texp precision contract",
+    )
+    expect_raises(
+        lambda: instantiate_candidate(
+            target="a5",
+            op_name="pto.tadd",
+            operand_specs=[raw_tile_spec, raw_tile_spec, raw_tile_spec],
+            provider_module="ptodsl.vmi_tilelib",
+            context_attrs={"precisionType": "default"},
+        ),
+        ValueError,
+        "does not support context attrs",
     )
 
     tmul_artifact = instantiate_candidate(

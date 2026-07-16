@@ -61,6 +61,7 @@ def canonical_vmi_template(
     target: str = "a5",
     op: str,
     name: str | None = None,
+    context_constraints: dict[str, tuple[object, ...]] | None = None,
 ):
     """Register one canonical VMI implementation in this provider module."""
 
@@ -71,6 +72,7 @@ def canonical_vmi_template(
             op=normalized_op,
             name=name,
             ir_level="vmi",
+            context_constraints=context_constraints,
         )(fn)
         VMI_TILELIB_REGISTRY.register(descriptor)
         return descriptor
@@ -296,6 +298,7 @@ def vmi_tadd_block64(src0: Tile, src1: Tile, dst: Tile):
     target="a5",
     op="texp",
     name="vmi_texp_block64",
+    context_constraints={"precisionType": ("default",)},
 )
 def vmi_texp_block64(src: Tile, dst: Tile):
     emit_elementwise_vmi(dst, (src,), _exp)
@@ -357,7 +360,12 @@ def vmi_tmins(src: Tile, scalar: f32, dst: Tile):
     )
 
 
-@canonical_vmi_template(target="a5", op="tdivs", name="vmi_tdivs")
+@canonical_vmi_template(
+    target="a5",
+    op="tdivs",
+    name="vmi_tdivs",
+    context_constraints={"precisionType": ("default",)},
+)
 def vmi_tdivs(src: Tile, scalar: f32, dst: Tile):
     emit_elementwise_vmi(
         dst,
@@ -385,7 +393,12 @@ def vmi_trowexpandsub(src: Tile, row_values: Tile, dst: Tile):
     emit_row_expand_sub_vmi(src, row_values, dst)
 
 
-@canonical_vmi_template(target="a5", op="tcvt", name="vmi_tcvt_f32_f16")
+@canonical_vmi_template(
+    target="a5",
+    op="tcvt",
+    name="vmi_tcvt_f32_f16",
+    context_constraints={"round_mode": ("RINT",)},
+)
 def vmi_tcvt_f32_f16(src: Tile, dst: Tile):
     emit_convert_vmi(src, dst)
 
