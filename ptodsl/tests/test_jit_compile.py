@@ -2362,12 +2362,16 @@ def vmi_wrapper_dispatch_probe():
     src_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
     other_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
     dst_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
+    int_src_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.i32)
+    int_other_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.i32)
     hist_acc_tile = pto.alloc_tile(shape=[1, 256], dtype=pto.ui16)
     hist_src_tile = pto.alloc_tile(shape=[1, 256], dtype=pto.ui8)
 
     src_ptr = src_tile.as_ptr()
     other_ptr = other_tile.as_ptr()
     dst_ptr = dst_tile.as_ptr()
+    int_src_ptr = int_src_tile.as_ptr()
+    int_other_ptr = int_other_tile.as_ptr()
     hist_acc_ptr = hist_acc_tile.as_ptr()
     hist_src_ptr = hist_src_tile.as_ptr()
 
@@ -2407,6 +2411,10 @@ def vmi_wrapper_dispatch_probe():
     gatherb = pto.vmi.vgatherb(src_ptr, idx, mask)
     hist = pto.vmi.vdhist(hist_acc, hist_src, hist_mask)
     cumul = pto.vmi.vchist(hist_acc, hist_src, hist_mask)
+    int_lhs = pto.vmi.vload(int_src_ptr, offset, size=64)
+    int_rhs = pto.vmi.vload(int_other_ptr, offset, size=64)
+    low, high = pto.vmi.vmull(int_lhs, int_rhs, mask)
+    widened = pto.vmi.vadd(low, high, mask)
     casted = pto.vmi.vcvt(shuffled, pto.f16)
     recast = pto.vmi.vinterpret_cast(
         lhs,
@@ -2424,6 +2432,7 @@ def vmi_wrapper_dispatch_probe():
     _ = gatherb
     _ = hist
     _ = cumul
+    _ = widened
     _ = casted
     _ = recast
     _ = hi
@@ -5856,6 +5865,7 @@ def main() -> None:
         "pto.vmi.vcmin",
         "pto.vmi.vdhist",
         "pto.vmi.vchist",
+        "pto.vmi.vmull",
         "pto.vmi.vgather",
         "pto.vmi.vcvt",
         "pto.vmi.vinterpret_cast",
@@ -5868,8 +5878,8 @@ def main() -> None:
             f"representative {op_name} wrapper dispatch should emit the matching generated VMI op",
         )
     expect(
-        vmi_wrapper_dispatch_text.count("pto.vmi.vload") == 5,
-        "vmi wrapper dispatch probe should lower five explicit VMI loads",
+        vmi_wrapper_dispatch_text.count("pto.vmi.vload") == 7,
+        "vmi wrapper dispatch probe should lower seven explicit VMI loads",
     )
     expect(
         "pto.backend = \"vpto\"" in vmi_wrapper_dispatch_text,
