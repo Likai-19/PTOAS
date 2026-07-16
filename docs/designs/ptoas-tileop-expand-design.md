@@ -467,11 +467,6 @@ implementation。该实现必须在无融合时独立正确执行。PTODSL VMI h
 的 priority 选择，也不存在 candidate locking；多 candidate、schedule family 和
 region-aware cost model 均属于后续性能迭代。
 
-VMI provider module 必须显式暴露 `VMI_TILELIB_REGISTRY`。模板通过
-`@canonical_vmi_template` 在模块导入时注册，Expand helper 只从该 registry 按
-`(target, op)` 查询，不扫描 Python module 全局变量。VMI 使用独立 registry，避免与普通
-PTODSL TileLib 中同名的 VPTO/MI candidate 混合选择。
-
 ### 3.2 Expand TileOp Pass 的工作流程
 
 以编译时遇到 `pto.tadd` 为例，Expand TileOp pass 的处理步骤如下：

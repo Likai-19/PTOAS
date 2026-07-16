@@ -17,6 +17,7 @@ import sys
 
 from ._tile_template_tracing import (
     TileSpec,
+    TileTemplate,
     bf16,
     f16,
     f32,
@@ -24,7 +25,6 @@ from ._tile_template_tracing import (
     i16,
     i32,
 )
-from .tilelib.registry import TileTemplateRegistry
 
 
 _DTYPE_MAP = {
@@ -153,14 +153,16 @@ def _parse_tile_config(config: object, index: int) -> str:
     return b_layout
 
 
-def _find_candidates(module, *, target: str, op_name: str) -> list:
-    registry = getattr(module, "VMI_TILELIB_REGISTRY", None)
-    if not isinstance(registry, TileTemplateRegistry):
-        raise TypeError(
-            f"PTODSL VMI provider module {module.__name__!r} must expose "
-            "VMI_TILELIB_REGISTRY as a TileTemplateRegistry"
-        )
-    return registry.lookup(op_name, target)
+def _find_candidates(module, *, target: str, op_name: str) -> list[TileTemplate]:
+    candidates = []
+    seen = set()
+    for value in vars(module).values():
+        if not isinstance(value, TileTemplate) or id(value) in seen:
+            continue
+        seen.add(id(value))
+        if value.target == target and _normalize_op_name(value.op) == op_name:
+            candidates.append(value)
+    return candidates
 
 
 def instantiate_candidate(
