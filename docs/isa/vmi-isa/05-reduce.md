@@ -1,126 +1,69 @@
-# 5. Reduce
+# 5. Row Reductions
 
-> **Category:** B (VLane-aligned), C (unaligned sub-VLane).
-> **Mask:** `Pg req` (governing mask is a required operand).
->
-> Reduction ops collapse lanes into compact scalars, governed by a mask.
-> `{group=C}` controls the number of sub-groups. Inactive lane behavior:
-> `vcadd` treats inactive as 0; `vcmax`/`vcmin` treat inactive as `-∞`/`+∞`
-> (fp) or type min/max (int).
+VMI row reductions use the corresponding Tile Op names and require an explicit
+two-dimensional source. A row is one logical group; the result retains the
+row count and has one column.
 
----
+| VMI op | Replaces | Semantics |
+|---|---|---|
+| `pto.vmi.trowsum` | `vcadd` | `result[m,0] = sum_n source[m,n]` |
+| `pto.vmi.trowmax` | `vcmax` | `result[m,0] = max_n source[m,n]` |
+| `pto.vmi.trowmin` | `vcmin` | `result[m,0] = min_n source[m,n]` |
 
-## `pto.vmi.vcadd`
+## Common form
 
-- **semantics:** Masked add-reduction. When `{group=C}` is absent, reduces all
-  `L` active lanes to a single scalar (`V<1×T>`).
+```mlir
+%result = pto.vmi.trowsum %source, %mask {reassoc}
+    : !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxi1>
+      -> !pto.vmi.tilereg<Mx1xT>
+```
 
-  ```c
-  // Without group: full reduction to scalar
-  T sum = 0;
-  for (int i = 0; i < L; i++)
-      if (mask[i]) sum += src[i];
-  dst[0] = sum;
+```text
+for m in 0 .. M:
+  acc = identity
+  for n in 0 .. N:
+    if mask[m, n]:
+      acc = reduce(acc, source[m, n])
+  result[m, 0] = acc
+```
 
-  // With {group=C}: per-group reduction
-  int gs = L / C;  // lanes per group
-  for (int g = 0; g < C; g++) {
-      T sum = 0;
-      for (int i = 0; i < gs; i++)
-          if (mask[g*gs + i]) sum += src[g*gs + i];
-      dst[g] = sum;
-  }
-  ```
+`M` and `N` must be positive. This directly represents the current VMI rule
+that the positive group count evenly divide the logical lane count. The input
+and mask have the same `MxN` shape. The result is an `Mx1` group-scalar
+carrier.
 
-- **syntax:**
-  ```mlir
-  %r = pto.vmi.vcadd %src, %mask {group = C, reassoc} : !pto.vmi.vreg<L×T>, !pto.vmi.mask<L> -> !pto.vmi.vreg<C×T>
-  ```
-- **operands:**
+The mask is required. Inactive positions contribute the operation identity:
 
-  | Operand | Type | Description |
-  |---|---|---|
-  | `src` | `!pto.vmi.vreg<L×T>` | Source vector |
-  | `mask` | `!pto.vmi.mask<L>` | Governing predicate (required) |
+| Op | Inactive position contribution |
+|---|---|
+| `trowsum` | zero |
+| `trowmax` | negative infinity for floating point; the type minimum for integer |
+| `trowmin` | positive infinity for floating point; the type maximum for integer |
 
-- **results:**
+`trowsum` accepts `{reassoc}` and requires it for floating-point source data.
+`trowmax` and `trowmin` do not accept `{reassoc}`.
 
-  | Result | Type | Description |
-  |---|---|---|
-  | `result` | `!pto.vmi.vreg<C×T>` | Compact scalar vector (`C = 1` if no group) |
+## Full reduction
 
-- **attributes:**
+A full reduction is the `M = 1` row-reduction form:
 
-  | Attribute | Values | Default | Description |
-  |---|---|---|---|
-  | `group` | `1`, `2`, `4`, `8` | `1` (full reduce) | Number of sub-groups |
-  | `reassoc` | *(unit attr)* | *(absent)* | Permit reassociation (**required** for fp sources) |
-  | `pmode` | `"zero"`, `"merge"` | `"zero"` | Inactive-result behavior |
+```mlir
+%sum = pto.vmi.trowsum %flat, %mask {reassoc}
+    : !pto.vmi.tilereg<1x128xf32>, !pto.vmi.tilereg<1x128xi1>
+      -> !pto.vmi.tilereg<1x1xf32>
+```
 
-- **datatypes:** `i8`–`i32`, `f16`, `f32`
-- **lowering to `pto.mi`:**
+No `group` attribute is used. For an existing flat tile, reshape to `1xL` (the
+canonical one-dimensional form) or to a multi-row `MxN` shape before reducing.
 
-  | Group / W | Category | Physical lowering | `#mi` | `dep` |
-  |---|---|---|---|---|
-  | No group (`C=1`), `K=1` | B | `1 × pto.vcadd` | `1` | `1` |
-  | No group, `K>1` (fold) | B | `(K-1) × vadd` + `1 × vcadd` | `K` | `K` |
-  | No group, `K>1` (partial) | B | `K × vcadd` + combine | `K` | `1+⌈log₂K⌉` |
-  | `group=8` (W=32B, VLane-aligned) | B | `K × pto.vcgadd` | `K` | `1` |
-  | `group=2/4` (W=64B/128B aligned) | B | `(k-1) × vadd` fold + `vcgadd` | `K+k-1` | `k` |
+## Example: eight independent reductions
 
-- **example:**
-  ```mlir
-  // Full sum reduction (to scalar)
-  %sum = pto.vmi.vcadd %x, %mask {reassoc}
-      : !pto.vmi.vreg<64×f32>, !pto.vmi.mask<64> -> !pto.vmi.vreg<1×f32>
-
-  // Grouped: 256-lane → 8 groups of 32, each VLane-aligned (W=32B)
-  %sums = pto.vmi.vcadd %x, %mask {group = 8}
-      : !pto.vmi.vreg<256×f16>, !pto.vmi.mask<256> -> !pto.vmi.vreg<8×f16>
-  ```
-
----
-
-## `pto.vmi.vcmax` / `pto.vmi.vcmin`
-
-- **semantics:** Masked max/min reduction.
-
-  ```c
-  // vcmax: inactive lanes treated as -∞
-  T best = -INF;
-  for (int i = 0; i < L; i++)
-      if (mask[i]) best = max(best, src[i]);
-  dst[0] = best;
-
-  // vcmin: inactive lanes treated as +∞
-  T best = +INF;
-  for (int i = 0; i < L; i++)
-      if (mask[i]) best = min(best, src[i]);
-  dst[0] = best;
-  ```
-
-- **syntax:**
-  ```mlir
-  %r = pto.vmi.vcmax %src, %mask {group = C} : !pto.vmi.vreg<L×T>, !pto.vmi.mask<L> -> !pto.vmi.vreg<C×T>
-  ```
-- **operands:** Same as `vcadd` (without `reassoc`).
-- **results:** Same as `vcadd`.
-- **attributes:** `group`, `pmode` (same as `vcadd`, no `reassoc`).
-- **datatypes:** `i16`–`i32`, `f16`, `f32`
-- **lowering to `pto.mi`:**
-
-  | Group / W | Physical lowering |
-  |---|---|
-  | No group, fold | `(K-1) × vmax` + `1 × vcmax` |
-  | VLane-aligned | `K × pto.vcgmax` / `K × pto.vcgmin` |
-
-- **example:**
-  ```mlir
-  // Full max reduction
-  %mx = pto.vmi.vcmax %x, %mask
-      : !pto.vmi.vreg<64×f32>, !pto.vmi.mask<64> -> !pto.vmi.vreg<1×f32>
-
-  // Grouped: 8-sub-group max (MX block-scale exponent pattern)
-  %maxe = pto.vmi.vcmax %exp, %mask {group = 8}
-      : !pto.vmi.vreg<256×ui16>, !pto.vmi.mask<256> -> !pto.vmi.vreg<8×ui16>
-  ```
+```mlir
+%rows = pto.vmi.treshape %input
+    : !pto.vmi.tilereg<1x128xf32> -> !pto.vmi.tilereg<8x16xf32>
+%mask = pto.vmi.texpands %active_per_row
+    : index -> !pto.vmi.tilereg<8x16xi1>
+%sums = pto.vmi.trowsum %rows, %mask {reassoc}
+    : !pto.vmi.tilereg<8x16xf32>, !pto.vmi.tilereg<8x16xi1>
+      -> !pto.vmi.tilereg<8x1xf32>
+```
