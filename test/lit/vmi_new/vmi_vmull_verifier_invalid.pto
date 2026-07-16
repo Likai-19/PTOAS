@@ -1,0 +1,200 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). Please refer to the License for details. You may not use
+// this file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON
+// AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+// FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+// for the full text of the License.
+
+// RUN: not pto-test-opt %s -split-input-file 2>&1 | FileCheck %s
+
+module {
+  func.func @vmull_lane_count_invalid(
+      %a: !pto.vmi.vreg<32xi32>, %b: !pto.vmi.vreg<32xi32>,
+      %mask: !pto.vmi.mask<32xpred>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<32xi32>, !pto.vmi.vreg<32xi32>,
+          !pto.vmi.mask<32xpred>
+        -> !pto.vmi.vreg<32xi32>, !pto.vmi.vreg<32xi32>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.vmull' op requires logical lane count to be 64, 128, or 256
+
+// -----
+
+module {
+  func.func @vmull_i16_invalid(
+      %a: !pto.vmi.vreg<64xi16>, %b: !pto.vmi.vreg<64xi16>,
+      %mask: !pto.vmi.mask<64xpred>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<64xi16>, !pto.vmi.vreg<64xi16>,
+          !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xi16>, !pto.vmi.vreg<64xi16>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.vmull' op requires a, b, low, and high element types to be exactly i32 or ui32
+
+// -----
+
+module {
+  func.func @vmull_f32_invalid(
+      %a: !pto.vmi.vreg<64xf32>, %b: !pto.vmi.vreg<64xf32>,
+      %mask: !pto.vmi.mask<64xpred>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>,
+          !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.vmull' op requires a, b, low, and high element types to be exactly i32 or ui32
+
+// -----
+
+module {
+  func.func @vmull_si32_invalid(
+      %a: !pto.vmi.vreg<64xsi32>, %b: !pto.vmi.vreg<64xsi32>,
+      %mask: !pto.vmi.mask<64xpred>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<64xsi32>, !pto.vmi.vreg<64xsi32>,
+          !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xsi32>, !pto.vmi.vreg<64xsi32>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.vmull' op requires a, b, low, and high element types to be exactly i32 or ui32
+
+// -----
+
+module {
+  func.func @vmull_si64_invalid(
+      %a: !pto.vmi.vreg<64xsi64>, %b: !pto.vmi.vreg<64xsi64>,
+      %mask: !pto.vmi.mask<64xpred>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<64xsi64>, !pto.vmi.vreg<64xsi64>,
+          !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xsi64>, !pto.vmi.vreg<64xsi64>
+    return
+  }
+}
+
+// CHECK: '!pto.vmi.vreg<64xsi64>' expected an 8-bit, 16-bit, or 32-bit logical element type
+
+// -----
+
+module {
+  func.func @vmull_input_signedness_mismatch_invalid(
+      %a: !pto.vmi.vreg<64xi32>, %b: !pto.vmi.vreg<64xui32>,
+      %mask: !pto.vmi.mask<64xpred>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xui32>,
+          !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.vmull' op requires a, b, low, and high to have identical VMI vreg types
+
+// -----
+
+module {
+  func.func @vmull_result_type_mismatch_invalid(
+      %a: !pto.vmi.vreg<64xi32>, %b: !pto.vmi.vreg<64xi32>,
+      %mask: !pto.vmi.mask<64xpred>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>,
+          !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xui32>, !pto.vmi.vreg<64xi32>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.vmull' op requires a, b, low, and high to have identical VMI vreg types
+
+// -----
+
+module {
+  func.func @vmull_result_lane_count_mismatch_invalid(
+      %a: !pto.vmi.vreg<64xi32>, %b: !pto.vmi.vreg<64xi32>,
+      %mask: !pto.vmi.mask<64xpred>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>,
+          !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<128xi32>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.vmull' op requires a, b, low, and high to have identical VMI vreg types
+
+// -----
+
+module {
+  func.func @vmull_mask_lane_mismatch_invalid(
+      %a: !pto.vmi.vreg<64xi32>, %b: !pto.vmi.vreg<64xi32>,
+      %mask: !pto.vmi.mask<128xpred>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>,
+          !pto.vmi.mask<128xpred>
+        -> !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.vmull' op requires mask logical lane count to match data
+
+// -----
+
+module {
+  func.func @vmull_merge_invalid(
+      %a: !pto.vmi.vreg<64xi32>, %b: !pto.vmi.vreg<64xi32>,
+      %mask: !pto.vmi.mask<64xpred>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask {pmode = "merge"}
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>,
+          !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.vmull' op pmode must be 'zero' when specified
+
+// -----
+
+module {
+  func.func @vmull_unknown_pmode_invalid(
+      %a: !pto.vmi.vreg<64xi32>, %b: !pto.vmi.vreg<64xi32>,
+      %mask: !pto.vmi.mask<64xpred>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask {pmode = "unknown"}
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>,
+          !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.vmull' op pmode must be 'zero' when specified
+
+// -----
+
+module {
+  func.func @vmull_old_single_result_invalid(
+      %a: !pto.vmi.vreg<64xi32>, %b: !pto.vmi.vreg<64xi32>,
+      %mask: !pto.vmi.mask<64xpred>) {
+    %result = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>,
+          !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<64xi64>
+    return
+  }
+}
+
+// CHECK: error:

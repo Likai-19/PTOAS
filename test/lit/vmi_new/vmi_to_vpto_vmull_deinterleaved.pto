@@ -1,0 +1,216 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). Please refer to the License for details. You may not use
+// this file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON
+// AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+// FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+// for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-to-vpto | FileCheck %s
+
+module {
+  func.func @vmull_deint2_64(
+      %a: !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>,
+      %b: !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>,
+      %mask: !pto.vmi.mask<64xb32, #pto.vmi.layout<deinterleaved = 2>>)
+      -> (!pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.mask<64xb32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>,
+           !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>
+    return %low, %high
+        : !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>
+  }
+
+  func.func @vmull_deint2_128(
+      %a: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+      %b: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+      %mask: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>)
+      -> (!pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+           !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>
+    return %low, %high
+        : !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 2>>
+  }
+
+  func.func @vmull_deint2_256(
+      %a: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>,
+      %b: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>,
+      %mask: !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 2>>)
+      -> (!pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>,
+           !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>
+    return %low, %high
+        : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>
+  }
+
+  func.func @vmull_deint4_64(
+      %a: !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>,
+      %b: !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>,
+      %mask: !pto.vmi.mask<64xb32, #pto.vmi.layout<deinterleaved = 4>>)
+      -> (!pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.mask<64xb32, #pto.vmi.layout<deinterleaved = 4>>
+        -> !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>,
+           !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>
+    return %low, %high
+        : !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>
+  }
+
+  func.func @vmull_deint4_128(
+      %a: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 4>>,
+      %b: !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 4>>,
+      %mask: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 4>>)
+      -> (!pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 4>>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 4>>
+        -> !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 4>>,
+           !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 4>>
+    return %low, %high
+        : !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.vreg<128xi32, #pto.vmi.layout<deinterleaved = 4>>
+  }
+
+  func.func @vmull_deint4_256(
+      %a: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>,
+      %b: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>,
+      %mask: !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4>>)
+      -> (!pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4>>
+        -> !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>,
+           !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
+    return %low, %high
+        : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
+  }
+
+  func.func @vmull_deint4_64_padding_mask(
+      %a: !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>,
+      %b: !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>)
+      -> (!pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>) {
+    // Every logical lane is active, but each physical factor-4 part contains
+    // only 16 logical lanes. The remaining 48 physical lanes must be masked.
+    %mask = "pto.vmi.constant_mask"() {
+      value = dense<true> : tensor<64xi1>
+    } : () -> !pto.vmi.mask<64xb32, #pto.vmi.layout<deinterleaved = 4>>
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.mask<64xb32, #pto.vmi.layout<deinterleaved = 4>>
+        -> !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>,
+           !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>
+    return %low, %high
+        : !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 4>>
+  }
+
+  func.func @vmull_deint2_64_padding_mask(
+      %a: !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>,
+      %b: !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>)
+      -> (!pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>) {
+    // Factor-2 similarly has 32 logical lanes and 32 padding lanes per part.
+    %mask = "pto.vmi.constant_mask"() {
+      value = dense<true> : tensor<64xi1>
+    } : () -> !pto.vmi.mask<64xb32, #pto.vmi.layout<deinterleaved = 2>>
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.mask<64xb32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>,
+           !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>
+    return %low, %high
+        : !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>,
+          !pto.vmi.vreg<64xi32, #pto.vmi.layout<deinterleaved = 2>>
+  }
+}
+
+// CHECK-LABEL: func.func @vmull_deint2_64(
+// CHECK: %[[D2L0:.*]], %[[D2H0:.*]] = pto.vmull %arg0, %arg2, %arg4
+// CHECK-SAME: !pto.vreg<64xi32>, !pto.vreg<64xi32>, !pto.mask<b32>
+// CHECK: %[[D2L1:.*]], %[[D2H1:.*]] = pto.vmull %arg1, %arg3, %arg5
+// CHECK-SAME: !pto.mask<b32>
+// CHECK-NOT: pto.vmull
+// CHECK: return %[[D2L0]], %[[D2L1]], %[[D2H0]], %[[D2H1]]
+
+// CHECK-LABEL: func.func @vmull_deint2_128(
+// CHECK-COUNT-2: pto.vmull
+// CHECK-NOT: pto.vmull
+// CHECK: return
+
+// CHECK-LABEL: func.func @vmull_deint2_256(
+// CHECK-COUNT-4: pto.vmull
+// CHECK-NOT: pto.vmull
+// CHECK: return
+
+// CHECK-LABEL: func.func @vmull_deint4_64(
+// CHECK: %[[D4L0:.*]], %[[D4H0:.*]] = pto.vmull %arg0, %arg4, %arg8
+// CHECK-SAME: !pto.mask<b32>
+// CHECK: %[[D4L1:.*]], %[[D4H1:.*]] = pto.vmull %arg1, %arg5, %arg9
+// CHECK-SAME: !pto.mask<b32>
+// CHECK: %[[D4L2:.*]], %[[D4H2:.*]] = pto.vmull %arg2, %arg6, %arg10
+// CHECK-SAME: !pto.mask<b32>
+// CHECK: %[[D4L3:.*]], %[[D4H3:.*]] = pto.vmull %arg3, %arg7, %arg11
+// CHECK-SAME: !pto.mask<b32>
+// CHECK-NOT: pto.vmull
+// CHECK: return %[[D4L0]], %[[D4L1]], %[[D4L2]], %[[D4L3]], %[[D4H0]], %[[D4H1]], %[[D4H2]], %[[D4H3]]
+
+// CHECK-LABEL: func.func @vmull_deint4_128(
+// CHECK-COUNT-4: pto.vmull
+// CHECK-NOT: pto.vmull
+// CHECK: return
+
+// CHECK-LABEL: func.func @vmull_deint4_256(
+// CHECK-COUNT-4: pto.vmull
+// CHECK-NOT: pto.vmull
+// CHECK: return
+
+// CHECK-LABEL: func.func @vmull_deint4_64_padding_mask(
+// CHECK: %[[PAD0:.*]] = pto.pset_b32 "PAT_VL16"
+// CHECK-NEXT: %[[PAD1:.*]] = pto.pset_b32 "PAT_VL16"
+// CHECK-NEXT: %[[PAD2:.*]] = pto.pset_b32 "PAT_VL16"
+// CHECK-NEXT: %[[PAD3:.*]] = pto.pset_b32 "PAT_VL16"
+// CHECK-NEXT: %[[PAD_L0:.*]], %[[PAD_H0:.*]] = pto.vmull %arg0, %arg4, %[[PAD0]]
+// CHECK-NEXT: %[[PAD_L1:.*]], %[[PAD_H1:.*]] = pto.vmull %arg1, %arg5, %[[PAD1]]
+// CHECK-NEXT: %[[PAD_L2:.*]], %[[PAD_H2:.*]] = pto.vmull %arg2, %arg6, %[[PAD2]]
+// CHECK-NEXT: %[[PAD_L3:.*]], %[[PAD_H3:.*]] = pto.vmull %arg3, %arg7, %[[PAD3]]
+// CHECK-NEXT: return %[[PAD_L0]], %[[PAD_L1]], %[[PAD_L2]], %[[PAD_L3]], %[[PAD_H0]], %[[PAD_H1]], %[[PAD_H2]], %[[PAD_H3]]
+
+// CHECK-LABEL: func.func @vmull_deint2_64_padding_mask(
+// CHECK: %[[PAD2_0:.*]] = pto.pset_b32 "PAT_VL32"
+// CHECK-NEXT: %[[PAD2_1:.*]] = pto.pset_b32 "PAT_VL32"
+// CHECK-NEXT: %[[PAD2_L0:.*]], %[[PAD2_H0:.*]] = pto.vmull %arg0, %arg2, %[[PAD2_0]]
+// CHECK-NEXT: %[[PAD2_L1:.*]], %[[PAD2_H1:.*]] = pto.vmull %arg1, %arg3, %[[PAD2_1]]
+// CHECK-NEXT: return %[[PAD2_L0]], %[[PAD2_L1]], %[[PAD2_H0]], %[[PAD2_H1]]
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.

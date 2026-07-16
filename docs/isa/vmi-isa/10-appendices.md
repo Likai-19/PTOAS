@@ -47,7 +47,7 @@
 | 39 | `pto.vmi.vaxpy` | 7: SFU | A | Fused α·x+y |
 | 40 | `pto.vmi.vlrelu` | 7: SFU | A | Leaky ReLU |
 | 41 | `pto.vmi.vprelu` | 7: SFU | A | Parametric ReLU |
-| 42 | `pto.vmi.vmull` | 7: SFU | B | Widening 32×32→64 multiply |
+| 42 | `pto.vmi.vmull` | 7: SFU | A | Pair-result widening 32×32 multiply |
 | 43 | `pto.vmi.vmula` | 7: SFU | A | Fused multiply-add |
 | 44 | `pto.vmi.vchist` | 7: SFU | B | Cumulative histogram (half-axis) |
 | 45 | `pto.vmi.vdhist` | 7: SFU | B | Distribution histogram (plain per-bin) |

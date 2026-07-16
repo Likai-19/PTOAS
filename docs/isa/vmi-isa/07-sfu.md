@@ -1,12 +1,12 @@
 # 7. SFU
 
-> **Category:** A (fused arithmetic), B (`vchist`, `vdhist`, `vmull`), C (gather/scatter).
+> **Category:** A (fused arithmetic, `vmull`), B (`vchist`, `vdhist`), C (gather/scatter).
 > **Mask:** `Pg` on all except sort-like ops.
 >
 > Special-function / domain-accelerator ops. Mixed categories: `vchist`
 > produces a `half` axis (B); `vdhist` yields a plain per-bin count (B);
 > gather/scatter are Category C tile/permute ops; fused activation/arithmetic
-> ops are Category A `vreg→vreg`.
+> ops and pair-result `vmull` are Category A layout-passthrough operations.
 
 ---
 
@@ -150,40 +150,50 @@
 
 ### `pto.vmi.vmull`
 
-- **semantics:** Widening 32-bit × 32-bit → 64-bit multiply. The result
-  occupies two physical registers (hi + lo) accessed through a virtual `width`
-  axis.
+- **semantics:** Widening 32-bit × 32-bit multiply. The operation returns the
+  low and high 32-bit halves as two logical vectors of the same type as the
+  inputs. Inactive lanes in both results are zero.
 
   ```c
-  for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? (int64_t)a[i] * (int64_t)b[i] : (pmode_merge ? dst_old[i] : 0);
+  for (int i = 0; i < L; i++) {
+      uint64_t product = T == i32
+          ? (uint64_t)((int64_t)(int32_t)a[i] * (int64_t)(int32_t)b[i])
+          : (uint64_t)(uint32_t)a[i] * (uint64_t)(uint32_t)b[i];
+      low[i] = mask[i] ? (uint32_t)product : 0;
+      high[i] = mask[i] ? (uint32_t)(product >> 32) : 0;
+  }
   ```
 
 - **syntax:**
   ```mlir
-  %res = pto.vmi.vmull %a, %b, %mask : !pto.vmi.vreg<L×i32>, !pto.vmi.vreg<L×i32>, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×i64>
+  %low, %high = pto.vmi.vmull %a, %b, %mask
+      : !pto.vmi.vreg<L×T>, !pto.vmi.vreg<L×T>, !pto.vmi.mask<L>
+        -> !pto.vmi.vreg<L×T>, !pto.vmi.vreg<L×T>
   ```
 - **operands:**
 
   | Operand | Type | Description |
   |---|---|---|
-  | `a` | `!pto.vmi.vreg<L×i32>` | First operand |
-  | `b` | `!pto.vmi.vreg<L×i32>` | Second operand |
+  | `a` | `!pto.vmi.vreg<L×T>` | First operand |
+  | `b` | `!pto.vmi.vreg<L×T>` | Second operand |
   | `mask` | `!pto.vmi.mask<L>` | Governing predicate |
 
-- **results:** `!pto.vmi.vreg<L×i64>` (2 physical regs per logical value)
-- **datatypes:** `i32` → `i64` (also `ui32` → `ui64`)
+- **results:** `%low` and `%high`, both `!pto.vmi.vreg<L×T>`
+- **datatypes:** `T` is exactly `i32` or `ui32`; `L` is exactly 64, 128, or
+  256. Omitted `pmode` means zeroing; the only explicit legal value is
+  `pmode = "zero"`.
 - **lowering to `pto.mi`:**
   ```
   K × pto.vmull (produces hi+lo pair per reg)
   ```
-  `#mi = K`, `dep = 1`. Two result regs per input reg → Category B (`width` axis).
+  For contiguous layout, `K = L / 64`; therefore 64, 128, and 256 lanes lower
+  to 1, 2, and 4 operations respectively.
 
 - **example:**
   ```mlir
-  %res = pto.vmi.vmull %a, %b, %mask
+  %low, %high = pto.vmi.vmull %a, %b, %mask
       : !pto.vmi.vreg<64×i32>, !pto.vmi.vreg<64×i32>, !pto.vmi.mask<64>
-      -> !pto.vmi.vreg<64×i64>
+        -> !pto.vmi.vreg<64×i32>, !pto.vmi.vreg<64×i32>
   ```
 
 ### `pto.vmi.vmula`
