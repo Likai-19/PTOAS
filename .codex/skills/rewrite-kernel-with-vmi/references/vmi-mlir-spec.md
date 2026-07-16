@@ -43,21 +43,23 @@ Common layouts:
 - Deinterleaved: even/odd or grouped physical backing created by widening,
   deinterleave loads, or layout-sensitive lowering.
 
-Author PTODSL without explicit layout by default. Use explicit layout or
-`ensure_layout` only when debugging layout assignment or when the user asked for
-layout-level IR.
+Author PTODSL without explicit layout by default. PTODSL does not expose
+explicit layout selection on `pto.vmi.vreg(...)` or `pto.vmi.mask(...)`; use
+`ensure_layout` only when debugging layout assignment or when the user asked
+for layout-level IR.
 
 ## Mask And Tail Semantics
 
 For dynamic tails:
 
 ```python
-mask = pto.vmi.create_mask(active_lanes, result_type=pto.vmi.mask(lanes))
+mask = pto.vmi.create_mask(active_lanes, size=lanes)
 ```
 
 Use the same `lanes` as the gated vector. Put the mask on compute ops and
 stores. If the backend cannot predicate a load, load the full vector from a safe
-UB range and rely on masked consumers/stores.
+UB range and rely on masked consumers/stores. For grouped tails, use
+`create_mask(..., size=lanes, group=...)`.
 
 Group masks represent active elements inside each group and should be used for
 group reductions or grouped broadcasts rather than plain prefix tails.
@@ -88,8 +90,8 @@ Preserve these details when they are semantic:
 Preferred surface VMI shape:
 
 ```python
-mask = pto.vmi.create_mask(active, result_type=pto.vmi.mask(lanes))
-x = pto.vmi.vload(x_ub, x_off, result_type=pto.vmi.vreg(lanes, src_dtype))
+mask = pto.vmi.create_mask(active, size=lanes)
+x = pto.vmi.vload(x_ub, x_off, size=lanes)
 y = pto.vmi.vcvt(x, to_dtype=compute_dtype)      # if needed
 z = pto.vmi.vmul(y, scale, mask)                 # representative compute
 out = pto.vmi.vcvt(z, to_dtype=dst_dtype)        # if needed
@@ -120,10 +122,10 @@ Do not diagnose VMI legality from a non-VMI invocation. `--enable-vmi` requires
 
 ## Debugging Priorities
 
-1. PTODSL trace error: fix Python DSL syntax, types, missing `result_type`, or
-   unsupported wrapper usage.
-2. VMI verifier error: fix lane/mask mismatch, dtype mismatch, missing result
-   type, invalid group count, or unsupported conversion.
+1. PTODSL trace error: fix Python DSL syntax, types, missing required kwargs,
+   or unsupported wrapper usage.
+2. VMI verifier error: fix lane/mask mismatch, dtype mismatch, invalid
+   inferred shape, invalid group count, or unsupported conversion.
 3. VMI lowering error: check whether the logical form needs a different legal
    VMI expression. Avoid adding store/reload workarounds without user approval.
 4. Semantic mismatch: revisit the VMI design gate; most errors come from
