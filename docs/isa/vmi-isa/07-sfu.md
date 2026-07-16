@@ -6,20 +6,6 @@ existing names.
 
 ## Tile Op-aligned operations
 
-### `pto.vmi.trowexpandexpdif`
-
-`trowexpandexpdif` replaces `vexpdif`. Its row-scalar operand is explicit:
-
-```mlir
-%result = pto.vmi.trowexpandexpdif %source, %row_max, %mask
-    : !pto.vmi.tilereg<MxNxf32>, !pto.vmi.tilereg<Mx1xf32>,
-      !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxf32>
-```
-
-It computes `exp(source[m,n] - row_max[m,0])` at active positions. See
-[Broadcast and Row Expansion](04-broadcast.md) for the complete group-shape
-contract.
-
 ### `pto.vmi.tlrelu`
 
 `tlrelu` replaces `vlrelu` and has the Tile Op leaky-ReLU name.
@@ -60,14 +46,37 @@ target restrictions remain in force.
 
 ## VMI-only fused and special instructions
 
-`dhist` and `vmula` have no single same-function Tile Op, so their names are
-retained. The former `vmull` is documented as the widening `tmul` overload in
-[Elementwise Compute](03-eltwise-compute.md).
+`vexpdif`, `dhist`, and `vmula` have no single same-function Tile Op, so their
+names are retained. The former `vmull` is documented as the widening `tmul`
+overload in [Elementwise Compute](03-eltwise-compute.md).
 
 | Instruction | Tile-register contract |
 |---|---|
+| `pto.vmi.vexpdif` | Same-shaped `x`, `max`, result, and mask tiles. `x` is `f16` or `f32`; `max` and result are `f32`. |
 | `pto.vmi.dhist` | Full 256-bin distribution histogram. The accumulator and result are `1x256xui16`; the source is `1xLxui8`; the governing mask is `1xLxi1`. |
 | `pto.vmi.vmula` | Same-shaped accumulator, two tile operands, result, and mask. It is not scalar `taxpy`. |
+
+### `pto.vmi.vexpdif`
+
+```mlir
+%result = pto.vmi.vexpdif %x, %max, %mask
+    : !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxf32>,
+      !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxf32>
+```
+
+`T` is `f16` or `f32`. At each active position, the operation computes:
+
+```text
+result[m, n] = exp(f32(x[m, n]) - max[m, n])
+```
+
+The `max` tile is lane-wise and is not required to be a row splat. Inactive
+positions follow the shared VMI predication mode. `vexpdif` is therefore not
+renamed to Tile Op `trowexpandexpdif`, which consumes one scalar per row,
+requires same-dtype data operands and result, and does not directly represent
+an arbitrary `MxNxi1` VMI mask. See
+[Broadcast and Row Expansion](04-broadcast.md) for the explicit row-wise
+softmax form.
 
 ### `pto.vmi.dhist`
 

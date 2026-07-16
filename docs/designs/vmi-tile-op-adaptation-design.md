@@ -221,12 +221,56 @@ canonical 名称仍位于 `pto.vmi` namespace。例如 `vadd -> tadd` 后的操�
 | `vcadd` | `trowsum` | `MxNxT -> Mx1xT` |
 | `vcmax` | `trowmax` | `MxNxT -> Mx1xT` |
 | `vcmin` | `trowmin` | `MxNxT -> Mx1xT` |
-| `vexpdif` | `trowexpandexpdif` | `MxNxT` 数据与 `Mx1xT` row value 生成 `MxNxT` |
 
 这些映射不是简单改名：原来由 `group` 或 compact value 隐式表达的信息必须先转成
 `MxN` / `Mx1` 类型关系。
 
 ### 6.3 受约束的语义复用
+
+#### `vexpdif` 不直接映射为 `trowexpandexpdif`
+
+VMI `vexpdif` 的目标 tilereg 契约为：
+
+```mlir
+%result = pto.vmi.vexpdif %x, %max, %mask
+    : !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxf32>,
+      !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxf32>
+```
+
+其中 `T` 为 `f16` 或 `f32`，逐位置计算：
+
+```text
+result[m, n] = exp(f32(x[m, n]) - max[m, n])
+```
+
+该契约与 Tile Op `trowexpandexpdif` 存在三项关键差异：
+
+- VMI `max` 是与 `x` 同 shape 的逐 lane 值，不保证每行相同；
+- VMI 允许 `x=f16`、`max/result=f32`，而当前 Tile Op 要求输入和结果 dtype 相同；
+- VMI 接受任意同 shape predicate 和 `pmode`，Tile Op 形式没有等价的任意 mask
+  operand。
+
+因此 canonical VMI 名称继续保留为 `vexpdif`。只有同时满足以下条件时，才允许把
+特例作为优化复用 Tile Op `trowexpandexpdif`：
+
+1. `x`、`max` 和结果均为 `f32`；
+2. 能证明 `max[m,n] = row_max[m,0]`，即 `max` 直接来自逐行广播；
+3. mask 为全有效，或是能由 Tile Op valid shape 精确表达的连续 prefix；
+4. inactive position 的行为与 VMI `pmode` 完全一致。
+
+例如下面的 VMI 序列可作为候选匹配：
+
+```mlir
+%max_full = pto.vmi.trowexpand %row_max
+    : !pto.vmi.tilereg<Mx1xf32> -> !pto.vmi.tilereg<MxNxf32>
+%result = pto.vmi.vexpdif %x, %max_full, %mask
+    : !pto.vmi.tilereg<MxNxf32>, !pto.vmi.tilereg<MxNxf32>,
+      !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxf32>
+```
+
+这是一项受约束优化，不是 `vexpdif -> trowexpandexpdif` 的指令重命名。不能证明上述
+条件时，仍保留 `vexpdif`；也不能仅因 `tsub + texp` 可计算相同代数表达式就视为存在
+同语义单 Tile Op，因为融合计算的舍入和异常值行为可能不同。
 
 #### `vmull -> tmul`
 
@@ -285,6 +329,7 @@ mask[m, n] = n < active_per_row
 | 保留名称 | 语义 | 不映射原因 |
 |---|---|---|
 | `vselr` | 一维寄存器索引置换 | 没有单条相同置换语义的 Tile Op |
+| `vexpdif` | 带同 shape `max` 和 mask 的逐 lane `exp(x - max)` | `trowexpandexpdif` 只接受逐行 scalar，且 dtype 与 predication 契约不同 |
 | `vmula` | `result = acc + lhs * rhs`，两个乘数均为 tile | `taxpy` 的一个乘数是 scalar；`tmul + tadd` 不是同一条融合语义 |
 | `dhist` | 对带 mask 的 `1xLxui8` 输入生成完整 `1x256xui16` 分布直方图 | `thistogram` 是 row-wise source/index/destination 更新，操作数角色和结果契约不同 |
 

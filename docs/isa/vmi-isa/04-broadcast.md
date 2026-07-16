@@ -44,30 +44,20 @@ that `group = M` must be positive and evenly divide the logical lane count
 `L = M * N`. The source `Mx1` is a group-scalar carrier and cannot be consumed
 by an ordinary elementwise operation until it is expanded.
 
-## Row-expansion arithmetic
+## Relation to `pto.vmi.vexpdif`
 
-The current VMI surface exposes the fused exponent-difference form as
-`trowexpandexpdif`; it replaces `vexpdif`.
+`trowexpandexpdif` is not introduced as a canonical VMI rename. Canonical VMI
+`vexpdif` consumes same-shaped `x`, `max`, and result tiles and computes a
+lane-wise exponent difference. The `max` operand is not required to contain
+one repeated scalar per row.
 
-```mlir
-%result = pto.vmi.trowexpandexpdif %source, %row_value, %mask
-    : !pto.vmi.tilereg<MxNxf32>, !pto.vmi.tilereg<Mx1xf32>,
-      !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxf32>
-```
+Tile Op `trowexpandexpdif` instead consumes one logical scalar per row. It also
+requires its data operands and result to use the same floating-point dtype,
+whereas VMI `vexpdif` permits an `f16` `x` with an `f32` `max` and `f32`
+result. It therefore does not have the same general operation contract.
 
-```text
-for m in 0 .. M:
-  for n in 0 .. N:
-    if mask[m, n]:
-      result[m, n] = exp(source[m, n] - row_value[m, 0])
-```
-
-The scalar carrier and source must have the same row count. `trowexpandexpdif`
-is floating-point only. It replaces an implicit compact-vector broadcast with
-an explicit `Mx1` input.
-
-Other Tile Op row-expansion arithmetic names are reserved for future VMI
-instructions; they are not introduced by this design.
+For a row-wise softmax, use `trowexpand` to make the row broadcast explicit,
+then call `vexpdif` with same-shaped inputs.
 
 ## Example: row-wise softmax preparation
 
@@ -79,7 +69,9 @@ instructions; they are not introduced by this design.
 %max = pto.vmi.trowmax %rows, %mask
     : !pto.vmi.tilereg<8x16xf32>, !pto.vmi.tilereg<8x16xi1>
       -> !pto.vmi.tilereg<8x1xf32>
-%exp = pto.vmi.trowexpandexpdif %rows, %max, %mask
-    : !pto.vmi.tilereg<8x16xf32>, !pto.vmi.tilereg<8x1xf32>,
+%max_full = pto.vmi.trowexpand %max
+    : !pto.vmi.tilereg<8x1xf32> -> !pto.vmi.tilereg<8x16xf32>
+%exp = pto.vmi.vexpdif %rows, %max_full, %mask
+    : !pto.vmi.tilereg<8x16xf32>, !pto.vmi.tilereg<8x16xf32>,
       !pto.vmi.tilereg<8x16xi1> -> !pto.vmi.tilereg<8x16xf32>
 ```

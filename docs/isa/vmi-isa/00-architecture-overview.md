@@ -142,7 +142,7 @@ surface.
 | `iota`, `vci` | `tci` | `tci` |
 | `cmpf`, `cmpi`, `vcmp` | `tcmp` | `tcmp` |
 | `vcmps` | `tcmps` | `tcmps` |
-| `vexpdif` | `trowexpandexpdif` | `trowexpandexpdif` |
+| `vexpdif` | `vexpdif` | No direct one-op counterpart; a constrained row-splat case may use `trowexpandexpdif` |
 | `vlrelu` | `tlrelu` | `tlrelu` |
 | `vaxpy`, `vprelu` | `taxpy`, `tprelu` | `taxpy`, `tprelu` |
 | `vhist` | `thistogram` | `thistogram` |
@@ -158,8 +158,15 @@ VMI names are retained; only their operands and results change to `tilereg`:
 | Family | Retained VMI instruction |
 |---|---|
 | Register permutation | `vselr` |
+| Lane-wise fused exponent difference | `vexpdif` |
 | Fused tile-tile multiply-accumulate | `vmula` |
 | Full 256-bin distribution histogram | `dhist` |
+
+`vexpdif` is not renamed to `trowexpandexpdif`. VMI `vexpdif` accepts a
+same-shaped `max` tile and computes a lane-wise exponent difference, while
+Tile Op `trowexpandexpdif` consumes one scalar value per row. The two
+operations overlap only when the `max` tile is known to be a row splat and the
+remaining dtype and predication restrictions also match.
 
 `dhist` is not renamed to `thistogram`. `dhist` reduces one masked
 `1xLxui8` source tile into a single `1x256xui16` distribution accumulator,

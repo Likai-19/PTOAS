@@ -11,8 +11,8 @@
 | Compare and select | `tcmp`, `tcmps`, `tsel`, `vselr` |
 | Broadcast and reduction | `texpands`, `trowexpand`, `trowsum`, `trowmax`, `trowmin` |
 | Conversion | `tcvt`; `treshape` for bitwise reinterpretation |
-| Tile-aligned fused / special | `trowexpandexpdif`, `tlrelu`, `taxpy`, `tprelu`, `thistogram`, `tgather`, `tgatherb`, `tscatter` |
-| VMI-only fused / special | `dhist`, `vmula` |
+| Tile-aligned fused / special | `tlrelu`, `taxpy`, `tprelu`, `thistogram`, `tgather`, `tgatherb`, `tscatter` |
+| VMI-only fused / special | `vexpdif`, `dhist`, `vmula` |
 | Predicate construction | predicate `texpands` |
 | Rearrangement | `tinterleave`, `tdeinterleave` |
 
