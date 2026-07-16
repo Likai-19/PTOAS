@@ -15,7 +15,7 @@ module attributes {pto.target_arch = "a5"} {
     return
   }
 
-  func.func private @cube_helper() {
+  func.func public @cube_helper() {
     pto.section.cube {
     }
     return
@@ -27,8 +27,8 @@ module attributes {pto.target_arch = "a5"} {
 // CHECK: module attributes {
 // CHECK-SAME: pto.kernel_kind = #pto.kernel_kind<vector>
 // CHECK: func.func public @vec_helper()
-// CHECK-NOT: func.func private @cube_helper()
+// CHECK-NOT: func.func public @cube_helper()
 // CHECK: module attributes {
 // CHECK-SAME: pto.kernel_kind = #pto.kernel_kind<cube>
 // CHECK-NOT: func.func public @vec_helper()
-// CHECK: func.func private @cube_helper()
+// CHECK: func.func public @cube_helper()
