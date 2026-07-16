@@ -25,6 +25,7 @@
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Math/IR/Math.h"
@@ -46,6 +47,7 @@
 #include "mlir/Dialect/Bufferization/Transforms/OneShotAnalysis.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/Dialect/EmitC/IR/EmitC.h"
 #include "mlir/Dialect/EmitC/Transforms/Passes.h"
 #include "llvm/Support/CommandLine.h"
@@ -97,11 +99,28 @@ constexpr size_t kMarkerRewriteTernaryArgCount = 3;
 using StringRefVector =
     llvm::SmallVector<llvm::StringRef, kStringRefInlineCapacity>;
 
+/// Materialize the implicit no-inline semantics of `pto.simt_entry` using the
+/// standard Func dialect attribute understood by MLIR's public inliner
+/// extension and by later LLVM lowering.
+struct ApplySIMTEntryNoInlinePass final
+    : public PassWrapper<ApplySIMTEntryNoInlinePass,
+                         OperationPass<ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ApplySIMTEntryNoInlinePass)
+
+  void runOnOperation() final {
+    for (func::FuncOp func : getOperation().getOps<func::FuncOp>())
+      if (func->hasAttr(pto::kPTOSimtEntryAttrName))
+        func.setNoInline(true);
+  }
+};
+
 } // namespace
 
 int main(int argc, char **argv);
 
 void mlir::pto::registerPTOASDialects(DialectRegistry &registry) {
+  func::registerInlinerExtension(registry);
+  LLVM::registerInlinerInterface(registry);
   registry.insert<mlir::func::FuncDialect>();
   registry.insert<mlir::tensor::TensorDialect>();
   registry.insert<mlir::arith::ArithDialect>();
@@ -2800,8 +2819,17 @@ static LogicalResult runVPTOBackendPipeline(OwningOpRef<ModuleOp> &module,
     }
     lowerPTOToVPTOBackend(pm, module.get(), *expandOptions);
   }
-  if (enableVMI)
-    appendVMISemanticPipeline(pm.nest<ModuleOp>());
+  if (enableVMI) {
+    auto &kernelModulePM = pm.nest<ModuleOp>();
+    // Inline legal direct calls before VMI layout assignment so private helper
+    // bodies participate in one caller-local layout decision. The Func
+    // inliner honors `no_inline` on either the callee or call site. Materialize
+    // the implicit no-inline semantics of `pto.simt_entry` first so the rest of
+    // the pipeline can use MLIR's standard Func inliner implementation.
+    kernelModulePM.addPass(std::make_unique<ApplySIMTEntryNoInlinePass>());
+    kernelModulePM.addPass(createInlinerPass());
+    appendVMISemanticPipeline(kernelModulePM);
+  }
   prepareVPTOForEmission(pm);
   if (failed(applyConfiguredPassManagerCLOptions(
           pm, "VPTO unified emission pipeline")))

@@ -13,12 +13,12 @@ module attributes {
   pto.kernel_kind = #pto.kernel_kind<vector>,
   pto.target_arch = "a5"
 } {
-  func.func public @vpto_post(%value: i64) {
+  func.func public @vpto_post(%value: i64) attributes {no_inline} {
     func.call @local_helper(%value) : (i64) -> ()
     return
   }
 
-  func.func private @local_helper(%value: i64) {
+  func.func private @local_helper(%value: i64) attributes {no_inline} {
     return
   }
 

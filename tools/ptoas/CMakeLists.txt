@@ -71,6 +71,8 @@ target_link_libraries(pto-opt PRIVATE
   MLIRControlFlowDialect
   MLIRBufferizationDialect
   MLIRFuncDialect
+  MLIRFuncInlinerExtension
+  MLIRLLVMIRTransforms
   MLIRSupport
   MLIRTransformUtils
 )
