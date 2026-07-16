@@ -544,6 +544,8 @@ static std::string resolveHostTargetCPU() {
       return std::string(envCPU);
   }
   std::string hostCPU = llvm::sys::getHostCPUName().str();
+  if (hostCPU == "cortex-x925")
+    return "tsv200m";
   if (hostCPU == "znver4" || hostCPU == "znver5")
     return "znver3";
   return hostCPU;
