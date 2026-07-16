@@ -37,8 +37,7 @@ target_compile_definitions(pto-opt PRIVATE
   # these directories still need to override the flags explicitly.
   PTOAS_DEFAULT_TILELANG_PATH="${CMAKE_SOURCE_DIR}/lib/TileOps"
   PTOAS_DEFAULT_TILELANG_PKG_PATH="${CMAKE_SOURCE_DIR}/tilelang-dsl/python"
-  PTOAS_DEFAULT_PTODSL_PKG_PATH="${CMAKE_SOURCE_DIR}/ptodsl:${CMAKE_BINARY_DIR}/python:${MLIR_PYTHON_PACKAGE_DIR}"
-  PTOAS_DEFAULT_PTODSL_PYTHON_EXE="${Python3_EXECUTABLE}"
+  PTOAS_DEFAULT_PTODSL_PKG_PATH="${CMAKE_SOURCE_DIR}/ptodsl"
 )
 # [修改 2] 更新链接库名称
 # 原因：In-tree 时你的库叫 MLIRPTODialect，但现在 Out-of-tree 它们是你自己定义的
