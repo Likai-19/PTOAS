@@ -178,7 +178,7 @@ canonical VMI surface 删除 `group` 属性，二维 shape 直接表达 group：
 %rows = pto.vmi.treshape %flat
     : !pto.vmi.tilereg<1x128xf32>
       -> !pto.vmi.tilereg<8x16xf32>
-%mask = pto.vmi.texpands %active_per_row
+%mask = pto.vmi.create_group_mask %active_per_row
     : index -> !pto.vmi.tilereg<8x16xi1>
 %sum = pto.vmi.trowsum %rows, %mask {reassoc}
     : !pto.vmi.tilereg<8x16xf32>, !pto.vmi.tilereg<8x16xi1>
@@ -293,15 +293,17 @@ result[m, n] = exp(f32(x[m, n]) - max[m, n])
 
 这两类操作统一使用第 4 节的 `treshape`，以“总 bit-size 相同”作为 verifier 契约。
 
-#### `create_mask` / `create_group_mask -> predicate texpands`
+#### `create_mask` / `create_group_mask` 保留为 VMI predicate 指令
 
-mask 创建使用 `texpands` 的 predicate overload，不使用 `tfillpad`：
+Tile Op 没有与“根据运行时 active lane 数生成连续 prefix predicate”直接同义的单条
+指令，因此 `create_mask` 和 `create_group_mask` 不改名，也不映射为 `texpands` 或
+`tfillpad`：
 
 ```mlir
-%flat_mask = pto.vmi.texpands %active_lanes
+%flat_mask = pto.vmi.create_mask %active_lanes
     : index -> !pto.vmi.tilereg<1xLxi1>
 
-%group_mask = pto.vmi.texpands %active_per_row
+%group_mask = pto.vmi.create_group_mask %active_per_row
     : index -> !pto.vmi.tilereg<MxNxi1>
 ```
 
@@ -317,7 +319,9 @@ mask[0, n] = n < active_lanes
 mask[m, n] = n < active_per_row
 ```
 
-结果 shape 取代原 `num_groups`、`group_size` 等分组信息。
+结果 shape 取代原 `num_groups`、`group_size` 等分组信息。`texpands` 的语义是把一个
+scalar value 广播到整个目标 tile，只适合映射 scalar `vbrc`；它既不接收
+`active_lanes` 来生成动态 prefix，也不是 predicate 专用操作。
 
 #### `vhist -> thistogram`
 
@@ -332,6 +336,8 @@ mask[m, n] = n < active_per_row
 | `vexpdif` | 带同 shape `max` 和 mask 的逐 lane `exp(x - max)` | `trowexpandexpdif` 只接受逐行 scalar，且 dtype 与 predication 契约不同 |
 | `vmula` | `result = acc + lhs * rhs`，两个乘数均为 tile | `taxpy` 的一个乘数是 scalar；`tmul + tadd` 不是同一条融合语义 |
 | `dhist` | 对带 mask 的 `1xLxui8` 输入生成完整 `1x256xui16` 分布直方图 | `thistogram` 是 row-wise source/index/destination 更新，操作数角色和结果契约不同 |
+| `create_mask` | 根据 `active_lanes` 生成 `1xLxi1` prefix predicate | 没有接受动态 active lane 数并返回 prefix predicate 的同义 Tile Op；`texpands` 仅做 scalar broadcast |
+| `create_group_mask` | 在 `MxNxi1` 的每一行生成相同宽度的 prefix predicate | 没有同义的逐行动态 prefix predicate Tile Op；二维 shape 仅替代原 group 属性 |
 
 `vmula` 的目标 tilereg 形式为：
 
@@ -370,8 +376,8 @@ result[0, source[0, n]] += 1                     when mask[0, n] is true
 ### `valid_col` 取代部分 mask 的可行性
 
 > **讨论状态：** 本节只分析可行性，尚未纳入 canonical VMI 类型和指令签名。
-> 第 3.2 节的显式 `tilereg<MxNxi1>` mask 及第 6.3 节的 predicate
-> `texpands` 仍是当前设计结论。
+> 第 3.2 节的显式 `tilereg<MxNxi1>` mask 及第 6.3 节保留的
+> `create_mask` / `create_group_mask` 仍是当前设计结论。
 
 #### 可行性结论
 
@@ -476,8 +482,8 @@ effective_mask = implicit_prefix_mask AND explicit_mask
 
 如果 `create_mask` / `create_group_mask` 的结果只用于控制连续尾部，未来可以直接绑定
 `valid_col`，不必物化 `MxNxi1` tile。如果生成的 predicate 还会被 `tsel`、boolean op
-或其他 consumer 当作普通值使用，则仍应通过 predicate `texpands` 产生显式 `i1`
-tile。
+或其他 consumer 当作普通值使用，则仍应通过 `create_mask` / `create_group_mask` 产生
+显式 `i1` tile。
 
 #### 传播规则的候选方案
 
@@ -656,7 +662,7 @@ effective_valid_col = min(value.valid_col, window.valid_col)
 如果不采用 tilereg valid metadata，则仍需要以下方案之一：
 
 1. `tload` 同时返回显式 `MxNxi1` mask；
-2. consumer 根据 view 的 valid shape 通过 `texpands` 创建 mask；
+2. consumer 根据 view 的 valid shape 通过 `create_mask` / `create_group_mask` 创建 mask；
 3. `tload/tstore` 内部使用 view valid shape，但规定 load 结果无效位置为 unspecified。
 
 动态 `valid_row < M` 不能只用单个 `valid_col` 表达，因此第一阶段应要求所有行有效，

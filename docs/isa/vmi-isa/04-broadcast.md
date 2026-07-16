@@ -1,77 +1,97 @@
-# 4. Broadcast and Row Expansion
+# 4. Broadcast
 
-VMI uses the Tile Op broadcast names. Scalar broadcast and grouped broadcast
-are distinct operations because the latter has visible row structure.
+> **Category:** A (scalar expansion), B (row expansion).
+> **Mask:** none.
+>
+> The former `vbrc` forms use the matching Tile Op names: scalar broadcast is
+> `texpands`, while grouped broadcast is `trowexpand`. The scalar form
+> (single scalar fanned over `L` lanes) is cheap (`vdup`); the grouped form
+> (per-group scalar fan-back) has no single native instruction and is a
+> cost-model decision.
 
-## `pto.vmi.texpands`
+---
 
-`texpands` broadcasts one scalar to every position of a tile register.
+## `pto.vmi.texpands` / `pto.vmi.trowexpand`
 
-```mlir
-%result = pto.vmi.texpands %scalar
-    : T -> !pto.vmi.tilereg<MxNxT>
-```
+- **semantics:** Broadcast a scalar or group-slot compact value across lanes.
 
-For an `i1` result, `texpands` also has the active-extent predicate overload
-defined in [Predicate Tile Operations](08-predicate-ops.md).
+  **Ungrouped:** One value replicated to all `L` lanes.
+  ```c
+  for (int i = 0; i < L; i++)
+      dst[i] = src[0];
+  ```
 
-```text
-for m in 0 .. M:
-  for n in 0 .. N:
-    result[m, n] = scalar
-```
+  **Grouped:** Each of the `M` row scalars is fanned back across `N` lanes.
+  ```c
+  for (int m = 0; m < M; m++)
+      for (int n = 0; n < N; n++)
+          dst[m][n] = src[m][0];
+  ```
 
-The result may be either a legal `1xL` tile or a legal grouped `MxN` tile.
+- **syntax:**
+  ```mlir
+  // Ungrouped: scalar → full vector
+  %r = pto.vmi.texpands %scalar : f32 -> !pto.vmi.tilereg<1x64xf32>
 
-## `pto.vmi.trowexpand`
+  // Ungrouped: 1-lane tilereg → full vector
+  %r = pto.vmi.texpands %val : !pto.vmi.tilereg<1x1xf32> -> !pto.vmi.tilereg<1x256xf32>
 
-`trowexpand` is the grouped broadcast. It consumes one scalar per row and
-expands that value across the row.
+  // Grouped: one scalar per row → dense rows
+  %r = pto.vmi.trowexpand %source
+      : !pto.vmi.tilereg<128x1xf32> -> !pto.vmi.tilereg<128x8xf32>
+  ```
+- **operands:**
 
-```mlir
-%result = pto.vmi.trowexpand %source
-    : !pto.vmi.tilereg<Mx1xT> -> !pto.vmi.tilereg<MxNxT>
-```
+  | Operand | Type | Description |
+  |---|---|---|
+  | `value` | `T`, `!pto.vmi.tilereg<1x1xT>`, or `!pto.vmi.tilereg<Mx1xT>` | Broadcast source |
 
-```text
-for m in 0 .. M:
-  for n in 0 .. N:
-    result[m, n] = source[m, 0]
-```
+- **results:**
 
-`M` and `N` must be positive. This is the shape form of the current VMI rule
-that `group = M` must be positive and evenly divide the logical lane count
-`L = M * N`. The source `Mx1` is a group-scalar carrier and cannot be consumed
-by an ordinary elementwise operation until it is expanded.
+  | Result | Type | Description |
+  |---|---|---|
+  | `result` | `!pto.vmi.tilereg<1xLxT>` or `!pto.vmi.tilereg<MxNxT>` | Broadcast result |
 
-## Relation to `pto.vmi.vexpdif`
+- **datatypes:** `i8`–`i32`, `f16`, `bf16`, `f32`
+- **lowering to `pto.mi`:**
 
-`trowexpandexpdif` is not introduced as a canonical VMI rename. Canonical VMI
-`vexpdif` consumes same-shaped `x`, `max`, and result tiles and computes a
-lane-wise exponent difference. The `max` operand is not required to contain
-one repeated scalar per row.
+  | Form | Physical lowering | `#mi` | `dep` |
+  |---|---|---|---|
+  | Ungrouped (scalar) | `1 × pto.vdup` (register-resident), or `vsts`+`vlds BRC_*` (UB roundtrip) | `1` | `1` |
+  | Ungrouped (1-lane tilereg) | `1 × pto.vdup {position="LOWEST"}` per physical reg | `K` | `1` |
+  | Grouped (`Mx1 -> MxN`) | **Cost-model decision**: UB roundtrip (`vsts` partials + `vlds BRC_BLK`) **or** `vselr` gather **or** masked recompute | varies | 2–3 |
 
-Tile Op `trowexpandexpdif` instead consumes one logical scalar per row. It also
-requires its data operands and result to use the same floating-point dtype,
-whereas VMI `vexpdif` permits an `f16` `x` with an `f32` `max` and `f32`
-result. It therefore does not have the same general operation contract.
+- **examples:**
+  ```mlir
+  // Ungrouped: scalar → full vector
+  %bc = pto.vmi.texpands %maxe : f32 -> !pto.vmi.tilereg<1x64xf32>
+  // → pto.as: pto.vdup %maxe (one op, register-resident)
 
-For a row-wise softmax, use `trowexpand` to make the row broadcast explicit,
-then call `vexpdif` with same-shaped inputs.
+  // Ungrouped: 1-lane tilereg → full vector (rank-0 broadcast)
+  %bc = pto.vmi.texpands %scalar : !pto.vmi.tilereg<1x1xf32> -> !pto.vmi.tilereg<1x256xf32>
+  // → pto.as: 4 × pto.vdup {position="LOWEST"} (K=4)
 
-## Example: row-wise softmax preparation
+  // Grouped: 128 row scalars → 128 rows × 8 lanes
+  %bc = pto.vmi.trowexpand %source
+      : !pto.vmi.tilereg<128x1xf32> -> !pto.vmi.tilereg<128x8xf32>
+  // → pto.as: 16 × pto.vselr (vselr gather realization)
+  ```
 
-```mlir
-%rows = pto.vmi.treshape %flat
-    : !pto.vmi.tilereg<1x128xf32> -> !pto.vmi.tilereg<8x16xf32>
-%mask = pto.vmi.texpands %active
-    : index -> !pto.vmi.tilereg<8x16xi1>
-%max = pto.vmi.trowmax %rows, %mask
-    : !pto.vmi.tilereg<8x16xf32>, !pto.vmi.tilereg<8x16xi1>
-      -> !pto.vmi.tilereg<8x1xf32>
-%max_full = pto.vmi.trowexpand %max
-    : !pto.vmi.tilereg<8x1xf32> -> !pto.vmi.tilereg<8x16xf32>
-%exp = pto.vmi.vexpdif %rows, %max_full, %mask
-    : !pto.vmi.tilereg<8x16xf32>, !pto.vmi.tilereg<8x16xf32>,
-      !pto.vmi.tilereg<8x16xi1> -> !pto.vmi.tilereg<8x16xf32>
-```
+- **notes:**
+  - Fused `reduce→broadcast` (`trowsum`+`trowexpand`) is the recognized fusion pattern:
+    `pto.as` emits them back-to-back and keeps the result as a broadcast axis
+    rather than materializing `K` copies.
+  - Prefer `vdup` over a UB `BRC` reload for a single scalar.
+  - Grouped broadcast has **no single native `pto.mi` op** — `pto.as` picks
+    UB roundtrip (default, `vsts` partials + `vlds BRC_BLK`), `vselr` gather
+    (when group count and K are tiny), or masked recompute (very small groups).
+
+`texpands` is only the scalar-broadcast mapping of `vbrc`; it is not a mask
+creation op. `create_mask` and `create_group_mask` remain VMI predicate
+instructions because Tile Op has no direct operation with their prefix-mask
+semantics.
+
+`vexpdif` is not renamed to `trowexpandexpdif`. The latter may be selected only
+as a constrained optimization when the subtracted value is provably one scalar
+per row, all participating dtypes are `f32`, and its valid-region behavior is
+equivalent to the VMI mask and `pmode`.

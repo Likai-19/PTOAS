@@ -1,27 +1,58 @@
-# 2. Index Generation
+# 2. Index-gen
 
-`pto.vmi.tci` replaces the existing `iota` / `vci` spellings with the Tile Op
-name for contiguous integer sequence generation. It creates a one-dimensional
-tile-register index sequence.
+> **Category:** A. **Mask:** none.
+>
+> Index materialization. Produces an index vector; the single physical reg
+> backing is replicate-read until a Category B/C edge needs the expanded form.
+
+---
 
 ## `pto.vmi.tci`
 
-```mlir
-%index = pto.vmi.tci %base {order = "asc"}
-    : i32 -> !pto.vmi.tilereg<1xLxi32>
-```
+- **semantics:** Generate a per-lane index/counter vector from a single scalar base such as `[base, base±1, base±2, ...]`, lane `i` gets `base + i` (ASC) or `base - i` (DESC). It is the index source for `tgather`/`tscatter` offsets.
 
-For a `1xL` result, `tci` produces a consecutive sequence:
+  ```c
+  for (int i = 0; i < L; i++)
+      dst[i] = base + (order == "ASC" ? i : -i);
+  ```
 
-```text
-for n in 0 .. L:
-  result[0, n] = base + n               // order = "asc"
-  result[0, n] = base + (L - 1 - n)     // order = "desc"
-```
+- **syntax:**
+  ```mlir
+  %result = pto.vmi.tci %base {order = "ASC"} : T -> !pto.vmi.tilereg<1xLxT>
+  ```
+- **operands:**
 
-`order` is `"asc"` by default; `"desc"` is also legal. The result dtype is
-an integer type supported by VMI indexing.
+  | Operand | Type | Description |
+  |---|---|---|
+  | `base` | integer or float scalar | Starting value |
 
-`tci` is one-dimensional. Use `pto.vmi.treshape` after generation when a
-grouped `MxN` index tile is required; the generated sequence is then partitioned
-row-major without changing element order.
+- **results:**
+
+  | Result | Type | Description |
+  |---|---|---|
+  | `result` | `!pto.vmi.tilereg<1xLxT>` | Index vector |
+
+- **attributes:**
+
+  | Attribute | Values | Default | Description |
+  |---|---|---|---|
+  | `order` | `"ASC"`, `"DESC"` | `"ASC"` | Index generation direction |
+
+- **lowering to `pto.mi`:**
+  ```
+  1 × pto.vci {ASC/DESC} per chunk
+  ```
+  `#mi = 1/chunk`, `dep = 1`.
+
+- **datatypes:** `i8`/`i16`/`i32`, `f16`, `f32`; the result element type also
+  fixes `L` (`i32`/`f32` -> 64, `i16`/`f16` -> 128, `i8` -> 256).
+
+- **example:**
+  ```mlir
+  // Ascending i32 indices for a gather base
+  %idx = pto.vmi.tci %c0 {order = "ASC"} : i32 -> !pto.vmi.tilereg<1x64xi32>
+  // Descending f32 ramp
+  %ramp = pto.vmi.tci %c10 {order = "DESC"} : f32 -> !pto.vmi.tilereg<1x64xf32>
+  %idx = pto.vmi.tci %base {order = "ASC"} : i32 -> !pto.vmi.tilereg<1x64xi32>
+  // → pto.as: pto.vci {order="ASC"}, one op per physical chunk
+  ```

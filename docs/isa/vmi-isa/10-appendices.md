@@ -1,48 +1,82 @@
 # Appendices
 
-## Appendix A: Canonical VMI Instruction Index
+---
 
-| Family | Canonical instructions |
-|---|---|
-| Tile-register memory | `tload`, `tstore` |
-| View / index | `treshape`, `tci` |
-| Tile-aligned elementwise arithmetic | `tadd`, `tsub`, `tmul`, `tdiv`, `tmax`, `tmin`, `tabs`, `tneg`, `trelu`, `texp`, `tlog`, `tsqrt` |
-| Tile-aligned bitwise and scalar | `tand`, `tor`, `txor`, `tnot`, `tshl`, `tshr`, `tadds`, `tmuls`, `tmaxs`, `tmins`, `tshls`, `tshrs` |
-| Compare and select | `tcmp`, `tcmps`, `tsel`, `vselr` |
-| Broadcast and reduction | `texpands`, `trowexpand`, `trowsum`, `trowmax`, `trowmin` |
-| Conversion | `tcvt`; `treshape` for bitwise reinterpretation |
-| Tile-aligned fused / special | `tlrelu`, `taxpy`, `tprelu`, `thistogram`, `tgather`, `tgatherb`, `tscatter` |
-| VMI-only fused / special | `vexpdif`, `dhist`, `vmula` |
-| Predicate construction | predicate `texpands` |
-| Rearrangement | `tinterleave`, `tdeinterleave` |
+## Appendix A: Unified Ops Index
 
-## Appendix B: Flat and grouped equivalence
+| # | Op | Group | Category | Brief |
+|---|---|---|---|---|
+| 1 | `pto.vmi.tload` | 1: Load/Store | A | Logical vector load from UB |
+| 2 | `pto.vmi.tstore` | 1: Load/Store | A | Logical vector store to UB |
+| 3 | `pto.vmi.tci` | 2: Index-gen | A | Lane-index vector generation |
+| 4 | `pto.vmi.tadd` | 3: Eltwise | A | Elementwise add (fp+int unified) |
+| 5 | `pto.vmi.tsub` | 3: Eltwise | A | Elementwise subtract |
+| 6 | `pto.vmi.tmul` | 3: Eltwise | A | Elementwise multiply |
+| 7 | `pto.vmi.tdiv` | 3: Eltwise | A | Elementwise divide (fp only) |
+| 8 | `pto.vmi.tmax` | 3: Eltwise | A | Elementwise maximum |
+| 9 | `pto.vmi.tmin` | 3: Eltwise | A | Elementwise minimum |
+| 10 | `pto.vmi.tabs` | 3: Eltwise | A | Elementwise absolute value |
+| 11 | `pto.vmi.tneg` | 3: Eltwise | A | Elementwise negate |
+| 12 | `pto.vmi.trelu` | 3: Eltwise | A | Elementwise ReLU |
+| 13 | `pto.vmi.texp` | 3: Eltwise | A | Elementwise exponential |
+| 14 | `pto.vmi.tlog` | 3: Eltwise | A | Elementwise natural log |
+| 15 | `pto.vmi.tsqrt` | 3: Eltwise | A | Elementwise square root |
+| 16 | `pto.vmi.tand` | 3: Eltwise | A | Elementwise bitwise AND |
+| 17 | `pto.vmi.tor` | 3: Eltwise | A | Elementwise bitwise OR |
+| 18 | `pto.vmi.txor` | 3: Eltwise | A | Elementwise bitwise XOR |
+| 19 | `pto.vmi.tnot` | 3: Eltwise | A | Elementwise bitwise NOT |
+| 20 | `pto.vmi.tshl` | 3: Eltwise | A | Elementwise left shift |
+| 21 | `pto.vmi.tshr` | 3: Eltwise | A | Elementwise unsigned right shift |
+| 22 | `pto.vmi.tadds` | 3: Eltwise | A | Vector-scalar add |
+| 23 | `pto.vmi.tmuls` | 3: Eltwise | A | Vector-scalar multiply |
+| 24 | `pto.vmi.tmaxs` | 3: Eltwise | A | Vector-scalar maximum |
+| 25 | `pto.vmi.tmins` | 3: Eltwise | A | Vector-scalar minimum |
+| 26 | `pto.vmi.tshls` | 3: Eltwise | A | Vector-scalar shift left |
+| 27 | `pto.vmi.tshrs` | 3: Eltwise | A | Vector-scalar shift right |
+| 28 | `pto.vmi.tcmp` | 3: Eltwise | A | Elementwise compare → mask |
+| 29 | `pto.vmi.tcmps` | 3: Eltwise | A | Vector-scalar compare → mask |
+| 30 | `pto.vmi.tsel` | 3: Eltwise | A | Predicate select |
+| 31 | `pto.vmi.vselr` | 3: Eltwise | A | Dynamic lane permute; no direct Tile Op rename |
+| 32 | `pto.vmi.texpands` / `pto.vmi.trowexpand` | 4: Broadcast | A/B | Scalar / row broadcast |
+| 33 | `pto.vmi.trowsum` | 5: Reduce | B | Add-reduction |
+| 34 | `pto.vmi.trowmax` | 5: Reduce | B | Max-reduction |
+| 35 | `pto.vmi.trowmin` | 5: Reduce | B | Min-reduction |
+| 36 | `pto.vmi.tcvt` | 6: Convert | B | Unified type conversion |
+| 37 | `pto.vmi.treshape` | 6: Convert | A | Bitwise reinterpret |
+| 38 | `pto.vmi.vexpdif` | 7: SFU | A | Fused exp(x−max); no direct Tile Op rename |
+| 39 | `pto.vmi.taxpy` | 7: SFU | A | Fused α·x+y |
+| 40 | `pto.vmi.tlrelu` | 7: SFU | A | Leaky ReLU |
+| 41 | `pto.vmi.tprelu` | 7: SFU | A | Parametric ReLU |
+| 42 | `pto.vmi.tmul` | 7: SFU | B | Widening 32×32→64 multiply overload |
+| 43 | `pto.vmi.vmula` | 7: SFU | A | Fused multiply-add; no direct Tile Op rename |
+| 44 | `pto.vmi.thistogram` | 7: SFU | B | Channel histogram bin count |
+| 45 | `pto.vmi.dhist` | 7: SFU | B | Distribution histogram; no direct Tile Op rename |
+| 46 | `pto.vmi.tgather` | 7: SFU | C | Indexed gather (B32) |
+| 47 | `pto.vmi.tgatherb` | 7: SFU | C | Byte-granularity indexed gather |
+| 48 | `pto.vmi.tscatter` | 7: SFU | C | Indexed scatter |
+| 49 | `pto.vmi.create_mask` | 8: Predicate | gen | Prefix / first-N tail mask; no direct Tile Op rename |
+| 50 | `pto.vmi.create_group_mask` | 8: Predicate | gen | Grouped predicate mask; no direct Tile Op rename |
+| 51 | `pto.vmi.tinterleave` | 9: Rearrange | A | Interleave two vectors |
+| 52 | `pto.vmi.tdeinterleave` | 9: Rearrange | A | Deinterleave two vectors |
 
-The following two sequences represent the same logical 128-element fp32
-value. `treshape` changes only the view in this same-dtype example.
+---
+
+## Appendix C: MERGE Mode Emulation (A5)
+
+On A5, the hardware predicates only in **ZEROING** mode (inactive lanes → 0).
+MERGE mode is emulated by `pto.as`:
 
 ```mlir
-%flat = pto.vmi.tload %src[%c0]
-    : !pto.ptr<f32, ub> -> !pto.vmi.tilereg<1x128xf32>
-%rows = pto.vmi.treshape %flat
-    : !pto.vmi.tilereg<1x128xf32> -> !pto.vmi.tilereg<8x16xf32>
-%flat_again = pto.vmi.treshape %rows
-    : !pto.vmi.tilereg<8x16xf32> -> !pto.vmi.tilereg<1x128xf32>
+// MERGE emulation on A5:  dst = Pg ? op(...) : dst_old
+%npg   = pto.vmi.tnot %pg                         // complement predicate
+%new_z = pto.vmi.<op> %a, %b, %pg                 // ZEROING: inactive → 0
+%old_z = pto.vmi.tand %dst_old, %npg             // keep old on inactive lanes
+%dst   = pto.vmi.tor %new_z, %old_z               // disjoint OR → merged
 ```
 
-## Appendix C: Grouped reduction and expansion
+Alternatively, a single `tsel %pg, %new, %dst_old` can replace the `tand`+`tor`
+pair.
 
-```mlir
-%rows = pto.vmi.treshape %flat
-    : !pto.vmi.tilereg<1x128xf32> -> !pto.vmi.tilereg<8x16xf32>
-%mask = pto.vmi.texpands %active
-    : index -> !pto.vmi.tilereg<8x16xi1>
-%sum = pto.vmi.trowsum %rows, %mask {reassoc}
-    : !pto.vmi.tilereg<8x16xf32>, !pto.vmi.tilereg<8x16xi1>
-      -> !pto.vmi.tilereg<8x1xf32>
-%broadcast_sum = pto.vmi.trowexpand %sum
-    : !pto.vmi.tilereg<8x1xf32> -> !pto.vmi.tilereg<8x16xf32>
-```
-
-The shape itself expresses the former `group = 8` relationship. No group
-attribute or compact VMI vector type appears in the operation syntax.
+**MERGE cost on A5:** `+1 tnot` (once per distinct `Pg`) + `+K tsel`/`tor`.
+On A6, merge-capable ops take the mode natively — the `tnot`+`tor` emulation
+collapses to the single predicated op.
