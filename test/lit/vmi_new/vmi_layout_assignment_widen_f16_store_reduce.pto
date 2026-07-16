@@ -49,9 +49,8 @@ module {
 // LOWER: pto.vlds
 // LOWER: pto.vcvt
 // LOWER: pto.vcvt
-// LOWER: pto.vcgadd
-// LOWER: pto.vcgadd
 // LOWER: pto.vadd
+// LOWER: pto.vcgadd
 // LOWER: pto.vsts
 // LOWER: pto.vstsx2
 // LOWER-NOT: pto.vmi.

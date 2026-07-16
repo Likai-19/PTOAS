@@ -3053,7 +3053,14 @@ pto.vmi.reduce_addi:
     source must materialize to one or more full physical chunks with no padding logical lanes
     init/result must be 1-lane VMI vectors and each materialize to one physical chunk
     mask must materialize to the same number of physical chunks as source
-    lower as:
+    when all physical mask chunks are equivalent, lower as:
+      first_lane = pto.pge_b32 "PAT_VL1"
+      combined = source_chunks[0]
+      for each remaining source_chunk:
+        combined = pto.vadd(combined, source_chunk, common_mask)
+      reduced = pto.vcadd(combined, common_mask)
+      result = pto.vadd(reduced, init, first_lane)
+    otherwise preserve the per-chunk fallback:
       first_lane = pto.pge_b32 "PAT_VL1"
       acc = init
       for each source_chunk, mask_chunk in physical order:
@@ -3082,7 +3089,10 @@ pto.vmi.reduce_addf:
     source must materialize to one or more full physical chunks with no padding logical lanes
     init/result must be 1-lane VMI vectors and each materialize to one physical chunk
     mask must materialize to the same number of b32 physical chunks as source
-    lower as:
+    when all physical mask chunks are equivalent, combine source chunks with
+    pto.vadd under the common mask, execute one pto.vcadd, then combine the
+    reduced value with init under PAT_VL1
+    otherwise preserve the per-chunk fallback:
       first_lane = pto.pge_b32 "PAT_VL1"
       acc = init
       for each source_chunk, mask_chunk in physical order:
@@ -3161,6 +3171,9 @@ pto.vmi.group_reduce_addf:
     hardware 32B VLane group reduction path for f32: each source chunk produces
     eight 8-lane group sums in the low lanes of that physical chunk. The
     lowering preserves this natural no-pack result.
+    for multi-part packed and row-local groups whose physical masks are
+    equivalent, combine corresponding source parts with pto.vadd under the
+    common mask before executing one pto.vcgadd or pto.vcadd per result group
     Otherwise:
     derived group size S must be a multiple of physical lanes per part
     lower each source chunk with pto.vcadd, combine chunks in the same group
@@ -3187,6 +3200,10 @@ pto.vmi.group_reduce_addi / group_reduce_maxi / group_reduce_mini:
     aligned full-row i8/i16 add cases use widening pto.vcadd partials and
     widened pto.vadd combines, then pto.vbitcast the low bits back to the
     declared VMI result type
+    when the physical masks for one result group are equivalent, add/min/max
+    all combine the source parts elementwise first and execute one group or row
+    reduction; narrow integer add combines in the source type before the
+    widening pto.vcadd and final pto.vbitcast
     the widening is internal and is not exposed in the VMI type contract
   unsupported cases:
     element types other than i8/i16/i32
@@ -3252,19 +3269,19 @@ pto.vmi.reduce_maxf / reduce_minf / reduce_maxi / reduce_mini:
     source must materialize to one or more full physical chunks with no padding logical lanes
     init/result must be 1-lane VMI vectors and each materialize to one physical chunk
     mask must materialize to the same number of physical chunks as source
-    lower reduce_maxf as:
+    when all physical mask chunks are equivalent, lower reduce_maxf as:
+      combined = source_chunks[0]
+      for each remaining source_chunk:
+        combined = pto.vmax(combined, source_chunk, common_mask)
+      reduced = pto.vcmax(combined, common_mask)
+      result = pto.vmax(reduced, init, first_lane)
+    use the analogous pto.vmin/pto.vcmin chain for reduce_minf
+    otherwise preserve the per-chunk fallback, shown for reduce_maxf:
       first_lane = pto.pge_b16/b32 "PAT_VL1"
       acc = init
       for each source_chunk, mask_chunk in physical order:
         reduced = pto.vcmax(source_chunk, mask_chunk)
         acc = pto.vmax(reduced, acc, first_lane)
-      result = acc
-    lower reduce_minf as:
-      first_lane = pto.pge_b16/b32 "PAT_VL1"
-      acc = init
-      for each source_chunk, mask_chunk in physical order:
-        reduced = pto.vcmin(source_chunk, mask_chunk)
-        acc = pto.vmin(reduced, acc, first_lane)
       result = acc
   unsupported cases:
     bf16/fp8/f64 until VPTO reduction and combine semantics are designed

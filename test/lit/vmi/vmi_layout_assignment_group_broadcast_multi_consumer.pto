@@ -60,12 +60,13 @@ module {
 // ASSIGN: pto.vmi.store %[[H]]
 
 // LOWER-LABEL: func.func @vmi_layout_assignment_group_broadcast_multi_consumer(
-// LOWER: pto.vcgadd
 // LOWER: pto.vadd
+// LOWER: pto.vcgadd
 // LOWER: pto.vselr
 // LOWER: pto.vselr
 // LOWER: pto.vmul
 // LOWER: pto.vmul
+// LOWER: pto.vadd
 // LOWER: pto.vcgadd
 // LOWER: pto.vsts
 // LOWER: pto.vselr
