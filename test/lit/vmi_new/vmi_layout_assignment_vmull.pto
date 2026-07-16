@@ -1,0 +1,68 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). Please refer to the License for details. You may not use
+// this file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON
+// AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+// FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+// for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment | FileCheck %s
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER --implicit-check-not=pto.vmi. --implicit-check-not='!pto.vmi.'
+
+module {
+  func.func @vmi_layout_assignment_vmull(
+      %a: !pto.vmi.vreg<128xi32>,
+      %b: !pto.vmi.vreg<128xi32>,
+      %mask: !pto.vmi.mask<128xpred>)
+      -> (!pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32>,
+          !pto.vmi.mask<128xpred>
+        -> !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32>
+    return %low, %high : !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32>
+  }
+
+  func.func @vmi_layout_assignment_vmull_consumer_conflict(
+      %a: !pto.vmi.vreg<128xi32>,
+      %b: !pto.vmi.vreg<128xi32>,
+      %mask: !pto.vmi.mask<128xpred>) {
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+        : !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32>,
+          !pto.vmi.mask<128xpred>
+        -> !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32>
+    %sum = pto.vmi.vcadd %low, %mask
+        : !pto.vmi.vreg<128xi32>, !pto.vmi.mask<128xpred>
+        -> !pto.vmi.vreg<1xi32>
+    %even, %odd = pto.vmi.vdintlv %high, %high, %mask
+        : !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32>,
+          !pto.vmi.mask<128xpred>
+        -> !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32>
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @vmi_layout_assignment_vmull(
+// CHECK-SAME: %[[A:[a-zA-Z0-9_]+]]: !pto.vmi.vreg<128xi32, #pto.vmi.layout<contiguous>>
+// CHECK-SAME: %[[B:[a-zA-Z0-9_]+]]: !pto.vmi.vreg<128xi32, #pto.vmi.layout<contiguous>>
+// CHECK-SAME: %[[MASK:[a-zA-Z0-9_]+]]: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+// CHECK: %[[LOW:[a-zA-Z0-9_]+]], %[[HIGH:[a-zA-Z0-9_]+]] = pto.vmi.vmull %[[A]], %[[B]], %[[MASK]]
+// CHECK-SAME: !pto.vmi.vreg<128xi32, #pto.vmi.layout<contiguous>>
+// CHECK-SAME: !pto.vmi.vreg<128xi32, #pto.vmi.layout<contiguous>>
+// CHECK-SAME: !pto.vmi.mask<128xb32, #pto.vmi.layout<contiguous>>
+// CHECK-SAME: -> !pto.vmi.vreg<128xi32, #pto.vmi.layout<contiguous>>
+// CHECK-SAME: !pto.vmi.vreg<128xi32, #pto.vmi.layout<contiguous>>
+// CHECK: return %[[LOW]], %[[HIGH]]
+
+// CHECK-LABEL: func.func @vmi_layout_assignment_vmull_consumer_conflict(
+// CHECK: pto.vmi.vmull
+// CHECK: pto.vmi.ensure_mask_layout
+// CHECK: pto.vmi.ensure_layout
+
+// LOWER-LABEL: func.func @vmi_layout_assignment_vmull(
+// LOWER-SAME: !pto.vreg<64xi32>
+// LOWER-SAME: !pto.mask<b32>
+// LOWER: %[[LOW0:.*]], %[[HIGH0:.*]] = pto.vmull
+// LOWER: %[[LOW1:.*]], %[[HIGH1:.*]] = pto.vmull
+// LOWER: return %[[LOW0]], %[[LOW1]], %[[HIGH0]], %[[HIGH1]]

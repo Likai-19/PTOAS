@@ -774,36 +774,37 @@ stable softmax numerator.
 
 ---
 
-### `pto.vmi.vmull(a, b, mask) -> VRegType`
+### `pto.vmi.vmull(a, b, mask) -> (VRegType, VRegType)`
 
-**Description**: Widening multiply for 32-bit integer vectors. PTODSL infers
-the result type from `a` and widens the element type to the matching 64-bit
-signed or unsigned form.
+**Description**: Widening 32-bit integer multiply. For each active lane, the
+operation returns the low and high 32-bit halves of the 64-bit product. Both
+results have the same type as the inputs; inactive lanes are zero. The inputs
+must be matching `i32` or `ui32` vectors with 64, 128, or 256 lanes.
 
 **Parameters**:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `a` | `VRegType` | First operand vector (narrow type) |
-| `b` | `VRegType` | Second operand vector (narrow type) |
+| `a` | `VRegType` | First `i32` or `ui32` operand vector |
+| `b` | `VRegType` | Matching second operand vector |
 | `mask` | VMI mask | **Required.** Predicate mask |
 
 **Returns**:
 
 | Return Value | Type | Description |
 |--------------|------|-------------|
-| `result` | `VRegType` | Widened product |
+| `(low, high)` | `(VRegType, VRegType)` | Low and high 32-bit product halves |
 
 **Example**:
 
 ```python
-mul64 = pto.vmi.vmull(a32, b32, mask)
+low, high = pto.vmi.vmull(a32, b32, mask)
 ```
 
 **Constraints**:
-- `a` and `b` must be identical 32-bit integer VMI vectors.
-- The result vector type is inferred from `a` as the matching 64-bit integer
-  vector with the same signedness.
+- `a` and `b` must be identical `i32` or `ui32` VMI vectors with 64, 128, or
+  256 lanes.
+- Both result vector types are inferred from the input type.
 
 ---
 
@@ -1081,7 +1082,6 @@ surface no longer asks you to spell the full result type manually.
 - `vcmp` / `vcmps`: inferred from the `seed` mask.
 - `vsel`: inferred from `true_value`.
 - `vcadd`, `vcmax`, `vcmin`: inferred from the source vector and `group`.
-- `vmull`: inferred from `a`, widening the element type by one step.
 - `vdhist`, `vchist`: inferred from `acc`.
 - `vgather`: inferred from the source element type and the `offsets` lanes.
 - `vcvt` (when `to_dtype` is provided): inferred from the source lane count
@@ -1091,6 +1091,8 @@ surface no longer asks you to spell the full result type manually.
 - `vstore`: no result — side-effect only.
 - `vscatter`: no result — side-effect only.
 - `vintlv` / `vdintlv`: inferred from the input vector types.
+- `vmull`: both low/high result types are inferred from the two matching input
+  vector types.
 
 **Ops that infer when given the right hint**:
 
