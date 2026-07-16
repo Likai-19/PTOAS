@@ -580,6 +580,48 @@ FailureOr<Value> createPrefixMask(Location loc, MaskType maskType,
   return failure();
 }
 
+bool areEquivalentReductionMasks(Value lhs, Value rhs) {
+  if (lhs == rhs)
+    return true;
+  if (lhs.getType() != rhs.getType())
+    return false;
+
+  Operation *lhsOp = lhs.getDefiningOp();
+  Operation *rhsOp = rhs.getDefiningOp();
+  if (!lhsOp || !rhsOp || lhsOp->getName() != rhsOp->getName())
+    return false;
+
+  bool isPatternMask =
+      isa<PsetB8Op, PsetB16Op, PsetB32Op, PgeB8Op, PgeB16Op, PgeB32Op>(
+          lhsOp);
+  return isPatternMask && lhsOp->getAttr("pattern") == rhsOp->getAttr("pattern");
+}
+
+bool haveEquivalentReductionMasks(ValueRange masks) {
+  return !masks.empty() &&
+         llvm::all_of(masks.drop_front(), [&](Value mask) {
+           return areEquivalentReductionMasks(masks.front(), mask);
+         });
+}
+
+template <typename CombineOpTy>
+FailureOr<Value> combineEquivalentMaskedParts(
+    Location loc, ValueRange sources, ValueRange masks, VRegType resultType,
+    PatternRewriter &rewriter) {
+  if (sources.empty() || sources.size() != masks.size() ||
+      !haveEquivalentReductionMasks(masks))
+    return failure();
+
+  Value combined = sources.front();
+  for (Value source : sources.drop_front())
+    combined =
+        rewriter
+            .create<CombineOpTy>(loc, resultType, combined, source,
+                                 masks.front())
+            .getResult();
+  return combined;
+}
+
 FailureOr<std::pair<Value, Value>>
 createRuntimePrefixMask(Location loc, MaskType maskType, Value activeLanes,
                         PatternRewriter &rewriter) {
@@ -8667,6 +8709,25 @@ struct OneToNVMIReduceAddIOpPattern
       return rewriter.notifyMatchFailure(
           op, "failed to create reduce_addi first-lane mask");
 
+    FailureOr<Value> combined = combineEquivalentMaskedParts<VaddOp>(
+        op.getLoc(), sourceParts, maskParts, resultType, rewriter);
+    if (succeeded(combined)) {
+      Value reduced =
+          rewriter
+              .create<VcaddOp>(op.getLoc(), resultType, *combined,
+                               maskParts.front())
+              .getResult();
+      Value result =
+          rewriter
+              .create<VaddOp>(op.getLoc(), resultType, reduced,
+                              initParts.front(), *firstLaneMask)
+              .getResult();
+      replaceOpWithFlatConvertedValues(
+          rewriter, op, SmallVector<Value>{result},
+          *this->getTypeConverter());
+      return success();
+    }
+
     Value accumulator = initParts.front();
     for (auto [sourcePart, maskPart] :
          llvm::zip_equal(sourceParts, maskParts)) {
@@ -8731,6 +8792,25 @@ struct OneToNVMIReduceAddFOpPattern
     if (failed(firstLaneMask))
       return rewriter.notifyMatchFailure(
           op, "failed to create reduce_addf first-lane mask");
+
+    FailureOr<Value> combined = combineEquivalentMaskedParts<VaddOp>(
+        op.getLoc(), sourceParts, maskParts, resultType, rewriter);
+    if (succeeded(combined)) {
+      Value reduced =
+          rewriter
+              .create<VcaddOp>(op.getLoc(), resultType, *combined,
+                               maskParts.front())
+              .getResult();
+      Value result =
+          rewriter
+              .create<VaddOp>(op.getLoc(), resultType, reduced,
+                              initParts.front(), *firstLaneMask)
+              .getResult();
+      replaceOpWithFlatConvertedValues(
+          rewriter, op, SmallVector<Value>{result},
+          *this->getTypeConverter());
+      return success();
+    }
 
     Value accumulator = initParts.front();
     for (auto [sourcePart, maskPart] :
@@ -8882,13 +8962,6 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
 
       for (int64_t resultIndex = 0; resultIndex < resultPartCount;
            ++resultIndex) {
-        int64_t activeGroups =
-            std::min<int64_t>(8, numGroups - resultIndex * 8);
-        FailureOr<Value> combineMask = createPrefixMaskForActiveLanes(
-            op.getLoc(), maskType, activeGroups, rewriter);
-        if (failed(combineMask))
-          return rewriter.notifyMatchFailure(
-              op, "failed to create s16 block8 combine mask");
         Value loSource = sourceParts[resultIndex];
         Value hiSource = sourceParts[resultPartCount + resultIndex];
         Value loMask = maskParts[resultIndex];
@@ -8901,6 +8974,27 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
           return rewriter.notifyMatchFailure(
               op, "s16 block8 group_reduce requires uniform physical "
                   "types");
+
+        SmallVector<Value, 2> sources{loSource, hiSource};
+        SmallVector<Value, 2> masks{loMask, hiMask};
+        FailureOr<Value> combined = combineEquivalentMaskedParts<CombineOpTy>(
+            op.getLoc(), sources, masks, resultType, rewriter);
+        if (succeeded(combined)) {
+          results.push_back(
+              rewriter
+                  .create<GroupReduceOpTy>(op.getLoc(), resultType, *combined,
+                                           loMask)
+                  .getResult());
+          continue;
+        }
+
+        int64_t activeGroups =
+            std::min<int64_t>(8, numGroups - resultIndex * 8);
+        FailureOr<Value> combineMask = createPrefixMaskForActiveLanes(
+            op.getLoc(), maskType, activeGroups, rewriter);
+        if (failed(combineMask))
+          return rewriter.notifyMatchFailure(
+              op, "failed to create s16 block8 combine mask");
         Value lo = rewriter
                        .create<GroupReduceOpTy>(op.getLoc(), resultType,
                                                 loSource, loMask)
@@ -8937,13 +9031,10 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
 
       for (int64_t resultIndex = 0; resultIndex < resultPartCount;
            ++resultIndex) {
-        int64_t activeGroups =
-            std::min<int64_t>(8, numGroups - resultIndex * 8);
-        FailureOr<Value> combineMask = createPrefixMaskForActiveLanes(
-            op.getLoc(), maskType, activeGroups, rewriter);
-        if (failed(combineMask))
-          return rewriter.notifyMatchFailure(
-              op, "failed to create s32 block8 combine mask");
+        SmallVector<Value, 4> sources;
+        SmallVector<Value, 4> masks;
+        sources.reserve(4);
+        masks.reserve(4);
         SmallVector<Value, 4> partials;
         partials.reserve(4);
         for (int64_t part = 0; part < 4; ++part) {
@@ -8956,11 +9047,33 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
             return rewriter.notifyMatchFailure(
                 op, "s32 block8 group_reduce requires uniform physical "
                     "types");
+          sources.push_back(source);
+          masks.push_back(mask);
+        }
+
+        FailureOr<Value> combined = combineEquivalentMaskedParts<CombineOpTy>(
+            op.getLoc(), sources, masks, resultType, rewriter);
+        if (succeeded(combined)) {
+          results.push_back(
+              rewriter
+                  .create<GroupReduceOpTy>(op.getLoc(), resultType, *combined,
+                                           masks.front())
+                  .getResult());
+          continue;
+        }
+
+        int64_t activeGroups =
+            std::min<int64_t>(8, numGroups - resultIndex * 8);
+        FailureOr<Value> combineMask = createPrefixMaskForActiveLanes(
+            op.getLoc(), maskType, activeGroups, rewriter);
+        if (failed(combineMask))
+          return rewriter.notifyMatchFailure(
+              op, "failed to create s32 block8 combine mask");
+        for (auto [source, mask] : llvm::zip_equal(sources, masks))
           partials.push_back(rewriter
                                  .create<GroupReduceOpTy>(
                                      op.getLoc(), resultType, source, mask)
                                  .getResult());
-        }
         Value sum01 =
             rewriter
                 .create<CombineOpTy>(op.getLoc(), resultType, partials[0],
@@ -9040,6 +9153,42 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
             op, "failed to create deinterleaved=2 group_reduce lane mask");
 
       for (int64_t group = 0; group < groupCount; ++group) {
+        SmallVector<Value> groupSources;
+        SmallVector<Value> groupMasks;
+        groupSources.reserve(2 * chunksPerGroupPerPart);
+        groupMasks.reserve(2 * chunksPerGroupPerPart);
+        for (int64_t chunk = 0; chunk < chunksPerGroupPerPart; ++chunk) {
+          int64_t loIndex = group * chunksPerGroupPerPart + chunk;
+          int64_t hiIndex = chunksPerPart + loIndex;
+          if (sourceParts[loIndex].getType() != sourcePartType ||
+              sourceParts[hiIndex].getType() != sourcePartType ||
+              maskParts[loIndex].getType() != maskType ||
+              maskParts[hiIndex].getType() != maskType)
+            return rewriter.notifyMatchFailure(
+                op, "deinterleaved=2 group_reduce requires uniform physical "
+                    "chunk types");
+          groupSources.push_back(sourceParts[loIndex]);
+          groupSources.push_back(sourceParts[hiIndex]);
+          groupMasks.push_back(maskParts[loIndex]);
+          groupMasks.push_back(maskParts[hiIndex]);
+        }
+        FailureOr<Value> combined = combineEquivalentMaskedParts<CombineOpTy>(
+            op.getLoc(), groupSources, groupMasks, sourcePartType, rewriter);
+        if (succeeded(combined)) {
+          Value reduced =
+              rewriter
+                  .create<RowReduceOpTy>(op.getLoc(), *rowResultType, *combined,
+                                         groupMasks.front())
+                  .getResult();
+          FailureOr<Value> finalResult =
+              bitcastVReg(op.getLoc(), reduced, resultType, rewriter);
+          if (failed(finalResult))
+            return rewriter.notifyMatchFailure(
+                op, "failed to restore deinterleaved=2 group result type");
+          results[group] = *finalResult;
+          continue;
+        }
+
         Value accumulator;
         for (int64_t chunk = 0; chunk < chunksPerGroupPerPart; ++chunk) {
           int64_t loIndex = group * chunksPerGroupPerPart + chunk;
@@ -9152,26 +9301,45 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
     for (int64_t group = 0; group < groupCount; ++group) {
       Value accumulator;
 
-      for (int64_t chunk = 0; chunk < chunksPerGroup; ++chunk) {
-        int64_t index = group * chunksPerGroup + chunk;
-        if (sourceParts[index].getType() != sourcePartType ||
-            maskParts[index].getType() != maskType)
+      int64_t firstIndex = group * chunksPerGroup;
+      ValueRange groupSources = sourceParts.slice(firstIndex, chunksPerGroup);
+      ValueRange groupMasks = maskParts.slice(firstIndex, chunksPerGroup);
+      for (auto [source, mask] : llvm::zip_equal(groupSources, groupMasks)) {
+        if (source.getType() != sourcePartType || mask.getType() != maskType)
           return rewriter.notifyMatchFailure(
               op, "group_reduce requires uniform physical chunk types");
-        Value reduced =
+      }
+      FailureOr<Value> combined = combineEquivalentMaskedParts<CombineOpTy>(
+          op.getLoc(), groupSources, groupMasks, sourcePartType, rewriter);
+      if (succeeded(combined))
+        accumulator =
             rewriter
-                .create<RowReduceOpTy>(op.getLoc(), *rowResultType,
-                                       sourceParts[index], maskParts[index])
+                .create<RowReduceOpTy>(op.getLoc(), *rowResultType, *combined,
+                                       groupMasks.front())
                 .getResult();
-        if (!accumulator) {
-          accumulator = reduced;
-          continue;
+
+      if (!accumulator) {
+        for (int64_t chunk = 0; chunk < chunksPerGroup; ++chunk) {
+          int64_t index = group * chunksPerGroup + chunk;
+          if (sourceParts[index].getType() != sourcePartType ||
+              maskParts[index].getType() != maskType)
+            return rewriter.notifyMatchFailure(
+                op, "group_reduce requires uniform physical chunk types");
+          Value reduced =
+              rewriter
+                  .create<RowReduceOpTy>(op.getLoc(), *rowResultType,
+                                         sourceParts[index], maskParts[index])
+                  .getResult();
+          if (!accumulator) {
+            accumulator = reduced;
+            continue;
+          }
+          accumulator =
+              rewriter
+                  .create<CombineOpTy>(op.getLoc(), *rowResultType, reduced,
+                                       accumulator, *firstLaneMask)
+                  .getResult();
         }
-        accumulator = rewriter
-                          .create<CombineOpTy>(op.getLoc(), *rowResultType,
-                                               reduced, accumulator,
-                                               *firstLaneMask)
-                          .getResult();
       }
 
       FailureOr<Value> finalResult =
@@ -9700,6 +9868,24 @@ struct OneToNVMIReduceMinMaxOpPattern : OpConversionPattern<SourceOp> {
     if (failed(firstLaneMask))
       return rewriter.notifyMatchFailure(
           op, "failed to create min/max reduction first-lane mask");
+
+    FailureOr<Value> combined = combineEquivalentMaskedParts<CombineOp>(
+        op.getLoc(), sourceParts, maskParts, resultType, rewriter);
+    if (succeeded(combined)) {
+      Value reduced =
+          rewriter
+              .create<ChunkReduceOp>(op.getLoc(), resultType, *combined,
+                                     maskParts.front())
+              .getResult();
+      Value result =
+          rewriter
+              .create<CombineOp>(op.getLoc(), resultType, reduced,
+                                 initParts.front(), *firstLaneMask)
+              .getResult();
+      replaceOpWithFlatConvertedValues(
+          rewriter, op, SmallVector<Value>{result}, *this->getTypeConverter());
+      return success();
+    }
 
     Value accumulator = initParts.front();
     for (auto [sourcePart, maskPart] :

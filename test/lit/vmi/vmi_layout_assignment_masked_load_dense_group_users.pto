@@ -58,8 +58,8 @@ module {
 // LOWER-COUNT-4: pto.vsel
 // LOWER-COUNT-4: pto.vsts
 // LOWER: pto.vdintlv
-// LOWER-COUNT-4: pto.vcgadd
-// LOWER: pto.vadd
+// LOWER-COUNT-3: pto.vadd
+// LOWER: pto.vcgadd
 // LOWER-NOT: pto.vmi.
 // LOWER-NOT: !pto.vmi.
 // LOWER-NOT: unrealized_conversion_cast

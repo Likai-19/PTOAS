@@ -64,8 +64,8 @@ module {
 // LOWER-LABEL: func.func @vmi_layout_assignment_broadcast_dense_group_users(
 // LOWER-COUNT-4: pto.vdup
 // LOWER-COUNT-4: pto.vmul
-// LOWER-COUNT-4: pto.vcgadd
-// LOWER: pto.vadd
+// LOWER-COUNT-3: pto.vadd
+// LOWER: pto.vcgadd
 // LOWER: pto.vsts
 // LOWER-NOT: pto.vmi.
 // LOWER-NOT: !pto.vmi.

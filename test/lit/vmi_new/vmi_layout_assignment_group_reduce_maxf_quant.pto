@@ -69,8 +69,11 @@ module {
 // ASSIGN-SAME: -> !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
 
 // LOWER-LABEL: func.func @vmi_layout_assignment_group_reduce_maxf_quant(
-// LOWER: pto.vcmax
-// LOWER: pto.vmax
+// LOWER: %[[PAIR0:.*]] = pto.vmax
+// LOWER: %[[RED0:.*]] = pto.vcmax %[[PAIR0]]
+// LOWER: %[[PAIR1:.*]] = pto.vmax
+// LOWER: %[[RED1:.*]] = pto.vcmax %[[PAIR1]]
+// LOWER-NOT: pto.vcmax
 // LOWER-NOT: pto.vsel
 // LOWER: pto.vdiv
 // LOWER: pto.vcvt {{.*}} {part = "P0", rnd = "R", sat = "SAT"}
