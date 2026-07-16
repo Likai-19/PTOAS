@@ -3197,11 +3197,11 @@ std::optional<std::string> getDenseLaneStrideLoadDistToken(VMIVRegType type) {
   return std::nullopt;
 }
 
-std::optional<std::string> getDenseLaneStrideStoreDistToken(VMIVRegType type) {
-  VMILayoutAttr layout = type.getLayoutAttr();
-  if (!layout || !layout.isContiguous())
+std::optional<std::string>
+getLaneStrideStoreDistToken(VMILayoutAttr layout, Type elementType) {
+  if (!layout || !layout.hasLaneStride())
     return std::nullopt;
-  unsigned elementBits = pto::getPTOStorageElemBitWidth(type.getElementType());
+  unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
   if (layout.getLaneStride() == 2 && elementBits == 8)
     return std::string("PK_B16");
   if (layout.getLaneStride() == 2 && elementBits == 16)
@@ -3213,21 +3213,34 @@ std::optional<std::string> getDenseLaneStrideStoreDistToken(VMIVRegType type) {
   return std::nullopt;
 }
 
+std::optional<std::string> getDenseLaneStrideStoreDistToken(VMIVRegType type) {
+  VMILayoutAttr layout = type.getLayoutAttr();
+  if (!layout || !layout.isContiguous())
+    return std::nullopt;
+  return getLaneStrideStoreDistToken(layout, type.getElementType());
+}
+
+std::optional<StringRef>
+getLaneStrideStoreMaskGranularity(VMILayoutAttr layout, Type elementType) {
+  if (!layout || !layout.hasLaneStride())
+    return std::nullopt;
+  unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
+  if (layout.getLaneStride() == 2 && elementBits == 8)
+    return StringRef("b16");
+  if (layout.getLaneStride() == 2 &&
+      (elementBits == 16 || elementBits == 32))
+    return StringRef("b32");
+  if (layout.getLaneStride() == 4 && elementBits == 8)
+    return StringRef("b32");
+  return std::nullopt;
+}
+
 std::optional<StringRef>
 getDenseLaneStrideStoreMaskGranularity(VMIVRegType type) {
   VMILayoutAttr layout = type.getLayoutAttr();
   if (!layout || !layout.isContiguous())
     return std::nullopt;
-  unsigned elementBits = pto::getPTOStorageElemBitWidth(type.getElementType());
-  if (layout.getLaneStride() == 2 && elementBits == 8)
-    return StringRef("b16");
-  if (layout.getLaneStride() == 2 && elementBits == 16)
-    return StringRef("b32");
-  if (layout.getLaneStride() == 2 && elementBits == 32)
-    return StringRef("b32");
-  if (layout.getLaneStride() == 4 && elementBits == 8)
-    return StringRef("b32");
-  return std::nullopt;
+  return getLaneStrideStoreMaskGranularity(layout, type.getElementType());
 }
 
 std::optional<StringRef>
@@ -3571,6 +3584,71 @@ FailureOr<SmallVector<Value>> materializeLaneStrideToContiguous(
   return results;
 }
 
+FailureOr<SmallVector<Value>> materializeGroupSlotLaneStride(
+    Operation *op, ValueRange sourceParts, TypeRange resultTypes,
+    Type elementType, int64_t sourceStride, int64_t resultStride,
+    PatternRewriter &rewriter) {
+  auto fail = [&](const Twine &message) -> FailureOr<SmallVector<Value>> {
+    (void)rewriter.notifyMatchFailure(op, message);
+    return failure();
+  };
+
+  if (sourceParts.size() != resultTypes.size() || sourceParts.empty())
+    return fail("group-slot lane_stride materialization requires matching "
+                "non-empty source/result physical arity");
+  if ((sourceStride != 1 && sourceStride != 2 && sourceStride != 4) ||
+      (resultStride != 1 && resultStride != 2 && resultStride != 4))
+    return fail("unsupported group-slot lane_stride factor");
+
+  unsigned elementBits = pto::getPTOStorageElemBitWidth(elementType);
+  int64_t maxStride = std::max(sourceStride, resultStride);
+  if ((elementBits != 8 && elementBits != 16) ||
+      elementBits * maxStride > 32)
+    return fail("unsupported group-slot lane_stride carrier shape");
+
+  SmallVector<Value> results;
+  results.reserve(resultTypes.size());
+  for (auto [source, resultType] :
+       llvm::zip_equal(sourceParts, resultTypes)) {
+    unsigned carrierBits = elementBits * sourceStride;
+    FailureOr<VRegType> carrierType =
+        getUnsignedCarrierVRegType(rewriter.getContext(), carrierBits);
+    if (failed(carrierType))
+      return fail("failed to derive group-slot source carrier type");
+    FailureOr<Value> current =
+        bitcastVReg(op->getLoc(), source, *carrierType, rewriter);
+    if (failed(current))
+      return fail("failed to bitcast group-slot source carrier");
+
+    int64_t currentStride = sourceStride;
+    while (currentStride < resultStride) {
+      FailureOr<Value> unpacked = unpackToNextCarrier(
+          op->getLoc(), *current, carrierBits, /*partIndex=*/0, rewriter);
+      if (failed(unpacked))
+        return fail("failed to unpack group-slot lane_stride carrier");
+      current = *unpacked;
+      currentStride *= 2;
+      carrierBits *= 2;
+    }
+    while (currentStride > resultStride) {
+      FailureOr<Value> packed = packToPreviousCarrier(
+          op->getLoc(), *current, carrierBits / 2, rewriter);
+      if (failed(packed))
+        return fail("failed to pack group-slot lane_stride carrier");
+      current = *packed;
+      currentStride /= 2;
+      carrierBits /= 2;
+    }
+
+    FailureOr<Value> result =
+        bitcastVReg(op->getLoc(), *current, resultType, rewriter);
+    if (failed(result))
+      return fail("failed to bitcast group-slot result carrier");
+    results.push_back(*result);
+  }
+  return results;
+}
+
 FailureOr<SmallVector<Value>> materializeDataLayoutConversion(
     Operation *op, ValueRange sourceParts, TypeRange resultTypes,
     VMILayoutAttr sourceLayout, VMILayoutAttr resultLayout,
@@ -3586,6 +3664,18 @@ FailureOr<SmallVector<Value>> materializeDataLayoutConversion(
                                             rewriter)))
       return failure();
     return SmallVector<Value>(sourceParts.begin(), sourceParts.end());
+  }
+
+  if (sourceLayout.isGroupSlots() && resultLayout.isGroupSlots() &&
+      sourceLayout.getNumGroups() == resultLayout.getNumGroups() &&
+      sourceLayout.getSlots() == 8 && resultLayout.getSlots() == 8) {
+    auto ensure = dyn_cast<VMIEnsureLayoutOp>(op);
+    if (!ensure)
+      return failure();
+    auto sourceType = cast<VMIVRegType>(ensure.getSource().getType());
+    return materializeGroupSlotLaneStride(
+        op, sourceParts, resultTypes, sourceType.getElementType(),
+        sourceLayout.getLaneStride(), resultLayout.getLaneStride(), rewriter);
   }
 
   auto isElementDeinterleaved = [](VMILayoutAttr layout, int64_t factor) {
@@ -7197,6 +7287,41 @@ struct OneToNVMIGroupStoreOpPattern
           rewriter.eraseOp(op);
           return success();
         }
+      }
+
+      if (layout.hasLaneStride()) {
+        std::optional<std::string> dist = getLaneStrideStoreDistToken(
+            layout, valueVMIType.getElementType());
+        std::optional<StringRef> maskGranularity =
+            getLaneStrideStoreMaskGranularity(
+                layout, valueVMIType.getElementType());
+        if (!dist || !maskGranularity)
+          return rewriter.notifyMatchFailure(
+              op, "unsupported slots=8 lane_stride group_store packing");
+
+        auto maskType =
+            MaskType::get(rewriter.getContext(), *maskGranularity);
+        for (auto [slotBlock, value] : llvm::enumerate(valueParts)) {
+          if (!isa<VRegType>(value.getType()))
+            return rewriter.notifyMatchFailure(
+                op, "group_store value must be vreg");
+          int64_t activeGroups =
+              std::min<int64_t>(8, numGroups - slotBlock * 8);
+          FailureOr<Value> mask = createPrefixMaskForActiveLanes(
+              op.getLoc(), maskType, activeGroups, rewriter);
+          if (failed(mask))
+            return rewriter.notifyMatchFailure(
+                op, "failed to create packed slots=8 group_store mask");
+          Value groupOffset = createGroupChunkOffset(
+              op.getLoc(), *offset, *rowStride, slotBlock * 8,
+              /*chunkLaneOffset=*/0, rewriter);
+          rewriter.create<VstsOp>(
+              op.getLoc(), /*updated_base=*/Type{}, value, *destination,
+              groupOffset, rewriter.getStringAttr(*dist), *mask);
+        }
+
+        rewriter.eraseOp(op);
+        return success();
       }
 
       for (auto [slotBlock, value] : llvm::enumerate(valueParts)) {
