@@ -1594,9 +1594,11 @@ template <typename OpTy> static LogicalResult verifyVMIHistogramOp(OpTy op) {
 
   auto accElemType = dyn_cast<IntegerType>(accType.getElementType());
   auto sourceElemType = dyn_cast<IntegerType>(sourceType.getElementType());
+  int64_t bins = accType.getElementCount();
   if (!accElemType || !accElemType.isUnsigned() ||
-      accElemType.getWidth() != 16 || accType.getElementCount() != 256)
+      accElemType.getWidth() != 16 || (bins != 128 && bins != 256))
     return op.emitOpError("requires acc type to be "
+                          "!pto.vmi.vreg<128xui16> (Bin_N0-only) or "
                           "!pto.vmi.vreg<256xui16>");
   if (resultType != accType)
     return op.emitOpError("requires result type to match acc type");
