@@ -25,6 +25,16 @@ struct VMILoadLayoutFact {
   VMILayoutAttr resultLayout;
 };
 
+enum class VMIDeinterleaveLoadLayoutPort {
+  Low,
+  High,
+};
+
+struct VMIDeinterleaveLoadLayoutFact {
+  VMILayoutAttr lowLayout;
+  VMILayoutAttr highLayout;
+};
+
 struct VMIStoreLayoutFact {
   VMILayoutAttr valueLayout;
 };
@@ -174,6 +184,20 @@ public:
   FailureOr<VMILoadLayoutFact>
   getLoadLayoutFact(VMIVRegType resultType,
                     std::string *reason = nullptr) const;
+
+  FailureOr<VMIDeinterleaveLoadLayoutFact>
+  getPreferredDeinterleaveLoadLayoutFact(
+      VMIVRegType valueType, std::string *reason = nullptr) const;
+
+  FailureOr<SmallVector<VMIDeinterleaveLoadLayoutFact, 4>>
+  getDeinterleaveLoadLayoutFactsForLayout(
+      VMIVRegType valueType, VMIDeinterleaveLoadLayoutPort port,
+      VMILayoutAttr layout, std::string *reason = nullptr) const;
+
+  FailureOr<VMIDeinterleaveLoadLayoutFact>
+  getDeinterleaveLoadLayoutFactForLayouts(
+      VMIVRegType lowType, VMIVRegType highType,
+      std::string *reason = nullptr) const;
 
   FailureOr<VMIStoreLayoutFact>
   getStoreLayoutFact(VMIVRegType valueType,

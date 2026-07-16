@@ -1,0 +1,83 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+
+module {
+  func.func @vmi_deinterleave_load_compare_histogram(
+      %src: !pto.ptr<ui32, ub>,
+      %offset: index,
+      %acc: !pto.vmi.vreg<256xui16>,
+      %full_mask: !pto.vmi.mask<256xpred>,
+      %limit: ui32) -> !pto.vmi.vreg<256xui16> {
+    %low, %high = pto.vmi.vload %src[%offset] {dist_mode = "dintlv"}
+        : !pto.ptr<ui32, ub>
+        -> !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>
+    %valid = pto.vmi.vcmps %low, %limit, %full_mask {cmp = "lt"}
+        : !pto.vmi.vreg<256xui32>, ui32, !pto.vmi.mask<256xpred>
+        -> !pto.vmi.mask<256xpred>
+    %source = pto.vmi.vcvt %low
+        : !pto.vmi.vreg<256xui32> -> !pto.vmi.vreg<256xui8>
+    %hist = pto.vmi.vdhist %acc, %source, %valid
+        : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<256xui8>,
+          !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<256xui16>
+    return %hist : !pto.vmi.vreg<256xui16>
+  }
+
+  func.func @vmi_deinterleave_load_high_cast(
+      %src: !pto.ptr<ui32, ub>,
+      %offset: index) -> !pto.vmi.vreg<256xui8> {
+    %low, %high = pto.vmi.vload %src[%offset] {dist_mode = "dintlv"}
+        : !pto.ptr<ui32, ub>
+        -> !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>
+    %result = pto.vmi.vcvt %high
+        : !pto.vmi.vreg<256xui32> -> !pto.vmi.vreg<256xui8>
+    return %result : !pto.vmi.vreg<256xui8>
+  }
+}
+
+// ASSIGN-LABEL: func.func @vmi_deinterleave_load_compare_histogram(
+// ASSIGN: %[[LOW:.*]], %[[HIGH:.*]] = pto.vmi.deinterleave_load
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xui32, #pto.vmi.layout<contiguous>>, !pto.vmi.vreg<256xui32, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[LIMIT:.*]] = pto.vmi.broadcast %arg4
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xui32, #pto.vmi.layout<deinterleaved = 4>>
+// ASSIGN: %[[LOW_CMP:.*]] = pto.vmi.ensure_layout %[[LOW]]
+// ASSIGN-SAME: !pto.vmi.vreg<256xui32, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<256xui32, #pto.vmi.layout<deinterleaved = 4>>
+// ASSIGN: %[[CMP:.*]] = pto.vmi.cmpi "ult", %[[LOW_CMP]], %[[LIMIT]]
+// ASSIGN-SAME: -> !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4>>
+// ASSIGN: %[[VALID:.*]] = pto.vmi.mask_and %[[CMP]], %arg3
+// ASSIGN: %[[LOW_CVT:.*]] = pto.vmi.ensure_layout %[[LOW]]
+// ASSIGN-SAME: !pto.vmi.vreg<256xui32, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<256xui32, #pto.vmi.layout<deinterleaved = 4>>
+// ASSIGN: %[[SOURCE:.*]] = pto.vmi.trunci %[[LOW_CVT]]
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xui8, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[VALID_B8:.*]] = pto.vmi.ensure_mask_granularity %[[VALID]]
+// ASSIGN-SAME: -> !pto.vmi.mask<256xb8, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[HIST:.*]] = pto.vmi.vdhist %arg2, %[[SOURCE]], %[[VALID_B8]]
+// ASSIGN: return %[[HIST]]
+
+// ASSIGN-LABEL: func.func @vmi_deinterleave_load_high_cast(
+// ASSIGN: %[[LOW2:.*]], %[[HIGH2:.*]] = pto.vmi.deinterleave_load
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xui32, #pto.vmi.layout<contiguous>>, !pto.vmi.vreg<256xui32, #pto.vmi.layout<contiguous>>
+// ASSIGN: %[[HIGH_D4:.*]] = pto.vmi.ensure_layout %[[HIGH2]]
+// ASSIGN-SAME: !pto.vmi.vreg<256xui32, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<256xui32, #pto.vmi.layout<deinterleaved = 4>>
+// ASSIGN: %[[RESULT:.*]] = pto.vmi.trunci %[[HIGH_D4]]
+// ASSIGN-SAME: -> !pto.vmi.vreg<256xui8, #pto.vmi.layout<contiguous>>
+// ASSIGN: return %[[RESULT]]
+
+// LOWER-LABEL: func.func @vmi_deinterleave_load_compare_histogram(
+// LOWER: pto.vldsx2
+// LOWER: pto.dhistv2
+// LOWER-NOT: pto.vmi.
+// LOWER-NOT: !pto.vmi.
+
+// LOWER-LABEL: func.func @vmi_deinterleave_load_high_cast(
+// LOWER: pto.vldsx2
+// LOWER: pto.vcvt
+// LOWER-NOT: pto.vmi.
+// LOWER-NOT: !pto.vmi.
