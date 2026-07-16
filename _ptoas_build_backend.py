@@ -28,6 +28,7 @@ import glob
 import hashlib
 import io
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -71,6 +72,9 @@ else:
     _build_tree = _LLVM_BUILD_DIR / "tools" / "mlir" / "python_packages" / "mlir_core"
     _MLIR_PY_PKG = _installed if _installed.exists() else _build_tree
 _WHEEL_DIST_DIR = _BUILD_DIR / "wheel-dist"
+_PROJECT_VERSION_RE = re.compile(
+    r"project\s*\(\s*ptoas\s+VERSION\s+([0-9]+\.[0-9]+)\s*\)"
+)
 
 
 def _assert_installed_ptodsl_payload() -> None:
@@ -98,6 +102,17 @@ def _assert_editable_ptodsl_source() -> None:
     )
 
 
+def _default_ptoas_version() -> str:
+    version = os.environ.get("PTOAS_PYTHON_PACKAGE_VERSION", "").strip()
+    if version:
+        return version
+    cmake_file = _REPO / "CMakeLists.txt"
+    match = _PROJECT_VERSION_RE.search(cmake_file.read_text(encoding="utf-8"))
+    if not match:
+        raise RuntimeError(f"could not find PTOAS version in {cmake_file}")
+    return match.group(1)
+
+
 def get_requires_for_build_wheel(config_settings=None):
     return ["setuptools>=68", "wheel", "pybind11<3"]
 
@@ -114,7 +129,7 @@ def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
     """Return wheel metadata without running the full build."""
     import email.message
 
-    version = os.environ.get("PTOAS_PYTHON_PACKAGE_VERSION", "0.1.0")
+    version = _default_ptoas_version()
     dist_info = Path(metadata_directory) / f"ptoas-{version}.dist-info"
     dist_info.mkdir(parents=True, exist_ok=True)
 
@@ -237,7 +252,7 @@ def build_editable(wheel_directory, config_settings=None, metadata_directory=Non
     _cmake_configure_and_build(skip_install=True)
     _assert_editable_ptodsl_source()
 
-    version = os.environ.get("PTOAS_PYTHON_PACKAGE_VERSION", "0.1.0")
+    version = _default_ptoas_version()
 
     # Paths that must be on sys.path for the package to be importable
     pth_paths = [
