@@ -6,16 +6,16 @@ as the source of truth when an operation is missing here.
 
 ## Core Types
 
-- `pto.vmi.vreg(lanes, dtype, *, layout=None)` creates a logical vector type.
+- `pto.vmi.vreg(lanes, dtype)` creates a logical vector type.
   `lanes` must be a multiple of 64. Common full-register choices:
   - `pto.f32` / `pto.i32`: 64 lanes per 256B physical vreg.
   - `pto.f16` / `pto.bf16` / `pto.i16`: 128 lanes per physical vreg.
   - `pto.i8` / `pto.ui8` / fp8: 256 lanes per physical vreg.
-- `pto.vmi.mask(lanes, *, layout=None)` creates a logical per-lane mask type.
+- `pto.vmi.mask(lanes)` creates a logical per-lane mask type.
   Its lane count must match the gated vector.
 
-Default to omitting `layout`; VMI layout assignment is normally a PTOAS lowering
-concern.
+PTODSL does not expose layout selection on `pto.vmi.vreg(...)` or
+`pto.vmi.mask(...)`; PTOAS infers layout during lowering.
 
 `dtype` may come from a `pto.const_expr` parameter. Prefer compile-time dtype
 selection inside one PTODSL function over many small wrappers that only vary the
@@ -30,8 +30,10 @@ vec = pto.vmi.vcvt(src, to_dtype=OUT_DTYPE)
 
 ```python
 vec = pto.vmi.vload(ub_src, offset, size=128)
-vec = pto.vmi.vload(ub_src, offset, result_type=pto.vmi.vreg(128, pto.f16))
+even, odd = pto.vmi.vload(ub_src, offset, size=128, dist_mode="dintlv")
+wide = pto.vmi.vload(ub_src, offset, size=128, dist_mode="unpack", to_dtype=pto.f32)
 pto.vmi.vstore(vec, ub_dst, offset, mask)
+pto.vmi.vstore(vec, ub_dst, offset, group=8, stride=row_stride)
 ```
 
 Use VMI load/store only for UB-resident compute operands/results. Use MTE or
@@ -39,10 +41,16 @@ tile operations for GM movement.
 
 Useful options:
 
-- `dist_mode="dintlv"` for deinterleaved load/store forms.
-- `dist_mode="unpack", to_dtype=<dtype>` for one-step widening load.
-- `stride=...`, `block_stride=...`, `repeat_stride=...`, `group=...` for
-  strided or grouped access when the source algorithm truly uses it.
+- `size` is required for every `vload`.
+- `dist_mode=None` or `"continuous"` is the default contiguous load/store form.
+- `dist_mode="dintlv"` returns an `(even, odd)` pair.
+- `dist_mode="unpack", to_dtype=<dtype>` widens by one adjacent bit-width step.
+- `group=...`, `stride=...` select grouped access.
+- `block_stride=...`, `repeat_stride=...` select block-strided access.
+- `vload` does not take `mask`.
+- `group` store does not take `mask`.
+- `pmode="zero"` is the default masked-store behavior; `pmode="merge"` preserves
+  inactive lanes.
 
 Backend note: prefer putting dynamic tail masks on compute/store. Do not rely on
 masked loads unless the current backend explicitly supports the form.
@@ -50,23 +58,18 @@ masked loads unless the current backend explicitly supports the form.
 ## Masks
 
 ```python
-mask = pto.vmi.create_mask(active_lanes, result_type=pto.vmi.mask(lanes))
-gmask = pto.vmi.create_group_mask(
-    active_per_group,
-    result_type=pto.vmi.mask(lanes),
-    num_groups=num_groups,
-    group_size=group_size,
-)
+mask = pto.vmi.create_mask(active_lanes, size=lanes)
+gmask = pto.vmi.create_mask(active_per_group, size=lanes, group=num_groups)
 ```
 
-Use `create_mask` for prefix-active dynamic tails. Use group masks for grouped
-reductions or group broadcast patterns.
+Use `create_mask` for prefix-active dynamic tails. Use grouped masks for grouped
+reductions or grouped broadcast patterns.
 
 ## Index And Broadcast
 
 ```python
-idx = pto.vmi.vci(base, result_type=pto.vmi.vreg(64, pto.i32), order="ASC")
-bc = pto.vmi.vbrc(value, result_type=pto.vmi.vreg(128, pto.f16))
+idx = pto.vmi.vci(pto.i32(0), size=64, order="ASC")
+bc = pto.vmi.vbrc(pto.f16(0.0), size=128)
 ```
 
 Use `vci` for lane-wise index ramps and gather/scatter offsets. Use `vbrc` for
@@ -116,14 +119,12 @@ cmp_mask = pto.vmi.vcmps(x, scalar, seed_mask, "ge")
 out = pto.vmi.vsel(cmp_mask, true_value, false_value)
 ```
 
-Reduction result types are explicit:
+Reduction result types are inferred:
 
 ```python
-sum1 = pto.vmi.vcadd(x, mask, result_type=pto.vmi.vreg(1, pto.f32))
-max1 = pto.vmi.vcmax(x, mask, result_type=pto.vmi.vreg(1, pto.f32))
-sum_g = pto.vmi.vcadd(
-    x, gmask, result_type=pto.vmi.vreg(num_groups, pto.f32), group=num_groups
-)
+sum1 = pto.vmi.vcadd(x, mask, reassoc=True)
+max1 = pto.vmi.vcmax(x, mask)
+sum_g = pto.vmi.vcadd(x, gmask, group=num_groups, reassoc=True)
 ```
 
 ## Conversion And Reinterpretation
@@ -131,7 +132,7 @@ sum_g = pto.vmi.vcadd(
 ```python
 wide = pto.vmi.vcvt(x_f16, to_dtype=pto.f32)
 narrow = pto.vmi.vcvt(x_f32, to_dtype=pto.f16, rounding="...", saturate=...)
-bits = pto.vmi.vinterpret_cast(x, result_type=pto.vmi.vreg(64, pto.i32))
+bits = pto.vmi.vinterpret_cast(x, pto.i32)
 ```
 
 Use `vcvt` for numeric conversion. Use `vinterpret_cast` only for bit-level
@@ -140,11 +141,11 @@ reinterpretation.
 ## Gather, Scatter, Rearrangement
 
 ```python
-values = pto.vmi.vgather(src_ub, offsets, mask, result_type=pto.vmi.vreg(64, pto.f32))
+values = pto.vmi.vgather(src_ub, offsets, mask)
 pto.vmi.vscatter(values, dst_ub, offsets, mask)
 lo, hi = pto.vmi.vintlv(a, b, mask)
 even, odd = pto.vmi.vdintlv(a, b, mask)
-sel = pto.vmi.vselr(source, index, result_type=...)
+sel = pto.vmi.vselr(source, index)
 ```
 
 Only use explicit VMI interleave/deinterleave when it changes the logical data
@@ -172,5 +173,5 @@ constraints:
 2. Prefer one full physical-register worth of elements when the algorithm and
    UB layout are contiguous.
 3. Use smaller multiples of 64 for row tails or natural row/group widths.
-4. For dynamic remainders, use `create_mask` with the same lane count and keep
-   offsets symbolic.
+4. For dynamic remainders, use `create_mask(..., size=lanes[, group=...])` and
+   keep offsets symbolic.

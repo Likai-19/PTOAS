@@ -14,8 +14,9 @@ choreography when a logical VMI expression captures the same algorithm.
 1. Read the complete source kernel and all helpers/macros needed to understand
    its ABI, loop bounds, offsets, memory movement, synchronization, and compute.
 2. Read references only as needed:
-   - [vmi-dsl-spec.md](references/vmi-dsl-spec.md) for PTODSL `pto.vmi` API
-     spelling and common AscendC SIMD to VMI patterns.
+   - [vmi-dsl-spec.md](references/vmi-dsl-spec.md) for current PTODSL `pto.vmi`
+     API spelling, including `vload` / `vstore`, `create_mask`, `vci`, `vbrc`,
+     and common AscendC SIMD to VMI patterns.
    - [mi-dsl-spec.md](references/mi-dsl-spec.md) for PTODSL non-VMI user-guide
      navigation: kernel entry, buffers, control flow, MTE, sync, masks, SIMT.
    - [vmi-mlir-spec.md](references/vmi-mlir-spec.md) when VMI IR semantics,
@@ -111,10 +112,10 @@ Physical-only source details to collapse:
   - <PART_*, EVEN/ODD, PK*, vintlv/vdintlv trees, temporary register halves>
 VMI plan:
   for off in ...:
-      mask = create_mask(active_lanes)   # if tail/dynamic extent exists
-      x = vload(...)
+      mask = pto.vmi.create_mask(active_lanes, size=lanes)   # or size=lanes, group=groups
+      x = pto.vmi.vload(..., size=lanes)
       y = <logical compute>
-      vstore(y, ...)
+      pto.vmi.vstore(y, ..., mask)
 Lane choice:
   - lanes=<N>, dtype=<T>, reason=<full vreg/tail/per-row/grouping>
 Assumptions:
@@ -145,9 +146,13 @@ the stated assumptions and call them out in the result.
   and use `pto.castptr` internally when needed.
 - Preserve templates and generic dtype choices with `pto.const_expr` whenever
   possible. Use Python compile-time `if` branches and dtype variables to choose
-  pointer casts, VMI result types, conversion targets, and store paths. Only add
+  pointer casts, VMI lane/dtype choices, conversion targets, and store paths. Only add
   separate wrapper/probe functions when the ABI truly differs or the test
   harness explicitly requires separate entry symbols.
+- Use the current VMI surface shape: `vload(..., size=...)`, `vstore(..., mask=...)`,
+  `vci(..., size=...)`, `vbrc(..., size=...)`, and `create_mask(..., size=..., group=...)`.
+  Do not use the retired `create_group_mask` helper or legacy `result_type`
+  spellings in new rewrites.
 - Keep source offset and stride formulas symbolic. Do not replace expressions
   such as `vlForHalfNumber * 2` with a constant unless the source is already
   specialized and the user asked for specialization.
@@ -162,9 +167,9 @@ the stated assumptions and call them out in the result.
   rely on auto-inserted sync unless the user requests an auto-mode rewrite.
 - Prefer `pto.vmi.vload` from UB, logical compute, then `pto.vmi.vstore` to UB.
   GM movement belongs to MTE/tile movement outside the VMI compute region.
-- Use `pto.vmi.create_mask(active, result_type=pto.vmi.mask(lanes))` for dynamic
-  tails. Put masks on compute and store; do not assume a masked load is legal on
-  every backend.
+- Use `pto.vmi.create_mask(active, size=lanes)` for dynamic tails. Put masks on
+  compute and store; do not assume a masked load is legal on every backend.
+  For grouped tails, use `create_mask(..., size=lanes, group=...)`.
 - Collapse physical-only details such as `PART_P0`, `PART_EVEN`, `PART_ODD`,
   packed store modes, and interleave trees when they only describe hardware
   lowering of one logical vector.
