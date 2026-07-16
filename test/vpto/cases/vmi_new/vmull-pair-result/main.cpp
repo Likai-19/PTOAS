@@ -26,24 +26,17 @@ using namespace PtoTestCommon;
     }                                                                          \
   } while (0)
 
-void LaunchVmiVmullPairResult(
-    int32_t *lhs32, int32_t *rhs32, int16_t *lhs16, int16_t *rhs16,
-    uint8_t *lhs8, uint8_t *rhs8, uint32_t *low, uint32_t *high,
-    void *stream);
+void LaunchVmiVmullPairResult(int32_t *lhs, int32_t *rhs, uint32_t *low,
+                              uint32_t *high, void *stream);
 
 int main() {
-  constexpr size_t kBufferCount = 8;
-  constexpr size_t kInput32Bytes = 3 * 256 * sizeof(uint32_t);
-  constexpr size_t kInput16Bytes = 128 * sizeof(int16_t);
-  constexpr size_t kInput8Bytes = 256 * sizeof(uint8_t);
-  constexpr size_t kOutputBytes = 5 * 256 * sizeof(uint32_t);
+  constexpr size_t kBufferCount = 4;
+  constexpr size_t kBufferBytes = (64 + 128) * sizeof(uint32_t);
   const char *paths[kBufferCount] = {
-      "./lhs32.bin", "./rhs32.bin", "./lhs16.bin", "./rhs16.bin",
-      "./lhs8.bin",  "./rhs8.bin",  "./low.bin",   "./high.bin",
+      "./lhs.bin", "./rhs.bin", "./low.bin", "./high.bin",
   };
   const size_t sizes[kBufferCount] = {
-      kInput32Bytes, kInput32Bytes, kInput16Bytes, kInput16Bytes,
-      kInput8Bytes,  kInput8Bytes,  kOutputBytes,  kOutputBytes,
+      kBufferBytes, kBufferBytes, kBufferBytes, kBufferBytes,
   };
   void *host[kBufferCount] = {};
   void *device[kBufferCount] = {};
@@ -76,15 +69,13 @@ int main() {
                          ACL_MEMCPY_HOST_TO_DEVICE));
   }
 
-  LaunchVmiVmullPairResult(
-      static_cast<int32_t *>(device[0]), static_cast<int32_t *>(device[1]),
-      static_cast<int16_t *>(device[2]), static_cast<int16_t *>(device[3]),
-      static_cast<uint8_t *>(device[4]), static_cast<uint8_t *>(device[5]),
-      static_cast<uint32_t *>(device[6]), static_cast<uint32_t *>(device[7]),
-      stream);
+  LaunchVmiVmullPairResult(static_cast<int32_t *>(device[0]),
+                           static_cast<int32_t *>(device[1]),
+                           static_cast<uint32_t *>(device[2]),
+                           static_cast<uint32_t *>(device[3]), stream);
   ACL_CHECK(aclrtSynchronizeStream(stream));
 
-  for (size_t i = 6; i < kBufferCount; ++i) {
+  for (size_t i = 2; i < kBufferCount; ++i) {
     ACL_CHECK(aclrtMemcpy(host[i], sizes[i], device[i], sizes[i],
                          ACL_MEMCPY_DEVICE_TO_HOST));
     if (!WriteFile(paths[i], host[i], sizes[i])) {

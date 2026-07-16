@@ -13,7 +13,7 @@ import sys
 import numpy as np
 
 
-EXPECTED_ELEMS = 5 * 256
+EXPECTED_ELEMS = 64 + 128
 
 
 def compare_one(golden_path: Path, actual_path: Path, label: str) -> bool:
@@ -33,9 +33,10 @@ def compare_one(golden_path: Path, actual_path: Path, label: str) -> bool:
         return True
     print(f"[ERROR] {label}: {mismatches.size} mismatched lanes")
     for index in mismatches[:16]:
-        slot, lane = divmod(int(index), 256)
+        case = "signed64" if index < 64 else "unsigned128"
+        lane = int(index) if index < 64 else int(index) - 64
         print(
-            f"  slot={slot} lane={lane}: "
+            f"  case={case} lane={lane}: "
             f"expected=0x{int(golden[index]):08x}, actual=0x{int(actual[index]):08x}"
         )
     return False
@@ -46,7 +47,7 @@ def main() -> None:
     ok_high = compare_one(Path("golden_high.bin"), Path("high.bin"), "high")
     if not (ok_low and ok_high):
         sys.exit(2)
-    print("[INFO] compare passed: signed/unsigned contiguous and deinterleaved VMULL")
+    print("[INFO] compare passed: signed sparse-mask and unsigned multi-register VMULL")
 
 
 if __name__ == "__main__":
