@@ -1,0 +1,72 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+module attributes {pto.target_arch = "a5"} {
+  module attributes {pto.backend = "vpto", pto.kernel_kind = #pto.kernel_kind<vector>, pto.target_arch = "a5"} {
+    func.func @group_count_dhist_vmi(%arg0: !pto.ptr<si64, gm>, %arg1: !pto.ptr<ui32, gm>) attributes {pto.entry} {
+      %c0_i64 = arith.constant 0 : i64
+      %0 = builtin.unrealized_conversion_cast %c0_i64 : i64 to ui64
+      %1 = pto.castptr %0 : ui64 -> !pto.ptr<si64, ub>
+      %c0_i64_0 = arith.constant 0 : i64
+      %2 = builtin.unrealized_conversion_cast %c0_i64_0 : i64 to ui64
+      %3 = pto.castptr %2 : ui64 -> !pto.ptr<ui32, ub>
+      %c96256_i64 = arith.constant 96256 : i64
+      %4 = builtin.unrealized_conversion_cast %c96256_i64 : i64 to ui64
+      %5 = pto.castptr %4 : ui64 -> !pto.ptr<ui32, ub>
+      %c1_i64 = arith.constant 1 : i64
+      %c192512_i64 = arith.constant 192512 : i64
+      %c192512_i64_1 = arith.constant 192512 : i64
+      %c0_i64_2 = arith.constant 0 : i64
+      %c192512_i64_3 = arith.constant 192512 : i64
+      pto.mte_gm_ub %arg0, %1, %c0_i64_2, %c192512_i64_3 nburst(%c1_i64, %c192512_i64, %c192512_i64_1) {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0>} : !pto.ptr<si64, gm>, !pto.ptr<si64, ub>, i64, i64, i64, i64, i64
+      pto.set_flag[<PIPE_MTE2>, <PIPE_V>, <EVENT_ID0>]
+      pto.wait_flag[<PIPE_MTE2>, <PIPE_V>, <EVENT_ID0>]
+      pto.vecscope {
+        %c256 = arith.constant 256 : index
+        %6 = pto.vmi.create_mask %c256 : index -> !pto.vmi.mask<256xpred>
+        %c256_7 = arith.constant 256 : index
+        %7 = pto.vmi.create_mask %c256_7 : index -> !pto.vmi.mask<256xpred>
+        %c0_i16 = arith.constant 0 : i16
+        %8 = builtin.unrealized_conversion_cast %c0_i16 : i16 to ui16
+        %9 = pto.vmi.vbrc %8 : ui16 -> !pto.vmi.vreg<256xui16>
+        %c0_i32 = arith.constant 0 : i32
+        %10 = builtin.unrealized_conversion_cast %c0_i32 : i32 to ui32
+        %11 = pto.vmi.vbrc %10 : ui32 -> !pto.vmi.vreg<256xui32>
+        %c0 = arith.constant 0 : index
+        %c94 = arith.constant 94 : index
+        %c1 = arith.constant 1 : index
+        %12 = scf.for %arg2 = %c0 to %c94 step %c1 iter_args(%arg3 = %11) -> (!pto.vmi.vreg<256xui32>) {
+          %c256_9 = arith.constant 256 : index
+          %13 = arith.muli %arg2, %c256_9 : index
+          %c2 = arith.constant 2 : index
+          %14 = arith.muli %13, %c2 : index
+          %15:2 = pto.vmi.vload %3[%14] {dist_mode = "dintlv"} : !pto.ptr<ui32, ub> -> !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>
+          %c9_i32 = arith.constant 9 : i32
+          %16 = builtin.unrealized_conversion_cast %c9_i32 : i32 to ui32
+          %17 = pto.vmi.vcmps %15#0, %16, %6 {cmp = "lt"} : !pto.vmi.vreg<256xui32>, ui32, !pto.vmi.mask<256xpred> -> !pto.vmi.mask<256xpred>
+          %18 = pto.vmi.vcvt %15#0 : !pto.vmi.vreg<256xui32> -> !pto.vmi.vreg<256xui8>
+          %19 = pto.vmi.vdhist %9, %18, %17 : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<256xui8>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<256xui16>
+          %20 = pto.vmi.vcvt %19 : !pto.vmi.vreg<256xui16> -> !pto.vmi.vreg<256xui32>
+          %21 = pto.vmi.vadd %arg3, %20, %7 : !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<256xui32>
+          scf.yield %21 : !pto.vmi.vreg<256xui32>
+        }
+        %c0_8 = arith.constant 0 : index
+        pto.vmi.vstore %12, %5[%c0_8], %7 : !pto.vmi.vreg<256xui32>, !pto.ptr<ui32, ub>, !pto.vmi.mask<256xpred>
+      }
+      pto.set_flag[<PIPE_V>, <PIPE_MTE3>, <EVENT_ID1>]
+      pto.wait_flag[<PIPE_V>, <PIPE_MTE3>, <EVENT_ID1>]
+      %c1_i64_4 = arith.constant 1 : i64
+      %c1024_i64 = arith.constant 1024 : i64
+      %c1024_i64_5 = arith.constant 1024 : i64
+      %c1024_i64_6 = arith.constant 1024 : i64
+      pto.mte_ub_gm %5, %arg1, %c1024_i64_6 nburst(%c1_i64_4, %c1024_i64, %c1024_i64_5) {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 1, 0, 0, 0>} : !pto.ptr<ui32, ub>, !pto.ptr<ui32, gm>, i64, i64, i64, i64
+      pto.mem_bar "SS_ALL"
+      return
+    }
+  }
+}

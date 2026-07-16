@@ -1299,14 +1299,10 @@ LogicalResult checkSupportedDeinterleaveLoadShape(
 
   auto lowType = cast<VMIVRegType>(op.getLow().getType());
   auto highType = cast<VMIVRegType>(op.getHigh().getType());
-  VMILayoutAttr lowLayout = lowType.getLayoutAttr();
-  VMILayoutAttr highLayout = highType.getLayoutAttr();
-  if (!lowLayout || !highLayout || !lowLayout.isContiguous() ||
-      !highLayout.isContiguous())
-    return fail("requires assigned contiguous low/high result layouts");
-  if (lowType.getElementCount() != highType.getElementCount() ||
-      lowType.getElementType() != highType.getElementType())
-    return fail("requires matching low/high result shape and element type");
+  VMILayoutSupport supports;
+  if (failed(supports.getDeinterleaveLoadLayoutFactForLayouts(
+          lowType, highType, reason)))
+    return failure();
   if (!getX2MemoryDistToken(lowType.getElementType(), "DINTLV"))
     return fail("requires 8/16/32-bit element type for vldsx2 DINTLV");
 

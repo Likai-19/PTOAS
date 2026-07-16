@@ -332,6 +332,45 @@ public:
   }
 };
 
+class VMIDeinterleaveLoadTransfer final : public VMILayoutTransfer {
+public:
+  FailureOr<SmallVector<VMILayoutRelation, 4>>
+  query(Operation *op, Value changedValue, VMILayoutAttr changedLayout,
+        const VMILayoutPropagator &propagator,
+        OpOperand *changedOperand) const override {
+    auto load = dyn_cast<VMIDeinterleaveLoadOp>(op);
+    if (!load)
+      return failure();
+
+    VMIDeinterleaveLoadLayoutPort port;
+    if (changedValue == load.getLow()) {
+      port = VMIDeinterleaveLoadLayoutPort::Low;
+    } else if (changedValue == load.getHigh()) {
+      port = VMIDeinterleaveLoadLayoutPort::High;
+    } else {
+      return failure();
+    }
+
+    auto valueType = dyn_cast<VMIVRegType>(changedValue.getType());
+    if (!valueType)
+      return failure();
+    VMILayoutSupport supports;
+    FailureOr<SmallVector<VMIDeinterleaveLoadLayoutFact, 4>> facts =
+        supports.getDeinterleaveLoadLayoutFactsForLayout(
+            valueType, port, changedLayout);
+    if (failed(facts) || facts->empty())
+      return failure();
+
+    SmallVector<VMILayoutRelation, 4> relations;
+    for (const VMIDeinterleaveLoadLayoutFact &fact : *facts) {
+      relations.push_back(makeRelation(SmallVector<VMILayoutFact, 4>{
+          valueFact(load.getLow(), fact.lowLayout),
+          valueFact(load.getHigh(), fact.highLayout)}));
+    }
+    return relations;
+  }
+};
+
 class VMIGroupLoadTransfer final : public VMILayoutTransfer {
 public:
   FailureOr<SmallVector<VMILayoutRelation, 4>>
@@ -700,6 +739,7 @@ const VMILayoutTransfer *getTransfer(Operation *op) {
   static VMIMaskGranularityCastTransfer maskGranularityCastTransfer;
   static VMIFreeResultLayoutTransfer freeResultLayoutTransfer;
   static VMILoadTransfer loadTransfer;
+  static VMIDeinterleaveLoadTransfer deinterleaveLoadTransfer;
   static VMIGroupLoadTransfer groupLoadTransfer;
   static VMIGroupReduceTransfer groupReduceTransfer;
   static VMIGroupSlotLoadTransfer groupSlotLoadTransfer;
@@ -716,6 +756,8 @@ const VMILayoutTransfer *getTransfer(Operation *op) {
     return &freeResultLayoutTransfer;
   if (isa<VMILoadOp>(op))
     return &loadTransfer;
+  if (isa<VMIDeinterleaveLoadOp>(op))
+    return &deinterleaveLoadTransfer;
   if (isa<VMIGroupLoadOp>(op))
     return &groupLoadTransfer;
   if (isa<VMIGroupReduceAddFOp, VMIGroupReduceMaxFOp,
