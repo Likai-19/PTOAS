@@ -7,9 +7,9 @@
 
 ---
 
-## `pto.vmi.vci`
+## `pto.vmi.tci`
 
-- **semantics:** Generate a per-lane index/counter vector from a single scalar base such as `[base, base±1, base±2, ...]`, lane `i` gets `base + i` (ASC) or `base - i` (DESC). It is the index source for `vgather`/`vscatter` offsets.
+- **semantics:** Generate a per-lane index/counter vector from a single scalar base such as `[base, base±1, base±2, ...]`, lane `i` gets `base + i` (ASC) or `base - i` (DESC). It is the index source for `tgather`/`tscatter` offsets.
 
   ```c
   for (int i = 0; i < L; i++)
@@ -18,7 +18,7 @@
 
 - **syntax:**
   ```mlir
-  %result = pto.vmi.vci %base {order = "ASC"} : T -> !pto.vmi.vreg<L×T>
+  %result = pto.vmi.tci %base {order = "ASC"} : T -> !pto.vmi.tilereg<1xLxT>
   ```
 - **operands:**
 
@@ -30,7 +30,7 @@
 
   | Result | Type | Description |
   |---|---|---|
-  | `result` | `!pto.vmi.vreg<L×T>` | Index vector |
+  | `result` | `!pto.vmi.tilereg<1xLxT>` | Index vector |
 
 - **attributes:**
 
@@ -50,9 +50,9 @@
 - **example:**
   ```mlir
   // Ascending i32 indices for a gather base
-  %idx = pto.vmi.vci %c0 {order = "ASC"} : i32 -> !pto.vmi.vreg<64×i32>
+  %idx = pto.vmi.tci %c0 {order = "ASC"} : i32 -> !pto.vmi.tilereg<1x64xi32>
   // Descending f32 ramp
-  %ramp = pto.vmi.vci %c10 {order = "DESC"} : f32 -> !pto.vmi.vreg<64×f32>
-  %idx = pto.vmi.vci %base {order = "ASC"} : i32 -> !pto.vmi.vreg<64×i32>
+  %ramp = pto.vmi.tci %c10 {order = "DESC"} : f32 -> !pto.vmi.tilereg<1x64xf32>
+  %idx = pto.vmi.tci %base {order = "ASC"} : i32 -> !pto.vmi.tilereg<1x64xi32>
   // → pto.as: pto.vci {order="ASC"}, one op per physical chunk
   ```

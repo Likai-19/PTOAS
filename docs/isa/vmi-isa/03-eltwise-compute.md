@@ -11,7 +11,7 @@
 
 ## 3.1 Binary Arithmetic
 
-### `pto.vmi.vadd` / `pto.vmi.vsub` / `pto.vmi.vmul`
+### `pto.vmi.tadd` / `pto.vmi.tsub` / `pto.vmi.tmul`
 
 - **semantics:** Unified fp/int elementwise add / subtract / multiply.
 
@@ -22,21 +22,21 @@
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vadd %lhs, %rhs, %mask {pmode = "zero"} : !pto.vmi.vreg<L×T>, !pto.vmi.vreg<L×T>, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×T>
+  %r = pto.vmi.tadd %lhs, %rhs, %mask {pmode = "zero"} : !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxT>
   ```
 - **operands:**
 
   | Operand | Type | Description |
   |---|---|---|
-  | `lhs` | `!pto.vmi.vreg<L×T>` | First operand |
-  | `rhs` | `!pto.vmi.vreg<L×T>` | Second operand |
-  | `mask` | `!pto.vmi.mask<L>` (variadic) | Governing predicate (0 or 1) |
+  | `lhs` | `!pto.vmi.tilereg<MxNxT>` | First operand |
+  | `rhs` | `!pto.vmi.tilereg<MxNxT>` | Second operand |
+  | `mask` | `!pto.vmi.tilereg<MxNxi1>` (variadic) | Governing predicate (0 or 1) |
 
 - **results:**
 
   | Result | Type | Description |
   |---|---|---|
-  | `result` | `!pto.vmi.vreg<L×T>` | Elementwise result |
+  | `result` | `!pto.vmi.tilereg<MxNxT>` | Elementwise result |
 
 - **attributes:**
 
@@ -54,18 +54,18 @@
 - **example:**
   ```mlir
   // fp32 add with deinterleaved layout
-  %sum = pto.vmi.vadd %a, %b
-      : !pto.vmi.vreg<128×f32, #pto.vmi.layout<deinterleaved = 2>>,
-        !pto.vmi.vreg<128×f32, #pto.vmi.layout<deinterleaved = 2>>
-      -> !pto.vmi.vreg<128×f32, #pto.vmi.layout<deinterleaved = 2>>
+  %sum = pto.vmi.tadd %a, %b
+      : !pto.vmi.tilereg<1x128xf32>,
+        !pto.vmi.tilereg<1x128xf32>
+      -> !pto.vmi.tilereg<1x128xf32>
   // → pto.as: 2 × pto.vadd (EVEN/ODD), each with create_mask all-active mask
 
   // Masked add with merge mode
-  %s = pto.vmi.vadd %a, %b, %mask {pmode = "merge"}
-      : !pto.vmi.vreg<64×f32>, !pto.vmi.vreg<64×f32>, !pto.vmi.mask<64> -> !pto.vmi.vreg<64×f32>
+  %s = pto.vmi.tadd %a, %b, %mask {pmode = "merge"}
+      : !pto.vmi.tilereg<1x64xf32>, !pto.vmi.tilereg<1x64xf32>, !pto.vmi.tilereg<1x64xi1> -> !pto.vmi.tilereg<1x64xf32>
   ```
 
-### `pto.vmi.vdiv`
+### `pto.vmi.tdiv`
 
 - **semantics:** Elementwise floating-point divide.
 
@@ -76,7 +76,7 @@
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vdiv %lhs, %rhs, %mask : !pto.vmi.vreg<L×T>, !pto.vmi.vreg<L×T>, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×T>
+  %r = pto.vmi.tdiv %lhs, %rhs, %mask : !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxT>
   ```
 - **datatypes:** `f16`, `f32` only
 - **lowering to `pto.mi`:**
@@ -85,7 +85,7 @@
   ```
   `#mi = K`, `dep = 1`.
 
-### `pto.vmi.vmax` / `pto.vmi.vmin`
+### `pto.vmi.tmax` / `pto.vmi.tmin`
 
 - **semantics:** Elementwise maximum / minimum (unified fp/int).
 
@@ -96,7 +96,7 @@
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vmax %lhs, %rhs, %mask : !pto.vmi.vreg<L×T>, !pto.vmi.vreg<L×T>, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×T>
+  %r = pto.vmi.tmax %lhs, %rhs, %mask : !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxT>
   ```
 - **datatypes:** `i8`–`i32`, `f16`, `bf16`, `f32`
 - **lowering to `pto.mi`:**
@@ -109,7 +109,7 @@
 
 ## 3.2 Unary Arithmetic & Activation
 
-### `pto.vmi.vabs`
+### `pto.vmi.tabs`
 
 - **semantics:** Elementwise absolute value (unified fp/int).
 
@@ -120,7 +120,7 @@
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vabs %src, %mask {pmode = "zero"} : !pto.vmi.vreg<L×T>, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×T>
+  %r = pto.vmi.tabs %src, %mask {pmode = "zero"} : !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxT>
   ```
 - **datatypes:** `i8`–`i32`, `f16`, `bf16`, `f32`
 - **lowering to `pto.mi`:**
@@ -129,7 +129,7 @@
   ```
   `#mi = K`, `dep = 1`.
 
-### `pto.vmi.vneg`
+### `pto.vmi.tneg`
 
 - **semantics:** Elementwise negate: `0 - x`.
 
@@ -140,7 +140,7 @@
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vneg %src, %mask : !pto.vmi.vreg<L×T>, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×T>
+  %r = pto.vmi.tneg %src, %mask : !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxT>
   ```
 - **datatypes:** `i8`–`i32`, `f16`, `bf16`, `f32`
 - **lowering to `pto.mi`:**
@@ -149,7 +149,7 @@
   ```
   `#mi = K`, `dep = 1`.
 
-### `pto.vmi.vrelu`
+### `pto.vmi.trelu`
 
 - **semantics:** Elementwise ReLU: `max(0, x)`.
 
@@ -160,7 +160,7 @@
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vrelu %src, %mask : !pto.vmi.vreg<L×T>, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×T>
+  %r = pto.vmi.trelu %src, %mask : !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxT>
   ```
 - **datatypes:** `i8`–`i32`, `f16`, `bf16`, `f32`
 - **lowering to `pto.mi`:**
@@ -169,7 +169,7 @@
   ```
   `#mi = K`, `dep = 1`.
 
-### `pto.vmi.vexp` / `pto.vmi.vln` / `pto.vmi.vsqrt`
+### `pto.vmi.texp` / `pto.vmi.tlog` / `pto.vmi.tsqrt`
 
 - **semantics:** Elementwise transcendental: exponential, natural logarithm, square root.
 
@@ -184,7 +184,7 @@
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vexp %src, %mask : !pto.vmi.vreg<L×T>, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×T>
+  %r = pto.vmi.texp %src, %mask : !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxT>
   ```
 - **datatypes:** `f16`, `f32` only
 - **lowering to `pto.mi`:**
@@ -197,19 +197,19 @@
 
 ## 3.3 Bitwise Ops
 
-> **Mask-operand support (planned):** `vand` / `vor` / `vxor` / `vnot` will be
-> extended to accept **mask** operands in addition to vector registers. When
+> **Mask-operand support (planned):** `tand` / `tor` / `txor` / `tnot` will be
+> extended to accept `i1` tilereg operands in addition to data tileregs. When
 > the operands are masks, the op performs a per-lane **predicate boolean**
 > operation (AND / OR / XOR / NOT) on the mask lanes and produces a mask
-> result, rather than an elementwise data bitwise op on a vreg. This reuses the
-> same op names for both vreg-bitwise and mask-boolean forms; the operand type
+> result, rather than an elementwise data bitwise op on a data tilereg. This reuses the
+> same op names for both data-bitwise and mask-boolean forms; the operand dtype
 > selects the mode. There is no separate predicate-logic op (e.g. `pand`/
 > `por`/`pnot`); mask boolean logic is expressed through these ops.
 
-### `pto.vmi.vand` / `pto.vmi.vor` / `pto.vmi.vxor`
+### `pto.vmi.tand` / `pto.vmi.tor` / `pto.vmi.txor`
 
 - **semantics:** Elementwise bitwise AND / OR / XOR. Operands and result are
-  vregs by default; will also support mask-typed operands, performing a per-lane
+  data tileregs by default; will also support `i1` tileregs, performing a per-lane
   predicate boolean op and yielding a mask (the data operands themselves are
   masks, distinct from the governing `mask`).
 
@@ -220,7 +220,7 @@
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vand %lhs, %rhs, %mask : !pto.vmi.vreg<L×T>, !pto.vmi.vreg<L×T>, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×T>
+  %r = pto.vmi.tand %lhs, %rhs, %mask : !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxT>
   ```
 - **datatypes:** `i8`–`i32` (integer bitwise)
 - **lowering to `pto.mi`:**
@@ -229,10 +229,10 @@
   ```
   `#mi = K`, `dep = 1`.
 
-### `pto.vmi.vnot`
+### `pto.vmi.tnot`
 
-- **semantics:** Elementwise bitwise NOT. Operand and result are vregs by
-  default; will also support a mask-typed operand, performing a per-lane predicate
+- **semantics:** Elementwise bitwise NOT. Operand and result are data tileregs by
+  default; will also support an `i1` tilereg operand, performing a per-lane predicate
   complement and yielding a mask (the data operand itself is a mask, distinct
   from the governing `mask`).
 
@@ -243,7 +243,7 @@
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vnot %src, %mask : !pto.vmi.vreg<L×T>, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×T>
+  %r = pto.vmi.tnot %src, %mask : !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxT>
   ```
 - **datatypes:** `i8`–`i32`
 - **lowering to `pto.mi`:**
@@ -256,9 +256,9 @@
 
 ## 3.4 Shift Ops
 
-### `pto.vmi.vshl` / `pto.vmi.vshr`
+### `pto.vmi.tshl` / `pto.vmi.tshr`
 
-- **semantics:** Elementwise left shift (`vshl`) or unsigned right shift (`vshr`). The shift count is per-lane from `rhs`.
+- **semantics:** Elementwise left shift (`tshl`) or unsigned right shift (`tshr`). The shift count is per-lane from `rhs`.
 
   ```c
   for (int i = 0; i < L; i++)
@@ -269,7 +269,7 @@
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vshl %lhs, %rhs, %mask : !pto.vmi.vreg<L×T>, !pto.vmi.vreg<L×T>, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×T>
+  %r = pto.vmi.tshl %lhs, %rhs, %mask : !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxT>
   ```
 - **datatypes:** `i8`–`i32`
 - **lowering to `pto.mi`:**
@@ -285,7 +285,7 @@
 Vec-scalar ops broadcast a scalar to all lanes (R6 implicit broadcast). The
 scalar type must match the vector element type.
 
-### `pto.vmi.vadds` / `pto.vmi.vmuls` / `pto.vmi.vmaxs` / `pto.vmi.vmins`
+### `pto.vmi.tadds` / `pto.vmi.tmuls` / `pto.vmi.tmaxs` / `pto.vmi.tmins`
 
 - **semantics:** Elementwise vector-scalar add / multiply / max / min.
 
@@ -296,21 +296,21 @@ scalar type must match the vector element type.
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vadds %src, %scalar, %mask {pmode = "merge"} : !pto.vmi.vreg<L×T>, T, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×T>
+  %r = pto.vmi.tadds %src, %scalar, %mask {pmode = "merge"} : !pto.vmi.tilereg<MxNxT>, T, !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxT>
   ```
 - **operands:**
 
   | Operand | Type | Description |
   |---|---|---|
-  | `src` | `!pto.vmi.vreg<L×T>` | Vector operand |
+  | `src` | `!pto.vmi.tilereg<MxNxT>` | Vector operand |
   | `scalar` | `T` | Scalar (implicitly broadcast to all lanes) |
-  | `mask` | `!pto.vmi.mask<L>` | Governing predicate |
+  | `mask` | `!pto.vmi.tilereg<MxNxi1>` | Governing predicate |
 
 - **results:**
 
   | Result | Type | Description |
   |---|---|---|
-  | `result` | `!pto.vmi.vreg<L×T>` | Elementwise result |
+  | `result` | `!pto.vmi.tilereg<MxNxT>` | Elementwise result |
 
 - **datatypes:** `i8`–`i32`, `f16`, `bf16`, `f32`
 - **lowering to `pto.mi`:**
@@ -321,11 +321,11 @@ scalar type must match the vector element type.
 
 - **example:**
   ```mlir
-  %scaled = pto.vmi.vmuls %x, %scale, %mask
-      : !pto.vmi.vreg<64×f32>, f32, !pto.vmi.mask<64> -> !pto.vmi.vreg<64×f32>
+  %scaled = pto.vmi.tmuls %x, %scale, %mask
+      : !pto.vmi.tilereg<1x64xf32>, f32, !pto.vmi.tilereg<1x64xi1> -> !pto.vmi.tilereg<1x64xf32>
   ```
 
-### `pto.vmi.vshls` / `pto.vmi.vshrs`
+### `pto.vmi.tshls` / `pto.vmi.tshrs`
 
 - **semantics:** Elementwise vector-scalar shift.
 
@@ -338,7 +338,7 @@ scalar type must match the vector element type.
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vshls %src, %scalar, %mask : !pto.vmi.vreg<L×T>, T, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×T>
+  %r = pto.vmi.tshls %src, %scalar, %mask : !pto.vmi.tilereg<MxNxT>, T, !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxT>
   ```
 - **datatypes:** `i8`–`i32`
 - **lowering to `pto.mi`:**
@@ -351,7 +351,7 @@ scalar type must match the vector element type.
 
 ## 3.6 Compare & Select
 
-### `pto.vmi.vcmp`
+### `pto.vmi.tcmp`
 
 - **semantics:** Elementwise compare → predicate mask. The `seed` mask is the
   governing predicate `Pg`: where `seed[i] = 0` the result lane is 0 (zeroing);
@@ -364,21 +364,21 @@ scalar type must match the vector element type.
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vcmp %lhs, %rhs, %seed {cmp = "lt"} : !pto.vmi.vreg<L×T>, !pto.vmi.vreg<L×T>, !pto.vmi.mask<L> -> !pto.vmi.mask<L>
+  %r = pto.vmi.tcmp %lhs, %rhs, %seed {cmp = "lt"} : !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxi1>
   ```
 - **operands:**
 
   | Operand | Type | Description |
   |---|---|---|
-  | `lhs` | `!pto.vmi.vreg<L×T>` | First operand |
-  | `rhs` | `!pto.vmi.vreg<L×T>` | Second operand |
-  | `seed` | `!pto.vmi.mask<L>` | Governing predicate (required) |
+  | `lhs` | `!pto.vmi.tilereg<MxNxT>` | First operand |
+  | `rhs` | `!pto.vmi.tilereg<MxNxT>` | Second operand |
+  | `seed` | `!pto.vmi.tilereg<MxNxi1>` | Governing predicate (required) |
 
 - **results:**
 
   | Result | Type | Description |
   |---|---|---|
-  | `result` | `!pto.vmi.mask<L>` | Predicate mask (same L, granularity derived from T) |
+  | `result` | `!pto.vmi.tilereg<MxNxi1>` | Predicate mask (same L, granularity derived from T) |
 
 - **attributes:**
 
@@ -399,24 +399,24 @@ scalar type must match the vector element type.
 - **example:**
   ```mlir
   // f32 less-than compare over deinterleaved layout
-  %lt = pto.vmi.vcmp %a, %b, %seed {cmp = "lt"}
-      : !pto.vmi.vreg<128×f32, #pto.vmi.layout<deinterleaved = 2>>,
-        !pto.vmi.vreg<128×f32, #pto.vmi.layout<deinterleaved = 2>>,
-        !pto.vmi.mask<128×b32, #pto.vmi.layout<deinterleaved = 2>>
-      -> !pto.vmi.mask<128×b32, #pto.vmi.layout<deinterleaved = 2>>
+  %lt = pto.vmi.tcmp %a, %b, %seed {cmp = "lt"}
+      : !pto.vmi.tilereg<1x128xf32>,
+        !pto.vmi.tilereg<1x128xf32>,
+        !pto.vmi.tilereg<1x128xi1>
+      -> !pto.vmi.tilereg<1x128xi1>
 
   // i32 signed greater-than-or-equal over deinterleaved layout
-  %ge = pto.vmi.vcmp %a, %b, %seed {cmp = "sge"}
-      : !pto.vmi.vreg<128×i32>, !pto.vmi.vreg<128×i32>, !pto.vmi.mask<128×b32>
-      -> !pto.vmi.mask<128×b32>
+  %ge = pto.vmi.tcmp %a, %b, %seed {cmp = "sge"}
+      : !pto.vmi.tilereg<1x128xi32>, !pto.vmi.tilereg<1x128xi32>, !pto.vmi.tilereg<1x128xi1>
+      -> !pto.vmi.tilereg<1x128xi1>
 
   // bf16 contiguous equality compare (K=1)
-  %eq = pto.vmi.vcmp %a, %b, %seed {cmp = "eq"}
-      : !pto.vmi.vreg<128×bf16>, !pto.vmi.vreg<128×bf16>, !pto.vmi.mask<128×b16>
-      -> !pto.vmi.mask<128×b16>
+  %eq = pto.vmi.tcmp %a, %b, %seed {cmp = "eq"}
+      : !pto.vmi.tilereg<1x128xbf16>, !pto.vmi.tilereg<1x128xbf16>, !pto.vmi.tilereg<1x128xi1>
+      -> !pto.vmi.tilereg<1x128xi1>
   ```
 
-### `pto.vmi.vcmps`
+### `pto.vmi.tcmps`
 
 - **semantics:** Elementwise vector-scalar compare → predicate mask.
 
@@ -427,23 +427,23 @@ scalar type must match the vector element type.
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vcmps %src, %scalar, %seed {cmp = "ge"} : !pto.vmi.vreg<L×T>, T, !pto.vmi.mask<L> -> !pto.vmi.mask<L>
+  %r = pto.vmi.tcmps %src, %scalar, %seed {cmp = "ge"} : !pto.vmi.tilereg<MxNxT>, T, !pto.vmi.tilereg<MxNxi1> -> !pto.vmi.tilereg<MxNxi1>
   ```
 - **operands:**
 
   | Operand | Type | Description |
   |---|---|---|
-  | `src` | `!pto.vmi.vreg<L×T>` | Vector operand |
+  | `src` | `!pto.vmi.tilereg<MxNxT>` | Vector operand |
   | `scalar` | `T` | Scalar to compare against |
-  | `seed` | `!pto.vmi.mask<L>` | Governing predicate (required) |
+  | `seed` | `!pto.vmi.tilereg<MxNxi1>` | Governing predicate (required) |
 
 - **results:**
 
   | Result | Type | Description |
   |---|---|---|
-  | `result` | `!pto.vmi.mask<L>` | Predicate mask |
+  | `result` | `!pto.vmi.tilereg<MxNxi1>` | Predicate mask |
 
-- **attributes:** Same `cmp` / `pmode` as `vcmp`.
+- **attributes:** Same `cmp` / `pmode` as `tcmp`.
 - **datatypes:** `i8`–`i32`, `f16`, `bf16`, `f32`
 - **lowering to `pto.mi`:**
   ```
@@ -453,11 +453,11 @@ scalar type must match the vector element type.
 
 - **example:**
   ```mlir
-  %ges = pto.vmi.vcmps %a, %c0, %seed {cmp = "ge"}
-      : !pto.vmi.vreg<64×f32>, f32, !pto.vmi.mask<64> -> !pto.vmi.mask<64>
+  %ges = pto.vmi.tcmps %a, %c0, %seed {cmp = "ge"}
+      : !pto.vmi.tilereg<1x64xf32>, f32, !pto.vmi.tilereg<1x64xi1> -> !pto.vmi.tilereg<1x64xi1>
   ```
 
-### `pto.vmi.vsel`
+### `pto.vmi.tsel`
 
 - **semantics:** Per-lane selection driven by a predicate mask.
 
@@ -468,21 +468,21 @@ scalar type must match the vector element type.
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vsel %mask, %true_val, %false_val {pmode = "zero"} : !pto.vmi.mask<L>, !pto.vmi.vreg<L×T>, !pto.vmi.vreg<L×T> -> !pto.vmi.vreg<L×T>
+  %r = pto.vmi.tsel %mask, %true_val, %false_val {pmode = "zero"} : !pto.vmi.tilereg<MxNxi1>, !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxT> -> !pto.vmi.tilereg<MxNxT>
   ```
 - **operands:**
 
   | Operand | Type | Description |
   |---|---|---|
-  | `mask` | `!pto.vmi.mask<L>` | Selector predicate (required) |
-  | `true_val` | `!pto.vmi.vreg<L×T>` | Value when mask[i] = 1 |
-  | `false_val` | `!pto.vmi.vreg<L×T>` | Value when mask[i] = 0 |
+  | `mask` | `!pto.vmi.tilereg<MxNxi1>` | Selector predicate (required) |
+  | `true_val` | `!pto.vmi.tilereg<MxNxT>` | Value when mask[i] = 1 |
+  | `false_val` | `!pto.vmi.tilereg<MxNxT>` | Value when mask[i] = 0 |
 
 - **results:**
 
   | Result | Type | Description |
   |---|---|---|
-  | `result` | `!pto.vmi.vreg<L×T>` | Selected result |
+  | `result` | `!pto.vmi.tilereg<MxNxT>` | Selected result |
 
 - **attributes:**
 
@@ -499,9 +499,9 @@ scalar type must match the vector element type.
 
 - **example:**
   ```mlir
-  %out = pto.vmi.vsel %mask, %x, %y {pmode = "zero"}
-      : !pto.vmi.mask<256×b16>, !pto.vmi.vreg<256×ui16>, !pto.vmi.vreg<256×ui16>
-      -> !pto.vmi.vreg<256×ui16>
+  %out = pto.vmi.tsel %mask, %x, %y {pmode = "zero"}
+      : !pto.vmi.tilereg<1x256xi1>, !pto.vmi.tilereg<1x256xui16>, !pto.vmi.tilereg<1x256xui16>
+      -> !pto.vmi.tilereg<1x256xui16>
   ```
 
 ### `pto.vmi.vselr`
@@ -515,20 +515,20 @@ scalar type must match the vector element type.
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vselr %source, %index : !pto.vmi.vreg<L×T>, !pto.vmi.vreg<L×index_T> -> !pto.vmi.vreg<L×T>
+  %r = pto.vmi.vselr %source, %index : !pto.vmi.tilereg<MxNxT>, !pto.vmi.tilereg<MxNxindex_T> -> !pto.vmi.tilereg<MxNxT>
   ```
 - **operands:**
 
   | Operand | Type | Description |
   |---|---|---|
-  | `source` | `!pto.vmi.vreg<L×T>` | Source vector to permute from |
-  | `index` | `!pto.vmi.vreg<L×index_T>` | Per-lane source lane index |
+  | `source` | `!pto.vmi.tilereg<MxNxT>` | Source vector to permute from |
+  | `index` | `!pto.vmi.tilereg<MxNxindex_T>` | Per-lane source lane index |
 
 - **results:**
 
   | Result | Type | Description |
   |---|---|---|
-  | `result` | `!pto.vmi.vreg<L×T>` | Permuted result |
+  | `result` | `!pto.vmi.tilereg<MxNxT>` | Permuted result |
 
 - **datatypes:** `i8`–`i32`, `f16`, `bf16`, `f32`
 - **lowering to `pto.mi`:**
@@ -546,7 +546,7 @@ scalar type must match the vector element type.
 - **example:**
   ```mlir
   %r = pto.vmi.vselr %src, %idx
-      : !pto.vmi.vreg<64×f16>, !pto.vmi.vreg<4×i16> -> !pto.vmi.vreg<4×f16>
+      : !pto.vmi.tilereg<1x64xf16>, !pto.vmi.tilereg<1x4xi16> -> !pto.vmi.tilereg<1x4xf16>
   ```
 
 ---
