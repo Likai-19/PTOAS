@@ -1,0 +1,237 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). Please refer to the License for details. You may not use
+// this file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON
+// AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+// FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+// for the full text of the License.
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @vmi_vmull_pair_result_kernel(
+      %lhs_gm: !pto.ptr<i32, gm>, %rhs_gm: !pto.ptr<i32, gm>,
+      %lhs16_gm: !pto.ptr<i16, gm>, %rhs16_gm: !pto.ptr<i16, gm>,
+      %lhs8_gm: !pto.ptr<ui8, gm>, %rhs8_gm: !pto.ptr<ui8, gm>,
+      %low_gm: !pto.ptr<i32, gm>, %high_gm: !pto.ptr<i32, gm>)
+      attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    %c256 = arith.constant 256 : index
+    %c512 = arith.constant 512 : index
+    %c768 = arith.constant 768 : index
+    %c1024 = arith.constant 1024 : index
+    %c0_i64 = arith.constant 0 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %c8_i64 = arith.constant 8 : i64
+    %c96_i64 = arith.constant 96 : i64
+    %c160_i64 = arith.constant 160 : i64
+    %c4096_i64 = arith.constant 4096 : i64
+    %c8192_i64 = arith.constant 8192 : i64
+    %c8448_i64 = arith.constant 8448 : i64
+    %c12288_i64 = arith.constant 12288 : i64
+    %c12544_i64 = arith.constant 12544 : i64
+    %c16384_i64 = arith.constant 16384 : i64
+    %c24576_i64 = arith.constant 24576 : i64
+
+    %ub_lhs = pto.castptr %c0_i64 : i64 -> !pto.ptr<i32, ub>
+    %ub_rhs = pto.castptr %c4096_i64 : i64 -> !pto.ptr<i32, ub>
+    %ub_lhs16 = pto.castptr %c8192_i64 : i64 -> !pto.ptr<si16, ub>
+    %ub_rhs16 = pto.castptr %c8448_i64 : i64 -> !pto.ptr<si16, ub>
+    %ub_lhs8 = pto.castptr %c12288_i64 : i64 -> !pto.ptr<ui8, ub>
+    %ub_rhs8 = pto.castptr %c12544_i64 : i64 -> !pto.ptr<ui8, ub>
+    %ub_low = pto.castptr %c16384_i64 : i64 -> !pto.ptr<i32, ub>
+    %ub_high = pto.castptr %c24576_i64 : i64 -> !pto.ptr<i32, ub>
+    %ub_lhs_u = pto.castptr %c0_i64 : i64 -> !pto.ptr<ui32, ub>
+    %ub_rhs_u = pto.castptr %c4096_i64 : i64 -> !pto.ptr<ui32, ub>
+    %ub_low_u = pto.castptr %c16384_i64 : i64 -> !pto.ptr<ui32, ub>
+    %ub_high_u = pto.castptr %c24576_i64 : i64 -> !pto.ptr<ui32, ub>
+
+    pto.mte_gm_ub %lhs_gm, %ub_lhs, %c0_i64, %c96_i64
+      nburst(%c1_i64, %c96_i64, %c96_i64)
+      : !pto.ptr<i32, gm>, !pto.ptr<i32, ub>, i64, i64, i64, i64, i64
+    pto.mte_gm_ub %rhs_gm, %ub_rhs, %c0_i64, %c96_i64
+      nburst(%c1_i64, %c96_i64, %c96_i64)
+      : !pto.ptr<i32, gm>, !pto.ptr<i32, ub>, i64, i64, i64, i64, i64
+    pto.mte_gm_ub %lhs16_gm, %ub_lhs16, %c0_i64, %c8_i64
+      nburst(%c1_i64, %c8_i64, %c8_i64)
+      : !pto.ptr<i16, gm>, !pto.ptr<si16, ub>, i64, i64, i64, i64, i64
+    pto.mte_gm_ub %rhs16_gm, %ub_rhs16, %c0_i64, %c8_i64
+      nburst(%c1_i64, %c8_i64, %c8_i64)
+      : !pto.ptr<i16, gm>, !pto.ptr<si16, ub>, i64, i64, i64, i64, i64
+    pto.mte_gm_ub %lhs8_gm, %ub_lhs8, %c0_i64, %c8_i64
+      nburst(%c1_i64, %c8_i64, %c8_i64)
+      : !pto.ptr<ui8, gm>, !pto.ptr<ui8, ub>, i64, i64, i64, i64, i64
+    pto.mte_gm_ub %rhs8_gm, %ub_rhs8, %c0_i64, %c8_i64
+      nburst(%c1_i64, %c8_i64, %c8_i64)
+      : !pto.ptr<ui8, gm>, !pto.ptr<ui8, ub>, i64, i64, i64, i64, i64
+    pto.mte_gm_ub %low_gm, %ub_low, %c0_i64, %c160_i64
+      nburst(%c1_i64, %c160_i64, %c160_i64)
+      : !pto.ptr<i32, gm>, !pto.ptr<i32, ub>, i64, i64, i64, i64, i64
+    pto.mte_gm_ub %high_gm, %ub_high, %c0_i64, %c160_i64
+      nburst(%c1_i64, %c160_i64, %c160_i64)
+      : !pto.ptr<i32, gm>, !pto.ptr<i32, ub>, i64, i64, i64, i64, i64
+
+    pto.set_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+    pto.wait_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+
+    pto.vecscope {
+      // Signed/unsigned contiguous cases cover 64, 128, and 256 lanes.
+      %a0 = pto.vmi.vload %ub_lhs[%c0]
+          : !pto.ptr<i32, ub> -> !pto.vmi.vreg<64xi32>
+      %b0 = pto.vmi.vload %ub_rhs[%c0]
+          : !pto.ptr<i32, ub> -> !pto.vmi.vreg<64xi32>
+      %mask0 = "pto.vmi.constant_mask"() {
+        value = dense<[
+          true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true
+        ]> : tensor<64xi1>
+      } : () -> !pto.vmi.mask<64xpred>
+      %low0, %high0 = pto.vmi.vmull %a0, %b0, %mask0
+          : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>,
+            !pto.vmi.mask<64xpred>
+          -> !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>
+      pto.vmi.vstore %low0, %ub_low[%c0]
+          : !pto.vmi.vreg<64xi32>, !pto.ptr<i32, ub>
+      pto.vmi.vstore %high0, %ub_high[%c0]
+          : !pto.vmi.vreg<64xi32>, !pto.ptr<i32, ub>
+      %a1 = pto.vmi.vload %ub_lhs[%c256]
+          : !pto.ptr<i32, ub> -> !pto.vmi.vreg<128xi32>
+      %b1 = pto.vmi.vload %ub_rhs[%c256]
+          : !pto.ptr<i32, ub> -> !pto.vmi.vreg<128xi32>
+      %mask1 = "pto.vmi.constant_mask"() {
+        value = dense<[
+          true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true,
+          true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true
+        ]> : tensor<128xi1>
+      } : () -> !pto.vmi.mask<128xpred>
+      %low1, %high1 = pto.vmi.vmull %a1, %b1, %mask1 {pmode = "zero"}
+          : !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32>,
+            !pto.vmi.mask<128xpred>
+          -> !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32>
+      pto.vmi.vstore %low1, %ub_low[%c256]
+          : !pto.vmi.vreg<128xi32>, !pto.ptr<i32, ub>
+      pto.vmi.vstore %high1, %ub_high[%c256]
+          : !pto.vmi.vreg<128xi32>, !pto.ptr<i32, ub>
+      %a2 = pto.vmi.vload %ub_lhs_u[%c512]
+          : !pto.ptr<ui32, ub> -> !pto.vmi.vreg<256xui32>
+      %b2 = pto.vmi.vload %ub_rhs_u[%c512]
+          : !pto.ptr<ui32, ub> -> !pto.vmi.vreg<256xui32>
+      %mask2 = "pto.vmi.constant_mask"() {
+        value = dense<[
+          true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true,
+          true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true,
+          true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true
+        ]> : tensor<256xi1>
+      } : () -> !pto.vmi.mask<256xpred>
+      %low2, %high2 = pto.vmi.vmull %a2, %b2, %mask2
+          : !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>,
+            !pto.vmi.mask<256xpred>
+          -> !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>
+      pto.vmi.vstore %low2, %ub_low_u[%c512]
+          : !pto.vmi.vreg<256xui32>, !pto.ptr<ui32, ub>
+      pto.vmi.vstore %high2, %ub_high_u[%c512]
+          : !pto.vmi.vreg<256xui32>, !pto.ptr<ui32, ub>
+
+      // Signed 16-to-32 widening anchors VMULL at factor-2. Observable stores
+      // are unmasked so every inactive result lane must be zero.
+      %a3n = pto.vmi.vload %ub_lhs16[%c0]
+          : !pto.ptr<si16, ub> -> !pto.vmi.vreg<128xsi16>
+      %b3n = pto.vmi.vload %ub_rhs16[%c0]
+          : !pto.ptr<si16, ub> -> !pto.vmi.vreg<128xsi16>
+      %a3 = pto.vmi.vcvt %a3n
+          : !pto.vmi.vreg<128xsi16> -> !pto.vmi.vreg<128xi32>
+      %b3 = pto.vmi.vcvt %b3n
+          : !pto.vmi.vreg<128xsi16> -> !pto.vmi.vreg<128xi32>
+      %mask3 = "pto.vmi.constant_mask"() {
+        value = dense<[
+          true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true,
+          true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true
+        ]> : tensor<128xi1>
+      } : () -> !pto.vmi.mask<128xpred>
+      %low3, %high3 = pto.vmi.vmull %a3, %b3, %mask3
+          : !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32>,
+            !pto.vmi.mask<128xpred>
+          -> !pto.vmi.vreg<128xi32>, !pto.vmi.vreg<128xi32>
+      pto.vmi.vstore %low3, %ub_low[%c768]
+          : !pto.vmi.vreg<128xi32>, !pto.ptr<i32, ub>
+      pto.vmi.vstore %high3, %ub_high[%c768]
+          : !pto.vmi.vreg<128xi32>, !pto.ptr<i32, ub>
+
+      // Unsigned 8-to-32 widening anchors VMULL at factor-4.
+      %a4n = pto.vmi.vload %ub_lhs8[%c0]
+          : !pto.ptr<ui8, ub> -> !pto.vmi.vreg<256xui8>
+      %b4n = pto.vmi.vload %ub_rhs8[%c0]
+          : !pto.ptr<ui8, ub> -> !pto.vmi.vreg<256xui8>
+      %a4 = pto.vmi.vcvt %a4n
+          : !pto.vmi.vreg<256xui8> -> !pto.vmi.vreg<256xui32>
+      %b4 = pto.vmi.vcvt %b4n
+          : !pto.vmi.vreg<256xui8> -> !pto.vmi.vreg<256xui32>
+      %mask4 = "pto.vmi.constant_mask"() {
+        value = dense<[
+          true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true,
+          true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true,
+          true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+          false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true
+        ]> : tensor<256xi1>
+      } : () -> !pto.vmi.mask<256xpred>
+      %low4, %high4 = pto.vmi.vmull %a4, %b4, %mask4
+          : !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>,
+            !pto.vmi.mask<256xpred>
+          -> !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>
+      pto.vmi.vstore %low4, %ub_low_u[%c1024]
+          : !pto.vmi.vreg<256xui32>, !pto.ptr<ui32, ub>
+      pto.vmi.vstore %high4, %ub_high_u[%c1024]
+          : !pto.vmi.vreg<256xui32>, !pto.ptr<ui32, ub>
+    }
+
+    pto.set_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+    pto.wait_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+    pto.mte_ub_gm %ub_low, %low_gm, %c160_i64
+      nburst(%c1_i64, %c160_i64, %c160_i64)
+      : !pto.ptr<i32, ub>, !pto.ptr<i32, gm>, i64, i64, i64, i64
+    pto.mte_ub_gm %ub_high, %high_gm, %c160_i64
+      nburst(%c1_i64, %c160_i64, %c160_i64)
+      : !pto.ptr<i32, ub>, !pto.ptr<i32, gm>, i64, i64, i64, i64
+    pto.barrier #pto.pipe<PIPE_ALL>
+    return
+  }
+}

@@ -7851,6 +7851,70 @@ struct OneToNVMIBinaryOpPattern : OpConversionPattern<SourceOp> {
   }
 };
 
+struct OneToNVMIVmullOpPattern : OpConversionPattern<VMIVmullOp> {
+  using OpConversionPattern<VMIVmullOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(VMIVmullOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    ValueRange aParts = adaptor.getA();
+    ValueRange bParts = adaptor.getB();
+    ValueRange maskParts = adaptor.getMask();
+    FailureOr<SmallVector<Type>> maybeLowTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    FailureOr<SmallVector<Type>> maybeHighTypes =
+        getConvertedResultTypes(op, 1, *this->getTypeConverter());
+    if (failed(maybeLowTypes) || failed(maybeHighTypes))
+      return failure();
+    SmallVector<Type> lowTypes = std::move(*maybeLowTypes);
+    SmallVector<Type> highTypes = std::move(*maybeHighTypes);
+
+    size_t arity = aParts.size();
+    if (arity == 0 || bParts.size() != arity || maskParts.size() != arity ||
+        lowTypes.size() != arity || highTypes.size() != arity)
+      return rewriter.notifyMatchFailure(
+          op, "physical vmull arity mismatch across a, b, mask, low, and high");
+
+    SmallVector<Value> lows;
+    SmallVector<Value> highs;
+    lows.reserve(arity);
+    highs.reserve(arity);
+    for (size_t index = 0; index < arity; ++index) {
+      Type lowType = lowTypes[index];
+      Type highType = highTypes[index];
+      auto dataType = dyn_cast<VRegType>(lowType);
+      auto maskType = dyn_cast<MaskType>(maskParts[index].getType());
+      if (!dataType || dataType.getElementCount() != 64 ||
+          lowType != highType || aParts[index].getType() != lowType ||
+          bParts[index].getType() != lowType)
+        return rewriter.notifyMatchFailure(
+            op, "vmull requires matching 64-lane physical data part types");
+      auto elementType = dyn_cast<IntegerType>(dataType.getElementType());
+      if (!elementType || elementType.getWidth() != 32 ||
+          (!elementType.isSignless() && !elementType.isUnsigned()))
+        return rewriter.notifyMatchFailure(
+            op, "vmull requires physical i32 or ui32 data parts");
+      if (!maskType || !maskType.isB32())
+        return rewriter.notifyMatchFailure(
+            op, "vmull requires a corresponding b32 mask part");
+
+      auto vmull = rewriter.create<VmullOp>(op.getLoc(), lowType, highType,
+                                            aParts[index], bParts[index],
+                                            maskParts[index]);
+      lows.push_back(vmull.getLow());
+      highs.push_back(vmull.getHigh());
+    }
+
+    SmallVector<Value> results;
+    results.reserve(lows.size() + highs.size());
+    results.append(lows);
+    results.append(highs);
+    replaceOpWithFlatConvertedValues(rewriter, op, results,
+                                     *this->getTypeConverter());
+    return success();
+  }
+};
+
 template <typename SourceOp, typename TargetOp>
 struct OneToNVMIInterleaveOpPattern : OpConversionPattern<SourceOp> {
   using OpConversionPattern<SourceOp>::OpConversionPattern;
@@ -10946,8 +11010,8 @@ void populateVMIConversionPatterns(
       OneToNVMIBinaryOpPattern<VMISubFOp, VsubOp>,
       OneToNVMIBinaryOpPattern<VMISubIOp, VsubOp>,
       OneToNVMIBinaryOpPattern<VMIMulFOp, VmulOp>,
-      OneToNVMIBinaryOpPattern<VMIMulIOp, VmulOp>, OneToNVMIFmaOpPattern,
-      OneToNVMIBinaryOpPattern<VMIDivFOp, VdivOp>,
+      OneToNVMIBinaryOpPattern<VMIMulIOp, VmulOp>, OneToNVMIVmullOpPattern,
+      OneToNVMIFmaOpPattern, OneToNVMIBinaryOpPattern<VMIDivFOp, VdivOp>,
       OneToNVMIBinaryOpPattern<VMIMinFOp, VminOp>,
       OneToNVMIBinaryOpPattern<VMIMaxFOp, VmaxOp>,
       OneToNVMIUnaryOpPattern<VMINegFOp, VnegOp>,
@@ -11528,6 +11592,75 @@ LogicalResult checkSupportedVchistShape(VMIVchistOp op,
   return failure();
 }
 
+LogicalResult checkSupportedVmullShape(VMIVmullOp op,
+                                       std::string *reason = nullptr) {
+  auto fail = [&](const Twine &message) -> LogicalResult {
+    if (reason)
+      *reason = message.str();
+    return failure();
+  };
+
+  auto aType = cast<VMIVRegType>(op.getA().getType());
+  auto bType = cast<VMIVRegType>(op.getB().getType());
+  auto lowType = cast<VMIVRegType>(op.getLow().getType());
+  auto highType = cast<VMIVRegType>(op.getHigh().getType());
+  auto maskType = cast<VMIMaskType>(op.getMask().getType());
+
+  auto elementType = dyn_cast<IntegerType>(aType.getElementType());
+  if (!elementType || elementType.getWidth() != 32 ||
+      (!elementType.isSignless() && !elementType.isUnsigned()))
+    return fail("requires element type to be exactly i32 or ui32");
+  if (aType != bType || aType != lowType || aType != highType)
+    return fail("requires identical a, b, low, and high VMI vreg types");
+
+  int64_t lanes = aType.getElementCount();
+  if (lanes != 64 && lanes != 128 && lanes != 256)
+    return fail("requires logical lane count 64, 128, or 256");
+
+  VMILayoutAttr layout = aType.getLayoutAttr();
+  if (!layout)
+    return fail("requires an assigned data layout");
+  bool supportedLayout =
+      layout.getLaneStride() == 1 &&
+      (layout.isContiguous() ||
+       (layout.isDeinterleaved() && layout.getBlockElems() == 1 &&
+        (layout.getFactor() == 2 || layout.getFactor() == 4)));
+  if (!supportedLayout)
+    return fail("requires contiguous layout or deinterleaved factor 2/4 with "
+                "block_elems=1 and lane_stride=1");
+  if (maskType.getLayoutAttr() != layout)
+    return fail("requires the mask and all four data values to share one "
+                "layout");
+  if (maskType.getGranularity() != "b32")
+    return fail("requires b32 mask granularity");
+
+  FailureOr<int64_t> aArity = getVMIPhysicalArity(aType);
+  FailureOr<int64_t> bArity = getVMIPhysicalArity(bType);
+  FailureOr<int64_t> lowArity = getVMIPhysicalArity(lowType);
+  FailureOr<int64_t> highArity = getVMIPhysicalArity(highType);
+  FailureOr<int64_t> maskArity = getVMIPhysicalArity(maskType);
+  if (failed(aArity) || failed(bArity) || failed(lowArity) ||
+      failed(highArity) || failed(maskArity) || *aArity < 1)
+    return fail("requires computable non-empty physical arity on every port");
+  if (*aArity != *bArity || *aArity != *lowArity || *aArity != *highArity ||
+      *aArity != *maskArity)
+    return fail("requires matching physical arity on a, b, mask, low, and "
+                "high");
+
+  FailureOr<int64_t> lanesPerPart = getDataLanesPerPart(aType.getElementType());
+  FailureOr<Type> physicalElementType = getVMIVRegPhysicalElementType(aType);
+  FailureOr<StringRef> physicalMaskGranularity =
+      getVMIMaskPhysicalGranularity(maskType);
+  if (failed(lanesPerPart) || *lanesPerPart != 64 ||
+      failed(physicalElementType) ||
+      *physicalElementType != aType.getElementType() ||
+      failed(physicalMaskGranularity) || *physicalMaskGranularity != "b32")
+    return fail("requires 64xi32/ui32 data parts with corresponding b32 mask "
+                "parts");
+
+  return success();
+}
+
 LogicalResult
 checkSupportedFmaShape(VMIFmaOp op, std::string *reason = nullptr) {
   auto fail = [&](const Twine &message) -> LogicalResult {
@@ -11939,6 +12072,18 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     if (auto muli = dyn_cast<VMIMulIOp>(op))
       return emitMaskableUnsupported(
           op, "pto.vmi.muli", cast<VMIVRegType>(muli.getResult().getType()));
+    if (auto vmull = dyn_cast<VMIVmullOp>(op)) {
+      std::string reason;
+      if (succeeded(checkSupportedVmullShape(vmull, &reason)))
+        return WalkResult::advance();
+      vmull.emitError()
+          << kVMIDiagUnsupportedPrefix
+          << "pto.vmi.vmull requires equal 64/128/256-lane i32/ui32 data "
+             "ports, a matching b32 mask, and contiguous or deinterleaved "
+             "factor-2/factor-4 block_elems=1 lane_stride=1 layout ("
+          << reason << ")";
+      return WalkResult::interrupt();
+    }
     if (auto divf = dyn_cast<VMIDivFOp>(op))
       return emitMaskableUnsupported(
           op, "pto.vmi.divf", cast<VMIVRegType>(divf.getResult().getType()));

@@ -650,6 +650,14 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
+      if (auto vmull = dyn_cast<VMIVmullOp>(op)) {
+        if (failed(constrainElementwiseBinary(vmull.getAMutable(),
+                                              vmull.getBMutable(),
+                                              vmull.getLow(), op)) ||
+            failed(unite(vmull.getA(), vmull.getHigh(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
       if (auto fma = dyn_cast<VMIFmaOp>(op)) {
         if (failed(unite(fma.getLhs(), fma.getRhs(), op)) ||
             failed(unite(fma.getLhs(), fma.getAcc(), op)) ||

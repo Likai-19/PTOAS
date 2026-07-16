@@ -246,23 +246,6 @@ def _derive_vci_result_type(base, size, *, context: str):
     return _pto.VMIVRegType.get(size, raw_base.type)
 
 
-def _derive_vmull_result_type(a, *, context: str):
-    source_type = _as_vmi_vreg_type(_type_of(a), context=context)
-    element_type = source_type.element_type
-    if not IntegerType.isinstance(element_type):
-        raise TypeError(f"{context} requires 32-bit integer vectors")
-    integer_type = IntegerType(element_type)
-    if integer_type.width != 32:
-        raise TypeError(f"{context} requires 32-bit integer vectors")
-    if integer_type.is_unsigned:
-        result_element_type = IntegerType.get_unsigned(64)
-    elif integer_type.is_signed:
-        result_element_type = IntegerType.get_signed(64)
-    else:
-        result_element_type = IntegerType.get_signless(64)
-    return _pto.VMIVRegType.get(source_type.element_count, result_element_type)
-
-
 def _derive_hist_result_type(acc, *, context: str):
     return _as_vmi_vreg_type(_type_of(acc), context=context)
 
@@ -722,9 +705,11 @@ class _VMINamespace:
 
     @staticmethod
     def vmull(a, b, mask, *, pmode=None, loc=None, ip=None):
+        result_type = _type_of(a)
         return _call_value(
             "vmull",
-            _derive_vmull_result_type(a, context="pto.vmi.vmull(...)"),
+            result_type,
+            result_type,
             _raw(a),
             _raw(b),
             _required_mask(mask, context="pto.vmi.vmull(...)"),
