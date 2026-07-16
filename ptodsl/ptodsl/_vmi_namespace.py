@@ -246,6 +246,20 @@ def _derive_vci_result_type(base, size, *, context: str):
     return _pto.VMIVRegType.get(size, raw_base.type)
 
 
+def _derive_vmull_result_types(a, b, *, context: str):
+    lhs_type = _as_vmi_vreg_type(_type_of(a), context=context)
+    rhs_type = _as_vmi_vreg_type(_type_of(b), context=context)
+    if lhs_type != rhs_type:
+        raise TypeError(f"{context} requires a and b to have identical VMI vreg types")
+    element_type = lhs_type.element_type
+    if not IntegerType.isinstance(element_type):
+        raise TypeError(f"{context} requires 32-bit integer vectors")
+    integer_type = IntegerType(element_type)
+    if integer_type.width != 32:
+        raise TypeError(f"{context} requires 32-bit integer vectors")
+    return lhs_type, rhs_type
+
+
 def _derive_hist_result_type(acc, *, context: str):
     return _as_vmi_vreg_type(_type_of(acc), context=context)
 
@@ -795,8 +809,7 @@ class _VMINamespace:
         result_type = _type_of(a)
         return _call_value(
             "vmull",
-            result_type,
-            result_type,
+            *_derive_vmull_result_types(a, b, context="pto.vmi.vmull(...)"),
             _raw(a),
             _raw(b),
             _required_mask(mask, context="pto.vmi.vmull(...)"),
