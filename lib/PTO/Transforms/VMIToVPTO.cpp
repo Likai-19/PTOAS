@@ -9551,70 +9551,96 @@ struct OneToNVMIGroupBroadcastOpPattern
   }
 };
 
+//===----------------------------------------------------------------------===//
+// VMI vdhist / vchist → VPTO dhistv2 / chistv2 lowering (shared template)
+//===----------------------------------------------------------------------===//
+
+template <typename VMIOp, typename VPTOHistOp>
+static LogicalResult
+lowerVMIHistogramToVPTO(VMIOp op,
+                        typename OpConversionPattern<VMIOp>::OneToNOpAdaptor
+                            adaptor,
+                        const TypeConverter *typeConverter,
+                        ConversionPatternRewriter &rewriter) {
+  ValueRange accParts    = adaptor.getAcc();
+  ValueRange sourceParts = adaptor.getSource();
+  ValueRange maskParts   = adaptor.getMask();
+
+  // Allow 1 (Bin_N0-only, 128×ui16) or 2 (Bin_N0+Bin_N1, 256×ui16) halves
+  size_t halfCount = accParts.size();
+  if (halfCount != 1 && halfCount != 2)
+    return rewriter.notifyMatchFailure(
+        op, "expected one or two accumulator parts");
+  if (sourceParts.empty() || sourceParts.size() != maskParts.size())
+    return rewriter.notifyMatchFailure(
+        op, "expected matching source/mask chunks");
+
+  auto partType = dyn_cast<VRegType>(accParts[0].getType());
+  if (!partType)
+    return rewriter.notifyMatchFailure(op, "expected ui16 acc parts");
+  if (halfCount == 2 && accParts[1].getType() != partType)
+    return rewriter.notifyMatchFailure(op,
+                                       "expected matching ui16 acc parts");
+
+  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
+  FailureOr<int64_t> lanesPerPart =
+      getDataLanesPerPart(sourceType.getElementType());
+  if (failed(lanesPerPart))
+    return rewriter.notifyMatchFailure(op, "failed to compute source lanes");
+
+  Location loc = op.getLoc();
+  SmallVector<Value, 2> binConsts;
+  binConsts.push_back(createI32Constant(loc, 0, rewriter));
+  if (halfCount == 2)
+    binConsts.push_back(createI32Constant(loc, 1, rewriter));
+
+  SmallVector<Value, 2> halves(accParts.begin(), accParts.end());
+
+  for (size_t index = 0, e = sourceParts.size(); index < e; ++index) {
+    Value source   = sourceParts[index];
+    Value userMask = maskParts[index];
+    auto maskType  = dyn_cast<MaskType>(userMask.getType());
+    if (!maskType || !maskType.isB8())
+      return rewriter.notifyMatchFailure(op, "expected b8 source mask");
+
+    Value chunkMask = userMask;
+    int64_t firstLane   = int64_t(index) * *lanesPerPart;
+    int64_t activeLanes = std::min<int64_t>(
+        *lanesPerPart, sourceType.getElementCount() - firstLane);
+    if (activeLanes < *lanesPerPart) {
+      FailureOr<Value> validMask = createPrefixMaskForActiveLanes(
+          loc, maskType, activeLanes, rewriter);
+      FailureOr<Value> allMask = createAllTrueMask(loc, maskType, rewriter);
+      if (failed(validMask) || failed(allMask))
+        return rewriter.notifyMatchFailure(
+            op, "failed to materialize tail-valid b8 mask");
+      chunkMask =
+          rewriter
+              .create<PandOp>(loc, maskType, chunkMask, *validMask, *allMask)
+              .getResult();
+    }
+
+    for (size_t h = 0; h < halfCount; ++h)
+      halves[h] = rewriter.create<VPTOHistOp>(loc, partType, halves[h],
+                                               source, chunkMask, binConsts[h])
+                      .getResult();
+  }
+
+  replaceOpWithFlatConvertedValues(
+      rewriter, op,
+      SmallVector<Value>(halves.begin(), halves.begin() + halfCount),
+      *typeConverter);
+  return success();
+}
+
 struct OneToNVMIVdhistOpPattern : OpConversionPattern<VMIVdhistOp> {
   using OpConversionPattern<VMIVdhistOp>::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(VMIVdhistOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    ValueRange accParts = adaptor.getAcc();
-    ValueRange sourceParts = adaptor.getSource();
-    ValueRange maskParts = adaptor.getMask();
-    if (accParts.size() != 2 || sourceParts.empty() ||
-        sourceParts.size() != maskParts.size())
-      return rewriter.notifyMatchFailure(
-          op, "expected two accumulator parts and matching source/mask chunks");
-
-    auto loType = dyn_cast<VRegType>(accParts[0].getType());
-    auto hiType = dyn_cast<VRegType>(accParts[1].getType());
-    if (!loType || loType != hiType)
-      return rewriter.notifyMatchFailure(op,
-                                         "expected matching ui16 acc parts");
-    auto sourceType = cast<VMIVRegType>(op.getSource().getType());
-    FailureOr<int64_t> lanesPerPart =
-        getDataLanesPerPart(sourceType.getElementType());
-    if (failed(lanesPerPart))
-      return rewriter.notifyMatchFailure(op, "failed to compute source lanes");
-
-    Location loc = op.getLoc();
-    Value bin0 = createI32Constant(loc, 0, rewriter);
-    Value bin1 = createI32Constant(loc, 1, rewriter);
-    Value lo = accParts[0];
-    Value hi = accParts[1];
-
-    for (size_t index = 0, e = sourceParts.size(); index < e; ++index) {
-      Value source = sourceParts[index];
-      Value userMask = maskParts[index];
-      auto maskType = dyn_cast<MaskType>(userMask.getType());
-      if (!maskType || !maskType.isB8())
-        return rewriter.notifyMatchFailure(op, "expected b8 source mask");
-
-      Value chunkMask = userMask;
-      int64_t firstLane = static_cast<int64_t>(index) * *lanesPerPart;
-      int64_t activeLanes = std::min<int64_t>(
-          *lanesPerPart, sourceType.getElementCount() - firstLane);
-      if (activeLanes < *lanesPerPart) {
-        FailureOr<Value> validMask = createPrefixMaskForActiveLanes(
-            loc, maskType, activeLanes, rewriter);
-        FailureOr<Value> allMask = createAllTrueMask(loc, maskType, rewriter);
-        if (failed(validMask) || failed(allMask))
-          return rewriter.notifyMatchFailure(
-              op, "failed to materialize tail-valid b8 mask");
-        chunkMask =
-            rewriter
-                .create<PandOp>(loc, maskType, chunkMask, *validMask, *allMask)
-                .getResult();
-      }
-
-      lo = rewriter.create<Dhistv2Op>(loc, loType, lo, source, chunkMask, bin0)
-               .getResult();
-      hi = rewriter.create<Dhistv2Op>(loc, hiType, hi, source, chunkMask, bin1)
-               .getResult();
-    }
-
-    replaceOpWithFlatConvertedValues(rewriter, op, SmallVector<Value>{lo, hi},
-                                     *this->getTypeConverter());
-    return success();
+    return lowerVMIHistogramToVPTO<VMIVdhistOp, Dhistv2Op>(
+        op, adaptor, this->getTypeConverter(), rewriter);
   }
 };
 
@@ -9624,64 +9650,8 @@ struct OneToNVMIVchistOpPattern : OpConversionPattern<VMIVchistOp> {
   LogicalResult
   matchAndRewrite(VMIVchistOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    ValueRange accParts = adaptor.getAcc();
-    ValueRange sourceParts = adaptor.getSource();
-    ValueRange maskParts = adaptor.getMask();
-    if (accParts.size() != 2 || sourceParts.empty() ||
-        sourceParts.size() != maskParts.size())
-      return rewriter.notifyMatchFailure(
-          op, "expected two accumulator parts and matching source/mask chunks");
-
-    auto loType = dyn_cast<VRegType>(accParts[0].getType());
-    auto hiType = dyn_cast<VRegType>(accParts[1].getType());
-    if (!loType || loType != hiType)
-      return rewriter.notifyMatchFailure(op,
-                                         "expected matching ui16 acc parts");
-    auto sourceType = cast<VMIVRegType>(op.getSource().getType());
-    FailureOr<int64_t> lanesPerPart =
-        getDataLanesPerPart(sourceType.getElementType());
-    if (failed(lanesPerPart))
-      return rewriter.notifyMatchFailure(op, "failed to compute source lanes");
-
-    Location loc = op.getLoc();
-    Value bin0 = createI32Constant(loc, 0, rewriter);
-    Value bin1 = createI32Constant(loc, 1, rewriter);
-    Value lo = accParts[0];
-    Value hi = accParts[1];
-
-    for (size_t index = 0, e = sourceParts.size(); index < e; ++index) {
-      Value source = sourceParts[index];
-      Value userMask = maskParts[index];
-      auto maskType = dyn_cast<MaskType>(userMask.getType());
-      if (!maskType || !maskType.isB8())
-        return rewriter.notifyMatchFailure(op, "expected b8 source mask");
-
-      Value chunkMask = userMask;
-      int64_t firstLane = static_cast<int64_t>(index) * *lanesPerPart;
-      int64_t activeLanes = std::min<int64_t>(
-          *lanesPerPart, sourceType.getElementCount() - firstLane);
-      if (activeLanes < *lanesPerPart) {
-        FailureOr<Value> validMask = createPrefixMaskForActiveLanes(
-            loc, maskType, activeLanes, rewriter);
-        FailureOr<Value> allMask = createAllTrueMask(loc, maskType, rewriter);
-        if (failed(validMask) || failed(allMask))
-          return rewriter.notifyMatchFailure(
-              op, "failed to materialize tail-valid b8 mask");
-        chunkMask =
-            rewriter
-                .create<PandOp>(loc, maskType, chunkMask, *validMask, *allMask)
-                .getResult();
-      }
-
-      lo = rewriter.create<Chistv2Op>(loc, loType, lo, source, chunkMask, bin0)
-               .getResult();
-      hi = rewriter.create<Chistv2Op>(loc, hiType, hi, source, chunkMask, bin1)
-               .getResult();
-    }
-
-    replaceOpWithFlatConvertedValues(rewriter, op, SmallVector<Value>{lo, hi},
-                                     *this->getTypeConverter());
-    return success();
+    return lowerVMIHistogramToVPTO<VMIVchistOp, Chistv2Op>(
+        op, adaptor, this->getTypeConverter(), rewriter);
   }
 };
 
