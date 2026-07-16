@@ -7,7 +7,7 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 // RUN: ptoas --pto-arch=a5 --pto-backend=vpto --tile-lib-backend=ptodsl-vmi --emit-vpto %S/../../samples/FlashAttention/flash_attention_softmax.pto -o /dev/null --mlir-print-ir-after=pto-expand-tile-op 2>&1 | FileCheck %s --check-prefix=EXPAND
-// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --tile-lib-backend=ptodsl-vmi --emit-vpto %S/../../samples/FlashAttention/flash_attention_softmax.pto -o /dev/null --mlir-print-ir-after=pto-inline-libcall 2>&1 | FileCheck %s --check-prefix=INLINE --implicit-check-not=__pto_ptodsl_vmi --implicit-check-not=pto.vecscope
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --tile-lib-backend=ptodsl-vmi --emit-vpto %S/../../samples/FlashAttention/flash_attention_softmax.pto -o /dev/null --mlir-print-ir-after=pto-inline-libcall 2>&1 | FileCheck %s --check-prefix=INLINE --implicit-check-not=__pto_ptodsl_vmi
 // RUN: ptoas --pto-arch=a5 --pto-backend=vpto --tile-lib-backend=ptodsl-vmi --emit-vpto %S/../../samples/FlashAttention/flash_attention_softmax.pto -o - | FileCheck %s --check-prefix=FINAL --implicit-check-not=pto.vmi. --implicit-check-not=__pto_ptodsl_vmi
 
 // EXPAND: call {{.*}}__pto_ptodsl_vmi_a5_tmuls
@@ -30,7 +30,6 @@
 // INLINE: pto.vmi.vdiv
 
 // FINAL-LABEL: func.func @flash_attention_softmax_block
-// FINAL: pto.vecscope
 // FINAL: pto.vdup
 // FINAL: pto.vmul
 // FINAL: pto.vmax

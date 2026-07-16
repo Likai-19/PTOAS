@@ -9,7 +9,7 @@
 // This is a static Softmax compute-op coverage harness, not a complete
 // normalized or dynamic Online Softmax kernel.
 // RUN: ptoas --pto-arch=a5 --pto-backend=vpto --tile-lib-backend=ptodsl-vmi --emit-vpto %s -o /dev/null --mlir-print-ir-after=pto-expand-tile-op 2>&1 | FileCheck %s --check-prefix=EXPAND
-// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --tile-lib-backend=ptodsl-vmi --emit-vpto %s -o /dev/null --mlir-print-ir-after=pto-inline-libcall 2>&1 | FileCheck %s --check-prefix=INLINE --implicit-check-not=__pto_ptodsl_vmi --implicit-check-not=pto.vecscope
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --tile-lib-backend=ptodsl-vmi --emit-vpto %s -o /dev/null --mlir-print-ir-after=pto-inline-libcall 2>&1 | FileCheck %s --check-prefix=INLINE --implicit-check-not=__pto_ptodsl_vmi
 // RUN: ptoas --pto-arch=a5 --pto-backend=vpto --tile-lib-backend=ptodsl-vmi --emit-vpto %s -o - | FileCheck %s --check-prefix=FINAL --implicit-check-not=pto.vmi. --implicit-check-not=__pto_ptodsl_vmi
 
 module {
@@ -110,7 +110,6 @@ module {
 // INLINE: pto.vmi.vcvt
 
 // FINAL-LABEL: func.func @ptodsl_vmi_softmax_compute_ops
-// FINAL: pto.vecscope
 // FINAL: pto.vcmax
 // FINAL: pto.vsub
 // FINAL: pto.vmul

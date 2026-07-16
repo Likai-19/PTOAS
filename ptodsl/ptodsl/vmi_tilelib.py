@@ -24,6 +24,7 @@ from ._tile_template_tracing import (
     index_add,
     index_mul,
     tile_template as _trace_tile_template,
+    vecscope,
     vmi_create_mask,
     vmi_create_mask_lanes,
     vmi_prepare_tile_access,
@@ -94,13 +95,14 @@ def emit_elementwise_vmi(
     _validate_elementwise_tiles(dst, sources, logical_lanes=logical_lanes)
     block_map = CanonicalBlockMap.from_tile(dst, logical_lanes=logical_lanes)
 
-    vmi_prepare_tile_access(*sources, dst)
-    mask = vmi_create_mask(block_map, dst.element_type)
-    with for_(0, block_map.logical_block_count, step=1) as logical_block:
-        coordinate = block_map.coordinate(logical_block)
-        values = tuple(vmi_vload(source, coordinate) for source in sources)
-        result = compute(values, mask)
-        vmi_vstore(result, dst, coordinate, mask)
+    with vecscope():
+        vmi_prepare_tile_access(*sources, dst)
+        mask = vmi_create_mask(block_map, dst.element_type)
+        with for_(0, block_map.logical_block_count, step=1) as logical_block:
+            coordinate = block_map.coordinate(logical_block)
+            values = tuple(vmi_vload(source, coordinate) for source in sources)
+            result = compute(values, mask)
+            vmi_vstore(result, dst, coordinate, mask)
 
 
 def _validate_elementwise_tiles(
@@ -212,20 +214,21 @@ def emit_row_reduce_vmi(
     reduce_op = vmi_vreduce_max if kind == "max" else vmi_vreduce_add
     merge_op = vmi_vmax if kind == "max" else vmi_vadd
 
-    vmi_prepare_tile_access(src, dst)
-    full_mask = vmi_create_mask(block_map, f32)
-    scalar_mask = vmi_create_mask_lanes(1, 1, f32)
-    with for_(0, block_map.rows, step=1) as row:
-        row_block_base = index_mul(row, block_map.blocks_per_row)
-        first_coordinate = block_map.coordinate(row_block_base)
-        accumulator = reduce_op(vmi_vload(src, first_coordinate), full_mask)
-        for block_in_row in range(1, block_map.blocks_per_row):
-            coordinate = block_map.coordinate(
-                index_add(row_block_base, block_in_row)
-            )
-            reduced = reduce_op(vmi_vload(src, coordinate), full_mask)
-            accumulator = merge_op(accumulator, reduced, scalar_mask)
-        vmi_vstore_linear(accumulator, dst, row, scalar_mask)
+    with vecscope():
+        vmi_prepare_tile_access(src, dst)
+        full_mask = vmi_create_mask(block_map, f32)
+        scalar_mask = vmi_create_mask_lanes(1, 1, f32)
+        with for_(0, block_map.rows, step=1) as row:
+            row_block_base = index_mul(row, block_map.blocks_per_row)
+            first_coordinate = block_map.coordinate(row_block_base)
+            accumulator = reduce_op(vmi_vload(src, first_coordinate), full_mask)
+            for block_in_row in range(1, block_map.blocks_per_row):
+                coordinate = block_map.coordinate(
+                    index_add(row_block_base, block_in_row)
+                )
+                reduced = reduce_op(vmi_vload(src, coordinate), full_mask)
+                accumulator = merge_op(accumulator, reduced, scalar_mask)
+            vmi_vstore_linear(accumulator, dst, row, scalar_mask)
 
 
 def emit_row_expand_sub_vmi(
@@ -251,19 +254,20 @@ def emit_row_expand_sub_vmi(
         raise ValueError("trowexpandsub columns must contain full f32 VL blocks")
     block_map = CanonicalBlockMap.from_tile(src, logical_lanes=f32.lanes)
 
-    vmi_prepare_tile_access(src, row_values, dst)
-    full_mask = vmi_create_mask(block_map, f32)
-    with for_(0, rows, step=1) as row:
-        row_scalar = vmi_vload_linear(row_values, row, lanes=1)
-        broadcast = vmi_vbroadcast(row_scalar, lanes=f32.lanes)
-        row_block_base = index_mul(row, block_map.blocks_per_row)
-        for block_in_row in range(block_map.blocks_per_row):
-            coordinate = block_map.coordinate(
-                index_add(row_block_base, block_in_row)
-            )
-            value = vmi_vload(src, coordinate)
-            result = vmi_vsub(value, broadcast, full_mask)
-            vmi_vstore(result, dst, coordinate, full_mask)
+    with vecscope():
+        vmi_prepare_tile_access(src, row_values, dst)
+        full_mask = vmi_create_mask(block_map, f32)
+        with for_(0, rows, step=1) as row:
+            row_scalar = vmi_vload_linear(row_values, row, lanes=1)
+            broadcast = vmi_vbroadcast(row_scalar, lanes=f32.lanes)
+            row_block_base = index_mul(row, block_map.blocks_per_row)
+            for block_in_row in range(block_map.blocks_per_row):
+                coordinate = block_map.coordinate(
+                    index_add(row_block_base, block_in_row)
+                )
+                value = vmi_vload(src, coordinate)
+                result = vmi_vsub(value, broadcast, full_mask)
+                vmi_vstore(result, dst, coordinate, full_mask)
 
 
 def emit_convert_vmi(src: _TileProxy, dst: _TileProxy) -> None:
@@ -275,12 +279,13 @@ def emit_convert_vmi(src: _TileProxy, dst: _TileProxy) -> None:
         raise ValueError("tcvt VMI candidate requires row-major tiles")
     block_map = CanonicalBlockMap.from_tile(src, logical_lanes=f32.lanes)
 
-    vmi_prepare_tile_access(src, dst)
-    dst_mask = vmi_create_mask_lanes(f32.lanes, f32.lanes, f16)
-    with for_(0, block_map.logical_block_count, step=1) as logical_block:
-        coordinate = block_map.coordinate(logical_block)
-        converted = vmi_vcvt(vmi_vload(src, coordinate), f16)
-        vmi_vstore(converted, dst, coordinate, dst_mask)
+    with vecscope():
+        vmi_prepare_tile_access(src, dst)
+        dst_mask = vmi_create_mask_lanes(f32.lanes, f32.lanes, f16)
+        with for_(0, block_map.logical_block_count, step=1) as logical_block:
+            coordinate = block_map.coordinate(logical_block)
+            converted = vmi_vcvt(vmi_vload(src, coordinate), f16)
+            vmi_vstore(converted, dst, coordinate, dst_mask)
 
 
 @canonical_vmi_template(

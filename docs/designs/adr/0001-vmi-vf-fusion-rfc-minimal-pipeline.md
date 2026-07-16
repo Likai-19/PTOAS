@@ -6,9 +6,9 @@
 ## Context
 
 PTOAS 已能通过 `--tile-lib-backend=ptodsl-vmi` 将 `PIPE_V` TileOp 展开为
-独立可执行的 VMI 模板。每个模板包含一个主 `scf.for` 和完整的 VMI
-load/compute/store，但不显式生成 `pto.vecscope`，因此多个连续 TileOp 展开后仍会
-产生多个循环和中间 UB 往返。
+独立可执行的 VMI 模板。每个模板当前包含自己的 `pto.vecscope`、一个主
+`scf.for` 和完整的 VMI load/compute/store，因此多个连续 TileOp 展开后仍会产生
+多个循环和中间 UB 往返。
 
 该 backend 是组合式路由：`PIPE_V` 使用唯一 canonical VMI provider，其他 Pipe
 继续使用现有 PTODSL TileLib daemon。它不会将非向量 TileOp 回退到 TileLang。
@@ -72,8 +72,8 @@ predicate 和地址模式对融合分析的干扰。
 
 ## Follow-ups
 
-- 实现 VMI fusion-unit provenance、识别、规划、loop fusion 和 mem2reg passes；复用
-  现有 late `PTOInferVPTOVecScope` 统一生成物理 VPTO vecscope。
+- 实现 VMI fusion-unit provenance、识别、规划、loop fusion、mem2reg 和 vecscope
+  coalescing passes。
 - 完成 elementwise 链的正向和负向 lit tests。
 - 在基本闭环稳定后，再独立评审多 candidate、Reduce schedule、cost model、unroll
   和算法专项深融合。

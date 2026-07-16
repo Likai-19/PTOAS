@@ -19,8 +19,7 @@ cost model 或 autotuning。
 2. Expand 和 Inline 后，从真实 VMI IR 中识别由 TileLib 产生的独立 fusion unit。
 3. 保守合并结构兼容的相邻 VMI 循环。
 4. 在融合后通过 VMI mem2reg 消除可证明安全的中间 UB store-load。
-5. VMI 模板和 Fusion 保持 scope-free；`VMIToVPTO` 后由现有
-   `PTOInferVPTOVecScope` 统一推断物理 VPTO vecscope。
+5. 合并冗余 `pto.vecscope`，再进入现有 VMI layout assignment 和 VMI-to-VPTO。
 6. 任何分析失败均保持原独立实现，不能改变程序语义。
 
 ### 2.2 非目标
@@ -41,7 +40,7 @@ TileOp
   -> ExpandTileOp(--tile-lib-backend=ptodsl-vmi)
   -> func.call @__pto_ptodsl_vmi_...
   -> PTOInlineLibCall
-  -> 多个独立 scf.for + pto.vmi.*
+  -> 多个独立 pto.vecscope + scf.for + pto.vmi.*
   -> FoldTileBufIntrinsics
   -> VMI semantic/layout pipeline
   -> VPTO
@@ -53,16 +52,20 @@ Softmax 的 RowReduce 归一化，尚不代表完整 FA/Online Softmax 已覆盖
 后每个 TileOp 仍有自己的循环。例如 `tadd -> texp` 会得到：
 
 ```mlir
-scf.for %i = %c0 to %blocks step %c1 {
-  %a = pto.vmi.vload %src0[%off_i] ...
-  %b = pto.vmi.vload %src1[%off_i] ...
-  %x = pto.vmi.vadd %a, %b, %mask ...
-  pto.vmi.vstore %x, %tmp[%off_i], %mask ...
+pto.vecscope {
+  scf.for %i = %c0 to %blocks step %c1 {
+    %a = pto.vmi.vload %src0[%off_i] ...
+    %b = pto.vmi.vload %src1[%off_i] ...
+    %x = pto.vmi.vadd %a, %b, %mask ...
+    pto.vmi.vstore %x, %tmp[%off_i], %mask ...
+  }
 }
-scf.for %j = %c0 to %blocks step %c1 {
-  %x = pto.vmi.vload %tmp[%off_j] ...
-  %y = pto.vmi.vexp %x, %mask ...
-  pto.vmi.vstore %y, %dst[%off_j], %mask ...
+pto.vecscope {
+  scf.for %j = %c0 to %blocks step %c1 {
+    %x = pto.vmi.vload %tmp[%off_j] ...
+    %y = pto.vmi.vexp %x, %mask ...
+    pto.vmi.vstore %y, %dst[%off_j], %mask ...
+  }
 }
 ```
 
@@ -72,6 +75,7 @@ scf.for %j = %c0 to %blocks step %c1 {
 - 没有 VMI 循环兼容性、依赖和 alias 分析。
 - 没有 VMI loop merge。
 - 没有 fusion-after mem2reg。
+- 每个模板独立生成的 `pto.vecscope` 尚未规整。
 
 ## 4. Canonical VMI TileLib 协议
 
@@ -132,7 +136,7 @@ attributes {pto.tileop.instance = "ptodsl-vmi"}
 设计实现时，ExpandTileOp 还应给实例化函数或 call 添加显式 TileOp 名称，不能依赖
 解析私有函数名恢复来源。函数 inline 后 function/call attribute 会消失，因此
 `PTOInlineLibCall` 需要在 inline PTODSL VMI provider function 时，把来源信息转移到
-canonical unit 的主 `scf.for`：
+canonical unit 的外层 `pto.vecscope` 或主 `scf.for`：
 
 ```mlir
 scf.for ... attributes {
@@ -153,8 +157,8 @@ scf.for ... attributes {
 一个首期 fusion unit 是满足以下条件的 TileLib 代码段：
 
 - 带合法 provenance。
+- 外层为一个 `pto.vecscope`，或可无副作用地归一化到一个 `pto.vecscope`。
 - 包含一个主 `scf.for`。
-- 不包含显式 `pto.vecscope`；物理 vecscope 由 emission boundary 的现有 pass 推断。
 - 主循环 step 可证明一致，首期要求正的常量 step。
 - 循环体中的 VMI memory effect 可枚举。
 - unit 外 setup 仅包含常量、mask、pointer/address 计算等可分析操作。
@@ -248,12 +252,16 @@ pto.vmi.vstore %x, %tmp[%off], %mask
 如果中间 Tile 仍有 fusion group 外用户，或 store 可能被其他访问覆盖，则不能删除
 对外可观察的 store。跨迭代 promotion 到 `scf.for iter_args` 属于后续扩展。
 
-### 7.5 VecScope 插入边界
+### 7.5 `VMICoalesceVecScope`
 
-不新增 VMI vecscope coalescing pass。canonical VMI 模板和 Fusion transform 都不显式
-生成 `pto.vecscope`，只维护合法的 SCF、VMI SSA 和内存顺序。现有
-`PTOInferVPTOVecScope` 在 `VMIToVPTO` 之后、LLVM emission 之前基于物理 VPTO 操作自动
-划分 resultless vecscope；DMA、sync、barrier 和无法安全移动的操作继续作为其边界。
+类型：cleanup transform pass。
+
+职责：
+
+- 将同一 fusion group 的多个 sibling `pto.vecscope` 规整为一个 scope。
+- 把可共享的 mask、常量和无副作用 pointer setup 放到合法位置。
+- 验证 VMI typed value 不非法跨 scope。
+- 不做 physical vreg allocation；scope 只定义合法 IR 边界。
 
 ## 8. 兼容性与安全判据
 
@@ -321,10 +329,10 @@ ExpandTileOp(--tile-lib-backend=ptodsl-vmi)
   -> canonicalize / CSE
   -> VMIMem2Reg
   -> canonicalize / CSE
+  -> VMICoalesceVecScope
   -> FoldTileBufIntrinsics(addr-only)
   -> existing VMI semantic/layout pipeline
   -> VMIToVPTO
-  -> existing PTOInferVPTOVecScope at the VPTO emission boundary
 ```
 
 关键顺序约束：
@@ -335,7 +343,6 @@ ExpandTileOp(--tile-lib-backend=ptodsl-vmi)
 - layout assignment 必须在 fusion/mem2reg 之后，避免物理 layout 细节污染判据。
 - addr-only folding 放在分析之后，以保留 Tile handle/storage provenance；分析需要能
   追踪 `tile_buf_addr` 的 root。
-- vecscope inference 必须在 VMI 物理化之后统一运行，VMI Fusion 不分析或合并 scope。
 
 ## 10. 与现有 Fusion pipeline 的关系
 
@@ -395,7 +402,7 @@ tadd(loop=128) + texp(loop=128) + trowmax(loop=32) + tsub(loop=128)
 - 三个 elementwise loops 连续合并且保持 op 顺序。
 - 同 location、同 offset 的中间 `vstore -> vload` 被 mem2reg 消除。
 - 动态 upper bound 使用同一 SSA 时可融合。
-- VMI Fusion 输出不包含显式 `pto.vecscope`，最终 VPTO emission 自动推断合法 scope。
+- 融合后只保留一个合法 `pto.vecscope`。
 - 最终 VMI-to-VPTO 编译通过且不残留 `pto.vmi.*`。
 
 ### 12.2 负向 lit tests

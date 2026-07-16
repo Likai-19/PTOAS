@@ -423,11 +423,11 @@ PTODSL VMI 的 RFC 目标 pipeline 如下：
        ↓
   VMI Mem2Reg               ← 融合后消除同 location 的中间 UB store/load
        ↓
+  Coalesce VecScope         ← 规整融合后 vecscope
+       ↓
   Fold TileBuf Intrinsics   ← 再折叠 address family
        ↓
   VMI Layout / VMIToVPTO    ← 选择物理 layout 并降到 VPTO
-       ↓
-  Infer VPTO VecScope       ← emission boundary 统一推断物理 vecscope
 ```
 
 VMI Fusion 的详细设计见 [`vmi-vf-fusion-design.md`](vmi-vf-fusion-design.md)。
