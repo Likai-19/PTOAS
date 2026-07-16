@@ -25,7 +25,7 @@ VMI introduces two logical type constructors. They describe a logical vector
 register and a logical predicate mask at the PTODSL level — the physical
 register mapping is handled by the backend.
 
-### `pto.vmi.vreg(lanes, dtype, *, layout=None)`
+### `pto.vmi.vreg(lanes, dtype) -> TypeDescriptor`
 
 **Description**: Creates a logical VMI vector register type descriptor.
 `lanes` is the logical lane count (not a physical register count). `dtype` is
@@ -37,7 +37,6 @@ a PTODSL element type token such as `pto.f32`, `pto.f16`, `pto.i32`, etc.
 |-----------|------|-------------|
 | `lanes` | `int` | Logical lane count. Must be a multiple of 64. See Constraints below |
 | `dtype` | `DType` | Element type token (`pto.f32`, `pto.f16`, `pto.i32`, etc.) |
-| `layout` | VMI layout or `None` | Physical register distribution of logical lanes. `None` (default) means contiguous. See the layout note below |
 
 **Returns**:
 
@@ -74,7 +73,7 @@ vec_f32_x2 = pto.vmi.vreg(128, pto.f32) # 2 physical regs (128 × 32b = 512B)
 
 ---
 
-### `pto.vmi.mask(lanes, *, layout=None)`
+### `pto.vmi.mask(lanes) -> TypeDescriptor`
 
 **Description**: Creates a logical VMI mask type descriptor. The predicate
 granularity is always per-lane: one mask bit governs one vector lane.
@@ -84,7 +83,6 @@ granularity is always per-lane: one mask bit governs one vector lane.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `lanes` | `int` | Logical lane count. Must match the gated vector's lanes. See Constraints below |
-| `layout` | VMI layout or `None` | Physical register distribution. `None` (default) means contiguous. See the layout note below |
 
 **Returns**:
 
@@ -96,10 +94,6 @@ granularity is always per-lane: one mask bit governs one vector lane.
 
 - `lanes` must match the lane count of the vector being gated. A `mask(64)`
   gates a `vreg(64, ...)`; a `mask(128)` gates a `vreg(128, ...)`.
-- The mask's `layout` should match the gated vector's layout. When the vector
-  is deinterleaved, the mask must carry the same deinterleaved layout so that
-  per-register predicate lowering stays consistent. In the common case where
-  `layout` is omitted on both, they default to contiguous and match naturally.
 
 **Example**:
 
@@ -109,22 +103,20 @@ mask128 = pto.vmi.mask(128)  # gates a vreg(128, ...)
 ```
 
 **About VMI layouts.** A VMI logical vector value may span `K` physical vector
-registers (256 B each). The `layout` on a `vreg` or `mask` type describes how
-logical lanes are distributed across those physical registers. Two common
-layouts are:
+registers (256 B each). PTOAS tracks the logical lane layout internally during
+lowering; PTODSL does not expose layout selection on `pto.vmi.vreg(...)` or
+`pto.vmi.mask(...)`. Two common internal layouts are:
 
 | Layout | Description |
 |--------|-------------|
-| `contiguous` (default) | Stride-1 mapping: lane `i` sits at position `i mod (2048/bitwidth(T))` within physical register `⌊i / (2048/bitwidth(T))⌋`. This is the implicit layout when `layout` is omitted |
+| `contiguous` (default) | Stride-1 mapping: lane `i` sits at position `i mod (2048/bitwidth(T))` within physical register `⌊i / (2048/bitwidth(T))⌋` |
 | `deinterleaved` | Parity split: EVEN lanes occupy the first `K/2` physical registers, ODD lanes occupy the second `K/2`. This is the natural output layout of a widening `vcvt` (e.g., `f16 → f32`) or a `vload` with `dist_mode="dintlv"` |
 
-Layouts are primarily a lowering concern managed by `pto.as`. The system
+Layouts are a lowering concern managed by `ptoas`. The system
 propagates layouts automatically through Category A ops (most elementwise
 compute) and inserts materialization at Category C boundaries. In day-to-day
-authoring you almost never need to spell a layout explicitly — the common case
-is to omit `layout` and let the type carry the default contiguous annotation.
-You would only set `layout` explicitly when declaring a VMI type annotation that
-must match the deinterleaved output of a prior narrowing/widening step.
+authoring you do not spell layouts explicitly; just declare the logical lane
+count and element type, and let PTOAS infer the internal layout.
 
 VMI types are mainly used as type annotations. They
 are not Python callables that produce values — use `pto.vmi.vload`,
@@ -139,56 +131,110 @@ values.
 The load/store family moves data between UB memory and VMI logical vector
 registers. These are the primary entry and exit points for VMI vector data.
 
-### `pto.vmi.vload(source, offset, *, size, to_dtype=None, dist_mode=None, stride=None, block_stride=None, repeat_stride=None, group=None, pmode=None)`
+PTODSL groups the `vload` / `vstore` surface into three mutually exclusive
+mode families:
+
+- `dist_mode`: the regular logical memory surface. This covers the default
+  contiguous case plus other access patterns selected by `dist_mode`.
+- `group`: grouped row-strided load/store.
+- `block_stride`: block-strided load/store using paired
+  `block_stride` / `repeat_stride` operands.
+
+Pick exactly one family per call. Do not mix `dist_mode`, `group`, and
+`block_stride` parameters in the same `vload` / `vstore`.
+
+### `vload`
+
+### `pto.vmi.vload(source, offset, *, size, dist_mode=None, to_dtype=None) -> VRegType`
+### `pto.vmi.vload(source, offset, *, size, dist_mode="dintlv") -> (VRegType, VRegType)`
+### `pto.vmi.vload(source, offset, *, size, group, stride) -> VRegType`
+### `pto.vmi.vload(source, offset, *, size, group, stride, dist_mode="brc") -> VRegType`
+### `pto.vmi.vload(source, offset, *, size, block_stride, repeat_stride) -> VRegType`
 
 **Description**: Loads a logical VMI vector from a UB pointer. The element
-type is derived from the source pointer; the lane count comes from the
-required `size`. This is the main entry point for bringing UB data into a
-`pto.vmi.vreg(...)` value.
+type is derived from the source pointer; `size` determines the logical lane
+count. Which memory access pattern is used depends on the selected mode family.
 
-**Parameters**:
+**Common parameters**:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `source` | `PtrType` (ub) | UB source pointer |
 | `offset` | `IndexLike` | Element offset into the source buffer |
-| `size` | `int` | Logical result lane count. PTODSL derives the element type from the source pointer. In grouped forms, this is still the total result lane count |
-| `to_dtype` | `DType` | Target element type. Required when `dist_mode="unpack"` |
-| `dist_mode` | `str` or `None` | Access pattern: `None` (continuous), `"dintlv"` (deinterleave), `"unpack"` (widen), `"brc"` (broadcast) |
-| `stride` | `IndexLike` or `None` | Element stride for strided access patterns |
-| `block_stride` | `int` or `None` | 16-bit block stride for block-strided access |
-| `repeat_stride` | `int` or `None` | 16-bit repeat stride for block-strided access |
-| `group` | `int` or `None` | Group count for grouped access patterns |
-| `pmode` | `int` or `None` | Optional pipeline mode |
+| `size` | `int` | Logical result lane count |
+
+**About `mask` on `vload`.**
+
+- `pto.vmi.vload(...)` does not take an explicit `mask` parameter. The load
+  surface describes how data is read from UB into a logical VMI value, not
+  which lanes of a later computation are active.
+- Tail handling and partial-lane participation are expressed on the consumer
+  side, typically by passing a mask to a later compute op such as
+  `pto.vmi.vadd(...)`, or to the final `pto.vmi.vstore(...)`.
+- In practice, if you need "load only the active lanes" behavior in authored
+  DSL code, write a normal `vload`, then apply your mask on the first consumer
+  or on the eventual store.
+
+**Mode 1: `dist_mode`**
+
+Use this family for the normal logical load surface. `dist_mode=None` means the
+default contiguous load.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `dist_mode` | `str` or `None` | One of `None`, `"continuous"`, `"dintlv"`, `"unpack"`, or `"brc"` |
+| `to_dtype` | `DType` or `None` | Required only when `dist_mode="unpack"` |
+
+Dist-mode behavior:
+
+- `None` or `"continuous"`: contiguous stride-1 load, returning one VMI vector.
+- `"dintlv"`: deinterleaved load, returning an `(even, odd)` pair.
+- `"unpack"`: widening unpack load, returning one widened VMI vector.
+- `"brc"`: broadcast load from one source element, returning one VMI vector.
+
+**Mode 2: `group`**
+
+Use this family for grouped row-strided accesses.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `group` | `int` | Number of groups |
+| `stride` | `IndexLike` | Element stride between groups |
+
+Grouped load behavior:
+
+- `size > group`: full-group load. Each group contributes `size / group`
+  elements.
+- `size == group`: slot load. Each group contributes one scalar slot.
+- `dist_mode="brc"` with `group` switches grouped load into grouped broadcast:
+  one source scalar is loaded per group and broadcast within that group.
+
+**Mode 3: `block_stride`**
+
+Use this family for block-strided accesses.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `block_stride` | `int` | 16-bit block stride operand |
+| `repeat_stride` | `int` | 16-bit repeat stride operand |
 
 **Returns**:
 
 | Return Value | Type | Description |
 |--------------|------|-------------|
-| `vec` | `VRegType` | Loaded logical vector (single return for continuous, unpack, broadcast modes) |
-| `(even, odd)` | `(VRegType, VRegType)` | Deinterleaved vector pair (when `dist_mode="dintlv"`) |
+| `vec` | `VRegType` | Single vector result for continuous, unpack, brc, group, and block-stride modes |
+| `(even, odd)` | `(VRegType, VRegType)` | Two-vector result for `dist_mode="dintlv"` |
 
-**Example** — continuous load:
+**Examples**:
+
+Continuous load:
 
 ```python
 lhs = pto.vmi.vload(src_ptr, offset, size=64)
 rhs = pto.vmi.vload(other_ptr, offset, size=64)
-out = pto.vmi.vadd(lhs, rhs, mask)
-pto.vmi.vstore(out, dst_ptr, offset, mask)
 ```
 
-**Example** — deinterleaved load:
-
-```python
-even, odd = pto.vmi.vload(
-    src_ptr,
-    offset,
-    size=64,
-    dist_mode="dintlv",
-)
-```
-
-**Example** — unpack (widening) load:
+Dist-mode unpack load:
 
 ```python
 wide = pto.vmi.vload(
@@ -200,47 +246,169 @@ wide = pto.vmi.vload(
 )
 ```
 
-The unpack form widens by exactly one adjacent step: `to_dtype` must be one
-width larger than the source pointer element type (e.g., `i8` → `i16`,
-`f16` → `f32`).
+Broadcast load:
+
+```python
+bias = pto.vmi.vload(
+    src_ptr,
+    offset,
+    size=64,
+    dist_mode="brc",
+)
+```
+
+Group-mode load:
+
+```python
+tile = pto.vmi.vload(
+    src_ptr,
+    offset,
+    size=64,
+    group=8,
+    stride=row_stride,
+)
+```
+
+Grouped broadcast load:
+
+```python
+grouped = pto.vmi.vload(
+    src_ptr,
+    offset,
+    size=64,
+    group=8,
+    stride=row_stride,
+    dist_mode="brc",
+)
+```
+
+Block-stride load:
+
+```python
+blocks = pto.vmi.vload(
+    src_ptr,
+    offset,
+    size=64,
+    block_stride=pto.i16(8),
+    repeat_stride=pto.i16(0),
+)
+```
 
 **Constraints**:
+
 - `size` is required for every `vload` form.
+- `block_stride` mode is mutually exclusive with both `dist_mode` and `group`.
+- `group` and `dist_mode` are mutually exclusive except for grouped broadcast,
+  spelled as `group=...`, `stride=...`, `dist_mode="brc"`.
 - `to_dtype` is only accepted when `dist_mode="unpack"`.
-- The `unpack` form widens by exactly one bit-width step.
+- `stride` is only accepted when `group` is provided.
+- `block_stride` and `repeat_stride` must be provided together.
+- The unpack form widens by exactly one adjacent bit-width step.
 
 ---
 
-### `pto.vmi.vstore(values, destination, offset, mask=None, *, dist_mode=None, stride=None, block_stride=None, repeat_stride=None, group=None, pmode=None)`
+### `vstore`
 
-**Description**: Writes one logical VMI vector (or a deinterleaved pair) back
-to a UB pointer.
+### `pto.vmi.vstore(values, destination, offset, mask=None, *, dist_mode=None, pmode=None) -> None`
+### `pto.vmi.vstore((even, odd), destination, offset, mask=None, *, dist_mode="dintlv", pmode=None) -> None`
+### `pto.vmi.vstore(values, destination, offset, *, group, stride, pmode=None) -> None`
+### `pto.vmi.vstore(values, destination, offset, mask=None, *, block_stride, repeat_stride, pmode=None) -> None`
 
-**Parameters**:
+**Description**: Writes one logical VMI vector, or a deinterleaved pair, back
+to a UB pointer. As with `vload`, the PTODSL surface is organized into the same
+three mutually exclusive mode families.
+
+**Common parameters**:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `values` | `VRegType` or `(VRegType, VRegType)` | One VMI vector, or a pair for `dist_mode="dintlv"` |
+| `values` | `VRegType` or `(VRegType, VRegType)` | One VMI vector for normal forms, or an `(even, odd)` pair for `dist_mode="dintlv"` |
 | `destination` | `PtrType` (ub) | UB destination pointer |
 | `offset` | `IndexLike` | Element offset into the destination buffer |
+| `pmode` | `str` or `None` | Optional inactive-lane mode: `"zero"` stores 0 to masked-off lanes; `"merge"` skips the write for masked-off lanes |
+
+**About `pmode` on `vstore`.**
+
+- `pmode="zero"` is the default store behavior. When a `mask` is present,
+  inactive lanes are written as zero.
+- `pmode="merge"` preserves destination contents on inactive lanes by skipping
+  those writes.
+- `pmode` only matters on store forms that actually use a `mask`. Group-mode
+  store does not take a mask operand, so there are no inactive lanes to define
+  there.
+
+**Mode 1: `dist_mode`**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
 | `mask` | VMI mask or `None` | Optional predicate mask gating which lanes are written |
-| `dist_mode` | `str` or `None` | Access pattern: `None` (continuous) or `"dintlv"` (interleave) |
-| `stride` | `IndexLike` or `None` | Element stride for strided access |
-| `block_stride` | `int` or `None` | 16-bit block stride |
-| `repeat_stride` | `int` or `None` | 16-bit repeat stride |
-| `group` | `int` or `None` | Group count for grouped access |
-| `pmode` | `int` or `None` | Optional pipeline mode |
+| `dist_mode` | `str` or `None` | One of `None`, `"continuous"`, or `"dintlv"` |
+
+Dist-mode behavior:
+
+- `None` or `"continuous"`: contiguous store of one VMI vector.
+- `"dintlv"`: interleaved store of an `(even, odd)` pair.
+
+**Mode 2: `group`**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `group` | `int` | Number of groups |
+| `stride` | `IndexLike` | Element stride between groups |
+
+Group store writes one grouped logical stream. On the current VMI contract,
+group-mode store does not take a mask operand.
+
+**Mode 3: `block_stride`**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `mask` | VMI mask or `None` | Optional store mask; omitting it means all lanes are active |
+| `block_stride` | `int` | 16-bit block stride operand |
+| `repeat_stride` | `int` | 16-bit repeat stride operand |
 
 **Returns**: None (side-effect operation).
 
-**Example**:
+**Examples**:
+
+Continuous store:
 
 ```python
 pto.vmi.vstore(vec, dst_ptr, offset, mask)
 ```
 
-Grouped and block-stride store forms follow the same access-mode spelling as
-`vload`.
+Group-mode store:
+
+```python
+pto.vmi.vstore(
+    tile,
+    dst_ptr,
+    offset,
+    group=8,
+    stride=row_stride,
+)
+```
+
+Block-stride store:
+
+```python
+pto.vmi.vstore(
+    vec,
+    dst_ptr,
+    offset,
+    mask,
+    block_stride=pto.i16(8),
+    repeat_stride=pto.i16(0),
+)
+```
+
+**Constraints**:
+
+- `dist_mode`, `group`, and `block_stride` mode selection are mutually
+  exclusive.
+- `dist_mode="dintlv"` requires `values` to be an `(even, odd)` pair.
+- Group mode requires `group` and `stride`, and does not accept `mask`.
+- `block_stride` and `repeat_stride` must be provided together.
 
 ---
 
@@ -249,7 +417,7 @@ Grouped and block-stride store forms follow the same access-mode spelling as
 These instructions produce a new logical vector from a scalar seed — either as
 a lane-wise ramp or a uniform broadcast.
 
-### `pto.vmi.vci(base, *, size, order=None)`
+### `pto.vmi.vci(base, *, size, order=None) -> VRegType`
 
 **Description**: Builds a logical lane-wise index ramp starting from a scalar
 base value. Use it when you need an index vector for lane addressing,
@@ -284,7 +452,8 @@ out = pto.vmi.vselr(src, idx)
 
 ---
 
-### `pto.vmi.vbrc(value, *, size, group=None)`
+### `pto.vmi.vbrc(value, *, size) -> VRegType`
+### `pto.vmi.vbrc(value, *, size, group) -> VRegType`
 
 **Description**: Broadcasts a scalar value (or a compact group-shaped input)
 across all lanes of a logical vector.
@@ -330,17 +499,17 @@ operands. They form the arithmetic core of VMI SIMD kernels.
 
 ### 14.4.1 Binary vector-vector
 
-#### `pto.vmi.vadd(lhs, rhs, mask=None) -> VRegType`
-#### `pto.vmi.vsub(lhs, rhs, mask=None) -> VRegType`
-#### `pto.vmi.vmul(lhs, rhs, mask=None) -> VRegType`
-#### `pto.vmi.vdiv(lhs, rhs, mask=None) -> VRegType`
-#### `pto.vmi.vmax(lhs, rhs, mask=None) -> VRegType`
-#### `pto.vmi.vmin(lhs, rhs, mask=None) -> VRegType`
-#### `pto.vmi.vand(lhs, rhs, mask=None) -> VRegType`
-#### `pto.vmi.vor(lhs, rhs, mask=None) -> VRegType`
-#### `pto.vmi.vxor(lhs, rhs, mask=None) -> VRegType`
-#### `pto.vmi.vshl(lhs, rhs, mask=None) -> VRegType`
-#### `pto.vmi.vshr(lhs, rhs, mask=None) -> VRegType`
+#### `pto.vmi.vadd(lhs, rhs, mask=None, *, pmode=None) -> VRegType`
+#### `pto.vmi.vsub(lhs, rhs, mask=None, *, pmode=None) -> VRegType`
+#### `pto.vmi.vmul(lhs, rhs, mask=None, *, pmode=None) -> VRegType`
+#### `pto.vmi.vdiv(lhs, rhs, mask=None, *, pmode=None) -> VRegType`
+#### `pto.vmi.vmax(lhs, rhs, mask=None, *, pmode=None) -> VRegType`
+#### `pto.vmi.vmin(lhs, rhs, mask=None, *, pmode=None) -> VRegType`
+#### `pto.vmi.vand(lhs, rhs, mask=None, *, pmode=None) -> VRegType`
+#### `pto.vmi.vor(lhs, rhs, mask=None, *, pmode=None) -> VRegType`
+#### `pto.vmi.vxor(lhs, rhs, mask=None, *, pmode=None) -> VRegType`
+#### `pto.vmi.vshl(lhs, rhs, mask=None, *, pmode=None) -> VRegType`
+#### `pto.vmi.vshr(lhs, rhs, mask=None, *, pmode=None) -> VRegType`
 
 **Description**: Element-wise binary operation: `result[i] = lhs[i] <op> rhs[i]`
 for lanes where `mask[i]` is true (or all lanes when `mask` is omitted).
@@ -352,6 +521,7 @@ for lanes where `mask[i]` is true (or all lanes when `mask` is omitted).
 | `lhs` | `VRegType` | First operand vector |
 | `rhs` | `VRegType` | Second operand vector |
 | `mask` | VMI mask or `None` | Optional predicate mask gating lane participation |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 
 **Returns**:
 
@@ -376,13 +546,13 @@ out = pto.vmi.vmul(scale, data, full_mask)
 
 ### 14.4.2 Unary vector
 
-#### `pto.vmi.vabs(source, mask=None) -> VRegType`
-#### `pto.vmi.vneg(source, mask=None) -> VRegType`
-#### `pto.vmi.vrelu(source, mask=None) -> VRegType`
-#### `pto.vmi.vexp(source, mask=None) -> VRegType`
-#### `pto.vmi.vln(source, mask=None) -> VRegType`
-#### `pto.vmi.vsqrt(source, mask=None) -> VRegType`
-#### `pto.vmi.vnot(source, mask=None) -> VRegType`
+#### `pto.vmi.vabs(source, mask=None, *, pmode=None) -> VRegType`
+#### `pto.vmi.vneg(source, mask=None, *, pmode=None) -> VRegType`
+#### `pto.vmi.vrelu(source, mask=None, *, pmode=None) -> VRegType`
+#### `pto.vmi.vexp(source, mask=None, *, pmode=None) -> VRegType`
+#### `pto.vmi.vln(source, mask=None, *, pmode=None) -> VRegType`
+#### `pto.vmi.vsqrt(source, mask=None, *, pmode=None) -> VRegType`
+#### `pto.vmi.vnot(source, mask=None, *, pmode=None) -> VRegType`
 
 **Description**: Element-wise unary operation: `result[i] = op(source[i])` for
 active lanes. `vrelu` = `max(0, x)`, `vnot` = bitwise NOT (integer types
@@ -394,6 +564,7 @@ only).
 |-----------|------|-------------|
 | `source` | `VRegType` | Input vector |
 | `mask` | VMI mask or `None` | Optional predicate mask gating lane participation |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 
 **Returns**:
 
@@ -412,12 +583,25 @@ inverted = pto.vmi.vnot(int_vec)
 
 ### 14.4.3 Vector-scalar
 
-#### `pto.vmi.vadds(source, scalar, mask) -> VRegType`
-#### `pto.vmi.vmuls(source, scalar, mask) -> VRegType`
-#### `pto.vmi.vmaxs(source, scalar, mask) -> VRegType`
-#### `pto.vmi.vmins(source, scalar, mask) -> VRegType`
-#### `pto.vmi.vshls(source, scalar, mask) -> VRegType`
-#### `pto.vmi.vshrs(source, scalar, mask) -> VRegType`
+Formal `pto.vmi` vector-scalar ops in VMI v0.1:
+
+#### `pto.vmi.vadds(source, scalar, mask, *, pmode=None) -> VRegType`
+#### `pto.vmi.vmuls(source, scalar, mask, *, pmode=None) -> VRegType`
+#### `pto.vmi.vmaxs(source, scalar, mask, *, pmode=None) -> VRegType`
+#### `pto.vmi.vmins(source, scalar, mask, *, pmode=None) -> VRegType`
+#### `pto.vmi.vshls(source, scalar, mask, *, pmode=None) -> VRegType`
+#### `pto.vmi.vshrs(source, scalar, mask, *, pmode=None) -> VRegType`
+
+The following are **PTODSL syntax sugar** — convenience wrappers provided by the
+PTODSL authoring layer. They have **no corresponding VMI instruction**; PTODSL lowers
+each to an equivalent `pto.vmi.*` form (e.g., `pto.vsubs` lowers to `pto.vmi.vadds` with a
+negated scalar). Users may freely use these spellings in PTODSL programs, but tooling and
+the VMI v0.1 spec only recognize the formal `pto.vmi.*` ops listed above.
+
+#### `pto.vsubs(source, scalar, mask) -> VRegType`
+#### `pto.vands(source, scalar, mask) -> VRegType`
+#### `pto.vors(source, scalar, mask) -> VRegType`
+#### `pto.vxors(source, scalar, mask) -> VRegType`
 
 **Description**: Element-wise operation with a uniform scalar second operand:
 `result[i] = source[i] <op> scalar`. The scalar is broadcast to all active
@@ -430,6 +614,7 @@ lanes.
 | `source` | `VRegType` | Input vector |
 | `scalar` | `ScalarType` | Scalar operand (Python number or PTODSL scalar). Automatically coerced to the vector element type |
 | `mask` | VMI mask | **Required.** Predicate mask gating lane participation |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 
 **Returns**:
 
@@ -440,14 +625,18 @@ lanes.
 **Example**:
 
 ```python
-shifted = pto.vmi.vsubs(scores, row_max, col_mask)
 scaled = pto.vmi.vmuls(data, 0.5, full_mask)
+shifted = pto.vsubs(scores, row_max, col_mask)
 ```
 
 **Constraints**:
 - `mask` is always required for vector-scalar ops — unlike binary and unary
   ops, there is no mask-optional form.
 - `scalar` is coerced to match the element type of `source`.
+- `vsubs`, `vands`, `vors`, and `vxors` are PTODSL convenience spellings, not
+  dedicated formal `pto.vmi` instructions in VMI v0.1.
+- `vdivs` is listed for symmetry with `vdiv`, but it is not currently surfaced
+  as a PTODSL API and is not part of the formal VMI v0.1 instruction set.
 
 ---
 
@@ -456,7 +645,7 @@ scaled = pto.vmi.vmuls(data, 0.5, full_mask)
 Compare instructions produce logical VMI masks from vector data. Select
 instructions consume masks to pick between values lane by lane.
 
-### `pto.vmi.vcmp(lhs, rhs, seed, cmp) -> MaskType`
+### `pto.vmi.vcmp(lhs, rhs, seed, cmp, *, pmode=None) -> MaskType`
 
 **Description**: Element-wise vector-vector comparison producing a VMI mask:
 `result[i] = seed[i] ? (lhs[i] <cmp> rhs[i]) : 0`.
@@ -468,7 +657,8 @@ instructions consume masks to pick between values lane by lane.
 | `lhs` | `VRegType` | First operand vector |
 | `rhs` | `VRegType` | Second operand vector |
 | `seed` | VMI mask | Seed mask gating which lanes participate |
-| `cmp` | `str` | Comparison predicate: `"oeq"`, `"one"`, `"olt"`, `"ole"`, `"ogt"`, `"oge"` |
+| `cmp` | `str` | Comparison predicate. VMI accepts bare predicates `"eq"`, `"ne"`, `"lt"`, `"le"`, `"gt"`, `"ge"`. Floating-point compares also accept ordered forms `"oeq"`, `"one"`, `"olt"`, `"ole"`, `"ogt"`, `"oge"` |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 **Returns**:
 
 | Return Value | Type | Description |
@@ -477,7 +667,7 @@ instructions consume masks to pick between values lane by lane.
 
 ---
 
-### `pto.vmi.vcmps(source, scalar, seed, cmp) -> MaskType`
+### `pto.vmi.vcmps(source, scalar, seed, cmp, *, pmode=None) -> MaskType`
 
 **Description**: Vector-scalar comparison: `result[i] = seed[i] ? (source[i] <cmp> scalar) : 0`.
 The scalar is broadcast to all lanes.
@@ -489,7 +679,8 @@ The scalar is broadcast to all lanes.
 | `source` | `VRegType` | Input vector |
 | `scalar` | `ScalarType` | Scalar operand (coerced to the vector element type) |
 | `seed` | VMI mask | Seed mask gating lane participation |
-| `cmp` | `str` | Comparison predicate |
+| `cmp` | `str` | Comparison predicate. Same accepted spellings as `vcmp` |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 **Returns**:
 
 | Return Value | Type | Description |
@@ -499,13 +690,13 @@ The scalar is broadcast to all lanes.
 **Example**:
 
 ```python
-pred = pto.vmi.vcmp(lhs, rhs, seed_mask, "ogt")
-pred2 = pto.vmi.vcmps(src, 0.0, seed_mask, "oge")
+pred = pto.vmi.vcmp(lhs, rhs, seed_mask, "gt")
+pred2 = pto.vmi.vcmps(src, 0.0, seed_mask, "ge")
 ```
 
 ---
 
-### `pto.vmi.vsel(mask, true_value, false_value) -> VRegType`
+### `pto.vmi.vsel(mask, true_value, false_value, *, pmode=None) -> VRegType`
 
 **Description**: Per-lane ternary select: `result[i] = mask[i] ? true_value[i] : false_value[i]`.
 
@@ -516,6 +707,7 @@ pred2 = pto.vmi.vcmps(src, 0.0, seed_mask, "oge")
 | `mask` | VMI mask | Selection predicate |
 | `true_value` | `VRegType` | Value taken when mask is true |
 | `false_value` | `VRegType` | Value taken when mask is false |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 **Returns**:
 
 | Return Value | Type | Description |
@@ -559,9 +751,9 @@ out = pto.vmi.vselr(src, idx)
 Reduction instructions collapse a logical vector along its lane dimension,
 producing a smaller logical result.
 
-### `pto.vmi.vcadd(source, mask, *, group=None, reassoc=None) -> VRegType`
-### `pto.vmi.vcmax(source, mask, *, group=None) -> VRegType`
-### `pto.vmi.vcmin(source, mask, *, group=None) -> VRegType`
+### `pto.vmi.vcadd(source, mask, *, group=None, reassoc, pmode=None) -> VRegType`
+### `pto.vmi.vcmax(source, mask, *, group=None, pmode=None) -> VRegType`
+### `pto.vmi.vcmin(source, mask, *, group=None, pmode=None) -> VRegType`
 
 **Description**: Full-vector or grouped reduction. `vcadd` computes the sum,
 `vcmax` / `vcmin` compute the maximum / minimum with their lane index. When
@@ -578,6 +770,7 @@ performed per group.
 | `mask` | VMI mask | **Required.** Predicate mask gating lane participation |
 | `group` | `int` or `None` | Number of groups for per-group reduction. `None` means full-vector reduction |
 | `reassoc` | `bool` | For `vcadd` on floating-point data only: PTODSL requires this keyword to be written explicitly as `True` or `False` |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 
 **Returns**:
 
@@ -617,7 +810,7 @@ group_max = pto.vmi.vcmax(
 
 ## 14.7 Conversion and reinterpretation
 
-### `pto.vmi.vcvt(source, to_dtype, *, rounding=None, saturate=None) -> VRegType`
+### `pto.vmi.vcvt(source, to_dtype, *, rounding=None, saturate=None, pmode=None) -> VRegType`
 
 **Description**: Numeric type conversion between VMI vector element types.
 Converts the element type of `source` to the target element type. PTODSL
@@ -634,6 +827,7 @@ For int→int widening, the source element type must carry signedness
 | `to_dtype` | `DType` | Target element type. PTODSL derives the result vector type from the source lane count/layout and this dtype |
 | `rounding` | rounding mode or `None` | Optional rounding mode token |
 | `saturate` | saturate mode or `None` | Optional saturation mode token |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 
 **Returns**:
 
@@ -695,7 +889,7 @@ This family covers special-function-unit ops, fused multiply-accumulate forms,
 and indexed memory access (gather, scatter, histogram). They go beyond simple
 elementwise arithmetic.
 
-### `pto.vmi.vexpdif(x, max_value, mask) -> VRegType`
+### `pto.vmi.vexpdif(x, max_value, mask, *, pmode=None) -> VRegType`
 
 **Description**: Computes `exp(x[i] - max_value[i])` for active lanes — the
 stable softmax numerator.
@@ -707,6 +901,7 @@ stable softmax numerator.
 | `x` | `VRegType` | Input vector |
 | `max_value` | `VRegType` | Maximum value vector to subtract before exponentiation |
 | `mask` | VMI mask | **Required.** Predicate mask gating lane participation |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 **Returns**:
 
 | Return Value | Type | Description |
@@ -715,7 +910,7 @@ stable softmax numerator.
 
 ---
 
-### `pto.vmi.vaxpy(x, acc, alpha, mask) -> VRegType`
+### `pto.vmi.vaxpy(x, acc, alpha, mask, *, pmode=None) -> VRegType`
 
 **Description**: Fused multiply-add: `result[i] = alpha * x[i] + acc[i]`.
 
@@ -727,6 +922,7 @@ stable softmax numerator.
 | `acc` | `VRegType` | Accumulator vector |
 | `alpha` | `ScalarType` | Scalar multiplier (coerced to the element type of `x`) |
 | `mask` | VMI mask | **Required.** Predicate mask |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 **Returns**:
 
 | Return Value | Type | Description |
@@ -735,7 +931,7 @@ stable softmax numerator.
 
 ---
 
-### `pto.vmi.vlrelu(x, slope, mask) -> VRegType`
+### `pto.vmi.vlrelu(x, slope, mask, *, pmode=None) -> VRegType`
 
 **Description**: Leaky ReLU: `result[i] = x[i] >= 0 ? x[i] : slope * x[i]`.
 
@@ -746,6 +942,7 @@ stable softmax numerator.
 | `x` | `VRegType` | Input vector |
 | `slope` | `ScalarType` | Negative-slope multiplier (coerced to the element type of `x`) |
 | `mask` | VMI mask | **Required.** Predicate mask |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 **Returns**:
 
 | Return Value | Type | Description |
@@ -754,7 +951,7 @@ stable softmax numerator.
 
 ---
 
-### `pto.vmi.vprelu(x, alpha, mask) -> VRegType`
+### `pto.vmi.vprelu(x, alpha, mask, *, pmode=None) -> VRegType`
 
 **Description**: Parametric ReLU with a per-lane vector alpha:
 `result[i] = x[i] >= 0 ? x[i] : alpha[i] * x[i]`.
@@ -766,6 +963,7 @@ stable softmax numerator.
 | `x` | `VRegType` | Input vector |
 | `alpha` | `VRegType` | Per-lane slope vector |
 | `mask` | VMI mask | **Required.** Predicate mask |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 **Returns**:
 
 | Return Value | Type | Description |
@@ -774,7 +972,7 @@ stable softmax numerator.
 
 ---
 
-### `pto.vmi.vmull(a, b, mask) -> (VRegType, VRegType)`
+### `pto.vmi.vmull(a, b, mask, *, pmode=None) -> (VRegType, VRegType)`
 
 **Description**: Widening 32-bit integer multiply. For each active lane, the
 operation returns the low and high 32-bit halves of the 64-bit product. Both
@@ -788,6 +986,7 @@ must be matching `i32` or `ui32` vectors with 64, 128, or 256 lanes.
 | `a` | `VRegType` | First `i32` or `ui32` operand vector |
 | `b` | `VRegType` | Matching second operand vector |
 | `mask` | VMI mask | **Required.** Predicate mask |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 
 **Returns**:
 
@@ -808,7 +1007,7 @@ low, high = pto.vmi.vmull(a32, b32, mask)
 
 ---
 
-### `pto.vmi.vmula(acc, lhs, rhs, mask) -> VRegType`
+### `pto.vmi.vmula(acc, lhs, rhs, mask, *, pmode=None) -> VRegType`
 
 **Description**: Widening multiply-accumulate: `result = acc + (lhs * rhs)`,
 where the product is computed at the widened precision of `acc`.
@@ -821,6 +1020,7 @@ where the product is computed at the widened precision of `acc`.
 | `lhs` | `VRegType` | First operand (narrow type) |
 | `rhs` | `VRegType` | Second operand (narrow type) |
 | `mask` | VMI mask | **Required.** Predicate mask |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 **Returns**:
 
 | Return Value | Type | Description |
@@ -881,7 +1081,7 @@ as `vdhist` but each bin accumulates the sum of counts for all bins ≤ its inde
 
 ---
 
-### `pto.vmi.vgather(source, offsets, mask) -> VRegType`
+### `pto.vmi.vgather(source, offsets, mask, *, pmode=None) -> VRegType`
 
 **Description**: Indexed gather from a UB pointer using per-lane element
 offsets. Only masked-on lanes participate; masked-off lanes produce an
@@ -894,6 +1094,7 @@ unspecified value.
 | `source` | `PtrType` (ub) | UB source pointer |
 | `offsets` | `VRegType` | Per-lane element offsets (integer VMI vector) |
 | `mask` | VMI mask | **Required.** Predicate mask gating lane participation |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 
 **Returns**:
 
@@ -907,7 +1108,7 @@ unspecified value.
 
 ---
 
-### `pto.vmi.vgatherb(source, offsets, mask) -> VRegType`
+### `pto.vmi.vgatherb(source, offsets, mask, *, pmode=None) -> VRegType`
 
 **Description**: Block gather from a UB pointer. Each participating lane
 gathers one 32-byte block using byte-level offsets.
@@ -919,6 +1120,7 @@ gathers one 32-byte block using byte-level offsets.
 | `source` | `PtrType` (ub) | UB source pointer |
 | `offsets` | `VRegType` | Per-lane byte offsets (integer VMI vector) |
 | `mask` | VMI mask | **Required.** Predicate mask |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 **Returns**:
 
 | Return Value | Type | Description |
@@ -932,7 +1134,7 @@ gathers one 32-byte block using byte-level offsets.
 
 ---
 
-### `pto.vmi.vscatter(value, destination, offsets, mask) -> None`
+### `pto.vmi.vscatter(value, destination, offsets, mask, *, pmode=None) -> None`
 
 **Description**: Indexed scatter to a UB pointer. Writes vector lanes to
 irregular memory locations using per-lane element offsets.
@@ -945,6 +1147,7 @@ irregular memory locations using per-lane element offsets.
 | `destination` | `PtrType` (ub) | UB destination pointer |
 | `offsets` | `VRegType` | Per-lane element offsets (integer VMI vector) |
 | `mask` | VMI mask | **Required.** Predicate mask gating lane participation |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 
 **Returns**: None (side-effect operation).
 
@@ -963,7 +1166,8 @@ VMI provides one surface API for creating predicate masks:
 `create_mask(...)`. It covers both whole-vector prefix masks and grouped
 prefix masks.
 
-### `pto.vmi.create_mask(active_lanes, *, size, num_groups=None, group_size=None) -> MaskType`
+### `pto.vmi.create_mask(active_lanes, *, size) -> MaskType`
+### `pto.vmi.create_mask(active_lanes, *, size, group) -> MaskType`
 
 **Description**: Creates a prefix-style VMI mask where the first
 `active_lanes` lanes are active and all remaining lanes are inactive. This is
@@ -975,8 +1179,7 @@ the primary mask constructor for tail handling and partial-vector scenarios.
 |-----------|------|-------------|
 | `active_lanes` | `IndexLike` | Number of active lanes in the prefix |
 | `size` | `int` | Total logical lane count |
-| `num_groups` | `int` or `None` | When provided together with `group_size`, creates a grouped prefix mask instead of a whole-vector prefix mask |
-| `group_size` | `int` or `None` | Number of lanes per group for the grouped form |
+| `group` | `int` or `None` | When provided, creates a grouped prefix mask instead of a whole-vector prefix mask. The group size is inferred as `size / group` |
 
 **Returns**:
 
@@ -992,15 +1195,14 @@ tail_mask = pto.vmi.create_mask(remained, size=64)
 group_mask = pto.vmi.create_mask(
     active_per_group,
     size=128,
-    num_groups=8,
-    group_size=16,
+    group=8,
 )
 ```
 
 **Constraints**:
-- `num_groups` and `group_size` must either both be omitted or both be provided.
-- When present, `size` must equal `num_groups * group_size`.
-- In grouped form, `active_lanes` must be ≤ `group_size`.
+- When `group` is present, `size` must be divisible by `group`.
+- In grouped form, `group_size` is inferred as `size / group`.
+- In grouped form, `active_lanes` must be ≤ inferred `group_size`.
 
 ---
 
@@ -1010,7 +1212,7 @@ Rearrangement instructions reorganize data between VMI vector registers
 without touching memory. They are used to switch between interleaved and
 deinterleaved data layouts.
 
-### `pto.vmi.vintlv(lhs, rhs, mask) -> (VRegType, VRegType)`
+### `pto.vmi.vintlv(lhs, rhs, mask, *, pmode=None) -> (VRegType, VRegType)`
 
 **Description**: Interleave two logical vectors lane-by-lane and return the
 result as a pair: `low` contains the interleaved lower half, `high` contains
@@ -1023,6 +1225,7 @@ the upper half.
 | `lhs` | `VRegType` | First source vector |
 | `rhs` | `VRegType` | Second source vector |
 | `mask` | VMI mask | **Required.** Predicate mask gating lane participation |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 **Returns**:
 
 | Return Value | Type | Description |
@@ -1032,7 +1235,7 @@ the upper half.
 
 ---
 
-### `pto.vmi.vdintlv(lhs, rhs, mask) -> (VRegType, VRegType)`
+### `pto.vmi.vdintlv(lhs, rhs, mask, *, pmode=None) -> (VRegType, VRegType)`
 
 **Description**: Deinterleave a previously interleaved vector pair. This is
 the inverse of `vintlv`: it separates even-positioned and odd-positioned lanes
@@ -1045,6 +1248,7 @@ of the logical input stream into two output vectors.
 | `lhs` | `VRegType` | Lower half of the interleaved input |
 | `rhs` | `VRegType` | Upper half of the interleaved input |
 | `mask` | VMI mask | **Required.** Predicate mask gating lane participation |
+| `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 **Returns**:
 
 | Return Value | Type | Description |
@@ -1175,14 +1379,16 @@ def vmi_elementwise(
 | Index / Broadcast | `vci`, `vbrc` |
 | Binary vector-vector | `vadd`, `vsub`, `vmul`, `vdiv`, `vmax`, `vmin`, `vand`, `vor`, `vxor`, `vshl`, `vshr` |
 | Unary vector | `vabs`, `vneg`, `vrelu`, `vexp`, `vln`, `vsqrt`, `vnot` |
-| Vector-scalar | `vadds`, `vmuls`, `vmaxs`, `vmins`, `vshls`, `vshrs` |
+| Vector-scalar | formal `pto.vmi`: `vadds`, `vmuls`, `vmaxs`, `vmins`, `vshls`, `vshrs`; DSL convenience: `vsubs`, `vands`, `vors`, `vxors` |
 | Compare / Select | `vcmp`, `vcmps`, `vsel`, `vselr` |
 | Reduction | `vcadd`, `vcmax`, `vcmin` |
 | Conversion | `vcvt`, `vinterpret_cast` |
 | SFU / Fused | `vexpdif`, `vaxpy`, `vlrelu`, `vprelu`, `vmull`, `vmula` |
 | Histogram | `vchist`, `vdhist` |
 | Indexed memory | `vgather`, `vgatherb`, `vscatter` |
-| Predicate construction | `create_mask`, `create_group_mask` |
+| Predicate construction | `create_mask` |
 | Data rearrangement | `vintlv`, `vdintlv` |
 
-All instructions listed above are members of the `pto.vmi` namespace.
+All formally listed VMI instructions above are members of the `pto.vmi`
+namespace. Entries explicitly labeled as DSL convenience spellings are PTODSL
+authoring helpers and are not part of the formal `pto.vmi` v0.1 inventory.
