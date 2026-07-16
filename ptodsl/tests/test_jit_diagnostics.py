@@ -118,12 +118,47 @@ def vmi_vinterpret_cast_width_mismatch_probe():
 
 
 @pto.jit(target="a5")
-def vmi_create_mask_partial_group_args_probe():
+def vmi_create_mask_group_mismatch_probe():
     _ = pto.vmi.create_mask(
-        8,
+        9,
         size=64,
-        num_groups=8,
+        group=8,
     )
+
+
+@pto.jit(target="a5")
+def vmi_vload_mixed_mode_probe():
+    tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
+    src = tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+    _ = pto.vmi.vload(src, offset, size=64, dist_mode="continuous", group=8, stride=8)
+
+
+@pto.jit(target="a5")
+def vmi_vload_brc_stride_without_group_probe():
+    tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
+    src = tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+    _ = pto.vmi.vload(src, offset, size=64, dist_mode="brc", stride=8)
+
+
+@pto.jit(target="a5")
+def vmi_vstore_group_mask_probe():
+    tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
+    src = tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+    vec = pto.vmi.vload(src, offset, size=64)
+    mask = pto.vmi.create_mask(64, size=64)
+    pto.vmi.vstore(vec, src, offset, mask, group=8, stride=8)
+
+
+@pto.jit(target="a5")
+def vmi_vbrc_group_lane_mismatch_probe():
+    tile = pto.alloc_tile(shape=[1, 16], dtype=pto.f32)
+    src = tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+    compact = pto.vmi.vload(src, offset, size=16)
+    _ = pto.vmi.vbrc(compact, size=64, group=8)
 
 @pto.jit(target="a5")
 def vmi_vload_missing_size_probe():
@@ -692,10 +727,34 @@ def main() -> None:
         "element widths to match",
     )
     expect_raises(
-        vmi_create_mask_partial_group_args_probe.compile,
-        TypeError,
+        vmi_create_mask_group_mismatch_probe.compile,
+        ValueError,
         "pto.vmi.create_mask(...)",
-        "num_groups and group_size together",
+        "active_lanes to be <= the inferred group_size",
+    )
+    expect_raises(
+        vmi_vload_mixed_mode_probe.compile,
+        TypeError,
+        "pto.vmi.vload(...)",
+        "dist_mode together with group",
+    )
+    expect_raises(
+        vmi_vload_brc_stride_without_group_probe.compile,
+        TypeError,
+        "pto.vmi.vload(...)",
+        "accepts stride only when group is provided",
+    )
+    expect_raises(
+        vmi_vstore_group_mask_probe.compile,
+        TypeError,
+        "pto.vmi.vstore(...)",
+        "group mode does not take a mask operand",
+    )
+    expect_raises(
+        vmi_vbrc_group_lane_mismatch_probe.compile,
+        ValueError,
+        "pto.vmi.vbrc(...)",
+        "input lane count to match group",
     )
     expect_raises(
         vmi_vload_missing_size_probe.compile,
