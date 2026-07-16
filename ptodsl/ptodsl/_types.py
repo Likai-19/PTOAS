@@ -153,10 +153,9 @@ class _MaskDescriptor(_DType):
         return f"<pto.mask {self._bits}>"
 
 class _VMIVRegDescriptor(_DType):
-    def __init__(self, lanes: int, elem, layout=None):
+    def __init__(self, lanes: int, elem):
         self._lanes = lanes
         self._elem = elem
-        self._layout = layout
 
     def resolve(self) -> Type:
         elem = _ensure_tensor_storage_dtype(self._elem, context="pto.vmi.vreg(...)")
@@ -166,18 +165,16 @@ class _VMIVRegDescriptor(_DType):
                 "The current PTO Python bindings do not expose VMIVRegType. "
                 "Rebuild the PTO Python extension before using pto.vmi.vreg(...)."
             )
-        return vreg_type_cls.get(self._lanes, elem, layout=self._layout)
+        return vreg_type_cls.get(self._lanes, elem)
 
     def __repr__(self):
-        layout = "" if self._layout is None else f", layout={self._layout!r}"
-        return f"<pto.vmi.vreg {self._lanes}x{self._elem}{layout}>"
+        return f"<pto.vmi.vreg {self._lanes}x{self._elem}>"
 
 
 class _VMIMaskDescriptor(_DType):
-    def __init__(self, lanes: int, layout=None):
+    def __init__(self, lanes: int):
         self._lanes = lanes
         self._granularity = "pred"
-        self._layout = layout
 
     def resolve(self) -> Type:
         mask_type_cls = getattr(_pto, "VMIMaskType", None)
@@ -186,11 +183,10 @@ class _VMIMaskDescriptor(_DType):
                 "The current PTO Python bindings do not expose VMIMaskType. "
                 "Rebuild the PTO Python extension before using pto.vmi.mask(...)."
             )
-        return mask_type_cls.get(self._lanes, self._granularity, layout=self._layout)
+        return mask_type_cls.get(self._lanes, self._granularity)
 
     def __repr__(self):
-        layout = "" if self._layout is None else f", layout={self._layout!r}"
-        return f"<pto.vmi.mask {self._lanes}x{self._granularity}{layout}>"
+        return f"<pto.vmi.mask {self._lanes}x{self._granularity}>"
 
 class _VecDescriptor(_DType):
     def __init__(self, elem, size: int):
@@ -494,14 +490,14 @@ def mask_type(bits: str = "b32") -> _MaskDescriptor:
     return _MaskDescriptor(bits)
 
 
-def vmi_vreg_type(lanes: int, elem, *, layout=None) -> _VMIVRegDescriptor:
+def vmi_vreg_type(lanes: int, elem) -> _VMIVRegDescriptor:
     """Return a lazy descriptor for ``!pto.vmi.vreg<lanesxelem>``."""
-    return _VMIVRegDescriptor(lanes, elem, layout)
+    return _VMIVRegDescriptor(lanes, elem)
 
 
-def vmi_mask_type(lanes: int, *, layout=None) -> _VMIMaskDescriptor:
+def vmi_mask_type(lanes: int) -> _VMIMaskDescriptor:
     """Return a lazy descriptor for ``!pto.vmi.mask<lanesxpred>``."""
-    return _VMIMaskDescriptor(lanes, layout)
+    return _VMIMaskDescriptor(lanes)
 
 
 def tile_buf_type(shape, dtype, valid_shape=None, *,

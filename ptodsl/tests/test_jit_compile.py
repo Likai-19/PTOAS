@@ -2382,8 +2382,7 @@ def vmi_wrapper_dispatch_probe():
     group_mask = pto.vmi.create_mask(
         active_per_group,
         size=64,
-        num_groups=8,
-        group_size=8,
+        group=8,
     )
     lhs = pto.vmi.vload(src_ptr, offset, size=64)
     rhs = pto.vmi.vload(other_ptr, offset, size=64)
@@ -2502,6 +2501,37 @@ def vmi_unpack_vload_probe():
         size=128,
         dist_mode="unpack",
         to_dtype=pto.i16,
+    )
+
+
+@pto.jit(target="a5", backend="vpto", mode="explicit")
+def vmi_brc_vload_probe():
+    src_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
+    src_ptr = src_tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+
+    _ = pto.vmi.vload(
+        src_ptr,
+        offset,
+        size=64,
+        dist_mode="brc",
+    )
+
+
+@pto.jit(target="a5", backend="vpto", mode="explicit")
+def vmi_group_brc_vload_probe():
+    src_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
+    src_ptr = src_tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+    row_stride = pto.const(1, dtype=pto.index)
+
+    _ = pto.vmi.vload(
+        src_ptr,
+        offset,
+        size=64,
+        group=8,
+        stride=row_stride,
+        dist_mode="brc",
     )
 
 
@@ -5752,6 +5782,18 @@ def main() -> None:
     expect_parse_roundtrip_and_verify(vmi_wrapper_dispatch_text, "public VMI wrapper dispatch specialization")
     vmi_unpack_vload_text = vmi_unpack_vload_probe.compile().mlir_text()
     expect_parse_roundtrip_and_verify(vmi_unpack_vload_text, "public VMI unpack vload specialization")
+    vmi_brc_vload_text = vmi_brc_vload_probe.compile().mlir_text()
+    expect_parse_roundtrip_and_verify(vmi_brc_vload_text, "public VMI brc vload specialization")
+    expect(
+        'dist_mode = "brc"' in vmi_brc_vload_text,
+        "pto.vmi.vload should preserve the authored brc dist_mode without requiring a stride operand",
+    )
+    vmi_group_brc_vload_text = vmi_group_brc_vload_probe.compile().mlir_text()
+    expect_parse_roundtrip_and_verify(vmi_group_brc_vload_text, "public VMI grouped brc vload specialization")
+    expect(
+        'dist_mode = "brc"' in vmi_group_brc_vload_text and "group = 8" in vmi_group_brc_vload_text,
+        "pto.vmi.vload should allow the grouped brc form exposed by the VMI IR contract",
+    )
     fixed_width_integer_text = fixed_width_integer_specialization_probe.compile().mlir_text()
     expect_parse_roundtrip_and_verify(fixed_width_integer_text, "fixed-width integer specialization")
     with mock.patch.object(vmi_namespace._pto, "vmi_vadd", None):

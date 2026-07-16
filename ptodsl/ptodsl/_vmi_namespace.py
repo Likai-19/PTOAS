@@ -15,7 +15,7 @@ from mlir.dialects import pto as _pto
 from mlir.ir import BF16Type, F16Type, F32Type, Float8E4M3FNType, Float8E5M2Type, IntegerType, MemRefType
 
 from ._scalar_coercion import coerce_scalar_to_type
-from ._surface_values import _coerce_index_value, unwrap_surface_value, wrap_surface_value
+from ._surface_values import _coerce_index_value, _try_get_constant_index, unwrap_surface_value, wrap_surface_value
 from ._types import _ensure_tensor_storage_dtype, _resolve, vmi_mask_type, vmi_vreg_type
 
 
@@ -313,6 +313,18 @@ def _resolve_vmi_mask_type(size, *, context: str):
     return _resolve(vmi_mask_type(size))
 
 
+def _vmi_vreg_element_count(type_obj, *, context: str):
+    vreg_type = _as_vmi_vreg_type(type_obj, context=context)
+    for attr in ("element_count", "elementCount"):
+        value = getattr(vreg_type, attr, None)
+        if value is not None:
+            return int(value)
+    getter = getattr(vreg_type, "getElementCount", None)
+    if callable(getter):
+        return int(getter())
+    raise TypeError(f"{context} could not determine VMI vector lane count from {type_obj}")
+
+
 def _resolve_vmi_unpack_result_type(source, size, to_dtype, *, context: str):
     if to_dtype is None:
         raise TypeError(f'{context} requires to_dtype when dist_mode="unpack"')
@@ -340,6 +352,43 @@ def _resolve_vmi_vload_result_types(source, size, *, dist_mode, to_dtype, contex
     if dist_mode == "dintlv":
         return [resolved, resolved]
     return [resolved]
+
+
+def _validate_vmi_load_modes(
+    context: str,
+    *,
+    dist_mode,
+    group,
+    stride,
+    block_stride,
+    repeat_stride,
+    allow_group_brc: bool,
+    allowed_dist_modes,
+):
+    if dist_mode is not None and dist_mode not in allowed_dist_modes:
+        expected = ", ".join(repr(mode) for mode in sorted(allowed_dist_modes, key=str))
+        raise TypeError(f"{context} does not support dist_mode={dist_mode!r}; expected one of {expected}")
+
+    if group is not None:
+        if dist_mode is not None and (not allow_group_brc or dist_mode != "brc"):
+            raise TypeError(f"{context} does not allow dist_mode together with group")
+        if block_stride is not None or repeat_stride is not None:
+            raise TypeError(f"{context} does not allow block_stride together with group")
+        if stride is None:
+            raise TypeError(f"{context} with group=... requires stride")
+        return
+
+    if block_stride is not None or repeat_stride is not None:
+        if dist_mode is not None:
+            raise TypeError(f"{context} does not allow dist_mode together with block_stride")
+        if block_stride is None or repeat_stride is None:
+            raise TypeError(f"{context} requires block_stride and repeat_stride together")
+        if stride is not None:
+            raise TypeError(f"{context} does not allow stride together with block_stride")
+        return
+
+    if stride is not None:
+        raise TypeError(f"{context} accepts stride only when group is provided")
 
 
 def _call_value(op_name: str, *args, **kwargs):
@@ -438,10 +487,19 @@ class _VMINamespace:
         repeat_stride=None,
         dist_mode=None,
         group=None,
-        pmode=None,
         loc=None,
         ip=None,
     ):
+        _validate_vmi_load_modes(
+            "pto.vmi.vload(...)",
+            dist_mode=dist_mode,
+            group=group,
+            stride=stride,
+            block_stride=block_stride,
+            repeat_stride=repeat_stride,
+            allow_group_brc=True,
+            allowed_dist_modes={None, "continuous", "dintlv", "unpack", "brc"},
+        )
         result_types = _resolve_vmi_vload_result_types(
             source,
             size,
@@ -459,7 +517,6 @@ class _VMINamespace:
             repeat_stride=_i16_value(repeat_stride, context="pto.vmi.vload(repeat_stride)"),
             dist_mode=dist_mode,
             group=group,
-            pmode=pmode,
             loc=loc,
             ip=ip,
         )
@@ -480,6 +537,23 @@ class _VMINamespace:
         loc=None,
         ip=None,
     ):
+        _validate_vmi_load_modes(
+            "pto.vmi.vstore(...)",
+            dist_mode=dist_mode,
+            group=group,
+            stride=stride,
+            block_stride=block_stride,
+            repeat_stride=repeat_stride,
+            allow_group_brc=False,
+            allowed_dist_modes={None, "continuous", "dintlv"},
+        )
+        if group is not None and mask is not None:
+            raise TypeError("pto.vmi.vstore(...) group mode does not take a mask operand")
+        if dist_mode == "dintlv":
+            if not _is_sequence(values) or len(values) != 2:
+                raise TypeError('pto.vmi.vstore(...) with dist_mode="dintlv" requires an (even, odd) pair')
+        elif _is_sequence(values):
+            raise TypeError("pto.vmi.vstore(...) expects a single VMI vector unless dist_mode=\"dintlv\"")
         return _generated("vstore")(
             _raw_sequence(values),
             _raw(destination),
@@ -592,6 +666,19 @@ class _VMINamespace:
         raw_value = _raw(value)
         if group is not None and (not hasattr(raw_value, "type") or not _is_vmi_vreg_type(raw_value.type)):
             raise TypeError(f"{context} with group=... requires a VMI vector input")
+        if group is not None:
+            if isinstance(group, bool) or not isinstance(group, int):
+                raise TypeError(f"{context} requires group to be a positive Python integer")
+            if group <= 0:
+                raise ValueError(f"{context} requires group to be positive, got {group!r}")
+            if not hasattr(raw_value, "type") or not _is_vmi_vreg_type(raw_value.type):
+                raise TypeError(f"{context} with group=... requires a VMI vector input")
+            value_lanes = _vmi_vreg_element_count(raw_value.type, context=context)
+            if value_lanes != group:
+                raise ValueError(
+                    f"{context} with group=... requires the input lane count to match group; "
+                    f"got {value_lanes} lanes for group={group}"
+                )
         if not hasattr(raw_value, "type") or not _is_vmi_vreg_type(raw_value.type):
             raw_value = coerce_scalar_to_type(
                 value,
@@ -799,28 +886,32 @@ class _VMINamespace:
         active_lanes,
         *,
         size,
-        num_groups=None,
-        group_size=None,
+        group=None,
         loc=None,
         ip=None,
     ):
         context = "pto.vmi.create_mask(...)"
         result_type = _resolve_vmi_mask_type(size, context=context)
-        if (num_groups is None) != (group_size is None):
-            raise TypeError(f"{context} requires num_groups and group_size together")
-        if num_groups is None:
-            return _call_value(
-                "create_mask",
-                result_type,
-                _coerce_index_value(active_lanes),
-                loc=loc,
-                ip=ip,
+        if group is None:
+            return _call_value("create_mask", result_type, _coerce_index_value(active_lanes), loc=loc, ip=ip)
+        if isinstance(group, bool) or not isinstance(group, int):
+            raise TypeError(f"{context} requires group to be a positive Python integer")
+        if group <= 0:
+            raise ValueError(f"{context} requires group to be positive, got {group!r}")
+        if size % group != 0:
+            raise ValueError(f"{context} requires size to be divisible by group; got size={size!r}, group={group!r}")
+        group_size = size // group
+        active_lanes_const = _try_get_constant_index(active_lanes)
+        if active_lanes_const is not None and active_lanes_const > group_size:
+            raise ValueError(
+                f"{context} requires active_lanes to be <= the inferred group_size; "
+                f"got active_lanes={active_lanes_const!r}, group_size={group_size!r}"
             )
         return _call_value(
             "create_group_mask",
             result_type,
             _coerce_index_value(active_lanes),
-            num_groups,
+            group,
             group_size,
             loc=loc,
             ip=ip,
