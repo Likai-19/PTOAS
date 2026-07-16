@@ -1,0 +1,179 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -pto-validate-vmi-layout-ir -vmi-to-vpto | FileCheck %s
+
+module {
+  func.func @gs8_to_gs8_ls2_ui8(
+      %v: !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8>>,
+      %dst: !pto.ptr<ui8, ub>, %off: index) {
+    %r = pto.vmi.ensure_layout %v
+        : !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8>>
+        -> !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+    %c1 = arith.constant 1 : index
+    pto.vmi.group_store %r, %dst[%off], %c1 {num_groups = 8}
+        : !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>,
+          !pto.ptr<ui8, ub>
+    return
+  }
+
+  func.func @gs8_ls2_to_gs8_ui8(
+      %v: !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>,
+      %dst: !pto.ptr<ui8, ub>, %off: index) {
+    %r = pto.vmi.ensure_layout %v
+        : !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+        -> !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8>>
+    %c1 = arith.constant 1 : index
+    pto.vmi.group_store %r, %dst[%off], %c1 {num_groups = 8}
+        : !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8>>,
+          !pto.ptr<ui8, ub>
+    return
+  }
+
+  func.func @gs8_to_gs8_ls4_ui8(
+      %v: !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8>>,
+      %dst: !pto.ptr<ui8, ub>, %off: index) {
+    %r = pto.vmi.ensure_layout %v
+        : !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8>>
+        -> !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>>
+    %c1 = arith.constant 1 : index
+    pto.vmi.group_store %r, %dst[%off], %c1 {num_groups = 8}
+        : !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>>,
+          !pto.ptr<ui8, ub>
+    return
+  }
+
+  func.func @gs8_ls4_to_gs8_ui8(
+      %v: !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>>,
+      %dst: !pto.ptr<ui8, ub>, %off: index) {
+    %r = pto.vmi.ensure_layout %v
+        : !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>>
+        -> !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8>>
+    %c1 = arith.constant 1 : index
+    pto.vmi.group_store %r, %dst[%off], %c1 {num_groups = 8}
+        : !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8>>,
+          !pto.ptr<ui8, ub>
+    return
+  }
+
+  func.func @gs8_ls2_to_gs8_ls4_ui8(
+      %v: !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>,
+      %dst: !pto.ptr<ui8, ub>, %off: index) {
+    %r = pto.vmi.ensure_layout %v
+        : !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+        -> !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>>
+    %c1 = arith.constant 1 : index
+    pto.vmi.group_store %r, %dst[%off], %c1 {num_groups = 8}
+        : !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>>,
+          !pto.ptr<ui8, ub>
+    return
+  }
+
+  func.func @gs8_ls4_to_gs8_ls2_ui8(
+      %v: !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>>,
+      %dst: !pto.ptr<ui8, ub>, %off: index) {
+    %r = pto.vmi.ensure_layout %v
+        : !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>>
+        -> !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+    %c1 = arith.constant 1 : index
+    pto.vmi.group_store %r, %dst[%off], %c1 {num_groups = 8}
+        : !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>,
+          !pto.ptr<ui8, ub>
+    return
+  }
+
+  func.func @gs8_to_gs8_ls2_ui16(
+      %v: !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8>>,
+      %dst: !pto.ptr<ui16, ub>, %off: index) {
+    %r = pto.vmi.ensure_layout %v
+        : !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8>>
+        -> !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+    %c1 = arith.constant 1 : index
+    pto.vmi.group_store %r, %dst[%off], %c1 {num_groups = 8}
+        : !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>,
+          !pto.ptr<ui16, ub>
+    return
+  }
+
+  func.func @gs8_ls2_to_gs8_ui16(
+      %v: !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>,
+      %dst: !pto.ptr<ui16, ub>, %off: index) {
+    %r = pto.vmi.ensure_layout %v
+        : !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+        -> !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8>>
+    %c1 = arith.constant 1 : index
+    pto.vmi.group_store %r, %dst[%off], %c1 {num_groups = 8}
+        : !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8>>,
+          !pto.ptr<ui16, ub>
+    return
+  }
+
+  func.func @gs8_to_gs8_ls2_ui8_multichunk(
+      %v: !pto.vmi.vreg<16xui8, #pto.vmi.layout<num_groups = 16, slots = 8>>,
+      %dst: !pto.ptr<ui8, ub>, %off: index) {
+    %r = pto.vmi.ensure_layout %v
+        : !pto.vmi.vreg<16xui8, #pto.vmi.layout<num_groups = 16, slots = 8>>
+        -> !pto.vmi.vreg<16xui8, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 2>>
+    %c1 = arith.constant 1 : index
+    pto.vmi.group_store %r, %dst[%off], %c1 {num_groups = 16}
+        : !pto.vmi.vreg<16xui8, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 2>>,
+          !pto.ptr<ui8, ub>
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @gs8_to_gs8_ls2_ui8(
+// CHECK: %[[U:.*]] = pto.vzunpack %arg0, %{{.*}} : !pto.vreg<256xui8> -> !pto.vreg<128xui16>
+// CHECK: %[[R:.*]] = pto.vbitcast %[[U]] : !pto.vreg<128xui16> -> !pto.vreg<256xui8>
+// CHECK: pto.vsts %[[R]], {{.*}} {dist = "PK_B16"}
+
+// CHECK-LABEL: func.func @gs8_ls2_to_gs8_ui8(
+// CHECK: %[[C:.*]] = pto.vbitcast %arg0 : !pto.vreg<256xui8> -> !pto.vreg<128xui16>
+// CHECK: %[[R:.*]] = pto.vpack %[[C]], "LOWER" : !pto.vreg<128xui16> -> !pto.vreg<256xui8>
+// CHECK: pto.vsts %[[R]]
+
+// CHECK-LABEL: func.func @gs8_to_gs8_ls4_ui8(
+// CHECK: %[[U2:.*]] = pto.vzunpack %arg0, %{{.*}} : !pto.vreg<256xui8> -> !pto.vreg<128xui16>
+// CHECK: %[[R:.*]] = pto.vzunpack %[[U2]], %{{.*}} : !pto.vreg<128xui16> -> !pto.vreg<64xui32>
+// CHECK: pto.vsts {{.*}} {dist = "PK4_B32"}
+
+// CHECK-LABEL: func.func @gs8_ls4_to_gs8_ui8(
+// CHECK: %[[C:.*]] = pto.vbitcast %arg0 : !pto.vreg<64xi32> -> !pto.vreg<64xui32>
+// CHECK: %[[P2:.*]] = pto.vpack %[[C]], "LOWER" : !pto.vreg<64xui32> -> !pto.vreg<128xui16>
+// CHECK: %[[R:.*]] = pto.vpack %[[P2]], "LOWER" : !pto.vreg<128xui16> -> !pto.vreg<256xui8>
+// CHECK: pto.vsts %[[R]]
+
+// CHECK-LABEL: func.func @gs8_ls2_to_gs8_ls4_ui8(
+// CHECK: %[[C:.*]] = pto.vbitcast %arg0 : !pto.vreg<256xui8> -> !pto.vreg<128xui16>
+// CHECK: %[[R:.*]] = pto.vzunpack %[[C]], %{{.*}} : !pto.vreg<128xui16> -> !pto.vreg<64xui32>
+// CHECK: pto.vsts {{.*}} {dist = "PK4_B32"}
+
+// CHECK-LABEL: func.func @gs8_ls4_to_gs8_ls2_ui8(
+// CHECK: %[[C:.*]] = pto.vbitcast %arg0 : !pto.vreg<64xi32> -> !pto.vreg<64xui32>
+// CHECK: %[[P:.*]] = pto.vpack %[[C]], "LOWER" : !pto.vreg<64xui32> -> !pto.vreg<128xui16>
+// CHECK: %[[R:.*]] = pto.vbitcast %[[P]] : !pto.vreg<128xui16> -> !pto.vreg<256xui8>
+// CHECK: pto.vsts %[[R]], {{.*}} {dist = "PK_B16"}
+
+// CHECK-LABEL: func.func @gs8_to_gs8_ls2_ui16(
+// CHECK: %[[R:.*]] = pto.vzunpack %arg0, %{{.*}} : !pto.vreg<128xui16> -> !pto.vreg<64xui32>
+// CHECK: pto.vsts {{.*}} {dist = "PK_B32"}
+
+// CHECK-LABEL: func.func @gs8_ls2_to_gs8_ui16(
+// CHECK: %[[C:.*]] = pto.vbitcast %arg0 : !pto.vreg<64xi32> -> !pto.vreg<64xui32>
+// CHECK: %[[R:.*]] = pto.vpack %[[C]], "LOWER" : !pto.vreg<64xui32> -> !pto.vreg<128xui16>
+// CHECK: pto.vsts %[[R]]
+
+// CHECK-LABEL: func.func @gs8_to_gs8_ls2_ui8_multichunk(
+// CHECK: pto.vzunpack
+// CHECK: pto.vbitcast
+// CHECK: pto.vzunpack
+// CHECK: pto.vbitcast
+// CHECK-COUNT-2: pto.vsts
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

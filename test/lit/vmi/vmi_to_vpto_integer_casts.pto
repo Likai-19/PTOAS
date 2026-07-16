@@ -217,8 +217,8 @@ module {
 
 // CHECK-LABEL: func.func @vmi_to_vpto_group_slot_trunci_slots8_ui16_to_ui8_lane_stride(
 // CHECK: pto.vcvt {{.*}} {part = "EVEN", sat = "SAT"} : !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<256xui8>
-// CHECK: pto.pge_b8 "PAT_VL8" : !pto.mask<b8>
-// CHECK: pto.vsts {{.*}} : !pto.vreg<256xui8>, !pto.ptr<ui8, ub>, !pto.mask<b8>
+// CHECK: pto.pge_b16 "PAT_VL8" : !pto.mask<b16>
+// CHECK: pto.vsts {{.*}} {dist = "PK_B16"} : !pto.vreg<256xui8>, !pto.ptr<ui8, ub>, !pto.mask<b16>
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
 // CHECK-NOT: unrealized_conversion_cast
