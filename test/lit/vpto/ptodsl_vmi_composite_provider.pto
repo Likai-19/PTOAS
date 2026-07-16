@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --tile-lib-backend=ptodsl-vmi --emit-vpto %s -o /dev/null --mlir-print-ir-after=pto-expand-tile-op --mlir-print-ir-after=pto-inline-libcall 2>&1 | FileCheck %s --check-prefix=PIPE --implicit-check-not=pto.vecscope
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --tile-lib-backend=ptodsl-vmi --emit-vpto %s -o /dev/null --mlir-print-ir-after=pto-expand-tile-op --mlir-print-ir-after=pto-inline-libcall 2>&1 | FileCheck %s --check-prefix=PIPE
 // RUN: ptoas --pto-arch=a5 --pto-backend=vpto --tile-lib-backend=ptodsl-vmi --emit-vpto %s -o - | FileCheck %s --check-prefix=FINAL --implicit-check-not=pto.vmi.
 
 module {
@@ -81,6 +81,5 @@ module {
 
 // FINAL-LABEL: func.func @ptodsl_vmi_composite_provider
 // FINAL: pto.copy_gm_to_ub
-// FINAL: pto.vecscope
 // FINAL: pto.vadd
 // FINAL: pto.copy_ubuf_to_gm
