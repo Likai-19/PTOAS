@@ -974,10 +974,9 @@ stable softmax numerator.
 
 ### `pto.vmi.vmull(a, b, mask, *, pmode=None) -> (VRegType, VRegType)`
 
-**Description**: Widening 32-bit integer multiply. For each active lane, the
-operation returns the low and high 32-bit halves of the 64-bit product. Both
-results have the same type as the inputs; inactive lanes are zero. The inputs
-must be matching `i32` or `ui32` vectors with 64, 128, or 256 lanes.
+**Description**: Widening multiply for 32-bit integer vectors. PTODSL returns
+a `(low, high)` pair of 32-bit VMI vectors; `low` carries the lower 32 bits
+and `high` carries the upper 32 bits. Signedness follows the inputs.
 
 **Parameters**:
 
@@ -992,7 +991,8 @@ must be matching `i32` or `ui32` vectors with 64, 128, or 256 lanes.
 
 | Return Value | Type | Description |
 |--------------|------|-------------|
-| `(low, high)` | `(VRegType, VRegType)` | Low and high 32-bit product halves |
+| `low` | `VRegType` | Lower 32 bits of the widened product |
+| `high` | `VRegType` | Upper 32 bits of the widened product |
 
 **Example**:
 
@@ -1001,31 +1001,32 @@ low, high = pto.vmi.vmull(a32, b32, mask)
 ```
 
 **Constraints**:
-- `a` and `b` must be identical `i32` or `ui32` VMI vectors with 64, 128, or
-  256 lanes.
-- Both result vector types are inferred from the input type.
-
----
+- `a` and `b` must be identical 32-bit integer VMI vectors.
+- `low` and `high` each have the same lane count and signedness as `a`.
 
 ### `pto.vmi.vmula(acc, lhs, rhs, mask, *, pmode=None) -> VRegType`
 
-**Description**: Widening multiply-accumulate: `result = acc + (lhs * rhs)`,
-where the product is computed at the widened precision of `acc`.
+**Description**: Fused multiply-accumulate: `result = acc + (lhs * rhs)`.
+The accumulator is both the input and the result value.
 
 **Parameters**:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `acc` | `VRegType` | Accumulator vector (wider type) |
-| `lhs` | `VRegType` | First operand (narrow type) |
-| `rhs` | `VRegType` | Second operand (narrow type) |
+| `acc` | `VRegType` | Accumulator vector |
+| `lhs` | `VRegType` | First multiply operand |
+| `rhs` | `VRegType` | Second multiply operand |
 | `mask` | VMI mask | **Required.** Predicate mask |
 | `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 **Returns**:
 
 | Return Value | Type | Description |
 |--------------|------|-------------|
-| `result` | `VRegType` | Accumulated product |
+| `result` | `VRegType` | Accumulator after the multiply-add |
+
+**Constraints**:
+- `acc`, `lhs`, `rhs`, and `result` must have identical VMI vreg types.
+- Supported element types are `i8`–`i32`, `f16`, `bf16`, and `f32`.
 
 ---
 
@@ -1286,6 +1287,8 @@ surface no longer asks you to spell the full result type manually.
 - `vcmp` / `vcmps`: inferred from the `seed` mask.
 - `vsel`: inferred from `true_value`.
 - `vcadd`, `vcmax`, `vcmin`: inferred from the source vector and `group`.
+- `vmull`: inferred from `a`, returning a `(low, high)` pair with the same 32-bit integer type.
+- `vmula`: inferred from `acc`, preserving the accumulator type.
 - `vdhist`, `vchist`: inferred from `acc`.
 - `vgather`: inferred from the source element type and the `offsets` lanes.
 - `vcvt` (when `to_dtype` is provided): inferred from the source lane count
