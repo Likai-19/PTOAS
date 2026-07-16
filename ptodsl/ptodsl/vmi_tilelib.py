@@ -22,7 +22,7 @@ from ._tile_template_tracing import (
     for_,
     index_add,
     index_mul,
-    tile_template as _trace_tile_template,
+    tile_template,
     vecscope,
     vmi_create_mask,
     vmi_create_mask_lanes,
@@ -42,35 +42,9 @@ from ._tile_template_tracing import (
     vmi_vstore,
     vmi_vstore_linear,
 )
-from .tilelib.registry import TileTemplateRegistry
 
 
 ElementwiseCompute = Callable[[Sequence[_VectorValue], _MaskValue], _VectorValue]
-
-
-VMI_TILELIB_REGISTRY = TileTemplateRegistry()
-
-
-def canonical_vmi_template(
-    *,
-    target: str = "a5",
-    op: str,
-    name: str | None = None,
-):
-    """Register one canonical VMI implementation in this provider module."""
-
-    def decorator(fn):
-        normalized_op = op[4:] if op.startswith("pto.") else op
-        descriptor = _trace_tile_template(
-            target=target,
-            op=normalized_op,
-            name=name,
-            ir_level="vmi",
-        )(fn)
-        VMI_TILELIB_REGISTRY.register(descriptor)
-        return descriptor
-
-    return decorator
 
 
 def emit_elementwise_vmi(
@@ -275,45 +249,47 @@ def emit_convert_vmi(src: _TileProxy, dst: _TileProxy) -> None:
             vmi_vstore(converted, dst, coordinate, dst_mask)
 
 
-@canonical_vmi_template(
+@tile_template(
     target="a5",
     op="tadd",
     name="vmi_tadd_block64",
+    ir_level="vmi",
 )
 def vmi_tadd_block64(src0: Tile, src1: Tile, dst: Tile):
     emit_elementwise_vmi(dst, (src0, src1), _add)
 
 
-@canonical_vmi_template(
+@tile_template(
     target="a5",
     op="texp",
     name="vmi_texp_block64",
+    ir_level="vmi",
 )
 def vmi_texp_block64(src: Tile, dst: Tile):
     emit_elementwise_vmi(dst, (src,), _exp)
 
 
-@canonical_vmi_template(target="a5", op="tsub", name="vmi_tsub")
+@tile_template(target="a5", op="tsub", name="vmi_tsub", ir_level="vmi")
 def vmi_tsub(src0: Tile, src1: Tile, dst: Tile):
     emit_elementwise_vmi(dst, (src0, src1), _sub)
 
 
-@canonical_vmi_template(target="a5", op="tmul", name="vmi_tmul")
+@tile_template(target="a5", op="tmul", name="vmi_tmul", ir_level="vmi")
 def vmi_tmul(src0: Tile, src1: Tile, dst: Tile):
     emit_elementwise_vmi(dst, (src0, src1), _mul)
 
 
-@canonical_vmi_template(target="a5", op="tmax", name="vmi_tmax")
+@tile_template(target="a5", op="tmax", name="vmi_tmax", ir_level="vmi")
 def vmi_tmax(src0: Tile, src1: Tile, dst: Tile):
     emit_elementwise_vmi(dst, (src0, src1), _max)
 
 
-@canonical_vmi_template(target="a5", op="tmov", name="vmi_tmov")
+@tile_template(target="a5", op="tmov", name="vmi_tmov", ir_level="vmi")
 def vmi_tmov(src: Tile, dst: Tile):
     emit_elementwise_vmi(dst, (src,), _move)
 
 
-@canonical_vmi_template(target="a5", op="tmuls", name="vmi_tmuls")
+@tile_template(target="a5", op="tmuls", name="vmi_tmuls", ir_level="vmi")
 def vmi_tmuls(src: Tile, scale: f32, dst: Tile):
     emit_elementwise_vmi(
         dst,
@@ -322,33 +298,32 @@ def vmi_tmuls(src: Tile, scale: f32, dst: Tile):
     )
 
 
-@canonical_vmi_template(target="a5", op="trowmax", name="vmi_trowmax")
+@tile_template(target="a5", op="trowmax", name="vmi_trowmax", ir_level="vmi")
 def vmi_trowmax(src: Tile, workspace: Tile, dst: Tile):
     emit_row_reduce_vmi(src, workspace, dst, kind="max")
 
 
-@canonical_vmi_template(target="a5", op="trowsum", name="vmi_trowsum")
+@tile_template(target="a5", op="trowsum", name="vmi_trowsum", ir_level="vmi")
 def vmi_trowsum(src: Tile, workspace: Tile, dst: Tile):
     emit_row_reduce_vmi(src, workspace, dst, kind="sum")
 
 
-@canonical_vmi_template(
+@tile_template(
     target="a5",
     op="trowexpandsub",
     name="vmi_trowexpandsub",
+    ir_level="vmi",
 )
 def vmi_trowexpandsub(src: Tile, row_values: Tile, dst: Tile):
     emit_row_expand_sub_vmi(src, row_values, dst)
 
 
-@canonical_vmi_template(target="a5", op="tcvt", name="vmi_tcvt_f32_f16")
+@tile_template(target="a5", op="tcvt", name="vmi_tcvt_f32_f16", ir_level="vmi")
 def vmi_tcvt_f32_f16(src: Tile, dst: Tile):
     emit_convert_vmi(src, dst)
 
 
 __all__ = [
-    "VMI_TILELIB_REGISTRY",
-    "canonical_vmi_template",
     "emit_elementwise_vmi",
     "vmi_tadd_block64",
     "vmi_texp_block64",

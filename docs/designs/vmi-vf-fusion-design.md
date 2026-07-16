@@ -89,10 +89,6 @@ RFC 模式下，每个 `(target, op)` 必须恰好注册一个 canonical VMI `Ti
 同一个模板可以根据静态 dtype/shape 做合法特化，但 provider 不在多个模板之间进行
 性能选择。零个实现是 coverage error；多个实现是 provider contract error。
 
-provider module 必须暴露独立的 `VMI_TILELIB_REGISTRY`，canonical 模板通过
-`@canonical_vmi_template` 显式注册。helper 只查询该 registry，不通过扫描 module
-全局变量发现模板，也不与普通 PTODSL TileLib 的 VPTO/MI registry 混用。
-
 ### 4.2 独立正确性
 
 每个 canonical 实现必须包含完整 load/compute/store，在没有 fusion pass 时也能正确
