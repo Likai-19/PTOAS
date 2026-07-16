@@ -309,6 +309,16 @@ static constexpr EnsureLayoutPattern kEnsureLayoutPatterns[] = {
 
     {bits<8>(), N<1, 2, 4, 8, 64>(), c(), ls(4)},
     {bits<8>(), N<1, 2, 4, 8, 64>(), ls(4), c()},
+
+    // Group-slot lane-stride materialization keeps num_groups and slots=8.
+    // Each physical part carries at most eight row-local group values, so the
+    // conversion is independent of the total logical element count.
+    {bits<8, 16>(), anyN(), gs(8), gs(8, 2)},
+    {bits<8, 16>(), anyN(), gs(8, 2), gs(8)},
+    {bits<8>(), anyN(), gs(8), gs(8, 4)},
+    {bits<8>(), anyN(), gs(8, 4), gs(8)},
+    {bits<8>(), anyN(), gs(8, 2), gs(8, 4)},
+    {bits<8>(), anyN(), gs(8, 4), gs(8, 2)},
 };
 
 struct EnsureMaskLayoutPattern {
@@ -2097,6 +2107,11 @@ static LogicalResult matchEnsureLayoutPattern(VMIVRegType sourceType,
   if (sourceLayout == resultLayout)
     return success();
 
+  int64_t numGroups =
+      sourceLayout.isGroupSlots()
+          ? sourceLayout.getNumGroups()
+          : (resultLayout.isGroupSlots() ? resultLayout.getNumGroups() : 0);
+
   for (const EnsureLayoutPattern &pattern : kEnsureLayoutPatterns) {
     if (!matchesElementBitsPattern(pattern.elementBits,
                                    sourceType.getElementType()))
@@ -2105,10 +2120,10 @@ static LogicalResult matchEnsureLayoutPattern(VMIVRegType sourceType,
                                     sourceType.getElementCount()))
       continue;
     if (!matchesLayoutPattern(sourceType.getContext(), pattern.sourceLayout,
-                              sourceLayout))
+                              sourceLayout, numGroups))
       continue;
     if (!matchesLayoutPattern(resultType.getContext(), pattern.resultLayout,
-                              resultLayout))
+                              resultLayout, numGroups))
       continue;
     return success();
   }
