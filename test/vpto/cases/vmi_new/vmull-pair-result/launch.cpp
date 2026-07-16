@@ -17,18 +17,12 @@
 #endif
 
 extern "C" __global__ [aicore] void vmi_vmull_pair_result_kernel(
-    __gm__ int32_t *lhs32, __gm__ int32_t *rhs32,
-    __gm__ int16_t *lhs16, __gm__ int16_t *rhs16,
-    __gm__ uint8_t *lhs8, __gm__ uint8_t *rhs8,
-    __gm__ int32_t *low, __gm__ int32_t *high);
+    __gm__ int32_t *lhs, __gm__ int32_t *rhs, __gm__ int32_t *low,
+    __gm__ int32_t *high);
 
-void LaunchVmiVmullPairResult(
-    int32_t *lhs32, int32_t *rhs32, int16_t *lhs16, int16_t *rhs16,
-    uint8_t *lhs8, uint8_t *rhs8, uint32_t *low, uint32_t *high,
-    void *stream) {
+void LaunchVmiVmullPairResult(int32_t *lhs, int32_t *rhs, uint32_t *low,
+                              uint32_t *high, void *stream) {
   vmi_vmull_pair_result_kernel<<<1, nullptr, stream>>>(
-      (__gm__ int32_t *)lhs32, (__gm__ int32_t *)rhs32,
-      (__gm__ int16_t *)lhs16, (__gm__ int16_t *)rhs16,
-      (__gm__ uint8_t *)lhs8, (__gm__ uint8_t *)rhs8,
-      (__gm__ int32_t *)low, (__gm__ int32_t *)high);
+      (__gm__ int32_t *)lhs, (__gm__ int32_t *)rhs, (__gm__ int32_t *)low,
+      (__gm__ int32_t *)high);
 }
