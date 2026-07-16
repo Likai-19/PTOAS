@@ -373,10 +373,8 @@ struct VMILayoutRematerializePass
           continue;
         }
 
-        if (auto ensure = dyn_cast<VMIEnsureMaskGranularityOp>(op)) {
+        if (auto ensure = dyn_cast<VMIEnsureMaskGranularityOp>(op))
           changed |= tryReplaceMaskEnsure(ensure);
-          continue;
-        }
 
         if (auto trunc = dyn_cast<VMITruncIOp>(op))
           changed |= tryRematerializeTruncIThroughSourceEnsure(trunc);
