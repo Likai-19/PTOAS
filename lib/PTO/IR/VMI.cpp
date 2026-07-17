@@ -3428,6 +3428,19 @@ LogicalResult VMICvtOp::verify() {
     StringRef satVal = satAttr.getValue();
     if (satVal != "SAT" && satVal != "NOSAT")
       return emitOpError("saturate must be 'SAT' or 'NOSAT'");
+    // si32 -> si8 IntNarrow has no native hardware form.  Lowering aliases
+    // it through ui32 -> ui8 (bit-pattern equal ONLY under NOSAT).  Reject
+    // SAT here because ui32 -> ui8 SAT clamps to [0, 255], which does NOT
+    // match the expected si32 -> si8 SAT clamp to [-128, 127].
+    if (dir == CvtDirection::IntNarrow && satVal == "SAT" &&
+        srcBits == 32 && dstBits == 8 &&
+        isa<IntegerType>(srcElem) &&
+        cast<IntegerType>(srcElem).isSigned() &&
+        isa<IntegerType>(dstElem) &&
+        cast<IntegerType>(dstElem).isSigned())
+      return emitOpError("si32 -> si8 int-narrow does not support "
+                         "saturate=\"SAT\" (no native hardware form; "
+                         "only saturate=\"NOSAT\" is allowed)");
   } else if (satAttr) {
     return emitOpError("'saturate' attribute is only valid for fp-narrow / "
                        "int-narrow / fp-to-si conversions");
