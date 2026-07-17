@@ -9,14 +9,14 @@
 // RUN: not ptoas --emit-pto-ir %s 2>&1 | FileCheck %s
 
 module {
-  func.func @vmi_shrui_float_invalid(
-      %lhs: !pto.vmi.vreg<128xf32>,
-      %rhs: !pto.vmi.vreg<128xf32>) {
-    %shifted = pto.vmi.vshr %lhs, %rhs
-        : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
-        -> !pto.vmi.vreg<128xf32>
+  func.func @vmi_shrsi_unsigned_invalid(
+      %lhs: !pto.vmi.vreg<128xui16>,
+      %rhs: !pto.vmi.vreg<128xui16>) {
+    %shifted = pto.vmi.shrsi %lhs, %rhs
+        : !pto.vmi.vreg<128xui16>, !pto.vmi.vreg<128xui16>
+        -> !pto.vmi.vreg<128xui16>
     return
   }
 }
 
-// CHECK: 'pto.vmi.vshr' op requires integer VMI element type
+// CHECK: 'pto.vmi.shrsi' op requires signless or signed i8, i16, or i32 VMI element type

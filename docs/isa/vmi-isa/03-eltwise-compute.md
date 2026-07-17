@@ -258,13 +258,16 @@
 
 ### `pto.vmi.vshl` / `pto.vmi.vshr`
 
-- **semantics:** Elementwise left shift (`vshl`) or unsigned right shift (`vshr`). The shift count is per-lane from `rhs`.
+- **semantics:** Elementwise left shift (`vshl`) or signedness-aware right
+  shift (`vshr`). The shift count is per-lane from `rhs`. `vshr` performs a
+  logical right shift for explicit unsigned element types and an arithmetic
+  right shift for signed or signless element types.
 
   ```c
   for (int i = 0; i < L; i++)
       dst[i] = mask[i] ? (lhs[i] << rhs[i]) : (pmode_merge ? dst_old[i] : 0);  // vshl
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? (lhs[i] >> rhs[i]) : (pmode_merge ? dst_old[i] : 0);  // vshr (unsigned)
+      dst[i] = mask[i] ? (lhs[i] >> rhs[i]) : (pmode_merge ? dst_old[i] : 0);  // vshr (type-directed)
   ```
 
 - **syntax:**

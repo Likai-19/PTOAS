@@ -130,6 +130,8 @@ static std::optional<Value> rematerializeBinaryDataOp(Operation *op,
     return rebuild(shli);
   if (auto shrui = dyn_cast<VMIShRUIOp>(op))
     return rebuild(shrui);
+  if (auto shrsi = dyn_cast<VMIShRSIOp>(op))
+    return rebuild(shrsi);
   return std::nullopt;
 }
 

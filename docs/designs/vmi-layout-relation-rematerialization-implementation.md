@@ -187,7 +187,7 @@ Initial op coverage:
 ```text
 mulf
 addf/addi/subf/subi/muli/divf/minf/maxf
-andi/ori/xori/shli/shrui
+andi/ori/xori/shli/shrui/shrsi
 negf/absf/absi/sqrt/exp/ln/relu/not
 fma
 ```

@@ -89,7 +89,7 @@ ensure_layout(op(a, b), L)
 
 ```text
 addf/addi/subf/subi/mulf/muli/divf/minf/maxf
-andi/ori/xori/shli/shrui
+andi/ori/xori/shli/shrui/shrsi
 negf/absf/absi/sqrt/exp/ln/relu/not
 fma
 select, when data operands and mask layout requirements can be kept explicit
