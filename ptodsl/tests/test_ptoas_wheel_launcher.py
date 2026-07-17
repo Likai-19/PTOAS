@@ -49,6 +49,20 @@ class WheelLauncherTests(unittest.TestCase):
         shared_module.write_text("fake shared module", encoding="utf-8")
         return package_root, install_root, wrapper
 
+    def _make_dist_tree(self, temp_root: Path) -> tuple[Path, Path, Path]:
+        dist_root = temp_root / "dist"
+        package_root = dist_root / "python" / "ptoas"
+        (package_root).mkdir(parents=True, exist_ok=True)
+        (dist_root / "bin").mkdir(parents=True, exist_ok=True)
+        (dist_root / "lib").mkdir(parents=True, exist_ok=True)
+        (dist_root / "share" / "ptoas" / "TileOps").mkdir(parents=True, exist_ok=True)
+        (dist_root / "tilelang_dsl").mkdir(parents=True, exist_ok=True)
+        wrapper = dist_root / "bin" / "ptoas"
+        wrapper.write_text("", encoding="utf-8")
+        shared_module = dist_root / "lib" / "ptoas.so"
+        shared_module.write_text("fake shared module", encoding="utf-8")
+        return package_root, dist_root, wrapper
+
     def test_launcher_exports_runtime_contract_and_injects_default_paths(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
@@ -115,15 +129,9 @@ class WheelLauncherTests(unittest.TestCase):
             shared_module.parent.mkdir(parents=True, exist_ok=True)
             shared_module.write_text("fake shared module", encoding="utf-8")
 
-            def fake_ldd(cmd, *, text, stderr, env):
-                target = Path(cmd[1]).resolve()
-                if target == shared_module.resolve():
-                    return f"\tlibMLIRMlirOptMain.so.21.1 => {dep} (0x0)\n"
-                return ""
-
             dep_library = mock.Mock()
             shared_library = mock.Mock()
-            with mock.patch.object(_launcher.subprocess, "check_output", side_effect=fake_ldd), mock.patch.object(
+            with mock.patch.object(
                 _launcher.ctypes, "CDLL", side_effect=[dep_library, shared_library]
             ) as load_library:
                 entrypoint = _launcher._load_shared_entrypoint(shared_module, runtime_lib_dir)
@@ -141,6 +149,42 @@ class WheelLauncherTests(unittest.TestCase):
         self.assertIs(entrypoint, shared_library.ptoas_entrypoint)
         self.assertEqual(entrypoint.argtypes, [_launcher.ctypes.c_int, _launcher.ctypes.POINTER(_launcher.ctypes.c_char_p)])
         self.assertIs(entrypoint.restype, _launcher.ctypes.c_int)
+
+    def test_preload_runtime_libraries_retries_until_dependencies_resolve(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            runtime_lib_dir = temp_root / "runtime" / "lib"
+            runtime_lib_dir.mkdir(parents=True, exist_ok=True)
+            dep_a = runtime_lib_dir / "libA.so.1"
+            dep_b = runtime_lib_dir / "libB.so.1"
+            dep_a.write_text("fake dep a", encoding="utf-8")
+            dep_b.write_text("fake dep b", encoding="utf-8")
+            shared_module = temp_root / "runtime" / "pto" / "ptoas.so"
+            shared_module.parent.mkdir(parents=True, exist_ok=True)
+            shared_module.write_text("fake shared module", encoding="utf-8")
+
+            loaded: list[str] = []
+            dep_b_attempts = 0
+
+            def fake_cdll(path: str, *, mode: int):
+                nonlocal dep_b_attempts
+                loaded.append(path)
+                if Path(path).resolve() == dep_b.resolve() and dep_b_attempts == 0:
+                    dep_b_attempts += 1
+                    raise OSError("missing libA dependency")
+                return mock.Mock()
+
+            with mock.patch.object(_launcher.ctypes, "CDLL", side_effect=fake_cdll):
+                _launcher._preload_runtime_libraries(shared_module, runtime_lib_dir)
+
+        self.assertEqual(
+            loaded,
+            [
+                str(dep_a.resolve()),
+                str(dep_b.resolve()),
+                str(dep_b.resolve()),
+            ],
+        )
 
     def test_launcher_falls_back_to_env_install_tree_for_editable_installs(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -184,6 +228,49 @@ class WheelLauncherTests(unittest.TestCase):
                 )
                 self.assertEqual(env["PATH"].split(os.pathsep)[0], str(wrapper.parent))
                 self.assertEqual(env["PYTHONPATH"].split(os.pathsep)[0], str(install_root))
+
+    def test_launcher_uses_dist_root_from_env_for_packaged_runtime(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            package_root, dist_root, wrapper = self._make_dist_tree(temp_root)
+            fake_launcher = package_root / "_launcher.py"
+            fake_launcher.write_text("", encoding="utf-8")
+
+            with mock.patch.dict(
+                _launcher.os.environ,
+                {"PTO_INSTALL_DIR": str(dist_root)},
+                clear=True,
+            ), mock.patch.object(
+                _launcher, "__file__", str(fake_launcher)
+            ), mock.patch.object(
+                _launcher.sys, "argv", [str(wrapper), "--version"]
+            ), mock.patch.object(_launcher, "_load_shared_entrypoint", return_value=mock.Mock(return_value=0)) as load_entrypoint:
+                with self.assertRaises(SystemExit) as exc:
+                    _launcher.main()
+
+                self.assertEqual(exc.exception.code, 0)
+                load_entrypoint.assert_called_once_with(dist_root / "lib" / "ptoas.so", dist_root / "lib")
+                entrypoint = load_entrypoint.return_value
+                argc, c_argv = entrypoint.call_args.args
+                self.assertEqual([
+                    c_argv[i].decode("utf-8") for i in range(argc)
+                ], [
+                    str(wrapper),
+                    "--tilelang-path",
+                    str(dist_root / "share" / "ptoas" / "TileOps"),
+                    "--tilelang-pkg-path",
+                    str(dist_root),
+                    "--version",
+                ])
+                env = _launcher.os.environ
+                self.assertEqual(env["PTOAS_HOME"], str(dist_root))
+                self.assertEqual(env["PTOAS_BIN"], str(wrapper))
+                self.assertEqual(
+                    env["PTOAS_TILEOPS_DIR"],
+                    str(dist_root / "share" / "ptoas" / "TileOps"),
+                )
+                self.assertEqual(env["PATH"].split(os.pathsep)[0], str(wrapper.parent))
+                self.assertEqual(env["PYTHONPATH"].split(os.pathsep)[0], str(dist_root))
 
     def test_launcher_respects_explicit_tilelang_flags(self):
         with tempfile.TemporaryDirectory() as temp_dir:

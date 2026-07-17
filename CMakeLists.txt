@@ -252,6 +252,11 @@ endif()
 # =========================================================
 # 4. 添加子目录
 # =========================================================
+if(BUILD_TESTING AND NOT TARGET ptoas_runtime_deps)
+  # Define this aggregate target before tools/ptoas runs so it can attach
+  # ptoas_runtime as a dependency during configure.
+  add_custom_target(ptoas_runtime_deps)
+endif()
 add_subdirectory(include)
 add_subdirectory(lib)
 add_subdirectory(tools)
@@ -261,9 +266,6 @@ add_subdirectory(tools)
 # =========================================================
 if(BUILD_TESTING)
   enable_testing()
-  if(NOT TARGET ptoas_runtime_deps)
-    add_custom_target(ptoas_runtime_deps)
-  endif()
   if(PTO_ENABLE_PYTHON_BINDING)
     get_filename_component(_llvm_root "${LLVM_DIR}/../../.." ABSOLUTE)
     set(_pto_python_test_pythonpath

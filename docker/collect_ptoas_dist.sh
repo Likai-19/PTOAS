@@ -22,6 +22,7 @@
 #     ptoas           - Wrapper script that sets up LD_LIBRARY_PATH
 #     bin/ptoas       - Python wrapper entrypoint
 #     python/ptoas/    - Launcher package used by the wrapper
+#     lib/ptoas.so    - Shared runtime loaded by the launcher
 #     lib/*.so*       - Required shared library dependencies
 #     share/ptoas/TileOps - TileLang template library
 #     tilelang_dsl/   - TileLang DSL Python package
@@ -52,6 +53,7 @@ PTO_BUILD_DIR="${PTO_BUILD_DIR:-${PTO_SOURCE_DIR}/build}"
 PTOAS_BIN="${PTO_BUILD_DIR}/tools/ptoas/ptoas"
 PTOAS_SHARED_MODULE="${PTO_INSTALL_DIR}/lib/ptoas.so"
 PTOAS_DEPS_DIR="${PTOAS_DIST_DIR}/lib"
+PTOAS_SHARED_MODULE_DIST_PATH="${PTOAS_DEPS_DIR}/ptoas.so"
 PTOAS_TILEOPS_SRC_DIR="${PTO_INSTALL_DIR}/share/ptoas/TileOps"
 PTOAS_TILEOPS_DIST_DIR="${PTOAS_DIST_DIR}/share/ptoas/TileOps"
 PTOAS_TILELANG_DSL_SRC_DIR="${PTO_INSTALL_DIR}/tilelang_dsl"
@@ -163,6 +165,9 @@ echo "Copying ptoas wrapper..."
 cp "$PTOAS_BIN" "${PTOAS_DIST_DIR}/bin/"
 chmod +x "${PTOAS_DIST_DIR}/bin/ptoas"
 
+echo "Copying ptoas shared runtime..."
+cp -fL "$PTOAS_SHARED_MODULE" "${PTOAS_SHARED_MODULE_DIST_PATH}"
+
 # Collect non-system *.so dependencies needed by the packaged shared runtime.
 echo "Collecting shared library dependencies..."
 linux_runtime_dep_paths() {
@@ -231,7 +236,8 @@ echo "Creating wrapper script..."
 cat > "${PTOAS_DIST_DIR}/ptoas" << 'WRAPPER_EOF'
 #!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export LD_LIBRARY_PATH="${SCRIPT_DIR}/lib:${LD_LIBRARY_PATH}"
+export PTO_INSTALL_DIR="${SCRIPT_DIR}"
+export LD_LIBRARY_PATH="${SCRIPT_DIR}/lib:${LD_LIBRARY_PATH:-}"
 export PTOAS_PYTHON_ROOT="${SCRIPT_DIR}/python"
 exec "${SCRIPT_DIR}/bin/ptoas" "$@"
 WRAPPER_EOF
@@ -253,6 +259,7 @@ fi
 
 test -d "${PTOAS_TILEOPS_DIST_DIR}"
 test -f "${PTOAS_TILELANG_DSL_DIST_DIR}/__init__.py"
+test -f "${PTOAS_SHARED_MODULE_DIST_PATH}"
 if [ -e "${PTOAS_DIST_DIR}/ptodsl" ]; then
   echo "Error: compiler-oriented ptoas dist must not bundle PTODSL" >&2
   exit 1

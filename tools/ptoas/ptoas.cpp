@@ -42,7 +42,6 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/FileSystem.h" // [Fix] Required for OF_None
-#include "llvm/Support/Path.h"
 #include "ptobc/ptobc_decode.h"
 #include "mlir/Dialect/Bufferization/Transforms/OneShotAnalysis.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -116,8 +115,6 @@ struct ApplySIMTEntryNoInlinePass final
 
 } // namespace
 
-int main(int argc, char **argv);
-
 void mlir::pto::registerPTOASDialects(DialectRegistry &registry) {
   func::registerInlinerExtension(registry);
   LLVM::registerInlinerInterface(registry);
@@ -159,51 +156,6 @@ void mlir::pto::loadPTOASDialects(MLIRContext &context) {
   context.getOrLoadDialect<memref::MemRefDialect>();
   context.getOrLoadDialect<affine::AffineDialect>();
   context.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
-}
-
-static std::string getParentDir(llvm::StringRef path) {
-  llvm::SmallString<256> parent(path);
-  llvm::sys::path::remove_filename(parent);
-  llvm::sys::path::remove_dots(parent, true);
-  return std::string(parent);
-}
-
-static bool pathExists(llvm::StringRef path) {
-  return !path.empty() && llvm::sys::fs::exists(path);
-}
-
-static std::string joinPath(llvm::StringRef lhs, llvm::StringRef rhs) {
-  llvm::SmallString<256> joined(lhs);
-  llvm::sys::path::append(joined, rhs);
-  llvm::sys::path::remove_dots(joined, true);
-  return std::string(joined);
-}
-
-static std::string detectInstalledTilelangPath(const char *argv0) {
-  std::string exePath = llvm::sys::fs::getMainExecutable(argv0, (void *)&main);
-  if (exePath.empty())
-    return {};
-
-  const std::string exeDir = getParentDir(exePath);
-  const std::string prefixDir = getParentDir(exeDir);
-  const std::string installedTileOps = joinPath(prefixDir, "share/ptoas/TileOps");
-  if (pathExists(installedTileOps))
-    return installedTileOps;
-  return {};
-}
-
-static std::string detectInstalledTilelangPkgPath(const char *argv0) {
-  std::string exePath = llvm::sys::fs::getMainExecutable(argv0, (void *)&main);
-  if (exePath.empty())
-    return {};
-
-  const std::string exeDir = getParentDir(exePath);
-  const std::string prefixDir = getParentDir(exeDir);
-  const std::string installedPkgRoot = prefixDir;
-  const std::string installedPkg = joinPath(installedPkgRoot, "tilelang_dsl");
-  if (pathExists(installedPkg))
-    return installedPkgRoot;
-  return {};
 }
 
 static bool hasCLIOption(int argc, char **argv, llvm::StringRef option) {
@@ -458,19 +410,6 @@ static pto::ExpandTileOpOptions resolveExpandTileOpOptions(int argc,
     // TileLang template or package paths.
     expandOpts.tilelangPath.clear();
     expandOpts.tilelangPkgPath.clear();
-  } else {
-    if (!hasCLIOption(argc, argv, "--tilelang-path")) {
-      std::string detectedTilelangPath = detectInstalledTilelangPath(argv[0]);
-      if (!detectedTilelangPath.empty())
-        expandOpts.tilelangPath = detectedTilelangPath;
-    }
-
-    if (!hasCLIOption(argc, argv, "--tilelang-pkg-path")) {
-      std::string detectedTilelangPkgPath =
-          detectInstalledTilelangPkgPath(argv[0]);
-      if (!detectedTilelangPkgPath.empty())
-        expandOpts.tilelangPkgPath = detectedTilelangPkgPath;
-    }
   }
 
   expandOpts.tileLibBackend = usePTODSLTileLib ? "ptodsl" : "tilelang";
