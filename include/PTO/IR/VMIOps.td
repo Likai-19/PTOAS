@@ -535,7 +535,8 @@ def VMIExtFOp : VMI_Op<"extf", [Pure]> {
 def VMITruncFOp : VMI_Op<"truncf", [Pure]> {
   let summary = "VMI floating-point elementwise truncation";
   let arguments = (ins VMI_VRegTypeConstraint:$source,
-                   OptionalAttr<StrAttr>:$rounding);
+                   OptionalAttr<StrAttr>:$rounding,
+                   OptionalAttr<StrAttr>:$saturate);
   let results = (outs VMI_VRegTypeConstraint:$result);
   let hasVerifier = 1;
   let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
@@ -543,7 +544,8 @@ def VMITruncFOp : VMI_Op<"truncf", [Pure]> {
 
 def VMIFPToSIOp : VMI_Op<"fptosi", [Pure]> {
   let summary = "VMI floating-point to signed integer elementwise conversion";
-  let arguments = (ins VMI_VRegTypeConstraint:$source);
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                   OptionalAttr<StrAttr>:$saturate);
   let results = (outs VMI_VRegTypeConstraint:$result);
   let hasVerifier = 1;
   let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
@@ -575,7 +577,8 @@ def VMIExtUIOp : VMI_Op<"extui", [Pure]> {
 
 def VMITruncIOp : VMI_Op<"trunci", [Pure]> {
   let summary = "VMI saturating integer elementwise truncation";
-  let arguments = (ins VMI_VRegTypeConstraint:$source);
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                   OptionalAttr<StrAttr>:$saturate);
   let results = (outs VMI_VRegTypeConstraint:$result);
   let hasVerifier = 1;
   let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
