@@ -24,7 +24,7 @@ module {
     %y32 = pto.vmi.mulf %x32, %scale_vec
         : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
         -> !pto.vmi.vreg<256xf32>
-    %y8 = pto.vmi.truncf %y32
+    %y8 = pto.vmi.truncf %y32 {saturate = "SAT"}
         : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
     pto.vmi.store %y8, %dst[%off]
         : !pto.vmi.vreg<256xf8E4M3FN>, !pto.ptr<f8E4M3FN, ub>

@@ -53,7 +53,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
           : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
          -> !pto.vmi.vreg<256xf32>
 
-        %res_fp8 = pto.vmi.truncf %res_fp32
+        %res_fp8 = pto.vmi.truncf %res_fp32 {saturate = "SAT"}
           : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
 
         pto.vmi.store %res_fp8, %y1Addr[%y_off]
@@ -100,7 +100,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
           : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
          -> !pto.vmi.vreg<256xf32>
 
-        %res_fp8 = pto.vmi.truncf %res_fp32
+        %res_fp8 = pto.vmi.truncf %res_fp32 {saturate = "SAT"}
           : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E5M2>
 
         pto.vmi.store %res_fp8, %y1Addr[%y_off]

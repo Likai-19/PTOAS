@@ -22,7 +22,7 @@ module {
     %valid = pto.vmi.vcmps %low, %limit, %full_mask {cmp = "lt"}
         : !pto.vmi.vreg<256xui32>, ui32, !pto.vmi.mask<256xpred>
         -> !pto.vmi.mask<256xpred>
-    %source = pto.vmi.vcvt %low
+    %source = pto.vmi.vcvt %low {saturate = "SAT"}
         : !pto.vmi.vreg<256xui32> -> !pto.vmi.vreg<256xui8>
     %hist = pto.vmi.vdhist %acc, %source, %valid
         : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<256xui8>,
@@ -36,7 +36,7 @@ module {
     %low, %high = pto.vmi.vload %src[%offset] {dist_mode = "dintlv"}
         : !pto.ptr<ui32, ub>
         -> !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>
-    %result = pto.vmi.vcvt %high
+    %result = pto.vmi.vcvt %high {saturate = "SAT"}
         : !pto.vmi.vreg<256xui32> -> !pto.vmi.vreg<256xui8>
     return %result : !pto.vmi.vreg<256xui8>
   }

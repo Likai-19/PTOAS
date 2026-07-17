@@ -48,7 +48,7 @@ module {
     %sel = pto.vmi.vsel %mask, %broadcast, %const
         : !pto.vmi.mask<128xpred>, !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
     %ext = pto.vmi.vcvt %broadcast16 : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
-    %trunc = pto.vmi.vcvt %ext : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
+    %trunc = pto.vmi.vcvt %ext {saturate = "SAT"} : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
 
     %loaded = pto.vmi.vload %ptr[%c0] {dist_mode = "continuous"} : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
     %slot_loaded = pto.vmi.group_slot_load %ptr[%c0], %c1 {num_groups = 8}
@@ -68,7 +68,7 @@ module {
     %ensure = pto.vmi.ensure_layout %layouted
         : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
-    %layouted_trunc = pto.vmi.vcvt %ensure
+    %layouted_trunc = pto.vmi.vcvt %ensure {saturate = "SAT"}
         : !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
         -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
     %layouted_ext = pto.vmi.vcvt %layouted_trunc

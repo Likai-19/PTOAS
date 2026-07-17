@@ -25,4 +25,4 @@ module {
   }
 }
 
-// CHECK: 'pto.vcvt' op requires sat attr for this vcvt type pair
+// CHECK: 'pto.vcvt' op requires sat attr for this vcvt type pair

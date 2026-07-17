@@ -15,7 +15,7 @@ module {
       %offset: index) -> !pto.vmi.vreg<128xf16> {
     %wide = pto.vmi.load %src[%offset]
         : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
-    %narrow = pto.vmi.truncf %wide
+    %narrow = pto.vmi.truncf %wide {saturate = "SAT"}
         : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
     return %narrow : !pto.vmi.vreg<128xf16>
   }
@@ -28,7 +28,7 @@ module {
         : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
     pto.vmi.store %wide, %dst[%offset]
         : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
-    %narrow = pto.vmi.truncf %wide
+    %narrow = pto.vmi.truncf %wide {saturate = "SAT"}
         : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
     return %narrow : !pto.vmi.vreg<128xf16>
   }

@@ -319,7 +319,8 @@ static bool tryRematerializeTruncIThroughSourceEnsure(VMITruncIOp trunc) {
   OpBuilder builder(trunc);
   Value remat = builder
                     .create<VMITruncIOp>(trunc->getLoc(), rematResultType,
-                                         ensure.getSource())
+                                         ensure.getSource(),
+                                         trunc.getSaturateAttr())
                     .getResult();
   Value replacement =
       materializeDataLayout(remat, resultType, trunc->getLoc(), builder);
