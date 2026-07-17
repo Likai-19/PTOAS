@@ -12,7 +12,7 @@ usually live in different layers.
 Build PTOAS after C++ or TableGen changes:
 
 ```bash
-ninja -C build-llvm21 tools/ptoas/ptoas
+cmake --build build-llvm21 --target ptoas_runtime
 ```
 
 Stage PTODSL after Python package changes:

@@ -90,6 +90,17 @@ def _assert_installed_ptodsl_payload() -> None:
     )
 
 
+def _assert_installed_ptoas_shared_module() -> None:
+    installed_shared_module = _PTO_INSTALL_DIR / "lib" / "ptoas.so"
+    if installed_shared_module.exists():
+        return
+    raise RuntimeError(
+        "PTOAS shared launcher module is missing from the PTOAS install tree. "
+        f"Expected to find {installed_shared_module}. "
+        "Wheel assembly now packages the shared module from the install tree."
+    )
+
+
 def _assert_editable_ptodsl_source() -> None:
     """Fail fast if the editable install cannot point at the PTODSL source."""
     source_init = _PTODSL_SOURCE_ROOT / "ptodsl" / "__init__.py"
@@ -205,6 +216,7 @@ def _cmake_configure_and_build(skip_install=False):
             ["cmake", "--build", str(_BUILD_DIR), "--target", "install"]
         )
         _assert_installed_ptodsl_payload()
+        _assert_installed_ptoas_shared_module()
 
 
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
@@ -214,6 +226,7 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     env.update({
         "PTO_SOURCE_DIR": str(_REPO),
         "PTO_INSTALL_DIR": str(_PTO_INSTALL_DIR),
+        "PTO_BUILD_DIR": str(_BUILD_DIR),
         "LLVM_BUILD_DIR": str(_LLVM_BUILD_DIR),
         "PTO_WHEEL_DIST_DIR": str(_WHEEL_DIST_DIR),
         # Keep wheel packaging on the same interpreter pip used to invoke the

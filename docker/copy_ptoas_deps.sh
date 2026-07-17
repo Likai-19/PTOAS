@@ -7,7 +7,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 
-# Collect only *.so actually needed by ptoas (transitive closure under /llvm-workspace).
+# Collect only non-system *.so actually needed by ptoas.
 # Expects: LLVM_BUILD_DIR, PTO_INSTALL_DIR, PTOAS_DEPS_DIR, PTO_SOURCE_DIR
 # Optional: PTO_BUILD_DIR (defaults to PTO_SOURCE_DIR/build)
 
@@ -20,6 +20,10 @@ PTOAS_BIN="${PTO_BUILD_DIR}/tools/ptoas/ptoas"
 remove_rpath() {
   local path="$1"
   if ! has_rpath "$path"; then
+    return
+  fi
+  if ! can_scrub_rpath; then
+    echo "WARN: skipping RPATH/RUNPATH scrub for ${path}; install patchelf or chrpath to harden local dist artifacts" >&2
     return
   fi
   if command -v patchelf >/dev/null 2>&1; then
@@ -50,6 +54,10 @@ has_rpath() {
   readelf -d "$path" 2>/dev/null | grep -Eq '(RPATH|RUNPATH)'
 }
 
+can_scrub_rpath() {
+  command -v patchelf >/dev/null 2>&1 || command -v chrpath >/dev/null 2>&1
+}
+
 assert_relro() {
   local path="$1"
   if ! readelf -l "$path" 2>/dev/null | grep -q 'GNU_RELRO'; then
@@ -71,6 +79,9 @@ assert_no_symtab() {
 
 assert_no_rpath() {
   local path="$1"
+  if ! can_scrub_rpath; then
+    return
+  fi
   if has_rpath "$path"; then
     echo "Error: runtime search path still present in ${path}" >&2
     exit 1
@@ -95,14 +106,36 @@ copy_so() {
   cp -L -n "$f" "${PTOAS_DEPS_DIR}/" 2>/dev/null || true
   harden_elf "${PTOAS_DEPS_DIR}/${name}"
   while read -r res; do
+    [[ -n "$res" ]] || continue
+    should_bundle_linux_dep "$res" || continue
     copy_so "$res"
-  done < <(ldd "$f" 2>/dev/null | awk '/=> \/llvm-workspace\// {print $3}')
+  done < <(linux_runtime_dep_paths "$f")
+}
+
+linux_runtime_dep_paths() {
+  local path="$1"
+  ldd "$path" 2>/dev/null | awk '
+    /=> \// { print $3 }
+    /^\// { print $1 }
+  '
+}
+
+should_bundle_linux_dep() {
+  local path="$1"
+  case "$path" in
+    /lib/*|/lib64/*|/usr/lib/*|/usr/lib64/*)
+      return 1
+      ;;
+  esac
+  return 0
 }
 
 mkdir -p "$PTOAS_DEPS_DIR"
 while read -r res; do
+  [[ -n "$res" ]] || continue
+  should_bundle_linux_dep "$res" || continue
   copy_so "$res"
-done < <(ldd "$PTOAS_BIN" 2>/dev/null | awk '/=> \/llvm-workspace\// {print $3}')
+done < <(linux_runtime_dep_paths "$PTOAS_BIN")
 
 while read -r packaged; do
   harden_elf "$packaged"

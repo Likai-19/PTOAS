@@ -194,6 +194,40 @@ jobs:
           export PTOAS_PYTHON_PACKAGE_VERSION="${PTOAS_VERSION}"
           bash $PTO_SOURCE_DIR/docker/create_wheel.sh
 
+      - name: Validate wheel payload and launcher contract
+        if: github.event_name == 'release' || github.event_name == 'schedule'
+        run: |
+          export PATH="${PY_PATH}/bin:$PATH"
+          python - <<'PY'
+          import os
+          import zipfile
+          from pathlib import Path
+
+          wheel_dist = Path(os.environ["PTO_SOURCE_DIR"]) / "build" / "wheel-dist"
+          wheels = sorted(wheel_dist.glob("ptoas-*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit(f"expected exactly one wheel in {wheel_dist}, found {len(wheels)}")
+
+          with zipfile.ZipFile(wheels[0]) as zf:
+              names = set(zf.namelist())
+              required = {"ptoas/__init__.py", "ptoas/_launcher.py", "pto/ptoas.so"}
+              missing = [name for name in required if name not in names]
+              if missing:
+                  raise SystemExit(f"wheel is missing required payload files: {missing}")
+              if "ptoas/_runtime/bin/ptoas" in names:
+                  raise SystemExit("wheel unexpectedly contains ptoas/_runtime/bin/ptoas")
+
+              entry_points_name = next(
+                  name for name in names
+                  if name.startswith("ptoas-") and name.endswith(".dist-info/entry_points.txt")
+              )
+              entry_points = zf.read(entry_points_name).decode("utf-8")
+              if "ptoas=ptoas._launcher:main" not in entry_points:
+                  raise SystemExit("wheel entry points do not route ptoas through ptoas._launcher:main")
+
+          print(f"validated wheel payload and launcher contract: {wheels[0].name}")
+          PY
+
       - name: Repair wheel with auditwheel
         if: github.event_name == 'release' || github.event_name == 'schedule'
         run: |

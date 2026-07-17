@@ -24,6 +24,8 @@ class PtoasBuildBackendTests(unittest.TestCase):
             llvm_build = temp_root / "llvm-build"
             install_dir = temp_root / "install"
             (repo / "cmake").mkdir(parents=True)
+            (install_dir / "lib").mkdir(parents=True)
+            (install_dir / "lib" / "ptoas.so").write_bytes(b"")
 
             check_call_args = []
 

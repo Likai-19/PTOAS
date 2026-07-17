@@ -1232,7 +1232,7 @@ static LogicalResult writeTextOutput(llvm::StringRef output,
 // +-------------+ +------------------------------------------+
 // | C++ source  | |                fatobj                    |
 // +-------------+ +------------------------------------------+
-int main(int argc, char **argv) {
+static int runPTOASDriver(int argc, char **argv) {
   DialectRegistry registry;
   mlir::pto::registerPTOASDialects(registry);
   mlir::pto::registerPTOASPassesAndCLOptions();
@@ -1283,3 +1283,13 @@ int main(int argc, char **argv) {
   llvm::errs() << "Error: unsupported ptoas compile result.\n";
   return 1;
 }
+
+extern "C" int ptoas_entrypoint(int argc, char **argv) {
+  return runPTOASDriver(argc, argv);
+}
+
+#ifndef PTOAS_BUILD_SHARED_LIBRARY
+int main(int argc, char **argv) {
+  return runPTOASDriver(argc, argv);
+}
+#endif

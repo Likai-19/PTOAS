@@ -17,7 +17,7 @@ NPU_VALIDATION_COMMON_DIR="${NPU_VALIDATION_COMMON_DIR:-${ROOT_DIR}/test/vpto/np
 
 WORK_SPACE="${WORK_SPACE:-}"
 ASCEND_HOME_PATH="${ASCEND_HOME_PATH:-}"
-PTOAS_BIN="${PTOAS_BIN:-${ROOT_DIR}/build/tools/ptoas/ptoas}"
+PTOAS_BIN="${PTOAS_BIN:-${ROOT_DIR}/install/bin/ptoas}"
 PTOAS_FLAGS="${PTOAS_FLAGS:---pto-arch a5 --pto-backend=vpto}"
 # set he HOST_RUNNER to "ssh root@localhost" if must change user to root to access the device 
 HOST_RUNNER="${HOST_RUNNER:-}"

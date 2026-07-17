@@ -67,10 +67,13 @@ resolve_ptoas_bin() {
   fi
 
   # Common locations:
+  # - installed wrapper in repo: PTOAS/install/bin/ptoas
   # - out-of-tree build in repo: PTOAS/build/tools/ptoas/ptoas
   # - legacy layout: build/bin/ptoas
   local cand
   if [[ -n "${PTO_BUILD_DIR}" ]]; then
+    cand="${PTO_BUILD_DIR%/build}/install/bin/ptoas"
+    [[ -x "$cand" ]] && { echo "$cand"; return 0; }
     cand="${PTO_BUILD_DIR}/tools/ptoas/ptoas"
     [[ -x "$cand" ]] && { echo "$cand"; return 0; }
     cand="${PTO_BUILD_DIR}/bin/ptoas"

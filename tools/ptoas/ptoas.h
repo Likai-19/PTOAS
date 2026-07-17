@@ -125,6 +125,9 @@ void registerPTOASDialects(DialectRegistry &registry);
 void registerPTOASPassesAndCLOptions();
 void loadPTOASDialects(MLIRContext &context);
 
+// Shared-library entrypoint for wheel-installed in-process launching.
+extern "C" int ptoas_entrypoint(int argc, char **argv);
+
 // Attach textual-.pto SSA name hints (function args, block args, op results)
 // to the parsed module's Locations as debug metadata. Called by the driver
 // right after parsing a textual .pto input so the names survive lowering.

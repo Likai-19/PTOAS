@@ -261,6 +261,9 @@ add_subdirectory(tools)
 # =========================================================
 if(BUILD_TESTING)
   enable_testing()
+  if(NOT TARGET ptoas_runtime_deps)
+    add_custom_target(ptoas_runtime_deps)
+  endif()
   if(PTO_ENABLE_PYTHON_BINDING)
     get_filename_component(_llvm_root "${LLVM_DIR}/../../.." ABSOLUTE)
     set(_pto_python_test_pythonpath
@@ -315,7 +318,7 @@ if(BUILD_TESTING)
   add_subdirectory(test/lit)
 
   set(_pto_check_ctest_depends)
-  foreach(_target IN ITEMS PTOPythonModules pto-opt ptoas ptobc)
+  foreach(_target IN ITEMS PTOPythonModules ptoas_runtime_deps ptobc)
     if(TARGET ${_target})
       list(APPEND _pto_check_ctest_depends ${_target})
     endif()

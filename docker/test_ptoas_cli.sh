@@ -16,6 +16,7 @@
 #   PTO_BUILD_DIR   - Path to PTO build directory
 #   LLVM_BUILD_DIR  - Path to LLVM build directory
 #   PTO_INSTALL_DIR - Path to PTO install directory
+#   PTOAS_BIN       - Path to the Python ptoas wrapper (optional)
 
 set -e
 
@@ -32,11 +33,20 @@ export PATH="${PTO_BUILD_DIR}/tools/ptoas:${PATH}"
 export LD_LIBRARY_PATH="${LLVM_BUILD_DIR}/lib:${PTO_INSTALL_DIR}/lib:${LD_LIBRARY_PATH}"
 export DYLD_LIBRARY_PATH="${LLVM_BUILD_DIR}/lib:${PTO_INSTALL_DIR}/lib:${DYLD_LIBRARY_PATH}"
 
+if [ -n "${PTOAS_BIN:-}" ]; then
+  if [ ! -x "${PTOAS_BIN}" ]; then
+    echo "Error: PTOAS_BIN is not executable: ${PTOAS_BIN}" >&2
+    exit 1
+  fi
+else
+  PTOAS_BIN="$(command -v ptoas)"
+fi
+
 echo "Testing ptoas CLI..."
-which ptoas
+echo "${PTOAS_BIN}"
 
 echo "Checking ptoas version..."
-VERSION_OUTPUT="$(ptoas --version | tr -d '\r')"
+VERSION_OUTPUT="$("${PTOAS_BIN}" --version | tr -d '\r')"
 echo "$VERSION_OUTPUT"
 if [ -n "${PTOAS_VERSION:-}" ]; then
   EXPECTED_VERSION_OUTPUT="ptoas ${PTOAS_VERSION}"
@@ -52,14 +62,14 @@ fi
 echo "Testing MatMul sample..."
 cd "${PTO_SOURCE_DIR}/test/samples/MatMul/"
 python ./tmatmulk.py > ./tmatmulk.pto
-ptoas ./tmatmulk.pto -o ./tmatmulk.cpp
+"${PTOAS_BIN}" ./tmatmulk.pto -o ./tmatmulk.cpp
 echo "MatMul test passed"
 
 # Test Abs sample
 echo "Testing Abs sample..."
 cd "${PTO_SOURCE_DIR}/test/samples/Abs/"
 python ./abs.py > ./abs.pto
-ptoas --enable-insert-sync ./abs.pto -o ./abs.cpp
+"${PTOAS_BIN}" --enable-insert-sync ./abs.pto -o ./abs.cpp
 echo "Abs test passed"
 
 echo "All ptoas CLI tests passed!"
