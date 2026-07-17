@@ -20,7 +20,7 @@ module {
     %mask = pto.vmi.create_mask %c96 : index -> !pto.vmi.mask<128xpred>
     pto.vmi.masked_store %x, %out32[%off], %mask
         : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>, !pto.vmi.mask<128xpred>
-    %h = pto.vmi.truncf %x : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
+    %h = pto.vmi.truncf %x {saturate = "SAT"} : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
     pto.vmi.masked_store %h, %out16[%off], %mask
         : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>, !pto.vmi.mask<128xpred>
     return

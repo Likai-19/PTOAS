@@ -35,7 +35,7 @@ module {
 
   func.func @fpnarrow_default(%source: !pto.vmi.vreg<64xf32>)
       -> !pto.vmi.vreg<64xf16> {
-    %result = pto.vmi.vcvt %source
+    %result = pto.vmi.vcvt %source {saturate = "SAT"}
         : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf16>
     return %result : !pto.vmi.vreg<64xf16>
   }
@@ -58,7 +58,7 @@ module {
 
   func.func @intnarrow_default(%source: !pto.vmi.vreg<64xsi32>)
       -> !pto.vmi.vreg<64xsi16> {
-    %result = pto.vmi.vcvt %source
+    %result = pto.vmi.vcvt %source {saturate = "SAT"}
         : !pto.vmi.vreg<64xsi32> -> !pto.vmi.vreg<64xsi16>
     return %result : !pto.vmi.vreg<64xsi16>
   }
@@ -81,7 +81,7 @@ module {
 
   func.func @fptosi_default(%source: !pto.vmi.vreg<64xf32>)
       -> !pto.vmi.vreg<64xsi32> {
-    %result = pto.vmi.vcvt %source
+    %result = pto.vmi.vcvt %source {saturate = "SAT"}
         : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xsi32>
     return %result : !pto.vmi.vreg<64xsi32>
   }
@@ -96,7 +96,7 @@ module {
 // CHECK-SAME: saturate = "NOSAT"
 
 // CHECK-LABEL: func.func @fpnarrow_default(
-// CHECK: pto.vmi.truncf %{{[^{]+}} : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf16>
+// CHECK: pto.vmi.truncf {{.*}}saturate = "SAT"{{.*}} : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf16>
 
 // CHECK-LABEL: func.func @intnarrow_sat(
 // CHECK: pto.vmi.trunci
@@ -107,7 +107,7 @@ module {
 // CHECK-SAME: saturate = "NOSAT"
 
 // CHECK-LABEL: func.func @intnarrow_default(
-// CHECK: pto.vmi.trunci %{{[^{]+}} : !pto.vmi.vreg<64xsi32> -> !pto.vmi.vreg<64xsi16>
+// CHECK: pto.vmi.trunci {{.*}}saturate = "SAT"{{.*}} : !pto.vmi.vreg<64xsi32> -> !pto.vmi.vreg<64xsi16>
 
 // CHECK-LABEL: func.func @fptosi_sat(
 // CHECK: pto.vmi.fptosi
@@ -118,4 +118,4 @@ module {
 // CHECK-SAME: saturate = "NOSAT"
 
 // CHECK-LABEL: func.func @fptosi_default(
-// CHECK: pto.vmi.fptosi %{{[^{]+}} : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xsi32>
+// CHECK: pto.vmi.fptosi {{.*}}saturate = "SAT"{{.*}} : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xsi32>

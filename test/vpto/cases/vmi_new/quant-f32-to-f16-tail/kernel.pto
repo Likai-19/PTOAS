@@ -41,7 +41,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
         %scale_vec = pto.vmi.vbrc %scale : f32 -> !pto.vmi.vreg<128xf32>
         %scaled = pto.vmi.vmul %wide, %scale_vec
             : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf32>
-        %packed = pto.vmi.vcvt %scaled : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
+        %packed = pto.vmi.vcvt %scaled {saturate = "SAT"} : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
         pto.vmi.vstore %packed, %ub_dst[%offset], %mask {pmode = "merge"}
             : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>, !pto.vmi.mask<128xpred>
         %next = arith.subi %rem, %c128 : index

@@ -40,7 +40,7 @@ module {
   func.func @vmi_to_vpto_trunci_i32_to_ui8(
       %wide: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>)
       -> !pto.vreg<256xui8> {
-    %narrow = pto.vmi.vcvt %wide
+    %narrow = pto.vmi.vcvt %wide {saturate = "SAT"}
         : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xui8, #pto.vmi.layout<contiguous>>
     %p = "pto.vmi.unpack"(%narrow)
@@ -52,7 +52,7 @@ module {
   func.func @vmi_to_vpto_trunci_i32_d4_to_ui16_d2(
       %wide: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>)
       -> (!pto.vreg<128xui16>, !pto.vreg<128xui16>) {
-    %narrow = pto.vmi.vcvt %wide
+    %narrow = pto.vmi.vcvt %wide {saturate = "SAT"}
         : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xui16, #pto.vmi.layout<deinterleaved = 2>>
     %low, %high = "pto.vmi.unpack"(%narrow)
@@ -65,7 +65,7 @@ module {
       %input: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>)
       -> (!pto.vreg<64xi32>, !pto.vreg<64xi32>,
           !pto.vreg<64xi32>, !pto.vreg<64xi32>) {
-    %wide = pto.vmi.vcvt %input
+    %wide = pto.vmi.vcvt %input {saturate = "SAT"}
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
     %p0, %p1, %p2, %p3 = "pto.vmi.unpack"(%wide)
@@ -82,7 +82,7 @@ module {
       %dst: !pto.ptr<ui8, ub>,
       %off: index) {
     %c1 = arith.constant 1 : index
-    %narrow = pto.vmi.vcvt %wide
+    %narrow = pto.vmi.vcvt %wide {saturate = "SAT"}
         : !pto.vmi.vreg<8xi32, #pto.vmi.layout<num_groups = 8, slots = 1>>
         -> !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 1>>
     pto.vmi.vstore %narrow, %dst[%off], %c1 {group = 8}
@@ -96,7 +96,7 @@ module {
       %dst: !pto.ptr<ui8, ub>,
       %off: index) {
     %c1 = arith.constant 1 : index
-    %narrow = pto.vmi.vcvt %wide
+    %narrow = pto.vmi.vcvt %wide {saturate = "SAT"}
         : !pto.vmi.vreg<8xi32, #pto.vmi.layout<num_groups = 8, slots = 8>>
         -> !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8>>
     pto.vmi.vstore %narrow, %dst[%off], %c1 {group = 8}
@@ -110,7 +110,7 @@ module {
       %dst: !pto.ptr<ui8, ub>,
       %off: index) {
     %c1 = arith.constant 1 : index
-    %narrow = pto.vmi.vcvt %wide
+    %narrow = pto.vmi.vcvt %wide {saturate = "SAT"}
         : !pto.vmi.vreg<8xi32, #pto.vmi.layout<num_groups = 8, slots = 8>>
         -> !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>>
     pto.vmi.vstore %narrow, %dst[%off], %c1 {group = 8}
@@ -124,7 +124,7 @@ module {
       %dst: !pto.ptr<ui8, ub>,
       %off: index) {
     %c1 = arith.constant 1 : index
-    %narrow = pto.vmi.vcvt %wide
+    %narrow = pto.vmi.vcvt %wide {saturate = "SAT"}
         : !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8>>
         -> !pto.vmi.vreg<8xui8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
     pto.vmi.vstore %narrow, %dst[%off], %c1 {group = 8}

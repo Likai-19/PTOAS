@@ -23,7 +23,7 @@ module {
     %sum = pto.vmi.vadd %source, %rhs, %mask64
         : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>,
           !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<64xf32>
-    %narrow = pto.vmi.vcvt %sum
+    %narrow = pto.vmi.vcvt %sum {saturate = "SAT"}
         : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
     pto.vmi.vstore %narrow, %dst_bf16[%offset], %mask64
         : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>, !pto.vmi.mask<64xpred>

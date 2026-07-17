@@ -50,7 +50,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
           : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
       %b_for_cast = pto.vmi.vbrc %sum32 {group = 8}
           : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<128xf32>
-      %h = pto.vmi.vcvt %b_for_cast
+      %h = pto.vmi.vcvt %b_for_cast {saturate = "SAT"}
           : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
       pto.vmi.vstore %h, %ub_dense[%c0] : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>
     }

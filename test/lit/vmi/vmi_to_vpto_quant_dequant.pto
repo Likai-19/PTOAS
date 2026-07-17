@@ -91,7 +91,7 @@ module {
         %scaled = pto.vmi.mulf %wide, %scale_vec
             : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
             -> !pto.vmi.vreg<128xf32>
-        %packed = pto.vmi.truncf %scaled
+        %packed = pto.vmi.truncf %scaled {saturate = "SAT"}
             : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
         pto.vmi.store %packed, %dst[%dst_offset]
             : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>
@@ -109,7 +109,7 @@ module {
         %scaled = pto.vmi.mulf %wide, %scale_vec
             : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
             -> !pto.vmi.vreg<128xf32>
-        %packed = pto.vmi.truncf %scaled
+        %packed = pto.vmi.truncf %scaled {saturate = "SAT"}
             : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
         pto.vmi.masked_store %packed, %dst[%dst_offset], %tail_mask
             : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>,
@@ -201,7 +201,7 @@ module {
         %scaled = pto.vmi.mulf %wide, %scale_vec
             : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
             -> !pto.vmi.vreg<256xf32>
-        %packed = pto.vmi.truncf %scaled
+        %packed = pto.vmi.truncf %scaled {saturate = "SAT"}
             : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
         pto.vmi.store %packed, %dst[%dst_offset]
             : !pto.vmi.vreg<256xf8E4M3FN>, !pto.ptr<f8E4M3FN, ub>
@@ -219,7 +219,7 @@ module {
         %scaled = pto.vmi.mulf %wide, %scale_vec
             : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
             -> !pto.vmi.vreg<256xf32>
-        %packed = pto.vmi.truncf %scaled
+        %packed = pto.vmi.truncf %scaled {saturate = "SAT"}
             : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
         pto.vmi.masked_store %packed, %dst[%dst_offset], %tail_mask
             : !pto.vmi.vreg<256xf8E4M3FN>, !pto.ptr<f8E4M3FN, ub>,

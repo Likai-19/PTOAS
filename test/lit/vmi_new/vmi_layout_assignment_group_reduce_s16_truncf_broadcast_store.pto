@@ -20,7 +20,7 @@ module {
         -> !pto.vmi.vreg<8xf32>
     %rows32 = pto.vmi.vbrc %sum32 {group = 8}
         : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<128xf32>
-    %rows16 = pto.vmi.vcvt %rows32
+    %rows16 = pto.vmi.vcvt %rows32 {saturate = "SAT"}
         : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
     pto.vmi.vstore %rows16, %dst[%off]
         : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>
