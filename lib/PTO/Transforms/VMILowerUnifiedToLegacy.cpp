@@ -422,16 +422,20 @@ static LogicalResult lowerVCvt(VMICvtOp op, OpBuilder &builder) {
   Value source = op.getSource();
   Value result;
 
+  StringAttr saturateAttr = op.getSaturateAttr();
+
   if (direction == "widen_fp") {
     result = builder.create<VMIExtFOp>(loc, resultType, source).getResult();
   } else if (direction == "narrow_fp") {
     StringAttr roundingAttr = op.getRoundingAttr();
     result =
-        builder.create<VMITruncFOp>(loc, resultType, source, roundingAttr)
+        builder.create<VMITruncFOp>(loc, resultType, source, roundingAttr,
+                                     saturateAttr)
             .getResult();
   } else if (direction == "fptosi") {
     result =
-        builder.create<VMIFPToSIOp>(loc, resultType, source).getResult();
+        builder.create<VMIFPToSIOp>(loc, resultType, source, saturateAttr)
+            .getResult();
   } else if (direction == "sitofp") {
     result =
         builder.create<VMISIToFPOp>(loc, resultType, source).getResult();
@@ -448,9 +452,9 @@ static LogicalResult lowerVCvt(VMICvtOp op, OpBuilder &builder) {
       result =
           builder.create<VMIExtUIOp>(loc, resultType, source).getResult();
   } else if (direction == "narrow_int") {
-    // trunci already has saturating semantics.
     result =
-        builder.create<VMITruncIOp>(loc, resultType, source).getResult();
+        builder.create<VMITruncIOp>(loc, resultType, source, saturateAttr)
+            .getResult();
   } else {
     return failure();
   }

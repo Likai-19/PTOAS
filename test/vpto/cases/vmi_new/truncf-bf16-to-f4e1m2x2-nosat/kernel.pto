@@ -1,0 +1,68 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  // bf16 -> f4E1M2x2 with saturate = "NOSAT" explicitly requested by the user.
+  //
+  // Contract for this direction:
+  //   requiresRnd = true (allowedRnd = "RAFZC")
+  //   requiresSat = false   <- unique in the VPTO contract table
+  //   requiresPart = true, family = Packed4
+  //
+  // "NOSAT" is the sole VMI saturate value that must reach the physical
+  // pto.vcvt with NO `sat` attribute attached (see VMILowerUnifiedToLegacy
+  // + VMIToVPTO::resolveSat).  This case exercises the full backend chain
+  // (VMI -> legacy -> VPTO -> emitted ACL) so we can verify that the NOSAT
+  // request actually produces a bit-identical result to the same kernel
+  // without the saturate attribute.
+  //
+  // Layout:
+  //   256 logical bf16 lanes read from UB
+  //   ->  256 f4E1M2x2 packed lanes  (== 128 storage bytes, two f4 per byte)
+  func.func @vmi_truncf_bf16_to_f4e1m2x2_nosat_kernel(%src_gm: !pto.ptr<bf16, gm>,
+                                                     %dst_gm: !pto.ptr<ui8, gm>) attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    %c0_i64 = arith.constant 0 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %c128_i64 = arith.constant 128 : i64
+    %c512_i64 = arith.constant 512 : i64
+    %c4096_i64 = arith.constant 4096 : i64
+
+    %ub_src = pto.castptr %c0_i64 : i64 -> !pto.ptr<bf16, ub>
+    %ub_dst_u8 = pto.castptr %c4096_i64 : i64 -> !pto.ptr<ui8, ub>
+    %ub_dst_f4 = pto.castptr %c4096_i64 : i64 -> !pto.ptr<!pto.f4E1M2x2, ub>
+
+    pto.mte_gm_ub %src_gm, %ub_src, %c0_i64, %c512_i64
+      nburst(%c1_i64, %c512_i64, %c512_i64)
+      : !pto.ptr<bf16, gm>, !pto.ptr<bf16, ub>, i64, i64, i64, i64, i64
+    pto.mte_gm_ub %dst_gm, %ub_dst_u8, %c0_i64, %c128_i64
+      nburst(%c1_i64, %c128_i64, %c128_i64)
+      : !pto.ptr<ui8, gm>, !pto.ptr<ui8, ub>, i64, i64, i64, i64, i64
+
+    pto.set_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+    pto.wait_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+
+    pto.vecscope {
+      %wide = pto.vmi.vload %ub_src[%c0] : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<256xbf16>
+      // Explicit saturate = "NOSAT": VPTO's bf16->f4E1M2x2 contract has
+      // requiresSat=false, so the physical pto.vcvt must drop the sat attr.
+      %packed = pto.vmi.vcvt %wide {saturate = "NOSAT"}
+          : !pto.vmi.vreg<256xbf16> -> !pto.vmi.vreg<256x!pto.f4E1M2x2>
+      pto.vmi.vstore %packed, %ub_dst_f4[%c0]
+          : !pto.vmi.vreg<256x!pto.f4E1M2x2>, !pto.ptr<!pto.f4E1M2x2, ub>
+    }
+
+    pto.set_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+    pto.wait_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+    pto.mte_ub_gm %ub_dst_u8, %dst_gm, %c128_i64
+      nburst(%c1_i64, %c128_i64, %c128_i64)
+      : !pto.ptr<ui8, ub>, !pto.ptr<ui8, gm>, i64, i64, i64, i64
+    pto.barrier #pto.pipe<PIPE_ALL>
+    return
+  }
+}
