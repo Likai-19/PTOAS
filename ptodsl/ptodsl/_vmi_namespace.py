@@ -303,16 +303,22 @@ def _coerce_scalar_like_vmi_element(vector_value, scalar_value, *, context: str)
     return coerce_scalar_to_type(scalar_value, elem_type, context=context)
 
 
-def _optional_mask(mask):
+def _variadic_mask(mask):
     if mask is None:
         return []
-    return [_raw(mask)]
+    return _raw_sequence(mask)
 
 
 def _required_mask(mask, *, context: str):
     if mask is None:
         raise TypeError(f"{context} requires a mask operand")
     return _raw(mask)
+
+
+def _required_variadic_mask(mask, *, context: str):
+    if mask is None:
+        raise TypeError(f"{context} requires a mask operand")
+    return _raw_sequence(mask)
 
 
 def _i16_value(value, *, context: str):
@@ -415,7 +421,7 @@ def _emit_binary(op_name: str, lhs, rhs, mask=None, *, pmode=None, loc=None, ip=
         _type_of(lhs),
         _raw(lhs),
         _raw(rhs),
-        _optional_mask(mask),
+        _variadic_mask(mask),
         pmode=pmode,
         loc=loc,
         ip=ip,
@@ -427,7 +433,7 @@ def _emit_unary(op_name: str, source, mask=None, *, pmode=None, loc=None, ip=Non
         op_name,
         _type_of(source),
         _raw(source),
-        _optional_mask(mask),
+        _variadic_mask(mask),
         pmode=pmode,
         loc=loc,
         ip=ip,
@@ -572,7 +578,7 @@ class _VMINamespace:
             _raw_sequence(values),
             _raw(destination),
             _coerce_index_value(offset),
-            _optional_mask(mask),
+            _variadic_mask(mask),
             stride=None if stride is None else _coerce_index_value(stride),
             block_stride=_i16_value(block_stride, context="pto.vmi.vstore(block_stride)"),
             repeat_stride=_i16_value(repeat_stride, context="pto.vmi.vstore(repeat_stride)"),
@@ -826,7 +832,7 @@ class _VMINamespace:
             _raw(acc),
             _raw(lhs),
             _raw(rhs),
-            _required_mask(mask, context="pto.vmi.vmula(...)"),
+            _required_variadic_mask(mask, context="pto.vmi.vmula(...)"),
             pmode=pmode,
             loc=loc,
             ip=ip,
