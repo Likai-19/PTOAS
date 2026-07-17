@@ -1257,7 +1257,7 @@ data:
   materialized for the requested result relation
   VMIFmaOp
   binary layout-transparent ops:
-    addf/addi/subf/subi/mulf/muli/divf/minf/maxf/andi/ori/xori/shli/shrui
+    addf/addi/subf/subi/mulf/muli/divf/minf/maxf/andi/ori/xori/shli/shrui/shrsi
   unary layout-transparent ops:
     negf/absf/absi/sqrt/exp/ln/relu/not
   VMIConstantOp only when the DenseElementsAttr is a splat

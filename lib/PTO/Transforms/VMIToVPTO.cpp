@@ -11151,6 +11151,7 @@ void populateVMIConversionPatterns(
       OneToNVMIBinaryOpPattern<VMIXOrIOp, VxorOp>,
       OneToNVMIBinaryOpPattern<VMIShLIOp, VshlOp>,
       OneToNVMIBinaryOpPattern<VMIShRUIOp, VshrOp>,
+      OneToNVMIBinaryOpPattern<VMIShRSIOp, VshrOp>,
       OneToNVMIUnaryOpPattern<VMINotOp, VnotOp>,
       OneToNVMICmpOpPattern<VMICmpFOp>, OneToNVMICmpOpPattern<VMICmpIOp>,
       OneToNVMISelectOpPattern, OneToNVMIActivePrefixIndexOpPattern,
@@ -12262,6 +12263,9 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
     if (auto shrui = dyn_cast<VMIShRUIOp>(op))
       return emitMaskableUnsupported(
           op, "pto.vmi.shrui", cast<VMIVRegType>(shrui.getResult().getType()));
+    if (auto shrsi = dyn_cast<VMIShRSIOp>(op))
+      return emitMaskableUnsupported(
+          op, "pto.vmi.shrsi", cast<VMIVRegType>(shrsi.getResult().getType()));
     if (auto notOp = dyn_cast<VMINotOp>(op))
       return emitMaskableUnsupported(
           op, "pto.vmi.not", cast<VMIVRegType>(notOp.getResult().getType()));

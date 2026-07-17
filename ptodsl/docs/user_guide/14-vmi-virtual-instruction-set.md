@@ -541,6 +541,8 @@ out = pto.vmi.vmul(scale, data, full_mask)
 - The result type is inferred from `lhs`.
 - For bitwise ops (`vand`, `vor`, `vxor`, `vshl`, `vshr`), integer element
   types are expected. Floating-point usage is rejected.
+- `vshr` performs logical right shift for explicit unsigned element types and
+  arithmetic right shift for signed or signless element types.
 
 ---
 
