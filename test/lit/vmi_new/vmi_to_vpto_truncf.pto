@@ -17,7 +17,7 @@ module {
         : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
           !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
-    %narrow = pto.vmi.vcvt %wide
+    %narrow = pto.vmi.vcvt %wide {saturate = "SAT"}
         : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
     %p = "pto.vmi.unpack"(%narrow)
@@ -29,7 +29,7 @@ module {
   func.func @vmi_to_vpto_truncf_f32_tail_to_f16(
       %wide: !pto.vmi.vreg<100xf32, #pto.vmi.layout<deinterleaved = 2>>)
       -> !pto.vreg<128xf16> {
-    %narrow = pto.vmi.vcvt %wide
+    %narrow = pto.vmi.vcvt %wide {saturate = "SAT"}
         : !pto.vmi.vreg<100xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<100xf16, #pto.vmi.layout<contiguous>>
     %p = "pto.vmi.unpack"(%narrow)
@@ -41,7 +41,7 @@ module {
   func.func @vmi_to_vpto_truncf_f32_to_f16_multichunk(
       %wide: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>)
       -> (!pto.vreg<128xf16>, !pto.vreg<128xf16>) {
-    %narrow = pto.vmi.vcvt %wide
+    %narrow = pto.vmi.vcvt %wide {saturate = "SAT"}
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
     %p0, %p1 = "pto.vmi.unpack"(%narrow)

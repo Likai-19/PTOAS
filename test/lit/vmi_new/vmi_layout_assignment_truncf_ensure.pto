@@ -12,7 +12,7 @@
 module {
   func.func @vmi_layout_assignment_truncf_ensure(
       %wide: !pto.vmi.vreg<128xf32>) -> !pto.vmi.vreg<128xf16> {
-    %narrow = pto.vmi.vcvt %wide
+    %narrow = pto.vmi.vcvt %wide {saturate = "SAT"}
         : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
     return %narrow : !pto.vmi.vreg<128xf16>
   }

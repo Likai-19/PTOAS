@@ -22,7 +22,7 @@ module {
         : !pto.vmi.vreg<128xf16, #pto.vmi.layout<deinterleaved = 2>>,
           !pto.vmi.vreg<128xf16, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<deinterleaved = 2>>
-    %packed = pto.vmi.vcvt %wide
+    %packed = pto.vmi.vcvt %wide {saturate = "SAT"}
         : !pto.vmi.vreg<128xf16, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<128xf8E4M3FN, #pto.vmi.layout<contiguous>>
     %p = "pto.vmi.unpack"(%packed)

@@ -20,4 +20,4 @@ module {
   }
 }
 
-// CHECK: saturate attr must be 'SAT' or 'NOSAT'
+// CHECK: saturate attr must be 'SAT' or 'NOSAT'

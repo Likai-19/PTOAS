@@ -11,7 +11,7 @@
 module {
   func.func @vmi_truncf_rounding_token_invalid(
       %source: !pto.vmi.vreg<256xf32>) {
-    %result = pto.vmi.vcvt %source {rounding = "F"}
+    %result = pto.vmi.vcvt %source{rounding = "F", saturate = "SAT"}
         : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256x!pto.hif8>
     return
   }

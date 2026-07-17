@@ -20,4 +20,4 @@ module {
   }
 }
 
-// CHECK: 'saturate' attribute is only valid for narrowing or fp-to-int conversions
+// CHECK: 'saturate' attribute is only valid for fp-narrow / int-narrow / fp-to-si conversions

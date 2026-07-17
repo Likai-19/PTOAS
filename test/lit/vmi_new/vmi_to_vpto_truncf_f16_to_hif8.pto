@@ -15,7 +15,7 @@ module {
   func.func @vmi_to_vpto_truncf_f16_to_hif8(
       %wide: !pto.vmi.vreg<128xf16, #pto.vmi.layout<deinterleaved = 2>>)
       -> !pto.vreg<256x!pto.hif8> {
-    %packed = pto.vmi.vcvt %wide
+    %packed = pto.vmi.vcvt %wide {saturate = "SAT"}
         : !pto.vmi.vreg<128xf16, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<128x!pto.hif8, #pto.vmi.layout<contiguous>>
     %p = "pto.vmi.unpack"(%packed)

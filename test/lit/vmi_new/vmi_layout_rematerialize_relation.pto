@@ -22,7 +22,7 @@ module {
     %x32_d4 = pto.vmi.ensure_layout %x32_d2
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
-    %y = pto.vmi.vcvt %x32_d4
+    %y = pto.vmi.vcvt %x32_d4 {saturate = "SAT"}
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
     return %y : !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
@@ -50,7 +50,7 @@ module {
     %mul_d4 = pto.vmi.ensure_layout %mul_d2
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
-    %y = pto.vmi.vcvt %mul_d4
+    %y = pto.vmi.vcvt %mul_d4 {saturate = "SAT"}
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
     return %y : !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
@@ -66,13 +66,13 @@ module {
     %x32_d2 = pto.vmi.vcvt %x16
         : !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
         -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
-    %y16 = pto.vmi.vcvt %x32_d2
+    %y16 = pto.vmi.vcvt %x32_d2 {saturate = "SAT"}
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
     %x32_d4 = pto.vmi.ensure_layout %x32_d2
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
-    %y8 = pto.vmi.vcvt %x32_d4
+    %y8 = pto.vmi.vcvt %x32_d4 {saturate = "SAT"}
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xf8E4M3FN, #pto.vmi.layout<contiguous>>
     return %y16, %y8
@@ -86,7 +86,7 @@ module {
     %x32_d2 = pto.vmi.ensure_layout %x32_d4
         : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>
-    %y16 = pto.vmi.vcvt %x32_d2
+    %y16 = pto.vmi.vcvt %x32_d2 {saturate = "SAT"}
         : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2>>
         -> !pto.vmi.vreg<256xui16, #pto.vmi.layout<contiguous>>
     return %y16 : !pto.vmi.vreg<256xui16, #pto.vmi.layout<contiguous>>

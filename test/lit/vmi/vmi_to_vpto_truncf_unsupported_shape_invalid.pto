@@ -11,7 +11,7 @@
 module {
   func.func @vmi_to_vpto_truncf_unsupported_shape_invalid(
       %input: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>) {
-    %narrow = pto.vmi.truncf %input
+    %narrow = pto.vmi.truncf %input {saturate = "SAT"}
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
     return
