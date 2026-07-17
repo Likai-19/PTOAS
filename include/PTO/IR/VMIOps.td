@@ -310,6 +310,14 @@ def VMIShRUIOp : VMI_Op<"shrui", [Pure]> {
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `,` type($rhs) `->` type($result)";
 }
 
+def VMIShRSIOp : VMI_Op<"shrsi", [Pure]> {
+  let summary = "VMI signed integer elementwise arithmetic right shift";
+  let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `,` type($rhs) `->` type($result)";
+}
+
 def VMINotOp : VMI_Op<"not", [Pure]> {
   let summary = "VMI integer elementwise bitwise not";
   let arguments = (ins VMI_VRegTypeConstraint:$source);
@@ -1052,7 +1060,7 @@ def VMIVshlOp : VMI_Op<"vshl", [Pure]> {
 }
 
 def VMIVshrOp : VMI_Op<"vshr", [Pure]> {
-  let summary = "VMI unsigned elementwise right shift";
+  let summary = "VMI signedness-aware elementwise right shift";
   let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs,
                        Variadic<VMI_MaskTypeConstraint>:$mask,
                        OptionalAttr<StrAttr>:$pmode);

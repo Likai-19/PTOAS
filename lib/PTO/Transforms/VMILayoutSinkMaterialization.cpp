@@ -93,6 +93,8 @@ getSinkableBinaryOperands(Operation *op) {
     return BinaryVRegOperands{&shli.getLhsMutable(), &shli.getRhsMutable()};
   if (auto shrui = dyn_cast<VMIShRUIOp>(op))
     return BinaryVRegOperands{&shrui.getLhsMutable(), &shrui.getRhsMutable()};
+  if (auto shrsi = dyn_cast<VMIShRSIOp>(op))
+    return BinaryVRegOperands{&shrsi.getLhsMutable(), &shrsi.getRhsMutable()};
   return std::nullopt;
 }
 

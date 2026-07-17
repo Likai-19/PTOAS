@@ -1233,6 +1233,16 @@ LogicalResult VMIShRUIOp::verify() {
   return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
 }
 
+LogicalResult VMIShRSIOp::verify() {
+  auto lhsType = cast<VMIVRegType>(getLhs().getType());
+  auto rhsType = cast<VMIVRegType>(getRhs().getType());
+  auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (!isVMISignedOrSignlessI8I16I32Type(lhsType.getElementType()))
+    return emitOpError(
+        "requires signless or signed i8, i16, or i32 VMI element type");
+  return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
+}
+
 LogicalResult VMINotOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
@@ -2818,9 +2828,8 @@ LogicalResult VMIVshrOp::verify() {
   auto rhsType = cast<VMIVRegType>(getRhs().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
   auto integerType = dyn_cast<IntegerType>(lhsType.getElementType());
-  if (!integerType || integerType.isSigned())
-    return emitOpError(
-        "requires signless or unsigned integer VMI element type");
+  if (!integerType)
+    return emitOpError("requires integer VMI element type");
   if (failed(verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType)))
     return failure();
   if (failed(verifyVMIVariadicPmodeMask(getOperation(), getMask(),

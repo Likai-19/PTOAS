@@ -21,6 +21,8 @@
 //   vadd/vsub/vmul/vdiv/vmin/vmax → legacy type-specific binary op
 //   vneg/vabs/vsqrt/vexp/vln/vrelu → legacy unary op
 //   vand/vor/vxor/vshl/vshr/vnot → legacy bitwise op
+//   vshr selects shrui for explicit unsigned elements and shrsi for
+//   signless/signed elements.
 //   Mask/pmode synthesis is intentionally bypassed here so two-stage lowering
 //   does not introduce select chains before layout assignment.
 //
@@ -53,6 +55,8 @@
 // Category C5 — vector-scalar ops, one-step to legacy (6 ops):
 //   vadds/vmuls/vmaxs/vmins/vshls/vshrs
 //     → broadcast scalar → legacy binary
+//   vshrs selects shrui for explicit unsigned elements and shrsi for
+//   signless/signed elements.
 //
 // Category C3 — unified load/store (2 ops, dispatch by dist_mode/group):
 //   vload → load / deinterleave_load / group_load
@@ -1345,9 +1349,13 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
     }
 
     if (auto vop = dyn_cast<VMIShrSOp>(op)) {
+      Type elemType = getVMIElementType(vop.getSrc());
       auto createLegacy = [&](Location loc, Type ty, Value lhs,
                               Value rhs) -> Value {
-        return builder.create<VMIShRUIOp>(loc, ty, lhs, rhs).getResult();
+        auto intType = cast<IntegerType>(elemType);
+        if (intType.isUnsigned())
+          return builder.create<VMIShRUIOp>(loc, ty, lhs, rhs).getResult();
+        return builder.create<VMIShRSIOp>(loc, ty, lhs, rhs).getResult();
       };
       (void)lowerVecScalar(vop, builder, createLegacy);
       continue;
@@ -1541,9 +1549,13 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
     }
 
     if (auto vop = dyn_cast<VMIVshrOp>(op)) {
+      Type elemType = getVMIElementType(vop.getLhs());
       auto createLegacy = [&](Location loc, Type ty, Value lhs,
                               Value rhs) -> Value {
-        return builder.create<VMIShRUIOp>(loc, ty, lhs, rhs).getResult();
+        auto intType = cast<IntegerType>(elemType);
+        if (intType.isUnsigned())
+          return builder.create<VMIShRUIOp>(loc, ty, lhs, rhs).getResult();
+        return builder.create<VMIShRSIOp>(loc, ty, lhs, rhs).getResult();
       };
       (void)lowerBinaryIgnoringMask(vop, createLegacy);
       continue;

@@ -10,28 +10,28 @@
 // RUN: pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-lower-unified-to-legacy -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
 
 module {
-  func.func @vmi_to_vpto_shrui(
-      %value: !pto.vmi.vreg<256xui16>,
-      %amount: !pto.vmi.vreg<256xui16>) -> !pto.vmi.vreg<256xui16> {
+  func.func @vmi_to_vpto_shrsi(
+      %value: !pto.vmi.vreg<256xsi16>,
+      %amount: !pto.vmi.vreg<256xsi16>) -> !pto.vmi.vreg<256xsi16> {
     %shifted = pto.vmi.vshr %value, %amount
-        : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<256xui16>
-        -> !pto.vmi.vreg<256xui16>
-    return %shifted : !pto.vmi.vreg<256xui16>
+        : !pto.vmi.vreg<256xsi16>, !pto.vmi.vreg<256xsi16>
+        -> !pto.vmi.vreg<256xsi16>
+    return %shifted : !pto.vmi.vreg<256xsi16>
   }
 }
 
-// LEGACY-LABEL: func.func @vmi_to_vpto_shrui(
-// LEGACY: pto.vmi.shrui
-// LEGACY-NOT: pto.vmi.shrsi
+// LEGACY-LABEL: func.func @vmi_to_vpto_shrsi(
+// LEGACY: pto.vmi.shrsi
+// LEGACY-NOT: pto.vmi.shrui
 
-// LOWER-LABEL: func.func @vmi_to_vpto_shrui(
-// LOWER-SAME: %[[VALUE0:[^,]+]]: !pto.vreg<128xui16>
-// LOWER-SAME: %[[VALUE1:[^,]+]]: !pto.vreg<128xui16>
-// LOWER-SAME: %[[AMOUNT0:[^,]+]]: !pto.vreg<128xui16>
-// LOWER-SAME: %[[AMOUNT1:[^)]+]]: !pto.vreg<128xui16>
-// LOWER-SAME: -> (!pto.vreg<128xui16>, !pto.vreg<128xui16>)
-// LOWER-DAG: %[[SHR0:.*]] = pto.vshr %[[VALUE0]], %[[AMOUNT0]], {{.*}} : !pto.vreg<128xui16>, !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
-// LOWER-DAG: %[[SHR1:.*]] = pto.vshr %[[VALUE1]], %[[AMOUNT1]], {{.*}} : !pto.vreg<128xui16>, !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
+// LOWER-LABEL: func.func @vmi_to_vpto_shrsi(
+// LOWER-SAME: %[[VALUE0:[^,]+]]: !pto.vreg<128xsi16>
+// LOWER-SAME: %[[VALUE1:[^,]+]]: !pto.vreg<128xsi16>
+// LOWER-SAME: %[[AMOUNT0:[^,]+]]: !pto.vreg<128xsi16>
+// LOWER-SAME: %[[AMOUNT1:[^)]+]]: !pto.vreg<128xsi16>
+// LOWER-SAME: -> (!pto.vreg<128xsi16>, !pto.vreg<128xsi16>)
+// LOWER-DAG: %[[SHR0:.*]] = pto.vshr %[[VALUE0]], %[[AMOUNT0]], {{.*}} : !pto.vreg<128xsi16>, !pto.vreg<128xsi16>, !pto.mask<b16> -> !pto.vreg<128xsi16>
+// LOWER-DAG: %[[SHR1:.*]] = pto.vshr %[[VALUE1]], %[[AMOUNT1]], {{.*}} : !pto.vreg<128xsi16>, !pto.vreg<128xsi16>, !pto.mask<b16> -> !pto.vreg<128xsi16>
 // LOWER: return %[[SHR0]], %[[SHR1]]
 // LOWER-NOT: pto.vmi.
 // LOWER-NOT: !pto.vmi.

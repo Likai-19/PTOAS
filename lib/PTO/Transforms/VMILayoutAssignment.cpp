@@ -765,6 +765,13 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
+      if (auto shrsi = dyn_cast<VMIShRSIOp>(op)) {
+        if (failed(constrainElementwiseBinary(shrsi.getLhsMutable(),
+                                              shrsi.getRhsMutable(),
+                                              shrsi.getResult(), op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
       if (auto notOp = dyn_cast<VMINotOp>(op)) {
         if (failed(unite(notOp.getSource(), notOp.getResult(), op)))
           return WalkResult::interrupt();

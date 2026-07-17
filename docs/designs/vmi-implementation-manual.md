@@ -1906,7 +1906,7 @@ identity/helper:
   pack, unpack, ensure_layout identity/materialization cases, ensure_mask_* identity case
 
 per-part elementwise:
-  addf, addi, subf, subi, mulf, muli, divf, minf, maxf, negf, absf, absi, sqrt, exp, ln, relu, andi, ori, xori, shli, shrui, not, cmpf, cmpi, select
+  addf, addi, subf, subi, mulf, muli, divf, minf, maxf, negf, absf, absi, sqrt, exp, ln, relu, andi, ori, xori, shli, shrui, shrsi, not, cmpf, cmpi, select
 
 per-part predicate:
   mask_and, mask_or, mask_xor, mask_not
@@ -2202,6 +2202,7 @@ pto.vmi.ori
 pto.vmi.xori
 pto.vmi.shli
 pto.vmi.shrui
+pto.vmi.shrsi
 pto.vmi.not
 pto.vmi.cmpf
 pto.vmi.cmpi
@@ -2211,9 +2212,9 @@ pto.vmi.truncf
 pto.vmi.bitcast
 ```
 
-`pto.vmi.shrui` represents logical right shift and lowers to `pto.vshr`.
-`pto.vmi.shrsi` is intentionally not defined until VPTO exposes or documents
-an arithmetic right-shift contract distinct from logical right shift.
+`pto.vmi.shrui` represents logical right shift and lowers to unsigned
+`pto.vshr`. `pto.vmi.shrsi` represents arithmetic right shift and lowers to
+signed `pto.vshr`; the physical element type selects the VPTO/VISA sign mode.
 Integer div/rem, integer casts, int-float casts, and index casts are also
 intentionally outside the current VMI surface until signedness, rounding,
 saturation, overflow/remainder, and target lowering contracts are explicit.
@@ -2501,7 +2502,7 @@ constant/broadcast/create_mask/constant_mask:
 mask_and/mask_or/mask_xor/mask_not:
   all mask operands/results same layout and granularity
 
-addf/addi/subf/subi/mulf/muli/divf/minf/maxf/negf/absf/absi/sqrt/exp/ln/relu/andi/ori/xori/shli/shrui/not/cmpf/cmpi/select:
+addf/addi/subf/subi/mulf/muli/divf/minf/maxf/negf/absf/absi/sqrt/exp/ln/relu/andi/ori/xori/shli/shrui/shrsi/not/cmpf/cmpi/select:
   all data operands/results same layout
   mask layout follows data layout
 
@@ -2876,7 +2877,7 @@ pto.vmi.mask_and / mask_or / mask_xor / mask_not:
     mask_xor emits pto.pxor(lhs_part, rhs_part, all_true_mask)
     mask_not emits pto.pnot(source_part, all_true_mask)
 
-pto.vmi.addf / addi / subf / subi / mulf / muli / divf / minf / maxf / negf / absf / absi / sqrt / exp / ln / relu / andi / ori / xori / shli / shrui / not:
+pto.vmi.addf / addi / subf / subi / mulf / muli / divf / minf / maxf / negf / absf / absi / sqrt / exp / ln / relu / andi / ori / xori / shli / shrui / shrsi / not:
   current direct lowering requires the physical element width to be 8, 16, or
   32 bits, because every emitted VPTO op is predicated by a materialized
   pto.mask<b8/b16/b32>. VMI types such as index or f64 remain valid semantic
@@ -2912,6 +2913,7 @@ pto.vmi.addf / addi / subf / subi / mulf / muli / divf / minf / maxf / negf / ab
     xori emits pto.vxor(lhs_part, rhs_part, all_true_mask)
     shli emits pto.vshl(lhs_part, rhs_part, all_true_mask)
     shrui emits pto.vshr(lhs_part, rhs_part, all_true_mask)
+    shrsi emits signed pto.vshr(lhs_part, rhs_part, all_true_mask)
     not emits pto.vnot(source_part, all_true_mask)
 
 pto.vmi.fma:
@@ -4450,7 +4452,7 @@ logical vector 语义和当前物理指令的天然限制。
 ```text
 elementwise same-shape op:
   examples:
-    addf/addi/subf/mulf/andi/shli/shrui/absf/absi/sqrt
+    addf/addi/subf/mulf/andi/shli/shrui/shrsi/absf/absi/sqrt
   layout rule:
     all data operands and result are in one equivalence class
   lowering rule:
@@ -4625,6 +4627,7 @@ use verifier failure:
   examples:
     absf on integer element
     shrui on signed integer element
+    shrsi on unsigned integer element
     bitcast total bits mismatch
 
 use VMI-LAYOUT-CONTRACT:
