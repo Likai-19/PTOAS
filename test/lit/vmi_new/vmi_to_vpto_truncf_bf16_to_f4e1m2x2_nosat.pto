@@ -1,0 +1,50 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto | FileCheck %s
+
+// bf16 -> f4E1M2x2 : VPTO contract has requiresSat=false, so a user-driven
+// saturate="NOSAT" must survive all the way to the physical pto.vcvt with
+// no sat attribute attached.  Baseline for this path (without saturate on
+// pto.vmi.vcvt) already lives in vmi_to_vpto_truncf_bf16_to_f4e1m2x2.pto.
+
+module {
+  func.func @vmi_to_vpto_truncf_bf16_to_f4e1m2x2_nosat(
+      %wide: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<deinterleaved = 4>>)
+      -> !pto.vreg<256x!pto.f4E1M2x2> {
+    %packed = pto.vmi.vcvt %wide {saturate = "NOSAT"}
+        : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<deinterleaved = 4>>
+        -> !pto.vmi.vreg<128x!pto.f4E1M2x2, #pto.vmi.layout<contiguous>>
+    %p = "pto.vmi.unpack"(%packed)
+        : (!pto.vmi.vreg<128x!pto.f4E1M2x2, #pto.vmi.layout<contiguous>>)
+        -> !pto.vreg<256x!pto.f4E1M2x2>
+    return %p : !pto.vreg<256x!pto.f4E1M2x2>
+  }
+}
+
+// CHECK-LABEL: func.func @vmi_to_vpto_truncf_bf16_to_f4e1m2x2_nosat(
+// CHECK: pto.vcvt
+// CHECK-SAME: part = "P0"
+// CHECK-SAME: rnd = "R"
+// CHECK-NOT: sat
+// CHECK: pto.vcvt
+// CHECK-SAME: part = "P1"
+// CHECK-SAME: rnd = "R"
+// CHECK-NOT: sat
+// CHECK: pto.vcvt
+// CHECK-SAME: part = "P2"
+// CHECK-SAME: rnd = "R"
+// CHECK-NOT: sat
+// CHECK: pto.vcvt
+// CHECK-SAME: part = "P3"
+// CHECK-SAME: rnd = "R"
+// CHECK-NOT: sat
+// CHECK: pto.vor
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast
