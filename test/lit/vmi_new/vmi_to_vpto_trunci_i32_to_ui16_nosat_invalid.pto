@@ -1,0 +1,28 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto 2>&1 | FileCheck %s
+
+// i32 -> ui16 (IntNarrow) contract has requiresSat=true; a user-driven NOSAT
+// must be caught by the physical pto.vcvt verifier.
+
+module {
+  func.func @vmi_to_vpto_trunci_i32_to_ui16_nosat_invalid(
+      %wide: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>)
+      -> (!pto.vreg<128xui16>, !pto.vreg<128xui16>) {
+    %narrow = pto.vmi.vcvt %wide {saturate = "NOSAT"}
+        : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
+        -> !pto.vmi.vreg<256xui16, #pto.vmi.layout<deinterleaved = 2>>
+    %low, %high = "pto.vmi.unpack"(%narrow)
+        : (!pto.vmi.vreg<256xui16, #pto.vmi.layout<deinterleaved = 2>>)
+        -> (!pto.vreg<128xui16>, !pto.vreg<128xui16>)
+    return %low, %high : !pto.vreg<128xui16>, !pto.vreg<128xui16>
+  }
+}
+
+// CHECK: 'pto.vcvt' op requires sat attr for this vcvt type pair

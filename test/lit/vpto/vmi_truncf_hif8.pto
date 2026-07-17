@@ -52,7 +52,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.vecscope {
       %x = pto.vmi.load %ub_src[%c0]
           : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
-      %h = pto.vmi.truncf %x
+      %h = pto.vmi.truncf %x {saturate = "SAT"}
           : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256x!pto.hif8>
       pto.vmi.store %h, %ub_dst[%c0]
           : !pto.vmi.vreg<256x!pto.hif8>, !pto.ptr<!pto.hif8, ub>
@@ -89,7 +89,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.vecscope {
       %x = pto.vmi.load %ub_src[%c0]
           : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
-      %h = pto.vmi.truncf %x {rounding = "H"}
+      %h = pto.vmi.truncf %x {rounding = "H", saturate = "SAT"}
           : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256x!pto.hif8>
       pto.vmi.store %h, %ub_dst[%c0]
           : !pto.vmi.vreg<256x!pto.hif8>, !pto.ptr<!pto.hif8, ub>

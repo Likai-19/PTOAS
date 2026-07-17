@@ -731,6 +731,24 @@ class _VMINamespace:
                 rounding,
                 context="pto.vmi.vcvt(..., rounding=...)",
             )
+        if saturate is None:
+            # The VMI verifier requires explicit "SAT" or "NOSAT" for
+            # narrowing and fp-to-int directions.  Default to "SAT" when
+            # the user does not specify.
+            src_bits = _type_bit_width(
+                _as_vmi_vreg_type(_type_of(source), context="pto.vmi.vcvt(...)").element_type,
+                context="pto.vmi.vcvt(...)",
+            )
+            dst_bits = _type_bit_width(
+                result_type.element_type,
+                context="pto.vmi.vcvt(...)",
+            )
+            src_is_fp = _is_vmi_float_element_type(
+                _as_vmi_vreg_type(_type_of(source), context="pto.vmi.vcvt(...)").element_type
+            )
+            dst_is_fp = _is_vmi_float_element_type(result_type.element_type)
+            if src_bits > dst_bits or (src_is_fp and not dst_is_fp):
+                saturate = "SAT"
         return _call_value(
             "vcvt",
             result_type,
