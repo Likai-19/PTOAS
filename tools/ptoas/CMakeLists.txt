@@ -11,18 +11,12 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 
-set(LLVM_LINK_COMPONENTS
-  Support
-  Core
-)
-
 set(PTOAS_RUNTIME_SOURCES
   ptoas.cpp
   driver.cpp
   VPTOHostStubEmission.cpp
   ObjectEmission.cpp
   TilelangDaemon.cpp
-  LLVMOptionRTTIShim.cpp
 )
 
 set(PTOAS_WRAPPER_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/ptoas_wrapper.py")
@@ -45,8 +39,9 @@ function(ptoas_configure_runtime_target target_name)
     PTOAS_RELEASE_VERSION="${PTOAS_CLI_VERSION}"
     # Source-tree defaults for TileLib expansion. These let ptoas run directly
     # from the build tree without passing --tilelang-path /
-    # --tilelang-pkg-path / --ptodsl-pkg-path. Installed layouts that move
-    # these directories still need to override the flags explicitly.
+    # --tilelang-pkg-path / --ptodsl-pkg-path. Installed layouts are expected
+    # to launch through the wrapper/launcher flow, which injects explicit
+    # runtime paths instead of relying on executable-path probing.
     PTOAS_DEFAULT_TILELANG_PATH="${CMAKE_SOURCE_DIR}/lib/TileOps"
     PTOAS_DEFAULT_TILELANG_PKG_PATH="${CMAKE_SOURCE_DIR}/tilelang-dsl/python"
     PTOAS_DEFAULT_PTODSL_PKG_PATH="${CMAKE_SOURCE_DIR}/ptodsl"
@@ -92,6 +87,9 @@ function(ptoas_configure_runtime_target target_name)
 endfunction()
 
 add_library(ptoas_runtime SHARED ${PTOAS_RUNTIME_SOURCES})
+# Keep the shared runtime's compile mode aligned with LLVM/MLIR so RTTI,
+# exceptions, and visibility expectations match the libraries it links to.
+llvm_update_compile_flags(ptoas_runtime)
 set_target_properties(ptoas_runtime PROPERTIES
   OUTPUT_NAME "ptoas"
   PREFIX ""
@@ -99,14 +97,6 @@ set_target_properties(ptoas_runtime PROPERTIES
 ptoas_configure_runtime_target(ptoas_runtime
   PTOAS_BUILD_SHARED_LIBRARY=1
 )
-if(APPLE)
-  target_link_options(ptoas_runtime PRIVATE "LINKER:-undefined,dynamic_lookup")
-elseif(UNIX)
-  target_link_options(ptoas_runtime PRIVATE
-    "LINKER:-z,undefs"
-    "LINKER:--allow-shlib-undefined"
-  )
-endif()
 
 if(TARGET ptoas_runtime_deps)
   add_dependencies(ptoas_runtime_deps ptoas_runtime)

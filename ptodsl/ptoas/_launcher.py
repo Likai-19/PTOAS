@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import ctypes
 import os
-import subprocess
 import shutil
 import sys
 from pathlib import Path
@@ -56,7 +55,6 @@ def _resolve_shared_module_path(package_root: Path, runtime_root: Path, wrapper:
         package_root.parent / "pto" / "ptoas.so",
         wrapper.parent / "ptoas.so",
         runtime_root / "lib" / "ptoas.so",
-        runtime_root / "pto" / "ptoas.so",
     ]
 
     for candidate in candidates:
@@ -64,8 +62,9 @@ def _resolve_shared_module_path(package_root: Path, runtime_root: Path, wrapper:
             return candidate
 
     raise SystemExit(
-        "wheel/runtime is missing the packaged shared module: expected pto.ptoas "
-        "or a local ptoas.so next to the wrapper/install tree"
+        "wheel/runtime is missing the packaged shared module: expected "
+        "ptoas/_runtime/lib/ptoas.so or a local ptoas.so next to the "
+        "wrapper/install tree"
     )
 
 
@@ -79,40 +78,16 @@ def _resolve_runtime_root(package_root: Path) -> Path:
     return package_root.parent.parent / "install"
 
 
-def _iter_runtime_library_deps(shared_module: Path, runtime_lib_dir: Path) -> list[Path]:
+def _iter_runtime_library_files(runtime_lib_dir: Path) -> list[Path]:
     if not runtime_lib_dir.is_dir():
         return []
 
-    env = os.environ.copy()
-    current = env.get("LD_LIBRARY_PATH", "")
-    rendered = str(runtime_lib_dir)
-    env["LD_LIBRARY_PATH"] = os.pathsep.join(
-        [rendered] + [part for part in current.split(os.pathsep) if part]
-    )
-
-    output = subprocess.check_output(
-        ["ldd", str(shared_module)],
-        text=True,
-        stderr=subprocess.DEVNULL,
-        env=env,
-    )
-    deps: list[Path] = []
-    for line in output.splitlines():
-        line = line.strip()
-        if "=>" in line:
-            candidate = line.split("=>", 1)[1].strip().split(" ", 1)[0]
-        else:
-            candidate = line.split(" ", 1)[0]
-        if not candidate.startswith("/"):
-            continue
-        dep_path = Path(candidate)
-        try:
-            if runtime_lib_dir.resolve() not in dep_path.resolve().parents:
-                continue
-        except FileNotFoundError:
-            continue
-        deps.append(dep_path)
-    return deps
+    libraries: dict[Path, None] = {}
+    for pattern in ("*.so", "*.so.*", "*.dylib", "*.dylib.*"):
+        for candidate in sorted(runtime_lib_dir.glob(pattern)):
+            if candidate.is_file():
+                libraries[candidate.resolve()] = None
+    return list(libraries)
 
 
 def _preload_runtime_libraries(shared_module: Path, runtime_lib_dir: Path) -> None:
@@ -120,24 +95,32 @@ def _preload_runtime_libraries(shared_module: Path, runtime_lib_dir: Path) -> No
     if not runtime_lib_dir.is_dir():
         return
 
-    loaded: set[Path] = set()
-    visiting: set[Path] = set()
+    pending = [
+        path for path in _iter_runtime_library_files(runtime_lib_dir)
+        if path != shared_module.resolve()
+    ]
+    if not pending:
+        return
 
-    def visit(path: Path) -> None:
-        resolved = path.resolve()
-        if resolved in loaded or resolved in visiting:
+    mode = getattr(ctypes, "RTLD_GLOBAL", 0)
+    last_error: OSError | None = None
+    while pending:
+        next_pending: list[Path] = []
+        made_progress = False
+        for candidate in pending:
+            try:
+                ctypes.CDLL(str(candidate), mode=mode)
+                made_progress = True
+            except OSError as exc:
+                last_error = exc
+                next_pending.append(candidate)
+        if not next_pending:
             return
-        visiting.add(resolved)
-        try:
-            for dep in _iter_runtime_library_deps(resolved, runtime_lib_dir):
-                visit(dep)
-            ctypes.CDLL(str(resolved), mode=getattr(ctypes, "RTLD_GLOBAL", 0))
-            loaded.add(resolved)
-        finally:
-            visiting.discard(resolved)
-
-    for dep in _iter_runtime_library_deps(shared_module, runtime_lib_dir):
-        visit(dep)
+        if not made_progress:
+            if last_error is not None:
+                raise last_error
+            raise OSError(f"unable to preload runtime libraries from {runtime_lib_dir}")
+        pending = next_pending
 
 
 def _load_shared_entrypoint(shared_module: Path, runtime_lib_dir: Path):

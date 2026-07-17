@@ -25,7 +25,7 @@ class PtoasBuildBackendTests(unittest.TestCase):
             install_dir = temp_root / "install"
             (repo / "cmake").mkdir(parents=True)
             (install_dir / "lib").mkdir(parents=True)
-            (install_dir / "lib" / "ptoas.so").write_bytes(b"")
+            (install_dir / "lib" / "ptoas.so").write_bytes(b"fake shared module")
 
             check_call_args = []
 
@@ -64,6 +64,17 @@ class PtoasBuildBackendTests(unittest.TestCase):
             check_call_args[-1],
             ["cmake", "--build", str(build_dir), "--target", "install"],
         )
+
+    def test_installed_shared_module_must_be_non_empty(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_dir = Path(temp_dir) / "install"
+            shared_module = install_dir / "lib" / "ptoas.so"
+            shared_module.parent.mkdir(parents=True)
+            shared_module.write_bytes(b"")
+
+            with mock.patch.object(build_backend, "_PTO_INSTALL_DIR", install_dir):
+                with self.assertRaisesRegex(RuntimeError, "missing or empty"):
+                    build_backend._assert_installed_ptoas_shared_module()
 
 
 if __name__ == "__main__":

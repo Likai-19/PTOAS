@@ -72,9 +72,9 @@ assemble_linux_wheel_runtime() {
     exit 1
   fi
 
-  mkdir -p "${RUNTIME_STAGING_DIR}/lib" "${RUNTIME_STAGING_DIR}/share/ptoas" "${RUNTIME_STAGING_DIR}/pto"
+  mkdir -p "${RUNTIME_STAGING_DIR}/lib" "${RUNTIME_STAGING_DIR}/share/ptoas"
   cp -R "${PTO_INSTALL_DIR}/share/ptoas/TileOps" "${RUNTIME_STAGING_DIR}/share/ptoas/TileOps"
-  cp "${PTO_INSTALL_DIR}/lib/ptoas.so" "${RUNTIME_STAGING_DIR}/pto/ptoas.so"
+  cp "${PTO_INSTALL_DIR}/lib/ptoas.so" "${RUNTIME_STAGING_DIR}/lib/ptoas.so"
 
   # Resolve transitive MLIR/LLVM dependencies through the build tree so
   # ldd can discover non-installed libs such as libMLIRMlirOptMain.so.*.
@@ -163,7 +163,6 @@ echo "Embedding unified runtime payload for wheel-side ptoas launcher..."
 mkdir -p "${WHEEL_STAGING_DIR}/ptoas/_runtime"
 cp -R "${RUNTIME_STAGING_DIR}/share" "${WHEEL_STAGING_DIR}/ptoas/_runtime/share"
 cp -R "${RUNTIME_STAGING_DIR}/lib" "${WHEEL_STAGING_DIR}/ptoas/_runtime/lib"
-cp -R "${RUNTIME_STAGING_DIR}/pto" "${WHEEL_STAGING_DIR}/pto"
 
 echo "Removing packaging residue..."
 find "${WHEEL_STAGING_DIR}" \( -name '*.egg-info' -o -name '*.dist-info' \) -prune -exec rm -rf {} +
@@ -236,7 +235,7 @@ with zipfile.ZipFile(wheel_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         record_rows.append((rel, hash_bytes(data), str(len(data))))
         if rel == "ptodsl/__init__.py":
             has_ptodsl_init = True
-        if rel == "pto/ptoas.so":
+        if rel == "ptoas/_runtime/lib/ptoas.so":
             has_ptoas_shared_module = True
 
     entry_points = "\n".join([
@@ -266,13 +265,13 @@ with zipfile.ZipFile(wheel_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
 if not has_ptodsl_init:
     raise SystemExit("Wheel staging payload is missing ptodsl/__init__.py")
 if not has_ptoas_shared_module:
-    raise SystemExit("Wheel staging payload is missing pto/ptoas.so")
+    raise SystemExit("Wheel staging payload is missing ptoas/_runtime/lib/ptoas.so")
 
 with zipfile.ZipFile(wheel_path) as zf:
     if "ptodsl/__init__.py" not in zf.namelist():
         raise SystemExit("Built wheel is missing ptodsl/__init__.py")
-    if "pto/ptoas.so" not in zf.namelist():
-        raise SystemExit("Built wheel is missing pto/ptoas.so")
+    if "ptoas/_runtime/lib/ptoas.so" not in zf.namelist():
+        raise SystemExit("Built wheel is missing ptoas/_runtime/lib/ptoas.so")
     if "ptoas/_runtime/bin/ptoas" in zf.namelist():
         raise SystemExit("Built wheel unexpectedly contains ptoas/_runtime/bin/ptoas")
 

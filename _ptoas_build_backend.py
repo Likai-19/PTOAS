@@ -92,10 +92,13 @@ def _assert_installed_ptodsl_payload() -> None:
 
 def _assert_installed_ptoas_shared_module() -> None:
     installed_shared_module = _PTO_INSTALL_DIR / "lib" / "ptoas.so"
-    if installed_shared_module.exists():
+    if (
+        installed_shared_module.is_file()
+        and installed_shared_module.stat().st_size > 0
+    ):
         return
     raise RuntimeError(
-        "PTOAS shared launcher module is missing from the PTOAS install tree. "
+        "PTOAS shared launcher module is missing or empty in the PTOAS install tree. "
         f"Expected to find {installed_shared_module}. "
         "Wheel assembly now packages the shared module from the install tree."
     )

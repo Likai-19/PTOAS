@@ -7,15 +7,21 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 
-# Collect only non-system *.so actually needed by ptoas.
-# Expects: LLVM_BUILD_DIR, PTO_INSTALL_DIR, PTOAS_DEPS_DIR, PTO_SOURCE_DIR
-# Optional: PTO_BUILD_DIR (defaults to PTO_SOURCE_DIR/build)
+# Collect only non-system *.so actually needed by the packaged ptoas shared
+# runtime. The `ptoas` wrapper is a Python script, so dependency discovery must
+# start from `ptoas.so` instead of running `ldd` on the wrapper itself.
+#
+# Expects: LLVM_BUILD_DIR, PTO_INSTALL_DIR, PTOAS_DEPS_DIR
 
 set -euo pipefail
 
 export LD_LIBRARY_PATH="${LLVM_BUILD_DIR}/lib:${PTO_INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}"
-PTO_BUILD_DIR="${PTO_BUILD_DIR:-${PTO_SOURCE_DIR}/build}"
-PTOAS_BIN="${PTO_BUILD_DIR}/tools/ptoas/ptoas"
+PTOAS_SHARED_MODULE="${PTO_INSTALL_DIR}/lib/ptoas.so"
+
+if [[ ! -f "${PTOAS_SHARED_MODULE}" ]]; then
+  echo "Error: shared launcher module not found at ${PTOAS_SHARED_MODULE}" >&2
+  exit 1
+fi
 
 remove_rpath() {
   local path="$1"
@@ -135,7 +141,7 @@ while read -r res; do
   [[ -n "$res" ]] || continue
   should_bundle_linux_dep "$res" || continue
   copy_so "$res"
-done < <(linux_runtime_dep_paths "$PTOAS_BIN")
+done < <(linux_runtime_dep_paths "$PTOAS_SHARED_MODULE")
 
 while read -r packaged; do
   harden_elf "$packaged"

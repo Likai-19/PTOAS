@@ -55,35 +55,17 @@ if [[ -n "${WHEEL_GLOB}" ]] && compgen -G "${WHEEL_GLOB}" >/dev/null 2>&1; then
   TEST_TMPDIR="$(mktemp -d /tmp/ptoas-wheel-test.XXXXXX)"
   echo "Installing wheel into isolated venv: ${TEST_WHEEL}"
   echo "Checking wheel payload before installation..."
-  TEST_WHEEL="${TEST_WHEEL}" "${PYTHON_BIN}" - <<'PY'
-import os
-import zipfile
-from pathlib import Path
-
-wheel = Path(os.environ["TEST_WHEEL"])
-with zipfile.ZipFile(wheel) as zf:
-    names = set(zf.namelist())
-    required = {"ptoas/__init__.py", "ptoas/_launcher.py", "pto/ptoas.so"}
-    missing = sorted(required - names)
-    if missing:
-        raise SystemExit(f"wheel is missing required payload files: {missing}")
-    if "ptoas/_runtime/bin/ptoas" in names:
-        raise SystemExit("wheel unexpectedly contains ptoas/_runtime/bin/ptoas")
-    entry_points_name = next(
-        name for name in names
-        if name.startswith("ptoas-") and name.endswith(".dist-info/entry_points.txt")
-    )
-    entry_points = zf.read(entry_points_name).decode("utf-8")
-    if "ptoas=ptoas._launcher:main" not in entry_points:
-        raise SystemExit("wheel entry points do not route ptoas through ptoas._launcher:main")
-print(f"Wheel payload check passed: {wheel.name}")
-PY
+  "${PYTHON_BIN}" "${REPO_ROOT}/docker/validate_wheel_payload.py" "${TEST_WHEEL}"
   "${PYTHON_BIN}" -m venv "${TEST_TMPDIR}/venv"
   source "${TEST_TMPDIR}/venv/bin/activate"
   python -m pip install --no-deps --force-reinstall "${TEST_WHEEL}"
   PYTHON_BIN="python"
 else
   echo "No wheel artifact supplied; testing the currently installed environment."
+fi
+
+if [[ -z "${TEST_TMPDIR}" ]]; then
+  TEST_TMPDIR="$(mktemp -d /tmp/ptoas-wheel-test.XXXXXX)"
 fi
 
 unset PYTHONPATH
@@ -115,6 +97,87 @@ if [[ -n "${PTOAS_VERSION:-}" ]]; then
 else
   echo "${PTOAS_VERSION_OUTPUT}" | grep -Eq '^ptoas [0-9]+\.[0-9]+$'
 fi
+
+echo "Testing installed ptoas console entry in a clean environment..."
+PTOAS_ENTRYPOINT="$(command -v ptoas)"
+PYTHON_ENTRYPOINT="$(command -v "${PYTHON_BIN}")"
+CLEAN_ENV_DIR="${TEST_TMPDIR}/clean-env"
+CLEAN_ENV_PTO="${CLEAN_ENV_DIR}/wheel-clean-env-probe.pto"
+CLEAN_ENV_CPP="${CLEAN_ENV_DIR}/wheel-clean-env-probe.cpp"
+mkdir -p "${CLEAN_ENV_DIR}"
+
+CLEAN_PTOAS_VERSION_OUTPUT="$(
+  env -i \
+    HOME="${CLEAN_ENV_DIR}" \
+    TMPDIR="${CLEAN_ENV_DIR}" \
+    PATH="/usr/bin:/bin" \
+    "${PTOAS_ENTRYPOINT}" --version | tr -d '\r'
+)"
+echo "${CLEAN_PTOAS_VERSION_OUTPUT}"
+if [[ -n "${PTOAS_VERSION:-}" ]]; then
+  EXPECTED_VERSION_OUTPUT="ptoas ${PTOAS_VERSION}"
+  if [[ "${CLEAN_PTOAS_VERSION_OUTPUT}" != "${EXPECTED_VERSION_OUTPUT}" ]]; then
+    echo "Error: expected '${EXPECTED_VERSION_OUTPUT}', got '${CLEAN_PTOAS_VERSION_OUTPUT}'" >&2
+    exit 1
+  fi
+else
+  echo "${CLEAN_PTOAS_VERSION_OUTPUT}" | grep -Eq '^ptoas [0-9]+\.[0-9]+$'
+fi
+
+env -i \
+  HOME="${CLEAN_ENV_DIR}" \
+  TMPDIR="${CLEAN_ENV_DIR}" \
+  PATH="/usr/bin:/bin" \
+  CLEAN_ENV_PTO="${CLEAN_ENV_PTO}" \
+  "${PYTHON_ENTRYPOINT}" - <<'PY'
+import os
+from pathlib import Path
+
+from ptodsl import pto
+
+
+@pto.jit(target="a5")
+def wheel_clean_env_probe(
+    A_ptr: pto.ptr(pto.f32, "gm"),
+    O_ptr: pto.ptr(pto.f32, "gm"),
+    rows: pto.i32,
+    cols: pto.i32,
+    *,
+    BLOCK: pto.const_expr = 128,
+):
+    a_view = pto.make_tensor_view(A_ptr, shape=[rows, cols], strides=[cols, 1])
+    o_view = pto.make_tensor_view(O_ptr, shape=[rows, cols], strides=[cols, 1])
+    tile = pto.alloc_tile(shape=[1, BLOCK], dtype=pto.f32)
+    src = pto.partition_view(a_view, offsets=[0, 0], sizes=[rows, cols])
+    dst = pto.partition_view(o_view, offsets=[0, 0], sizes=[rows, cols])
+    pto.tile.load(src, tile)
+    pto.tile.store(tile, dst)
+
+
+output_path = Path(os.environ["CLEAN_ENV_PTO"])
+mlir_text = wheel_clean_env_probe.compile().mlir_text()
+if "func.func @wheel_clean_env_probe" not in mlir_text:
+    raise SystemExit("PTODSL clean-environment probe did not preserve the kernel symbol")
+if "pto.tload" not in mlir_text or "pto.tstore" not in mlir_text:
+    raise SystemExit("PTODSL clean-environment probe did not emit the expected tile ops")
+output_path.write_text(mlir_text, encoding="utf-8")
+print(f"Wrote PTODSL-authored PTO IR to {output_path}")
+PY
+
+env -i \
+  HOME="${CLEAN_ENV_DIR}" \
+  TMPDIR="${CLEAN_ENV_DIR}" \
+  PATH="/usr/bin:/bin" \
+  "${PTOAS_ENTRYPOINT}" "${CLEAN_ENV_PTO}" -o "${CLEAN_ENV_CPP}"
+
+if [[ ! -s "${CLEAN_ENV_CPP}" ]]; then
+  echo "Error: clean-environment ptoas smoke did not produce ${CLEAN_ENV_CPP}" >&2
+  exit 1
+fi
+grep -q "wheel_clean_env_probe" "${CLEAN_ENV_CPP}" || {
+  echo "Error: clean-environment ptoas smoke output is missing wheel_clean_env_probe" >&2
+  exit 1
+}
 
 echo "Testing PTODSL compile-only probe..."
 "$PYTHON_BIN" - <<'PY'
