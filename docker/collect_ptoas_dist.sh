@@ -20,7 +20,8 @@
 # Output structure:
 #   <output_directory>/
 #     ptoas           - Wrapper script that sets up LD_LIBRARY_PATH
-#     bin/ptoas       - The actual ptoas binary
+#     bin/ptoas       - Python wrapper entrypoint
+#     python/ptoas/    - Launcher package used by the wrapper
 #     lib/*.so*       - Required shared library dependencies
 #     share/ptoas/TileOps - TileLang template library
 #     tilelang_dsl/   - TileLang DSL Python package
@@ -49,20 +50,32 @@ export LD_LIBRARY_PATH="${LLVM_BUILD_DIR}/lib:${PTO_INSTALL_DIR}/lib:${LD_LIBRAR
 
 PTO_BUILD_DIR="${PTO_BUILD_DIR:-${PTO_SOURCE_DIR}/build}"
 PTOAS_BIN="${PTO_BUILD_DIR}/tools/ptoas/ptoas"
+PTOAS_SHARED_MODULE="${PTO_INSTALL_DIR}/lib/ptoas.so"
 PTOAS_DEPS_DIR="${PTOAS_DIST_DIR}/lib"
 PTOAS_TILEOPS_SRC_DIR="${PTO_INSTALL_DIR}/share/ptoas/TileOps"
 PTOAS_TILEOPS_DIST_DIR="${PTOAS_DIST_DIR}/share/ptoas/TileOps"
 PTOAS_TILELANG_DSL_SRC_DIR="${PTO_INSTALL_DIR}/tilelang_dsl"
 PTOAS_TILELANG_DSL_DIST_DIR="${PTOAS_DIST_DIR}/tilelang_dsl"
+PTOAS_WRAPPER_PKG_SRC_DIR="${PTO_INSTALL_DIR}/ptoas"
+PTOAS_PYTHON_ROOT_DIST_DIR="${PTOAS_DIST_DIR}/python"
+PTOAS_WRAPPER_PKG_DIST_DIR="${PTOAS_PYTHON_ROOT_DIST_DIR}/ptoas"
 
 if [ ! -f "$PTOAS_BIN" ]; then
-  echo "Error: ptoas binary not found at $PTOAS_BIN" >&2
+  echo "Error: ptoas wrapper not found at $PTOAS_BIN" >&2
+  exit 1
+fi
+if [ ! -f "$PTOAS_SHARED_MODULE" ]; then
+  echo "Error: shared launcher module not found at $PTOAS_SHARED_MODULE" >&2
   exit 1
 fi
 
 remove_rpath() {
   local path="$1"
   if ! has_rpath "$path"; then
+    return
+  fi
+  if ! can_scrub_rpath; then
+    echo "WARN: skipping RPATH/RUNPATH scrub for ${path}; install patchelf or chrpath to harden local dist artifacts" >&2
     return
   fi
   if command -v patchelf >/dev/null 2>&1; then
@@ -93,6 +106,10 @@ has_rpath() {
   readelf -d "$path" 2>/dev/null | grep -Eq '(RPATH|RUNPATH)'
 }
 
+can_scrub_rpath() {
+  command -v patchelf >/dev/null 2>&1 || command -v chrpath >/dev/null 2>&1
+}
+
 assert_relro() {
   local path="$1"
   if ! readelf -l "$path" 2>/dev/null | grep -q 'GNU_RELRO'; then
@@ -114,6 +131,9 @@ assert_no_symtab() {
 
 assert_no_rpath() {
   local path="$1"
+  if ! can_scrub_rpath; then
+    return
+  fi
   if has_rpath "$path"; then
     echo "Error: runtime search path still present in ${path}" >&2
     exit 1
@@ -133,15 +153,36 @@ harden_elf() {
 mkdir -p \
   "${PTOAS_DIST_DIR}/bin" \
   "${PTOAS_DEPS_DIR}" \
+  "${PTOAS_PYTHON_ROOT_DIST_DIR}" \
   "$(dirname "${PTOAS_TILEOPS_DIST_DIR}")"
+rm -rf "${PTOAS_WRAPPER_PKG_DIST_DIR}"
+cp -R "${PTOAS_WRAPPER_PKG_SRC_DIR}" "${PTOAS_WRAPPER_PKG_DIST_DIR}"
 
 # Copy ptoas binary
-echo "Copying ptoas binary..."
+echo "Copying ptoas wrapper..."
 cp "$PTOAS_BIN" "${PTOAS_DIST_DIR}/bin/"
-harden_elf "${PTOAS_DIST_DIR}/bin/ptoas"
+chmod +x "${PTOAS_DIST_DIR}/bin/ptoas"
 
-# Collect *.so dependencies (transitive closure under /llvm-workspace)
+# Collect non-system *.so dependencies needed by the packaged shared runtime.
 echo "Collecting shared library dependencies..."
+linux_runtime_dep_paths() {
+  local path="$1"
+  ldd "$path" 2>/dev/null | awk '
+    /=> \// { print $3 }
+    /^\// { print $1 }
+  '
+}
+
+should_bundle_linux_dep() {
+  local path="$1"
+  case "$path" in
+    /lib/*|/lib64/*|/usr/lib/*|/usr/lib64/*)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 copy_so() {
   local f="$1"
   [[ -f "$f" ]] || return 0
@@ -151,17 +192,26 @@ copy_so() {
   cp -L -n "$f" "${PTOAS_DEPS_DIR}/" 2>/dev/null || true
   harden_elf "${PTOAS_DEPS_DIR}/${name}"
   while read -r res; do
+    [[ -n "$res" ]] || continue
+    should_bundle_linux_dep "$res" || continue
     copy_so "$res"
-  done < <(ldd "$f" 2>/dev/null | awk '/=> \/llvm-workspace\// {print $3}')
+  done < <(linux_runtime_dep_paths "$f")
 }
 
 while read -r res; do
+  [[ -n "$res" ]] || continue
+  should_bundle_linux_dep "$res" || continue
   copy_so "$res"
-done < <(ldd "$PTOAS_BIN" 2>/dev/null | awk '/=> \/llvm-workspace\// {print $3}')
+done < <(linux_runtime_dep_paths "$PTOAS_BIN")
+while read -r res; do
+  [[ -n "$res" ]] || continue
+  should_bundle_linux_dep "$res" || continue
+  copy_so "$res"
+done < <(linux_runtime_dep_paths "$PTOAS_SHARED_MODULE")
 
 while read -r packaged; do
   harden_elf "$packaged"
-done < <(find "${PTOAS_DIST_DIR}/bin" "${PTOAS_DEPS_DIR}" -type f | sort)
+done < <(find "${PTOAS_DEPS_DIR}" -type f | sort)
 
 echo "Copying TileLang runtime resources..."
 if [ ! -d "${PTOAS_TILEOPS_SRC_DIR}" ]; then
@@ -182,6 +232,7 @@ cat > "${PTOAS_DIST_DIR}/ptoas" << 'WRAPPER_EOF'
 #!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export LD_LIBRARY_PATH="${SCRIPT_DIR}/lib:${LD_LIBRARY_PATH}"
+export PTOAS_PYTHON_ROOT="${SCRIPT_DIR}/python"
 exec "${SCRIPT_DIR}/bin/ptoas" "$@"
 WRAPPER_EOF
 chmod +x "${PTOAS_DIST_DIR}/ptoas"
@@ -212,6 +263,7 @@ echo ""
 echo "=== ptoas distribution contents ==="
 ls -la "${PTOAS_DIST_DIR}/"
 ls -la "${PTOAS_DIST_DIR}/bin/"
+ls -la "${PTOAS_DIST_DIR}/python/"
 ls -la "${PTOAS_DIST_DIR}/share/ptoas/"
 ls -la "${PTOAS_TILELANG_DSL_DIST_DIR}"
 SO_COUNT=$(find "${PTOAS_DEPS_DIR}" -name "*.so*" 2>/dev/null | wc -l)

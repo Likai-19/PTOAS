@@ -325,7 +325,7 @@ jobs:
         env:
           CI_EVENT_NAME: ${{ github.event_name }}
           WORKFLOW_SOC_VERSION: ${{ github.event.inputs.soc_version || 'Ascend910' }}
-          PTOAS_BIN: ${{ env.PTO_BUILD_DIR }}/tools/ptoas/ptoas
+          PTOAS_BIN: ${{ env.PTO_INSTALL_DIR }}/bin/ptoas
           PTOBC_BIN: ${{ env.PTO_BUILD_DIR }}/tools/ptobc/ptobc
           PTO_BUILD_DIR: ${{ env.PTO_BUILD_DIR }}
           PYTHON_BIN: ${{ env.PTOAS_VENV }}/bin/python

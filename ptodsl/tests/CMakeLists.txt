@@ -58,7 +58,7 @@ endforeach()
 
 if(NOT TARGET check-dsl)
   set(_ptodsl_check_depends)
-  foreach(_target IN ITEMS PTOPythonModules pto-opt ptoas)
+  foreach(_target IN ITEMS PTOPythonModules ptoas_runtime_deps)
     if(TARGET ${_target})
       list(APPEND _ptodsl_check_depends ${_target})
     endif()

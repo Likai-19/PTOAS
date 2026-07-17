@@ -54,6 +54,30 @@ if [[ -n "${WHEEL_GLOB}" ]] && compgen -G "${WHEEL_GLOB}" >/dev/null 2>&1; then
   TEST_WHEEL="$(compgen -G "${WHEEL_GLOB}" | sort | tail -n 1)"
   TEST_TMPDIR="$(mktemp -d /tmp/ptoas-wheel-test.XXXXXX)"
   echo "Installing wheel into isolated venv: ${TEST_WHEEL}"
+  echo "Checking wheel payload before installation..."
+  TEST_WHEEL="${TEST_WHEEL}" "${PYTHON_BIN}" - <<'PY'
+import os
+import zipfile
+from pathlib import Path
+
+wheel = Path(os.environ["TEST_WHEEL"])
+with zipfile.ZipFile(wheel) as zf:
+    names = set(zf.namelist())
+    required = {"ptoas/__init__.py", "ptoas/_launcher.py", "pto/ptoas.so"}
+    missing = sorted(required - names)
+    if missing:
+        raise SystemExit(f"wheel is missing required payload files: {missing}")
+    if "ptoas/_runtime/bin/ptoas" in names:
+        raise SystemExit("wheel unexpectedly contains ptoas/_runtime/bin/ptoas")
+    entry_points_name = next(
+        name for name in names
+        if name.startswith("ptoas-") and name.endswith(".dist-info/entry_points.txt")
+    )
+    entry_points = zf.read(entry_points_name).decode("utf-8")
+    if "ptoas=ptoas._launcher:main" not in entry_points:
+        raise SystemExit("wheel entry points do not route ptoas through ptoas._launcher:main")
+print(f"Wheel payload check passed: {wheel.name}")
+PY
   "${PYTHON_BIN}" -m venv "${TEST_TMPDIR}/venv"
   source "${TEST_TMPDIR}/venv/bin/activate"
   python -m pip install --no-deps --force-reinstall "${TEST_WHEEL}"

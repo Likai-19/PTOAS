@@ -154,7 +154,7 @@ jobs:
           fi
 
           echo "ASCEND_HOME_PATH=${ASCEND_HOME_PATH_DETECTED}" >> "${GITHUB_ENV}"
-          echo "PTOAS_BIN=${GITHUB_WORKSPACE}/build/tools/ptoas/ptoas" >> "${GITHUB_ENV}"
+          echo "PTOAS_BIN=${GITHUB_WORKSPACE}/install/bin/ptoas" >> "${GITHUB_ENV}"
 
       - name: Ensure runner dependencies
         shell: bash

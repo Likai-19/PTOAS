@@ -26,7 +26,7 @@ configure_lit_site_cfg(
 
 set(PTOIR_TEST_DEPENDS
   FileCheck count not
-  pto-opt
+  ptoas_runtime_deps
   pto-test-opt
 )
 

@@ -24,7 +24,7 @@ add_test(NAME ptobc_to_ptoas_smoke
   COMMAND ${CMAKE_COMMAND} -E env
     PTOBC_BIN=$<TARGET_FILE:ptobc>
     PTOBC_ALLOW_GENERIC=1
-    PTOAS_BIN=$<TARGET_FILE:pto-opt>
+    PTOAS_BIN=${CMAKE_BINARY_DIR}/tools/ptoas/ptoas
     TESTDATA_DIR=${PTObc_TESTDATA_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/ptobc_to_ptoas_smoke.sh
 )

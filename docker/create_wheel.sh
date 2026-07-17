@@ -34,6 +34,14 @@ export PTOAS_PYTHON_PACKAGE_VERSION
 
 linux_runtime_dep_paths() {
   local path="$1"
+  local library_path="${2:-}"
+  if [[ -n "${library_path}" ]]; then
+    env LD_LIBRARY_PATH="${library_path}" ldd "$path" 2>/dev/null | awk '
+    /=> \// { print $3 }
+    /^\// { print $1 }
+  '
+    return
+  fi
   ldd "$path" 2>/dev/null | awk '
     /=> \// { print $3 }
     /^\// { print $1 }
@@ -51,12 +59,12 @@ should_bundle_linux_dep() {
 }
 
 assemble_linux_wheel_runtime() {
-  local ptoas_bin="${PTO_BUILD_DIR}/tools/ptoas/ptoas"
-  if [[ ! -f "${ptoas_bin}" ]]; then
-    ptoas_bin="${PTO_INSTALL_DIR}/bin/ptoas"
+  local ptoas_wrapper="${PTO_INSTALL_DIR}/bin/ptoas"
+  if [[ ! -f "${ptoas_wrapper}" ]]; then
+    ptoas_wrapper="${PTO_BUILD_DIR}/tools/ptoas/ptoas"
   fi
-  if [[ ! -f "${ptoas_bin}" ]]; then
-    echo "Error: ptoas binary not found in build tree or install tree" >&2
+  if [[ ! -f "${ptoas_wrapper}" ]]; then
+    echo "Error: ptoas wrapper not found in build tree or install tree" >&2
     exit 1
   fi
   if [[ ! -d "${PTO_INSTALL_DIR}/share/ptoas/TileOps" ]]; then
@@ -64,21 +72,25 @@ assemble_linux_wheel_runtime() {
     exit 1
   fi
 
-  mkdir -p "${RUNTIME_STAGING_DIR}/bin" "${RUNTIME_STAGING_DIR}/lib" "${RUNTIME_STAGING_DIR}/share/ptoas"
-  cp "${ptoas_bin}" "${RUNTIME_STAGING_DIR}/bin/ptoas"
+  mkdir -p "${RUNTIME_STAGING_DIR}/lib" "${RUNTIME_STAGING_DIR}/share/ptoas" "${RUNTIME_STAGING_DIR}/pto"
   cp -R "${PTO_INSTALL_DIR}/share/ptoas/TileOps" "${RUNTIME_STAGING_DIR}/share/ptoas/TileOps"
+  cp "${PTO_INSTALL_DIR}/lib/ptoas.so" "${RUNTIME_STAGING_DIR}/pto/ptoas.so"
 
+  # Resolve transitive MLIR/LLVM dependencies through the build tree so
+  # ldd can discover non-installed libs such as libMLIRMlirOptMain.so.*.
+  local dep_ld_library_path="${LLVM_BUILD_DIR}/lib:${PTO_INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}"
   while read -r dep_path; do
     [[ -n "${dep_path}" ]] || continue
     should_bundle_linux_dep "${dep_path}" || continue
     cp -L -n "${dep_path}" "${RUNTIME_STAGING_DIR}/lib/"
-  done < <(linux_runtime_dep_paths "${ptoas_bin}" | sort -u)
+  done < <(linux_runtime_dep_paths "${PTO_INSTALL_DIR}/lib/ptoas.so" "${dep_ld_library_path}" | sort -u)
 
   local version_output
+  local version_ld_library_path="${LLVM_BUILD_DIR}/lib:${RUNTIME_STAGING_DIR}/lib:${PTO_INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}"
   version_output="$(
     env -u PYTHONPATH -u DYLD_LIBRARY_PATH \
-      LD_LIBRARY_PATH="${RUNTIME_STAGING_DIR}/lib:${LD_LIBRARY_PATH:-}" \
-      "${RUNTIME_STAGING_DIR}/bin/ptoas" --version | tr -d '\r'
+      LD_LIBRARY_PATH="${version_ld_library_path}" \
+      "${ptoas_wrapper}" --version | tr -d '\r'
   )"
   echo "${version_output}"
   if [[ -n "${PTOAS_VERSION:-}" ]]; then
@@ -149,9 +161,9 @@ cp -R "${PTOAS_WRAPPER_PKG_DIR}" "${WHEEL_STAGING_DIR}/ptoas"
 
 echo "Embedding unified runtime payload for wheel-side ptoas launcher..."
 mkdir -p "${WHEEL_STAGING_DIR}/ptoas/_runtime"
-cp -R "${RUNTIME_STAGING_DIR}/bin" "${WHEEL_STAGING_DIR}/ptoas/_runtime/bin"
 cp -R "${RUNTIME_STAGING_DIR}/share" "${WHEEL_STAGING_DIR}/ptoas/_runtime/share"
 cp -R "${RUNTIME_STAGING_DIR}/lib" "${WHEEL_STAGING_DIR}/ptoas/_runtime/lib"
+cp -R "${RUNTIME_STAGING_DIR}/pto" "${WHEEL_STAGING_DIR}/pto"
 
 echo "Removing packaging residue..."
 find "${WHEEL_STAGING_DIR}" \( -name '*.egg-info' -o -name '*.dist-info' \) -prune -exec rm -rf {} +
@@ -208,7 +220,7 @@ wheel = "\n".join([
 
 record_rows = []
 has_ptodsl_init = False
-has_ptoas_runtime_binary = False
+has_ptoas_shared_module = False
 
 def hash_bytes(data: bytes) -> str:
     digest = hashlib.sha256(data).digest()
@@ -224,8 +236,8 @@ with zipfile.ZipFile(wheel_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         record_rows.append((rel, hash_bytes(data), str(len(data))))
         if rel == "ptodsl/__init__.py":
             has_ptodsl_init = True
-        if rel == "ptoas/_runtime/bin/ptoas":
-            has_ptoas_runtime_binary = True
+        if rel == "pto/ptoas.so":
+            has_ptoas_shared_module = True
 
     entry_points = "\n".join([
         "[console_scripts]",
@@ -253,14 +265,16 @@ with zipfile.ZipFile(wheel_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
 
 if not has_ptodsl_init:
     raise SystemExit("Wheel staging payload is missing ptodsl/__init__.py")
-if not has_ptoas_runtime_binary:
-    raise SystemExit("Wheel staging payload is missing ptoas/_runtime/bin/ptoas")
+if not has_ptoas_shared_module:
+    raise SystemExit("Wheel staging payload is missing pto/ptoas.so")
 
 with zipfile.ZipFile(wheel_path) as zf:
     if "ptodsl/__init__.py" not in zf.namelist():
         raise SystemExit("Built wheel is missing ptodsl/__init__.py")
-    if "ptoas/_runtime/bin/ptoas" not in zf.namelist():
-        raise SystemExit("Built wheel is missing ptoas/_runtime/bin/ptoas")
+    if "pto/ptoas.so" not in zf.namelist():
+        raise SystemExit("Built wheel is missing pto/ptoas.so")
+    if "ptoas/_runtime/bin/ptoas" in zf.namelist():
+        raise SystemExit("Built wheel unexpectedly contains ptoas/_runtime/bin/ptoas")
 
 print(f"Wheel created at {wheel_path}")
 PY
