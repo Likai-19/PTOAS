@@ -34,7 +34,7 @@ module {
         : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
     %b_for_cast = pto.vmi.vbrc %sum {group = 8}
         : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<128xf32>
-    %h = pto.vmi.vcvt %b_for_cast
+    %h = pto.vmi.vcvt %b_for_cast {saturate = "SAT"}
         : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
     pto.vmi.vstore %h, %dense_out[%off]
         : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>

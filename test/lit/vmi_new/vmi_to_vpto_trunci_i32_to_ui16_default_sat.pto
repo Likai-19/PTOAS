@@ -16,7 +16,7 @@ module {
   func.func @vmi_to_vpto_trunci_i32_to_ui16_default_sat(
       %wide: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>)
       -> (!pto.vreg<128xui16>, !pto.vreg<128xui16>) {
-    %narrow = pto.vmi.vcvt %wide
+    %narrow = pto.vmi.vcvt %wide {saturate = "SAT"}
         : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xui16, #pto.vmi.layout<deinterleaved = 2>>
     %low, %high = "pto.vmi.unpack"(%narrow)

@@ -14,7 +14,7 @@ module {
   func.func @vmi_to_vpto_trunci_i32_to_i8_invalid(
       %wide: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>)
       -> !pto.vreg<256xi8> {
-    %narrow = pto.vmi.trunci %wide
+    %narrow = pto.vmi.trunci %wide {saturate = "SAT"}
         : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xi8, #pto.vmi.layout<contiguous>>
     %p = "pto.vmi.unpack"(%narrow)

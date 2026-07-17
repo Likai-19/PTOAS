@@ -59,7 +59,7 @@ module {
         : !pto.ptr<f16, ub> -> !pto.vmi.vreg<64xf16>
     %x32 = pto.vmi.extf %x16
         : !pto.vmi.vreg<64xf16> -> !pto.vmi.vreg<64xf32>
-    %y16 = pto.vmi.truncf %x32
+    %y16 = pto.vmi.truncf %x32 {saturate = "SAT"}
         : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf16>
     pto.vmi.masked_store %y16, %dst[%off], %mask
         : !pto.vmi.vreg<64xf16>, !pto.ptr<f16, ub>, !pto.vmi.mask<64xpred>
@@ -72,7 +72,7 @@ module {
       %off: index) {
     %x32 = pto.vmi.load %src[%off]
         : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
-    %x16 = pto.vmi.truncf %x32
+    %x16 = pto.vmi.truncf %x32 {saturate = "SAT"}
         : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf16>
     pto.vmi.store %x16, %dst[%off]
         : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>
@@ -85,7 +85,7 @@ module {
       %off: index) {
     %x32 = pto.vmi.load %src[%off]
         : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
-    %x16 = pto.vmi.truncf %x32
+    %x16 = pto.vmi.truncf %x32 {saturate = "SAT"}
         : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf16>
     pto.vmi.store %x16, %dst[%off]
         : !pto.vmi.vreg<256xf16>, !pto.ptr<f16, ub>

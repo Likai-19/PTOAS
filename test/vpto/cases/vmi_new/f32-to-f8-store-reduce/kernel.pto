@@ -42,7 +42,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
           -> !pto.vmi.vreg<8xf32>
       pto.vmi.vstore %sum, %ub_sum[%c0], %c1 {group = 8}
           : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
-      %x8 = pto.vmi.vcvt %x32
+      %x8 = pto.vmi.vcvt %x32 {saturate = "SAT"}
           : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
       pto.vmi.vstore %x8, %ub_out8_f8[%c0]
           : !pto.vmi.vreg<256xf8E4M3FN>, !pto.ptr<f8E4M3FN, ub>

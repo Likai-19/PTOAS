@@ -14,7 +14,7 @@ module {
       %input: !pto.vmi.vreg<128xf32>,
       %dst: !pto.ptr<f8E4M3FN, ub>,
       %off: index) {
-    %packed = pto.vmi.vcvt %input
+    %packed = pto.vmi.vcvt %input {saturate = "SAT"}
         : !pto.vmi.vreg<128xf32> -> !pto.vmi.vreg<128xf8E4M3FN>
     pto.vmi.vstore %packed, %dst[%off]
         : !pto.vmi.vreg<128xf8E4M3FN>, !pto.ptr<f8E4M3FN, ub>

@@ -21,7 +21,7 @@ module {
     %scaled = pto.vmi.vmul %wide, %scale_vec
         : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
         -> !pto.vmi.vreg<256xf32>
-    %packed = pto.vmi.vcvt %scaled
+    %packed = pto.vmi.vcvt %scaled {saturate = "SAT"}
         : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
     pto.vmi.vstore %packed, %dst[%offset]
         : !pto.vmi.vreg<256xf8E4M3FN>, !pto.ptr<f8E4M3FN, ub>

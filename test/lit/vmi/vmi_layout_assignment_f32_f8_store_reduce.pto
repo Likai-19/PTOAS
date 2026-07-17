@@ -25,7 +25,7 @@ module {
         -> !pto.vmi.vreg<8xf32>
     pto.vmi.group_store %sumv, %sum[%off], %c1 {num_groups = 8}
         : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
-    %x8 = pto.vmi.truncf %x32
+    %x8 = pto.vmi.truncf %x32 {saturate = "SAT"}
         : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
     pto.vmi.store %x8, %out8[%off]
         : !pto.vmi.vreg<256xf8E4M3FN>, !pto.ptr<f8E4M3FN, ub>
