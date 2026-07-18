@@ -146,7 +146,7 @@ If you want to use Python bindings or PTODSL, prefer the repository-root
 
 ```bash
 # 1) Released or CI-built wheel: installs PTOAS + PTODSL together
-pip install /path/to/ptoas-*.whl
+pip install /path/to/ptoas*.whl
 
 # 2) Non-editable source install from the repository root
 cd $PTO_SOURCE_DIR
@@ -167,6 +167,9 @@ from mlir.dialects import pto as mlir_pto
 
 > Notes:
 > - The `ptoas` wheel also installs PTODSL.
+> - VMI release wheels publish under the Python project name `ptoas-vmi`; the wheel filename is normalized to `ptoas_vmi-*.whl`.
+> - The VMI release line keeps the `ptoas` CLI name; `ptoas --version` prints `ptoas vmi A.B.C`.
+> - The `ptoas` and `ptoas-vmi` release wheels are **mutually exclusive**. They both install the same top-level `ptoas` Python package and `ptoas` console script, so do **not** install them into the same Python environment. Mixing them will overwrite files, and uninstalling one can break the other.
 > - `ptoas-bin-*.tar.gz` compiler-only tarballs provide CLI/toolchain bits, not a PTODSL-capable Python distribution.
 > - `--no-build-isolation` keeps pip from baking a temporary pybind11 path into `CMakeCache.txt`, which would break later `ninja` reconfigure runs after the temporary virtual environment is removed.
 

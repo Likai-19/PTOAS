@@ -16,21 +16,34 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR = REPO_ROOT / "docker" / "validate_wheel_payload.py"
+CREATE_WHEEL = REPO_ROOT / "docker" / "create_wheel.sh"
 LINUX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "build_wheel.yml"
 MAC_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "build_wheel_mac.yml"
 WHEEL_IMPORTS = REPO_ROOT / "docker" / "test_wheel_imports.sh"
+CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+CI_SIM_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci_sim.yml"
 
 
 class ValidateWheelPayloadTests(unittest.TestCase):
-    def _make_wheel(self, root: Path, *, include_runtime_so: bool) -> Path:
-        wheel = root / "ptoas-1.2.3-cp311-cp311-linux_x86_64.whl"
+    def _make_wheel(
+        self,
+        root: Path,
+        *,
+        include_runtime_so: bool,
+        include_runtime_entry: bool = True,
+        wheel_stem: str = "ptoas",
+        dist_info_stem: str = "ptoas",
+    ) -> Path:
+        wheel = root / f"{wheel_stem}-1.2.3-cp311-cp311-linux_x86_64.whl"
         with zipfile.ZipFile(wheel, "w") as zf:
             zf.writestr("ptoas/__init__.py", "")
             zf.writestr("ptoas/_launcher.py", "")
+            if include_runtime_entry:
+                zf.writestr("ptoas/_runtime_entry.py", "")
             if include_runtime_so:
                 zf.writestr("ptoas/_runtime/lib/ptoas.so", "fake")
             zf.writestr(
-                "ptoas-1.2.3.dist-info/entry_points.txt",
+                f"{dist_info_stem}-1.2.3.dist-info/entry_points.txt",
                 "[console_scripts]\nptoas=ptoas._launcher:main\n",
             )
         return wheel
@@ -61,6 +74,41 @@ class ValidateWheelPayloadTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ptoas/_runtime/lib/ptoas.so", result.stderr)
 
+    def test_validator_rejects_missing_runtime_entry_module(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wheel = self._make_wheel(
+                Path(temp_dir),
+                include_runtime_so=True,
+                include_runtime_entry=False,
+            )
+            result = subprocess.run(
+                ["python3", str(VALIDATOR), str(wheel)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ptoas/_runtime_entry.py", result.stderr)
+
+    def test_validator_accepts_vmi_distribution_name(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wheel = self._make_wheel(
+                Path(temp_dir),
+                include_runtime_so=True,
+                wheel_stem="ptoas_vmi",
+                dist_info_stem="ptoas_vmi",
+            )
+            result = subprocess.run(
+                ["python3", str(VALIDATOR), str(wheel)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("validated wheel payload and launcher contract", result.stdout)
+
     def test_workflows_and_shell_probe_reuse_shared_validator(self):
         validator_call = 'python "$PTO_SOURCE_DIR/docker/validate_wheel_payload.py" "$PTO_SOURCE_DIR/build/wheel-dist"'
         self.assertIn(
@@ -76,14 +124,75 @@ class ValidateWheelPayloadTests(unittest.TestCase):
             WHEEL_IMPORTS.read_text(encoding="utf-8"),
         )
 
+    def test_release_workflows_separate_cli_and_wheel_versions(self):
+        linux_workflow = LINUX_WORKFLOW.read_text(encoding="utf-8")
+        mac_workflow = MAC_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "if: github.event_name != 'release' || startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'ptoas-v')",
+            linux_workflow,
+        )
+        self.assertIn(
+            "if: (github.event_name == 'release' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'ptoas-v'))) || github.event_name == 'schedule'",
+            linux_workflow,
+        )
+        self.assertIn('PTOAS_CLI_VERSION="vmi ${PTOAS_VERSION}"', linux_workflow)
+        self.assertIn('PTOAS_RELEASE_VERSION_OVERRIDE="${PTOAS_CLI_VERSION}"', linux_workflow)
+        self.assertIn('export PTOAS_PYTHON_PACKAGE_VERSION="${PTOAS_VERSION}"', linux_workflow)
+
+        self.assertIn(
+            "if: github.event_name != 'release' || startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'ptoas-v')",
+            mac_workflow,
+        )
+        self.assertIn(
+            "if: (github.event_name == 'release' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'ptoas-v'))) || github.event_name == 'schedule'",
+            mac_workflow,
+        )
+        self.assertIn('PTOAS_CLI_VERSION="vmi ${PTOAS_VERSION}"', mac_workflow)
+        self.assertIn('PTOAS_RELEASE_VERSION_OVERRIDE="${PTOAS_CLI_VERSION}"', mac_workflow)
+        self.assertIn('export PTOAS_PYTHON_PACKAGE_VERSION="${PTOAS_VERSION}"', mac_workflow)
+
+    def test_create_wheel_script_validates_package_name(self):
+        script = CREATE_WHEEL.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "if [[ ! \"${PTOAS_PYTHON_PACKAGE_NAME}\" =~ ^[A-Za-z0-9]+([-_.][A-Za-z0-9]+)*$ ]]; then",
+            script,
+        )
+        self.assertIn(
+            "Error: invalid PTOAS_PYTHON_PACKAGE_NAME",
+            script,
+        )
+
     def test_wheel_imports_script_keeps_clean_env_ptoas_smoke(self):
         script = WHEEL_IMPORTS.read_text(encoding="utf-8")
 
+        self.assertIn('EXPECTED_PTOAS_CLI_VERSION="${PTOAS_CLI_VERSION:-${PTOAS_VERSION:-}}"', script)
         self.assertIn('env -i \\', script)
         self.assertIn('CLEAN_ENV_PTO="${CLEAN_ENV_PTO}" \\', script)
+        self.assertIn('CLEAN_ENV_LOG="${CLEAN_ENV_DIR}/wheel-clean-env-probe.log"', script)
+        self.assertIn('CLEAN_ENV_PTO_IR="${CLEAN_ENV_DIR}/wheel-clean-env-probe.pto.ir"', script)
+        self.assertIn('def wheel_clean_env_probe():', script)
+        self.assertIn('pto.alloc_tile(shape=[1, 16], dtype=pto.f32, addr=0)', script)
+        self.assertIn('pto.castptr(pto.const(0, dtype=pto.ui64), pto.ptr(pto.f32, "gm"))', script)
+        self.assertIn('pto.tile.load(a_view, a_tile)', script)
+        self.assertIn('pto.tile.store(o_tile, o_view)', script)
+        self.assertIn('--emit-pto-ir "${CLEAN_ENV_PTO}" -o "${CLEAN_ENV_PTO_IR}"', script)
         self.assertIn('def wheel_clean_env_probe(', script)
-        self.assertIn('"${PTOAS_ENTRYPOINT}" "${CLEAN_ENV_PTO}" -o "${CLEAN_ENV_CPP}"', script)
-        self.assertIn('grep -q "wheel_clean_env_probe" "${CLEAN_ENV_CPP}"', script)
+        self.assertIn('"${PTOAS_ENTRYPOINT}" --pto-arch=a5 --pto-backend=vpto --pto-level=level3 --enable-tile-op-expand --emit-pto-ir "${CLEAN_ENV_PTO}" -o "${CLEAN_ENV_PTO_IR}"', script)
+        self.assertIn('>"${CLEAN_ENV_LOG}" 2>&1', script)
+        self.assertIn('grep -q "wheel_clean_env_probe" "${CLEAN_ENV_PTO_IR}"', script)
+        self.assertIn('grep -q "pto.tload" "${CLEAN_ENV_PTO_IR}"', script)
+        self.assertIn('grep -q "pto.tstore" "${CLEAN_ENV_PTO_IR}"', script)
+        self.assertIn('grep -q "candidates = " "${CLEAN_ENV_PTO_IR}"', script)
+        self.assertIn('grep -q "TileLib daemon started successfully" "${CLEAN_ENV_LOG}"', script)
+        self.assertIn('grep -q "TileLib daemon stopped" "${CLEAN_ENV_LOG}"', script)
+
+    def test_ci_workflows_accept_generic_ptoas_wheel_glob(self):
+        self.assertIn("name 'ptoas*.whl'", CI_WORKFLOW.read_text(encoding="utf-8"))
+        ci_sim_text = CI_SIM_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("name 'ptoas*.whl'", ci_sim_text)
+        self.assertNotIn("name 'ptoas-*.whl'", ci_sim_text)
 
 
 if __name__ == "__main__":

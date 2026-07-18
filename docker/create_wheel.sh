@@ -21,7 +21,14 @@ WHEEL_DIST_DIR="${PTO_WHEEL_DIST_DIR:-${PTO_SOURCE_DIR}/build/wheel-dist}"
 RUNTIME_STAGING_DIR="${PTO_RUNTIME_STAGING_DIR:-${PTO_SOURCE_DIR}/build/runtime-staging}"
 PTO_BUILD_DIR="${PTO_BUILD_DIR:-${PTO_SOURCE_DIR}/build}"
 PYTHON_BIN="${PYTHON:-python3}"
+PTOAS_PYTHON_PACKAGE_NAME="${PTOAS_PYTHON_PACKAGE_NAME:-ptoas}"
 PTOAS_PYTHON_PACKAGE_VERSION="${PTOAS_PYTHON_PACKAGE_VERSION:-${PTOAS_VERSION:-}}"
+PTOAS_CLI_VERSION="${PTOAS_CLI_VERSION:-${PTOAS_VERSION:-}}"
+if [[ ! "${PTOAS_PYTHON_PACKAGE_NAME}" =~ ^[A-Za-z0-9]+([-_.][A-Za-z0-9]+)*$ ]]; then
+  echo "Error: invalid PTOAS_PYTHON_PACKAGE_NAME '${PTOAS_PYTHON_PACKAGE_NAME}'; expected a normalized project name" >&2
+  exit 1
+fi
+PTOAS_WHEEL_DISTRIBUTION_NAME="$(printf '%s' "${PTOAS_PYTHON_PACKAGE_NAME}" | sed -E 's/[-_.]+/_/g')"
 PTOAS_WRAPPER_PKG_DIR="${PTO_SOURCE_DIR}/ptodsl/ptoas"
 PTODSL_INSTALL_DIR="${PTO_INSTALL_DIR}/ptodsl"
 MLIR_PYTHON_PACKAGE_DIR="${LLVM_BUILD_DIR}/tools/mlir/python_packages/mlir_core"
@@ -93,8 +100,8 @@ assemble_linux_wheel_runtime() {
       "${ptoas_wrapper}" --version | tr -d '\r'
   )"
   echo "${version_output}"
-  if [[ -n "${PTOAS_VERSION:-}" ]]; then
-    local expected_version_output="ptoas ${PTOAS_VERSION}"
+  if [[ -n "${PTOAS_CLI_VERSION:-}" ]]; then
+    local expected_version_output="ptoas ${PTOAS_CLI_VERSION}"
     if [[ "${version_output}" != "${expected_version_output}" ]]; then
       echo "Error: expected '${expected_version_output}', got '${version_output}'" >&2
       exit 1
@@ -170,7 +177,9 @@ find "${WHEEL_STAGING_DIR}" -name '__pycache__' -prune -exec rm -rf {} +
 
 export PTO_WHEEL_STAGING_DIR="${WHEEL_STAGING_DIR}"
 export PTO_WHEEL_DIST_DIR="${WHEEL_DIST_DIR}"
+export PTOAS_PYTHON_PACKAGE_NAME
 export PTOAS_PYTHON_PACKAGE_VERSION
+export PTOAS_WHEEL_DISTRIBUTION_NAME
 
 echo "Building wheel archive directly..."
 "${PYTHON_BIN}" - <<'PY'
@@ -179,13 +188,18 @@ import csv
 import hashlib
 import os
 import platform
+import re
 import sys
 import zipfile
 from pathlib import Path
 
 staging = Path(os.environ["PTO_WHEEL_STAGING_DIR"])
 dist = Path(os.environ["PTO_WHEEL_DIST_DIR"])
+project_name = os.environ["PTOAS_PYTHON_PACKAGE_NAME"]
 version = os.environ["PTOAS_PYTHON_PACKAGE_VERSION"]
+dist_name = os.environ.get("PTOAS_WHEEL_DISTRIBUTION_NAME") or re.sub(
+    r"[-_.]+", "_", project_name
+)
 
 py_tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
 if sys.platform == "darwin":
@@ -194,13 +208,13 @@ else:
     arch = platform.machine().lower().replace("-", "_")
     platform_tag = os.environ.get("WHEEL_PLAT_NAME") or f"linux_{arch}"
 
-wheel_name = f"ptoas-{version}-{py_tag}-{py_tag}-{platform_tag}.whl"
+wheel_name = f"{dist_name}-{version}-{py_tag}-{py_tag}-{platform_tag}.whl"
 wheel_path = dist / wheel_name
-dist_info = f"ptoas-{version}.dist-info"
+dist_info = f"{dist_name}-{version}.dist-info"
 
 metadata = "\n".join([
     "Metadata-Version: 2.1",
-    "Name: ptoas",
+    f"Name: {project_name}",
     f"Version: {version}",
     "Summary: PTO Assembler & Optimizer",
     "Requires-Python: >=3.9",
@@ -278,10 +292,11 @@ with zipfile.ZipFile(wheel_path) as zf:
 print(f"Wheel created at {wheel_path}")
 PY
 
+echo "Wheel package name: ${PTOAS_PYTHON_PACKAGE_NAME}"
 echo "Wheel created at ${WHEEL_DIST_DIR}/"
 ls -la "${WHEEL_DIST_DIR}/"*.whl
 
-EXPECTED_WHEEL_GLOB="${WHEEL_DIST_DIR}/ptoas-${PTOAS_PYTHON_PACKAGE_VERSION}-"*.whl
+EXPECTED_WHEEL_GLOB="${WHEEL_DIST_DIR}/${PTOAS_WHEEL_DISTRIBUTION_NAME}-${PTOAS_PYTHON_PACKAGE_VERSION}-"*.whl
 if ! compgen -G "${EXPECTED_WHEEL_GLOB}" >/dev/null 2>&1; then
   echo "Error: expected wheel matching ${EXPECTED_WHEEL_GLOB}" >&2
   exit 1

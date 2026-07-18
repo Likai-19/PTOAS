@@ -16,6 +16,24 @@ import _ptoas_build_backend as build_backend
 
 
 class PtoasBuildBackendTests(unittest.TestCase):
+    def test_prepare_metadata_honors_package_name_override(self):
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            build_backend.os.environ,
+            {
+                "PTOAS_PYTHON_PACKAGE_NAME": "ptoas-vmi",
+                "PTOAS_PYTHON_PACKAGE_VERSION": "0.1.0",
+            },
+            clear=False,
+        ):
+            dist_info_name = build_backend.prepare_metadata_for_build_wheel(temp_dir)
+
+            dist_info = Path(temp_dir) / dist_info_name
+            metadata = (dist_info / "METADATA").read_text(encoding="utf-8")
+
+        self.assertEqual(dist_info_name, "ptoas_vmi-0.1.0.dist-info")
+        self.assertIn("Name: ptoas-vmi", metadata)
+        self.assertIn("Version: 0.1.0", metadata)
+
     def test_cmake_build_driver_is_used_for_build_and_install(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)

@@ -18,6 +18,11 @@ _PROJECT_VERSION_RE = re.compile(
 )
 
 
+def read_package_name() -> str:
+    package_name = os.environ.get("PTOAS_PYTHON_PACKAGE_NAME", "").strip()
+    return package_name or "ptoas"
+
+
 def read_package_version() -> str:
     version = os.environ.get("PTOAS_PYTHON_PACKAGE_VERSION", "").strip()
     if version:
@@ -29,7 +34,7 @@ def read_package_version() -> str:
     return match.group(1)
 
 setup(
-    name="ptoas",
+    name=read_package_name(),
     version=read_package_version(),
     description="PTO Assembler & Optimizer",
     # NOTE: find_namespace_packages detects folders even without __init__.py

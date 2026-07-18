@@ -19,6 +19,7 @@ Environment variables (all optional):
   PTO_INSTALL_DIR              Install prefix (default: <repo>/install)
   CMAKE_C_COMPILER             Optional C compiler passed through to CMake
   CMAKE_CXX_COMPILER           Optional C++ compiler passed through to CMake
+  PTOAS_PYTHON_PACKAGE_NAME    Wheel project-name override
   PTOAS_PYTHON_PACKAGE_VERSION Wheel version override
 """
 from __future__ import annotations
@@ -75,6 +76,25 @@ _WHEEL_DIST_DIR = _BUILD_DIR / "wheel-dist"
 _PROJECT_VERSION_RE = re.compile(
     r"project\s*\(\s*ptoas\s+VERSION\s+([0-9]+\.[0-9]+)\s*\)"
 )
+_PACKAGE_NAME_RE = re.compile(
+    r"^[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*$"
+)
+
+
+def _default_ptoas_package_name() -> str:
+    package_name = os.environ.get("PTOAS_PYTHON_PACKAGE_NAME", "").strip()
+    if not package_name:
+        return "ptoas"
+    if not _PACKAGE_NAME_RE.fullmatch(package_name):
+        raise RuntimeError(
+            "invalid PTOAS Python package name override "
+            f"{package_name!r}; expected a normalized project name"
+        )
+    return package_name
+
+
+def _wheel_distribution_name(package_name: str) -> str:
+    return re.sub(r"[-_.]+", "_", package_name)
 
 
 def _assert_installed_ptodsl_payload() -> None:
@@ -143,13 +163,15 @@ def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
     """Return wheel metadata without running the full build."""
     import email.message
 
+    package_name = _default_ptoas_package_name()
+    dist_name = _wheel_distribution_name(package_name)
     version = _default_ptoas_version()
-    dist_info = Path(metadata_directory) / f"ptoas-{version}.dist-info"
+    dist_info = Path(metadata_directory) / f"{dist_name}-{version}.dist-info"
     dist_info.mkdir(parents=True, exist_ok=True)
 
     meta = email.message.Message()
     meta["Metadata-Version"] = "2.1"
-    meta["Name"] = "ptoas"
+    meta["Name"] = package_name
     meta["Version"] = version
     meta["Summary"] = "PTO Assembler & Optimizer"
     meta["Requires-Python"] = ">=3.9"
@@ -225,6 +247,8 @@ def _cmake_configure_and_build(skip_install=False):
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     _cmake_configure_and_build()
 
+    package_name = _default_ptoas_package_name()
+    dist_name = _wheel_distribution_name(package_name)
     env = os.environ.copy()
     env.update({
         "PTO_SOURCE_DIR": str(_REPO),
@@ -243,12 +267,12 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     )
 
     wheels = sorted(
-        glob.glob(str(_WHEEL_DIST_DIR / "ptoas-*.whl")),
+        glob.glob(str(_WHEEL_DIST_DIR / f"{dist_name}-*.whl")),
         key=os.path.getmtime,
     )
     if not wheels:
         raise RuntimeError(
-            f"No ptoas-*.whl found in {_WHEEL_DIST_DIR} after build."
+            f"No {dist_name}-*.whl found in {_WHEEL_DIST_DIR} after build."
         )
 
     wheel_path = Path(wheels[-1])
@@ -268,6 +292,8 @@ def build_editable(wheel_directory, config_settings=None, metadata_directory=Non
     _cmake_configure_and_build(skip_install=True)
     _assert_editable_ptodsl_source()
 
+    package_name = _default_ptoas_package_name()
+    dist_name = _wheel_distribution_name(package_name)
     version = _default_ptoas_version()
 
     # Paths that must be on sys.path for the package to be importable
@@ -294,14 +320,14 @@ def build_editable(wheel_directory, config_settings=None, metadata_directory=Non
         "[sys.path.remove(path) for path in pth_paths if path in sys.path]; "
         "sys.path[:0] = pth_paths\n"
     )
-    pth_filename = "ptoas-editable.pth"
+    pth_filename = f"{dist_name}-editable.pth"
 
     # ---- Build the editable wheel (a zip with .pth + dist-info) ----
     tag = f"py3-none-any"
-    wheel_name = f"ptoas-{version}-{tag}.whl"
+    wheel_name = f"{dist_name}-{version}-{tag}.whl"
     wheel_path = Path(wheel_directory) / wheel_name
 
-    dist_info_dir = f"ptoas-{version}.dist-info"
+    dist_info_dir = f"{dist_name}-{version}.dist-info"
 
     def _sha256_record(data: bytes) -> str:
         digest = hashlib.sha256(data).digest()
@@ -322,7 +348,7 @@ def build_editable(wheel_directory, config_settings=None, metadata_directory=Non
     ).encode()
     metadata_content = (
         "Metadata-Version: 2.1\n"
-        "Name: ptoas\n"
+        f"Name: {package_name}\n"
         f"Version: {version}\n"
         "Summary: PTO Assembler & Optimizer\n"
         "Requires-Python: >=3.9\n"

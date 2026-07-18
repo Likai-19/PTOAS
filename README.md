@@ -47,7 +47,7 @@ PTOAS/
 ```bash
 # ================= 配置区域 (请修改这里) =================
 # 设置您的工作根目录 (建议创建一个专门的目录存放 LLVM 和 PTOAS)
-export WORKSPACE_DIR=$HOME/llvm-workspace
+export WORKSPACE_DIR=$HOME/ptoas-workspace
 
 # LLVM 源码与构建路径
 export LLVM_SOURCE_DIR=$WORKSPACE_DIR/llvm-project
@@ -100,6 +100,7 @@ cmake -G Ninja -S llvm -B $LLVM_BUILD_DIR \
     -DLLVM_ENABLE_PROJECTS="mlir;clang" \
     -DBUILD_SHARED_LIBS=ON \
     -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
+    -DLLVM_ENABLE_ASSERTIONS=ON \
     -DPython3_EXECUTABLE=$(which python3) \
     -DPython_EXECUTABLE=$(which python3) \
     -Dpybind11_DIR=$(python3 -m pybind11 --cmakedir) \
@@ -186,7 +187,7 @@ pip install -e . --no-build-isolation
 发布或 CI 产出的 `ptoas` wheel 也遵循同一合同：
 
 ```bash
-pip install /path/to/ptoas-*.whl
+pip install /path/to/ptoas*.whl
 ```
 
 安装完成后，以下导入应直接可用：
@@ -199,6 +200,11 @@ from mlir.dialects import pto as mlir_pto
 
 > 说明：
 > - `ptoas` wheel 会同时安装 PTODSL，并提供可直接调用的 `ptoas` CLI。
+> - VMI release 线仍然复用 `ptoas` CLI 名称；对应的 `ptoas --version` 会显示
+>   `ptoas vmi A.B.C`。
+> - `ptoas` 与 `ptoas-vmi` 两个 release wheel **互斥**：它们都会安装同名的顶层
+>   `ptoas` Python 包和 `ptoas` console script，**不要**在同一个 Python 环境里同时安装；
+>   混装会互相覆盖文件，卸载其中一个也可能破坏另一个。
 > - `ptoas-bin-*.tar.gz` 这类 compiler-only 二进制 tarball 只提供 CLI/toolchain，
 >   **不是** PTODSL-capable Python distribution；仅解压 tarball 不能保证
 >   `import ptodsl` 可用。
@@ -208,7 +214,7 @@ from mlir.dialects import pto as mlir_pto
 
 ## 4. 运行环境配置 (Runtime Environment)
 
-如果你已经通过 `pip install .`、`pip install -e .` 或 `pip install ptoas-*.whl`
+如果你已经通过 `pip install .`、`pip install -e .` 或 `pip install ptoas*.whl`
 完成安装，那么 `import ptodsl` / `from mlir.dialects import pto` / `ptoas`
 都不应再依赖手动设置 `PYTHONPATH`。
 
