@@ -128,6 +128,10 @@ class ValidateWheelPayloadTests(unittest.TestCase):
         linux_workflow = LINUX_WORKFLOW.read_text(encoding="utf-8")
         mac_workflow = MAC_WORKFLOW.read_text(encoding="utf-8")
 
+        self.assertIn("workflow_dispatch:", linux_workflow)
+        self.assertIn("release_kind:", linux_workflow)
+        self.assertIn('type: choice', linux_workflow)
+        self.assertIn('--mode release)', linux_workflow)
         self.assertIn(
             "if: github.event_name != 'release' || startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'ptoas-v')",
             linux_workflow,
@@ -140,6 +144,10 @@ class ValidateWheelPayloadTests(unittest.TestCase):
         self.assertIn('PTOAS_RELEASE_VERSION_OVERRIDE="${PTOAS_CLI_VERSION}"', linux_workflow)
         self.assertIn('export PTOAS_PYTHON_PACKAGE_VERSION="${PTOAS_VERSION}"', linux_workflow)
 
+        self.assertIn("workflow_dispatch:", mac_workflow)
+        self.assertIn("release_kind:", mac_workflow)
+        self.assertIn('type: choice', mac_workflow)
+        self.assertIn('--mode release)', mac_workflow)
         self.assertIn(
             "if: github.event_name != 'release' || startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'ptoas-v')",
             mac_workflow,
