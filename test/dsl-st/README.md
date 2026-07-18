@@ -26,7 +26,7 @@ source scripts/ptoas_env.sh
 如果你在验证 release/CI wheel，也可以直接：
 
 ```bash
-pip install /path/to/ptoas-*.whl
+pip install /path/to/ptoas*.whl
 ```
 
 快速自检：

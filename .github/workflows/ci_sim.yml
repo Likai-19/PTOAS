@@ -336,7 +336,7 @@ jobs:
           python3 -m venv "${PTOAS_VENV}"
           "${PTOAS_VENV}/bin/python" -m pip install --upgrade pip
 
-          readarray -t ptoas_wheels < <(find "${PTO_WHEELHOUSE}" -maxdepth 1 -type f -name 'ptoas-*.whl' | sort)
+          readarray -t ptoas_wheels < <(find "${PTO_WHEELHOUSE}" -maxdepth 1 -type f -name 'ptoas*.whl' | sort)
           if [[ "${#ptoas_wheels[@]}" -ne 1 ]]; then
             echo "ERROR: expected exactly one PTOAS wheel in ${PTO_WHEELHOUSE}, found ${#ptoas_wheels[@]}" >&2
             printf '  %s\n' "${ptoas_wheels[@]}" >&2
@@ -802,7 +802,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          readarray -t ptodsl_wheels < <(find "${PTO_DSL_ST_WHEELHOUSE}" -maxdepth 1 -type f -name 'ptoas-*.whl' | sort)
+          readarray -t ptodsl_wheels < <(find "${PTO_DSL_ST_WHEELHOUSE}" -maxdepth 1 -type f -name 'ptoas*.whl' | sort)
           if [[ "${#ptodsl_wheels[@]}" -ne 1 ]]; then
             echo "ERROR: expected exactly one PTOAS wheel in ${PTO_DSL_ST_WHEELHOUSE}, found ${#ptodsl_wheels[@]}" >&2
             printf '  %s\n' "${ptodsl_wheels[@]}" >&2

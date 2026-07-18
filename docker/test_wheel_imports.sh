@@ -34,10 +34,10 @@ fi
 
 WHEEL_GLOB="${PTO_TEST_WHEEL_PATH:-}"
 if [[ -z "${WHEEL_GLOB}" && -n "${PTO_WHEEL_DIST_DIR:-}" ]]; then
-  WHEEL_GLOB="${PTO_WHEEL_DIST_DIR}/ptoas-*.whl"
+  WHEEL_GLOB="${PTO_WHEEL_DIST_DIR}/ptoas*.whl"
 fi
 if [[ -z "${WHEEL_GLOB}" && -d "${REPO_ROOT}/build/wheel-dist" ]]; then
-  WHEEL_GLOB="${REPO_ROOT}/build/wheel-dist/ptoas-*.whl"
+  WHEEL_GLOB="${REPO_ROOT}/build/wheel-dist/ptoas*.whl"
 fi
 
 TEST_TMPDIR=""
@@ -88,8 +88,9 @@ echo "Testing ptodsl public imports..."
 echo "Testing installed ptoas console entry..."
 PTOAS_VERSION_OUTPUT="$(ptoas --version | tr -d '\r')"
 echo "${PTOAS_VERSION_OUTPUT}"
-if [[ -n "${PTOAS_VERSION:-}" ]]; then
-  EXPECTED_VERSION_OUTPUT="ptoas ${PTOAS_VERSION}"
+EXPECTED_PTOAS_CLI_VERSION="${PTOAS_CLI_VERSION:-${PTOAS_VERSION:-}}"
+if [[ -n "${EXPECTED_PTOAS_CLI_VERSION}" ]]; then
+  EXPECTED_VERSION_OUTPUT="ptoas ${EXPECTED_PTOAS_CLI_VERSION}"
   if [[ "${PTOAS_VERSION_OUTPUT}" != "${EXPECTED_VERSION_OUTPUT}" ]]; then
     echo "Error: expected '${EXPECTED_VERSION_OUTPUT}', got '${PTOAS_VERSION_OUTPUT}'" >&2
     exit 1
@@ -103,7 +104,8 @@ PTOAS_ENTRYPOINT="$(command -v ptoas)"
 PYTHON_ENTRYPOINT="$(command -v "${PYTHON_BIN}")"
 CLEAN_ENV_DIR="${TEST_TMPDIR}/clean-env"
 CLEAN_ENV_PTO="${CLEAN_ENV_DIR}/wheel-clean-env-probe.pto"
-CLEAN_ENV_CPP="${CLEAN_ENV_DIR}/wheel-clean-env-probe.cpp"
+CLEAN_ENV_PTO_IR="${CLEAN_ENV_DIR}/wheel-clean-env-probe.pto.ir"
+CLEAN_ENV_LOG="${CLEAN_ENV_DIR}/wheel-clean-env-probe.log"
 mkdir -p "${CLEAN_ENV_DIR}"
 
 CLEAN_PTOAS_VERSION_OUTPUT="$(
@@ -114,8 +116,8 @@ CLEAN_PTOAS_VERSION_OUTPUT="$(
     "${PTOAS_ENTRYPOINT}" --version | tr -d '\r'
 )"
 echo "${CLEAN_PTOAS_VERSION_OUTPUT}"
-if [[ -n "${PTOAS_VERSION:-}" ]]; then
-  EXPECTED_VERSION_OUTPUT="ptoas ${PTOAS_VERSION}"
+if [[ -n "${EXPECTED_PTOAS_CLI_VERSION}" ]]; then
+  EXPECTED_VERSION_OUTPUT="ptoas ${EXPECTED_PTOAS_CLI_VERSION}"
   if [[ "${CLEAN_PTOAS_VERSION_OUTPUT}" != "${EXPECTED_VERSION_OUTPUT}" ]]; then
     echo "Error: expected '${EXPECTED_VERSION_OUTPUT}', got '${CLEAN_PTOAS_VERSION_OUTPUT}'" >&2
     exit 1
@@ -137,21 +139,21 @@ from ptodsl import pto
 
 
 @pto.jit(target="a5")
-def wheel_clean_env_probe(
-    A_ptr: pto.ptr(pto.f32, "gm"),
-    O_ptr: pto.ptr(pto.f32, "gm"),
-    rows: pto.i32,
-    cols: pto.i32,
-    *,
-    BLOCK: pto.const_expr = 128,
-):
-    a_view = pto.make_tensor_view(A_ptr, shape=[rows, cols], strides=[cols, 1])
-    o_view = pto.make_tensor_view(O_ptr, shape=[rows, cols], strides=[cols, 1])
-    tile = pto.alloc_tile(shape=[1, BLOCK], dtype=pto.f32)
-    src = pto.partition_view(a_view, offsets=[0, 0], sizes=[rows, cols])
-    dst = pto.partition_view(o_view, offsets=[0, 0], sizes=[rows, cols])
-    pto.tile.load(src, tile)
-    pto.tile.store(tile, dst)
+def wheel_clean_env_probe():
+    a_tile = pto.alloc_tile(shape=[1, 16], dtype=pto.f32, addr=0)
+    o_tile = pto.alloc_tile(shape=[1, 16], dtype=pto.f32, addr=0)
+    a_view = pto.make_tensor_view(
+        pto.castptr(pto.const(0, dtype=pto.ui64), pto.ptr(pto.f32, "gm")),
+        shape=[1, 16],
+        strides=[16, 1],
+    )
+    o_view = pto.make_tensor_view(
+        pto.castptr(pto.const(0, dtype=pto.ui64), pto.ptr(pto.f32, "gm")),
+        shape=[1, 16],
+        strides=[16, 1],
+    )
+    pto.tile.load(a_view, a_tile)
+    pto.tile.store(o_tile, o_view)
 
 
 output_path = Path(os.environ["CLEAN_ENV_PTO"])
@@ -164,50 +166,47 @@ output_path.write_text(mlir_text, encoding="utf-8")
 print(f"Wrote PTODSL-authored PTO IR to {output_path}")
 PY
 
-env -i \
+if ! env -i \
   HOME="${CLEAN_ENV_DIR}" \
   TMPDIR="${CLEAN_ENV_DIR}" \
   PATH="/usr/bin:/bin" \
-  "${PTOAS_ENTRYPOINT}" "${CLEAN_ENV_PTO}" -o "${CLEAN_ENV_CPP}"
-
-if [[ ! -s "${CLEAN_ENV_CPP}" ]]; then
-  echo "Error: clean-environment ptoas smoke did not produce ${CLEAN_ENV_CPP}" >&2
+  "${PTOAS_ENTRYPOINT}" --pto-arch=a5 --pto-backend=vpto --pto-level=level3 --enable-tile-op-expand --emit-pto-ir "${CLEAN_ENV_PTO}" -o "${CLEAN_ENV_PTO_IR}" \
+  >"${CLEAN_ENV_LOG}" 2>&1
+then
+  echo "Error: clean-environment ptoas smoke failed; log follows:" >&2
+  if [[ -f "${CLEAN_ENV_LOG}" ]]; then
+    cat "${CLEAN_ENV_LOG}" >&2
+  fi
   exit 1
 fi
-grep -q "wheel_clean_env_probe" "${CLEAN_ENV_CPP}" || {
+
+if [[ ! -s "${CLEAN_ENV_PTO_IR}" ]]; then
+  echo "Error: clean-environment ptoas smoke did not produce ${CLEAN_ENV_PTO_IR}" >&2
+  exit 1
+fi
+grep -q "wheel_clean_env_probe" "${CLEAN_ENV_PTO_IR}" || {
   echo "Error: clean-environment ptoas smoke output is missing wheel_clean_env_probe" >&2
   exit 1
 }
-
-echo "Testing PTODSL compile-only probe..."
-"$PYTHON_BIN" - <<'PY'
-from ptodsl import pto, scalar
-
-
-@pto.jit(target="a5")
-def wheel_compile_probe(
-    A_ptr: pto.ptr(pto.f32, "gm"),
-    O_ptr: pto.ptr(pto.f32, "gm"),
-    rows: pto.i32,
-    cols: pto.i32,
-    *,
-    BLOCK: pto.const_expr = 128,
-):
-    a_view = pto.make_tensor_view(A_ptr, shape=[rows, cols], strides=[cols, 1])
-    o_view = pto.make_tensor_view(O_ptr, shape=[rows, cols], strides=[cols, 1])
-    tile = pto.alloc_tile(shape=[1, BLOCK], dtype=pto.f32)
-    src = pto.partition_view(a_view, offsets=[0, 0], sizes=[rows, cols])
-    dst = pto.partition_view(o_view, offsets=[0, 0], sizes=[rows, cols])
-    pto.tile.load(src, tile)
-    pto.tile.store(tile, dst)
-
-
-mlir_text = wheel_compile_probe.compile().mlir_text()
-if "func.func @wheel_compile_probe" not in mlir_text:
-    raise SystemExit("PTODSL compile probe did not preserve the kernel symbol")
-if "pto.tload" not in mlir_text or "pto.tstore" not in mlir_text:
-    raise SystemExit("PTODSL compile probe did not emit the expected tile ops")
-print("PTODSL compile probe succeeded")
-PY
+grep -q "pto.tload" "${CLEAN_ENV_PTO_IR}" || {
+  echo "Error: clean-environment ptoas smoke output is missing pto.tload" >&2
+  exit 1
+}
+grep -q "pto.tstore" "${CLEAN_ENV_PTO_IR}" || {
+  echo "Error: clean-environment ptoas smoke output is missing pto.tstore" >&2
+  exit 1
+}
+grep -q "candidates = " "${CLEAN_ENV_PTO_IR}" || {
+  echo "Error: clean-environment ptoas smoke output is missing TileLib candidate metadata" >&2
+  exit 1
+}
+if ! grep -q "TileLib daemon started successfully" "${CLEAN_ENV_LOG}"; then
+  echo "Error: TileLib daemon did not report a successful start" >&2
+  exit 1
+fi
+if ! grep -q "TileLib daemon stopped" "${CLEAN_ENV_LOG}"; then
+  echo "Error: TileLib daemon did not report a clean stop" >&2
+  exit 1
+fi
 
 echo "All wheel import tests passed!"

@@ -29,7 +29,7 @@ env:
 
 jobs:
   build_wheel:
-    if: github.event_name != 'release' || startsWith(github.ref_name, 'ptoas-v') || startsWith(github.ref_name, 'vmi-v')
+    if: github.event_name != 'release' || startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'ptoas-v')
     # Non-release runs keep a single-Python matrix for faster gates;
     # release/nightly runs fan out to publish the full wheel set plus binary artifacts.
     name: Build ptoas-bin (macOS ${{ matrix.arch }}, py${{ matrix.python }})
@@ -69,18 +69,28 @@ jobs:
         run: |
           if [ "${GITHUB_EVENT_NAME}" = "release" ]; then
             case "${GITHUB_REF_NAME}" in
-              ptoas-v*)
-                EXPECTED_RELEASE_VERSION="$(python .github/scripts/compute_ptoas_version.py --mode release)"
-                PTOAS_VERSION="${GITHUB_REF_NAME#ptoas-v}"
-                ;;
               vmi-v*)
                 EXPECTED_RELEASE_VERSION="$(python .github/scripts/compute_vmi_version.py \
                   --version-file docs/release/VMI_VERSION \
                   --check-tag "${GITHUB_REF_NAME}")"
                 PTOAS_VERSION="${GITHUB_REF_NAME#vmi-v}"
+                PTOAS_CLI_VERSION="vmi ${PTOAS_VERSION}"
+                PTOAS_PYTHON_PACKAGE_NAME="ptoas-vmi"
+                ;;
+              ptoas-v*)
+                EXPECTED_RELEASE_VERSION="$(python .github/scripts/compute_ptoas_version.py --mode release)"
+                PTOAS_VERSION="${GITHUB_REF_NAME#ptoas-v}"
+                PTOAS_CLI_VERSION="${PTOAS_VERSION}"
+                PTOAS_PYTHON_PACKAGE_NAME="ptoas"
+                ;;
+              v*)
+                EXPECTED_RELEASE_VERSION="$(python .github/scripts/compute_ptoas_version.py --mode release)"
+                PTOAS_VERSION="${GITHUB_REF_NAME#v}"
+                PTOAS_CLI_VERSION="${PTOAS_VERSION}"
+                PTOAS_PYTHON_PACKAGE_NAME="ptoas"
                 ;;
               *)
-                echo "release tags for the wheel workflow must start with 'ptoas-v' or 'vmi-v'" >&2
+                echo "release tags for the wheel workflow must start with 'v', 'ptoas-v', or 'vmi-v'" >&2
                 exit 1
                 ;;
             esac
@@ -90,9 +100,15 @@ jobs:
             fi
           else
             PTOAS_VERSION="$(python .github/scripts/compute_ptoas_version.py --mode dev)"
+            PTOAS_CLI_VERSION="${PTOAS_VERSION}"
+            PTOAS_PYTHON_PACKAGE_NAME="ptoas"
           fi
           echo "PTOAS_VERSION=${PTOAS_VERSION}" >> "$GITHUB_ENV"
-          echo "Using PTOAS CLI version: ${PTOAS_VERSION}"
+          echo "PTOAS_CLI_VERSION=${PTOAS_CLI_VERSION}" >> "$GITHUB_ENV"
+          echo "PTOAS_PYTHON_PACKAGE_NAME=${PTOAS_PYTHON_PACKAGE_NAME}" >> "$GITHUB_ENV"
+          echo "Using PTOAS CLI version: ${PTOAS_CLI_VERSION}"
+          echo "Using PTOAS wheel version: ${PTOAS_VERSION}"
+          echo "Using PTOAS Python package name: ${PTOAS_PYTHON_PACKAGE_NAME}"
 
       - name: Install system dependencies
         run: |
@@ -178,13 +194,14 @@ jobs:
 
       - name: Build PTOAS
         run: |
-          PTOAS_RELEASE_VERSION_OVERRIDE="${PTOAS_VERSION}" \
+          PTOAS_RELEASE_VERSION_OVERRIDE="${PTOAS_CLI_VERSION}" \
           pip install . --no-build-isolation
 
       - name: Create Python wheel
         if: github.event_name == 'release' || github.event_name == 'schedule'
         run: |
           export PTO_WHEEL_DIST_DIR=$PTO_SOURCE_DIR/build/wheel-dist
+          export PTOAS_PYTHON_PACKAGE_NAME="${PTOAS_PYTHON_PACKAGE_NAME}"
           export PTOAS_PYTHON_PACKAGE_VERSION="${PTOAS_VERSION}"
           if [ "${{ matrix.arch }}" = "x86_64" ]; then
             TARGET_ARCH="x86_64"
@@ -373,7 +390,7 @@ jobs:
 
   upload_release_assets:
     name: Upload release assets
-    if: (github.event_name == 'release' && (startsWith(github.ref_name, 'ptoas-v') || startsWith(github.ref_name, 'vmi-v'))) || github.event_name == 'schedule'
+    if: (github.event_name == 'release' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'ptoas-v'))) || github.event_name == 'schedule'
     needs: build_wheel
     runs-on: ubuntu-latest
 
@@ -384,7 +401,11 @@ jobs:
             echo "RELEASE_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
             echo "RELEASE_NAME=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
             echo "RELEASE_PRERELEASE=false" >> "$GITHUB_ENV"
-            echo "RELEASE_MAKE_LATEST=true" >> "$GITHUB_ENV"
+            if [[ "${GITHUB_REF_NAME}" == vmi-v* ]]; then
+              echo "RELEASE_MAKE_LATEST=false" >> "$GITHUB_ENV"
+            else
+              echo "RELEASE_MAKE_LATEST=true" >> "$GITHUB_ENV"
+            fi
             {
               echo "RELEASE_BODY<<EOF"
               echo "Published release assets for ${GITHUB_REF_NAME}."

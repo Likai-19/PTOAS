@@ -18,6 +18,26 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class ReleaseVersionScriptTests(unittest.TestCase):
+    def test_ptoas_version_script_accepts_plain_v_tag(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            cmake_file = temp_root / "CMakeLists.txt"
+            cmake_file.write_text("project(ptoas VERSION 0.51)\n", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO_ROOT / ".github/scripts/compute_ptoas_version.py"),
+                    "--cmake-file",
+                    str(cmake_file),
+                    "--check-tag",
+                    "v0.51",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.stdout.strip(), "0.51")
+
     def test_ptoas_version_script_accepts_ptoas_tag_prefix(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)

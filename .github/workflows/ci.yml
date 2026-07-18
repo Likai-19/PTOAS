@@ -290,7 +290,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          readarray -t ptoas_wheels < <(find "${PTO_WHEELHOUSE}" -maxdepth 1 -type f -name 'ptoas-*.whl' | sort)
+          readarray -t ptoas_wheels < <(find "${PTO_WHEELHOUSE}" -maxdepth 1 -type f -name 'ptoas*.whl' | sort)
           if [[ "${#ptoas_wheels[@]}" -ne 1 ]]; then
             echo "ERROR: expected exactly one PTOAS wheel in ${PTO_WHEELHOUSE}, found ${#ptoas_wheels[@]}" >&2
             printf '  %s\n' "${ptoas_wheels[@]}" >&2

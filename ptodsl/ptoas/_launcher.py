@@ -10,159 +10,18 @@
 
 from __future__ import annotations
 
-import ctypes
-import os
-import shutil
 import sys
 from pathlib import Path
 from typing import NoReturn
 
-
-def _prepend_env_path(env: dict[str, str], name: str, value: Path) -> None:
-    if not value.exists():
-        return
-    current = env.get(name, "")
-    rendered = str(value)
-    parts = [part for part in current.split(os.pathsep) if part]
-    if rendered in parts:
-        parts.remove(rendered)
-    parts.insert(0, rendered)
-    env[name] = os.pathsep.join(parts)
-
-
-def _has_cli_option(argv: list[str], option: str) -> bool:
-    option_with_value = f"{option}="
-    for arg in argv:
-        if arg == option or arg.startswith(option_with_value):
-            return True
-    return False
-
-
-def _resolve_wrapper_path() -> Path:
-    argv0 = Path(sys.argv[0])
-    if argv0.exists():
-        return argv0.resolve()
-
-    found = shutil.which(argv0.name or "ptoas")
-    if found:
-        return Path(found).resolve()
-
-    raise SystemExit(f"unable to locate the installed ptoas wrapper: {sys.argv[0]}")
-
-
-def _resolve_shared_module_path(package_root: Path, runtime_root: Path, wrapper: Path) -> Path:
-    candidates = [
-        package_root.parent / "pto" / "ptoas.so",
-        wrapper.parent / "ptoas.so",
-        runtime_root / "lib" / "ptoas.so",
-    ]
-
-    for candidate in candidates:
-        if candidate.is_file() and candidate.stat().st_size > 0:
-            return candidate
-
-    raise SystemExit(
-        "wheel/runtime is missing the packaged shared module: expected "
-        "ptoas/_runtime/lib/ptoas.so or a local ptoas.so next to the "
-        "wrapper/install tree"
-    )
-
-
-def _resolve_runtime_root(package_root: Path) -> Path:
-    runtime_root = package_root / "_runtime"
-    if runtime_root.exists():
-        return runtime_root
-    env_install_dir = os.environ.get("PTO_INSTALL_DIR")
-    if env_install_dir:
-        return Path(env_install_dir)
-    return package_root.parent.parent / "install"
-
-
-def _iter_runtime_library_files(runtime_lib_dir: Path) -> list[Path]:
-    if not runtime_lib_dir.is_dir():
-        return []
-
-    libraries: dict[Path, None] = {}
-    for pattern in ("*.so", "*.so.*", "*.dylib", "*.dylib.*"):
-        for candidate in sorted(runtime_lib_dir.glob(pattern)):
-            if candidate.is_file():
-                libraries[candidate.resolve()] = None
-    return list(libraries)
-
-
-def _preload_runtime_libraries(shared_module: Path, runtime_lib_dir: Path) -> None:
-    runtime_lib_dir = runtime_lib_dir.resolve()
-    if not runtime_lib_dir.is_dir():
-        return
-
-    pending = [
-        path for path in _iter_runtime_library_files(runtime_lib_dir)
-        if path != shared_module.resolve()
-    ]
-    if not pending:
-        return
-
-    mode = getattr(ctypes, "RTLD_GLOBAL", 0)
-    last_error: OSError | None = None
-    while pending:
-        next_pending: list[Path] = []
-        made_progress = False
-        for candidate in pending:
-            try:
-                ctypes.CDLL(str(candidate), mode=mode)
-                made_progress = True
-            except OSError as exc:
-                last_error = exc
-                next_pending.append(candidate)
-        if not next_pending:
-            return
-        if not made_progress:
-            if last_error is not None:
-                raise last_error
-            raise OSError(f"unable to preload runtime libraries from {runtime_lib_dir}")
-        pending = next_pending
-
-
-def _load_shared_entrypoint(shared_module: Path, runtime_lib_dir: Path):
-    _preload_runtime_libraries(shared_module, runtime_lib_dir)
-    library = ctypes.CDLL(str(shared_module), mode=getattr(ctypes, "RTLD_GLOBAL", 0))
-    entrypoint = library.ptoas_entrypoint
-    entrypoint.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_char_p)]
-    entrypoint.restype = ctypes.c_int
-    return entrypoint
+from ptoas import _runtime_entry
 
 
 def main() -> NoReturn:
     package_root = Path(__file__).resolve().parent
-    runtime_root = _resolve_runtime_root(package_root)
-    wrapper = _resolve_wrapper_path()
-    shared_module = _resolve_shared_module_path(package_root, runtime_root, wrapper)
-
-    python_root = package_root.parent if runtime_root.name == "_runtime" else runtime_root
-    tileops_dir = runtime_root / "share" / "ptoas" / "TileOps"
-    env = os.environ.copy()
-    env["PTOAS_HOME"] = str(runtime_root)
-    env["PTOAS_BIN"] = str(wrapper)
-    env["PTOAS_TILEOPS_DIR"] = str(tileops_dir)
-
-    _prepend_env_path(env, "PATH", wrapper.parent)
-    _prepend_env_path(env, "PYTHONPATH", python_root)
-    _prepend_env_path(env, "LD_LIBRARY_PATH", runtime_root / "lib")
-    _prepend_env_path(env, "DYLD_LIBRARY_PATH", runtime_root / "lib")
-    os.environ.update(env)
-
-    argv = [str(wrapper)]
-    user_args = sys.argv[1:]
-    if not _has_cli_option(user_args, "--tilelang-path"):
-        argv.extend(["--tilelang-path", str(tileops_dir)])
-    if not _has_cli_option(user_args, "--tilelang-pkg-path"):
-        argv.extend(["--tilelang-pkg-path", str(python_root)])
-    argv.extend(user_args)
-
-    entrypoint = _load_shared_entrypoint(shared_module, runtime_root / "lib")
-    argv_bytes = [os.fsencode(arg) for arg in argv]
-    c_argv = (ctypes.c_char_p * len(argv_bytes))(*argv_bytes)
-    raise SystemExit(entrypoint(len(argv_bytes), c_argv))
+    wrapper = _runtime_entry.resolve_wrapper_path()
+    layout = _runtime_entry.resolve_wheel_layout(package_root, wrapper)
+    raise SystemExit(_runtime_entry.launch(layout, sys.argv[1:]))
 
 
 if __name__ == "__main__":

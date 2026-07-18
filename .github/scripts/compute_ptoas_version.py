@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--check-tag",
-        help="Optional release tag to validate, e.g. ptoas-v0.8 or v0.8.",
+        help="Optional release tag to validate, e.g. v0.8 or ptoas-v0.8.",
     )
     return parser.parse_args()
 

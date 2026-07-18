@@ -19,12 +19,14 @@ from pathlib import Path
 REQUIRED_FILES = {
     "ptoas/__init__.py",
     "ptoas/_launcher.py",
+    "ptoas/_runtime_entry.py",
     "ptoas/_runtime/lib/ptoas.so",
 }
 FORBIDDEN_FILES = {
     "ptoas/_runtime/bin/ptoas",
 }
 ENTRYPOINT_SNIPPET = "ptoas=ptoas._launcher:main"
+WHEEL_GLOB = "ptoas*.whl"
 
 
 def _resolve_wheel(candidate: str) -> Path:
@@ -32,7 +34,7 @@ def _resolve_wheel(candidate: str) -> Path:
     if path.is_file():
         return path
     if path.is_dir():
-        wheels = sorted(path.glob("ptoas-*.whl"))
+        wheels = sorted(path.glob(WHEEL_GLOB))
         if len(wheels) != 1:
             raise SystemExit(
                 f"expected exactly one wheel in {path}, found {len(wheels)}"
@@ -60,16 +62,17 @@ def validate_wheel_payload(wheel: Path) -> None:
                 f"{present_forbidden}"
             )
 
-        entry_points_name = next(
-            (
-                name for name in names
-                if name.startswith("ptoas-")
-                and name.endswith(".dist-info/entry_points.txt")
-            ),
-            None,
+        entry_points_names = sorted(
+            name
+            for name in names
+            if name.endswith(".dist-info/entry_points.txt")
         )
-        if entry_points_name is None:
-            raise SystemExit("wheel is missing dist-info/entry_points.txt")
+        if len(entry_points_names) != 1:
+            raise SystemExit(
+                "wheel must contain exactly one dist-info/entry_points.txt, "
+                f"found {len(entry_points_names)}"
+            )
+        entry_points_name = entry_points_names[0]
 
         entry_points = zf.read(entry_points_name).decode("utf-8")
         if ENTRYPOINT_SNIPPET not in entry_points:
@@ -85,7 +88,7 @@ def main() -> int:
     )
     parser.add_argument(
         "wheel",
-        help="Wheel file, directory containing exactly one ptoas-*.whl, or glob.",
+        help="Wheel file, directory containing exactly one ptoas*.whl, or glob.",
     )
     args = parser.parse_args()
 

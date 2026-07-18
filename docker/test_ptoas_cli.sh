@@ -48,8 +48,9 @@ echo "${PTOAS_BIN}"
 echo "Checking ptoas version..."
 VERSION_OUTPUT="$("${PTOAS_BIN}" --version | tr -d '\r')"
 echo "$VERSION_OUTPUT"
-if [ -n "${PTOAS_VERSION:-}" ]; then
-  EXPECTED_VERSION_OUTPUT="ptoas ${PTOAS_VERSION}"
+EXPECTED_PTOAS_CLI_VERSION="${PTOAS_CLI_VERSION:-${PTOAS_VERSION:-}}"
+if [ -n "${EXPECTED_PTOAS_CLI_VERSION}" ]; then
+  EXPECTED_VERSION_OUTPUT="ptoas ${EXPECTED_PTOAS_CLI_VERSION}"
   if [ "${VERSION_OUTPUT}" != "${EXPECTED_VERSION_OUTPUT}" ]; then
     echo "Error: expected '${EXPECTED_VERSION_OUTPUT}', got '${VERSION_OUTPUT}'" >&2
     exit 1

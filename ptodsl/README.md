@@ -42,7 +42,7 @@ to make `import ptodsl` available are:
 
 ```bash
 # 1) Released or CI-built wheel: installs PTOAS + PTODSL together
-pip install /path/to/ptoas-*.whl
+pip install /path/to/ptoas*.whl
 
 # 2) Non-editable source install from the repository root
 cd $PTOAS_REPO_ROOT
