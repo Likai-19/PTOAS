@@ -17,6 +17,14 @@ on:
   schedule:
     - cron: "10 17 * * *"
   workflow_dispatch:
+    inputs:
+      release_kind:
+        description: Manual release flavor for dry-runs
+        type: choice
+        options:
+          - ptoas
+          - vmi
+        default: ptoas
   release:
     types: [prereleased, released]
 
@@ -38,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ${{ fromJson((github.event_name == 'release' || github.event_name == 'schedule') && '["3.10","3.11","3.12"]' || '["3.11"]') }}
+        python: ${{ fromJson((github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["3.10","3.11","3.12"]' || '["3.11"]') }}
         arch: ["x86_64", "aarch64"]
 
     container:
@@ -93,6 +101,14 @@ jobs:
               echo "release tag '${GITHUB_REF_NAME}' does not match computed version '${EXPECTED_RELEASE_VERSION}'" >&2
               exit 1
             fi
+          elif [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ "${{ inputs.release_kind }}" = "vmi" ]; then
+            PTOAS_VERSION="$(${PY_PATH}/bin/python .github/scripts/compute_vmi_version.py)"
+            PTOAS_CLI_VERSION="vmi ${PTOAS_VERSION}"
+            PTOAS_PYTHON_PACKAGE_NAME="ptoas-vmi"
+          elif [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            PTOAS_VERSION="$(${PY_PATH}/bin/python .github/scripts/compute_ptoas_version.py --mode release)"
+            PTOAS_CLI_VERSION="${PTOAS_VERSION}"
+            PTOAS_PYTHON_PACKAGE_NAME="ptoas"
           else
             PTOAS_VERSION="$(${PY_PATH}/bin/python .github/scripts/compute_ptoas_version.py --mode dev)"
             PTOAS_CLI_VERSION="${PTOAS_VERSION}"
@@ -204,7 +220,7 @@ jobs:
           pip install . --no-build-isolation
 
       - name: Create Python wheel
-        if: github.event_name == 'release' || github.event_name == 'schedule'
+        if: github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: |
           export PATH="${PY_PATH}/bin:$PATH"
           export PTOAS_PYTHON_PACKAGE_NAME="${PTOAS_PYTHON_PACKAGE_NAME}"
@@ -212,13 +228,13 @@ jobs:
           bash $PTO_SOURCE_DIR/docker/create_wheel.sh
 
       - name: Validate wheel payload and launcher contract
-        if: github.event_name == 'release' || github.event_name == 'schedule'
+        if: github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: |
           export PATH="${PY_PATH}/bin:$PATH"
           python "$PTO_SOURCE_DIR/docker/validate_wheel_payload.py" "$PTO_SOURCE_DIR/build/wheel-dist"
 
       - name: Repair wheel with auditwheel
-        if: github.event_name == 'release' || github.event_name == 'schedule'
+        if: github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: |
           export PATH="${PY_PATH}/bin:$PATH"
           export PTO_WHEEL_DIST_DIR=$PTO_SOURCE_DIR/build/wheel-dist
@@ -228,7 +244,7 @@ jobs:
           auditwheel repair --plat manylinux_2_34_${{ matrix.arch }} "$PTO_WHEEL_DIST_DIR"/ptoas*.whl -w "$PTO_WHEELHOUSE"
 
       - name: Test wheel installation
-        if: github.event_name == 'release' || github.event_name == 'schedule'
+        if: github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: |
           export PATH="${PY_PATH}/bin:$PATH"
           pip install $GITHUB_WORKSPACE/wheelhouse/ptoas*.whl
@@ -240,7 +256,7 @@ jobs:
           bash $PTO_SOURCE_DIR/docker/test_ptoas_cli.sh
 
       - name: Upload wheel artifact
-        if: github.event_name == 'release' || github.event_name == 'schedule'
+        if: github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: ptoas-wheel-py${{ matrix.python }}-${{ matrix.arch }}
