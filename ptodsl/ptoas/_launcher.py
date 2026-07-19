@@ -6,22 +6,15 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 
-"""Wheel-installed `ptoas` console entry."""
+"""Compatibility shim for legacy `ptoas._launcher` imports."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-from typing import NoReturn
-
-from ptoas import _runtime_entry
+from ptoas_wheel_bootstrap import main as _wheel_bootstrap_main
 
 
-def main() -> NoReturn:
-    package_root = Path(__file__).resolve().parent
-    wrapper = _runtime_entry.resolve_wrapper_path()
-    layout = _runtime_entry.resolve_wheel_layout(package_root, wrapper)
-    raise SystemExit(_runtime_entry.launch(layout, sys.argv[1:]))
+def main() -> None:
+    _wheel_bootstrap_main()
 
 
 if __name__ == "__main__":

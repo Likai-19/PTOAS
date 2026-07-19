@@ -9,6 +9,7 @@
 
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -93,6 +94,32 @@ class PtoasBuildBackendTests(unittest.TestCase):
             with mock.patch.object(build_backend, "_PTO_INSTALL_DIR", install_dir):
                 with self.assertRaisesRegex(RuntimeError, "missing or empty"):
                     build_backend._assert_installed_ptoas_shared_module()
+
+    def test_build_editable_routes_console_entry_through_wheel_bootstrap(self):
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            build_backend.os.environ,
+            {
+                "PTOAS_PYTHON_PACKAGE_NAME": "ptoas",
+                "PTOAS_PYTHON_PACKAGE_VERSION": "0.1.0",
+            },
+            clear=False,
+        ), mock.patch.object(
+            build_backend,
+            "_cmake_configure_and_build",
+        ) as cmake_build:
+            wheel_dir = Path(temp_dir) / "wheel"
+            wheel_dir.mkdir(parents=True, exist_ok=True)
+
+            wheel_name = build_backend.build_editable(str(wheel_dir))
+            wheel_path = wheel_dir / wheel_name
+
+            with zipfile.ZipFile(wheel_path) as zf:
+                entry_points = zf.read("ptoas-0.1.0.dist-info/entry_points.txt").decode("utf-8")
+
+        cmake_build.assert_called_once_with()
+
+        self.assertIn("ptoas=ptoas_wheel_bootstrap:main", entry_points)
+        self.assertNotIn("ptoas._launcher", entry_points)
 
 
 if __name__ == "__main__":

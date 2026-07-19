@@ -31,11 +31,15 @@ class ValidateWheelPayloadTests(unittest.TestCase):
         *,
         include_runtime_so: bool,
         include_runtime_entry: bool = True,
+        include_bootstrap: bool = True,
+        entry_points_text: str = "[console_scripts]\nptoas=ptoas_wheel_bootstrap:main\n",
         wheel_stem: str = "ptoas",
         dist_info_stem: str = "ptoas",
     ) -> Path:
         wheel = root / f"{wheel_stem}-1.2.3-cp311-cp311-linux_x86_64.whl"
         with zipfile.ZipFile(wheel, "w") as zf:
+            if include_bootstrap:
+                zf.writestr("ptoas_wheel_bootstrap.py", "")
             zf.writestr("ptoas/__init__.py", "")
             zf.writestr("ptoas/_launcher.py", "")
             if include_runtime_entry:
@@ -44,7 +48,7 @@ class ValidateWheelPayloadTests(unittest.TestCase):
                 zf.writestr("ptoas/_runtime/lib/ptoas.so", "fake")
             zf.writestr(
                 f"{dist_info_stem}-1.2.3.dist-info/entry_points.txt",
-                "[console_scripts]\nptoas=ptoas._launcher:main\n",
+                entry_points_text,
             )
         return wheel
 
@@ -90,6 +94,56 @@ class ValidateWheelPayloadTests(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ptoas/_runtime_entry.py", result.stderr)
+
+    def test_validator_rejects_missing_wheel_bootstrap_module(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wheel = self._make_wheel(
+                Path(temp_dir),
+                include_runtime_so=True,
+                include_bootstrap=False,
+            )
+            result = subprocess.run(
+                ["python3", str(VALIDATOR), str(wheel)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ptoas_wheel_bootstrap.py", result.stderr)
+
+    def test_validator_rejects_legacy_ptoas_launcher_entrypoint(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wheel = self._make_wheel(
+                Path(temp_dir),
+                include_runtime_so=True,
+                entry_points_text="[console_scripts]\nptoas=ptoas._launcher:main\n",
+            )
+            result = subprocess.run(
+                ["python3", str(VALIDATOR), str(wheel)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ptoas_wheel_bootstrap:main", result.stderr)
+
+    def test_validator_accepts_normalized_entrypoint_spacing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wheel = self._make_wheel(
+                Path(temp_dir),
+                include_runtime_so=True,
+                entry_points_text="[console_scripts]\nptoas = ptoas_wheel_bootstrap:main\n",
+            )
+            result = subprocess.run(
+                ["python3", str(VALIDATOR), str(wheel)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_validator_accepts_vmi_distribution_name(self):
         with tempfile.TemporaryDirectory() as temp_dir:

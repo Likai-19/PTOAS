@@ -30,6 +30,7 @@ if [[ ! "${PTOAS_PYTHON_PACKAGE_NAME}" =~ ^[A-Za-z0-9]+([-_.][A-Za-z0-9]+)*$ ]];
 fi
 PTOAS_WHEEL_DISTRIBUTION_NAME="$(printf '%s' "${PTOAS_PYTHON_PACKAGE_NAME}" | sed -E 's/[-_.]+/_/g')"
 PTOAS_WRAPPER_PKG_DIR="${PTO_SOURCE_DIR}/ptodsl/ptoas"
+PTOAS_WHEEL_BOOTSTRAP="${PTO_SOURCE_DIR}/ptodsl/ptoas_wheel_bootstrap.py"
 PTODSL_INSTALL_DIR="${PTO_INSTALL_DIR}/ptodsl"
 MLIR_PYTHON_PACKAGE_DIR="${LLVM_BUILD_DIR}/tools/mlir/python_packages/mlir_core"
 
@@ -165,6 +166,11 @@ if [[ ! -f "${PTOAS_WRAPPER_PKG_DIR}/__init__.py" ]]; then
   exit 1
 fi
 cp -R "${PTOAS_WRAPPER_PKG_DIR}" "${WHEEL_STAGING_DIR}/ptoas"
+if [[ ! -f "${PTOAS_WHEEL_BOOTSTRAP}" ]]; then
+  echo "Error: ptoas wheel bootstrap module not found at ${PTOAS_WHEEL_BOOTSTRAP}" >&2
+  exit 1
+fi
+cp "${PTOAS_WHEEL_BOOTSTRAP}" "${WHEEL_STAGING_DIR}/ptoas_wheel_bootstrap.py"
 
 echo "Embedding unified runtime payload for wheel-side ptoas launcher..."
 mkdir -p "${WHEEL_STAGING_DIR}/ptoas/_runtime"
@@ -254,7 +260,7 @@ with zipfile.ZipFile(wheel_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
 
     entry_points = "\n".join([
         "[console_scripts]",
-        "ptoas=ptoas._launcher:main",
+        "ptoas=ptoas_wheel_bootstrap:main",
         "",
     ]).encode("utf-8")
 

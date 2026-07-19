@@ -342,7 +342,7 @@ jobs:
       - name: Archive ptoas binary artifact
         if: matrix.python == '3.11'
         run: |
-          chmod +x "$GITHUB_WORKSPACE/ptoas-dist/ptoas" "$GITHUB_WORKSPACE/ptoas-dist/bin/ptoas"
+          chmod +x "$GITHUB_WORKSPACE/ptoas-dist/bin/ptoas"
           tar -czf "$GITHUB_WORKSPACE/ptoas-bin-macos-${{ matrix.arch }}.tar.gz" \
             -C "$GITHUB_WORKSPACE/ptoas-dist" .
 
@@ -354,13 +354,14 @@ jobs:
           mkdir -p "$TEST_DIR/extracted"
           tar -xzf "$GITHUB_WORKSPACE/ptoas-bin-macos-${{ matrix.arch }}.tar.gz" -C "$TEST_DIR/extracted"
 
-          test -x "$TEST_DIR/extracted/ptoas"
           test -x "$TEST_DIR/extracted/bin/ptoas"
+          test -f "$TEST_DIR/extracted/ptoas/_runtime_entry.py"
+          test -f "$TEST_DIR/extracted/ptoas_wheel_bootstrap.py"
 
           env -u PYTHONPATH -u DYLD_LIBRARY_PATH -u LD_LIBRARY_PATH \
-            "$TEST_DIR/extracted/ptoas" --version
+            "$TEST_DIR/extracted/bin/ptoas" --version
           env -u PYTHONPATH -u DYLD_LIBRARY_PATH -u LD_LIBRARY_PATH \
-            "$TEST_DIR/extracted/ptoas" \
+            "$TEST_DIR/extracted/bin/ptoas" \
             "$PTO_SOURCE_DIR/test/lit/pto/kernel_kind_vector_scf_while_emitc.pto" \
             >/dev/null
 

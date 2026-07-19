@@ -73,6 +73,9 @@ unset PYTHONPATH
 # Test in a clean directory to avoid local imports
 cd /tmp
 
+PTOAS_ENTRYPOINT="$(command -v ptoas)"
+PYTHON_ENTRYPOINT="$(command -v "${PYTHON_BIN}")"
+
 echo "Testing mlir.ir import..."
 "$PYTHON_BIN" -c "import mlir.ir; print('mlir.ir imported successfully')"
 
@@ -99,9 +102,34 @@ else
   echo "${PTOAS_VERSION_OUTPUT}" | grep -Eq '^ptoas [0-9]+\.[0-9]+$'
 fi
 
+echo "Testing installed ptoas console entry under polluted Python and LLVM paths..."
+POLLUTED_ENV_DIR="${TEST_TMPDIR}/polluted-env"
+mkdir -p "${POLLUTED_ENV_DIR}/ptoas"
+cat > "${POLLUTED_ENV_DIR}/ptoas/__init__.py" <<'PY'
+raise RuntimeError("shadow ptoas package must not be imported")
+PY
+cat > "${POLLUTED_ENV_DIR}/ptoas/_runtime_entry.py" <<'PY'
+raise RuntimeError("shadow runtime entry must not be imported")
+PY
+POLLUTED_PTOAS_VERSION_OUTPUT="$(
+  env \
+    PYTHONPATH="${POLLUTED_ENV_DIR}" \
+    LD_LIBRARY_PATH="/tmp/polluted-llvm" \
+    DYLD_LIBRARY_PATH="/tmp/polluted-dylib" \
+    "${PTOAS_ENTRYPOINT}" --version | tr -d '\r'
+)"
+echo "${POLLUTED_PTOAS_VERSION_OUTPUT}"
+if [[ -n "${EXPECTED_PTOAS_CLI_VERSION}" ]]; then
+  EXPECTED_VERSION_OUTPUT="ptoas ${EXPECTED_PTOAS_CLI_VERSION}"
+  if [[ "${POLLUTED_PTOAS_VERSION_OUTPUT}" != "${EXPECTED_VERSION_OUTPUT}" ]]; then
+    echo "Error: expected '${EXPECTED_VERSION_OUTPUT}', got '${POLLUTED_PTOAS_VERSION_OUTPUT}'" >&2
+    exit 1
+  fi
+else
+  echo "${POLLUTED_PTOAS_VERSION_OUTPUT}" | grep -Eq '^ptoas [0-9]+\.[0-9]+$'
+fi
+
 echo "Testing installed ptoas console entry in a clean environment..."
-PTOAS_ENTRYPOINT="$(command -v ptoas)"
-PYTHON_ENTRYPOINT="$(command -v "${PYTHON_BIN}")"
 CLEAN_ENV_DIR="${TEST_TMPDIR}/clean-env"
 CLEAN_ENV_PTO="${CLEAN_ENV_DIR}/wheel-clean-env-probe.pto"
 CLEAN_ENV_PTO_IR="${CLEAN_ENV_DIR}/wheel-clean-env-probe.pto.ir"

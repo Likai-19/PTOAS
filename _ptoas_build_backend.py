@@ -344,7 +344,7 @@ def build_editable(wheel_directory, config_settings=None, metadata_directory=Non
     ).encode()
     entry_points = (
         "[console_scripts]\n"
-        "ptoas=ptoas._launcher:main\n"
+        "ptoas=ptoas_wheel_bootstrap:main\n"
     ).encode()
     metadata_content = (
         "Metadata-Version: 2.1\n"
