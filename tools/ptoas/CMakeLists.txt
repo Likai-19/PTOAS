@@ -98,8 +98,26 @@ ptoas_configure_runtime_target(ptoas_runtime
   PTOAS_BUILD_SHARED_LIBRARY=1
 )
 
+set(PTOAS_BUILD_RUNTIME_STAGING_DIR "${CMAKE_BINARY_DIR}/runtime-staging")
+add_custom_target(ptoas_runtime_staging ALL
+  COMMAND ${CMAKE_COMMAND} -E make_directory
+          "${PTOAS_BUILD_RUNTIME_STAGING_DIR}/lib"
+          "${PTOAS_BUILD_RUNTIME_STAGING_DIR}/share/ptoas"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "$<TARGET_FILE:ptoas_runtime>"
+          "${PTOAS_BUILD_RUNTIME_STAGING_DIR}/lib/ptoas.so"
+  COMMAND ${CMAKE_COMMAND} -E remove_directory
+          "${PTOAS_BUILD_RUNTIME_STAGING_DIR}/share/ptoas/TileOps"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_SOURCE_DIR}/lib/TileOps"
+          "${PTOAS_BUILD_RUNTIME_STAGING_DIR}/share/ptoas/TileOps"
+  DEPENDS ptoas_runtime
+  COMMENT "Staging ptoas runtime into build/runtime-staging"
+  VERBATIM
+)
+
 if(TARGET ptoas_runtime_deps)
-  add_dependencies(ptoas_runtime_deps ptoas_runtime)
+  add_dependencies(ptoas_runtime_deps ptoas_runtime_staging)
 endif()
 
 install(PROGRAMS "${PTOAS_WRAPPER_BINARY}"

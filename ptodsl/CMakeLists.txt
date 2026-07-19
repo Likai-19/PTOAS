@@ -14,6 +14,8 @@ set(PTODSL_PACKAGE_SRC_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/ptodsl")
 set(PTOAS_PY_PACKAGE_SRC_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/ptoas")
+set(PTOAS_WHEEL_BOOTSTRAP_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/ptoas_wheel_bootstrap.py")
 set(PTODSL_BUILD_ROOT "${CMAKE_BINARY_DIR}/python")
 set(PTODSL_BUILD_PACKAGE_DIR
     "${PTODSL_BUILD_ROOT}/ptodsl")
@@ -30,6 +32,9 @@ add_custom_target(PTODSLPackage ALL
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${PTOAS_PY_PACKAGE_SRC_DIR}"
           "${PTOAS_PY_BUILD_PACKAGE_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E copy
+          "${PTOAS_WHEEL_BOOTSTRAP_SOURCE}"
+          "${PTODSL_BUILD_ROOT}/ptoas_wheel_bootstrap.py"
   COMMENT "Staging ptodsl package into build/python"
   VERBATIM
 )
@@ -48,4 +53,10 @@ install(
   COMPONENT PTOAS_Runtime
   PATTERN "__pycache__" EXCLUDE
   PATTERN "*.pyc" EXCLUDE
+)
+
+install(
+  FILES "${PTOAS_WHEEL_BOOTSTRAP_SOURCE}"
+  DESTINATION "."
+  COMPONENT PTOAS_Runtime
 )

@@ -17,6 +17,7 @@ from pathlib import Path
 
 
 REQUIRED_FILES = {
+    "ptoas_wheel_bootstrap.py",
     "ptoas/__init__.py",
     "ptoas/_launcher.py",
     "ptoas/_runtime_entry.py",
@@ -25,7 +26,7 @@ REQUIRED_FILES = {
 FORBIDDEN_FILES = {
     "ptoas/_runtime/bin/ptoas",
 }
-ENTRYPOINT_SNIPPET = "ptoas=ptoas._launcher:main"
+PTOAS_ENTRYPOINT_TARGET = "ptoas_wheel_bootstrap:main"
 WHEEL_GLOB = "ptoas*.whl"
 
 
@@ -46,6 +47,33 @@ def _resolve_wheel(candidate: str) -> Path:
             f"expected exactly one wheel matching {candidate!r}, found {len(matches)}"
         )
     return matches[0]
+
+
+def _parse_console_scripts(entry_points: str) -> dict[str, str]:
+    in_console_scripts = False
+    scripts: dict[str, str] = {}
+    for raw_line in entry_points.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            in_console_scripts = line == "[console_scripts]"
+            continue
+        if not in_console_scripts:
+            continue
+        if "=" not in line:
+            raise SystemExit(
+                "wheel console_scripts entry point is malformed: "
+                f"{raw_line!r}"
+            )
+        name, target = [part.strip() for part in line.split("=", 1)]
+        if name in scripts:
+            raise SystemExit(
+                "wheel console_scripts contains duplicate entry point: "
+                f"{name}"
+            )
+        scripts[name] = target
+    return scripts
 
 
 def validate_wheel_payload(wheel: Path) -> None:
@@ -75,10 +103,11 @@ def validate_wheel_payload(wheel: Path) -> None:
         entry_points_name = entry_points_names[0]
 
         entry_points = zf.read(entry_points_name).decode("utf-8")
-        if ENTRYPOINT_SNIPPET not in entry_points:
+        console_scripts = _parse_console_scripts(entry_points)
+        if console_scripts.get("ptoas") != PTOAS_ENTRYPOINT_TARGET:
             raise SystemExit(
                 "wheel entry points do not route ptoas through "
-                "ptoas._launcher:main"
+                "ptoas_wheel_bootstrap:main"
             )
 
 
