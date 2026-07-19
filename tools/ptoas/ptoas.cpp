@@ -20,8 +20,14 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Verifier.h"
-#include "mlir/InitAllDialects.h"
-#include "mlir/InitAllPasses.h"
+#include "mlir/Conversion/Passes.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
+#include "mlir/Dialect/Arith/Transforms/Passes.h"
+#include "mlir/Dialect/Func/Transforms/Passes.h"
+#include "mlir/Dialect/Math/Transforms/Passes.h"
+#include "mlir/Dialect/MemRef/Transforms/Passes.h"
+#include "mlir/Dialect/SCF/Transforms/Passes.h"
+#include "mlir/Dialect/Tensor/Transforms/Passes.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -192,7 +198,15 @@ void mlir::pto::registerPTOASDialects(DialectRegistry &registry) {
 }
 
 void mlir::pto::registerPTOASPassesAndCLOptions() {
-  mlir::registerAllPasses();
+  mlir::registerConversionPasses();
+  mlir::arith::registerArithPasses();
+  mlir::func::registerFuncPasses();
+  mlir::math::registerMathPasses();
+  mlir::memref::registerMemRefPasses();
+  mlir::registerSCFPasses();
+  mlir::tensor::registerTensorPasses();
+  mlir::registerTransformsPasses();
+
   mlir::pto::registerPTOPasses();
   mlir::pto::registerPTOViewToMemrefPass();
   mlir::pto::registerPTOInlineLibCall();
