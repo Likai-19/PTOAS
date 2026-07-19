@@ -6,6 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
+#include "PTO/Support/PythonExecutable.h"
 #include "TilelangDaemon.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -30,11 +31,15 @@ std::string DaemonManager::generateSocketPath() {
 
 bool DaemonManager::start(const std::string &socketPath,
                           const std::string &daemonModule,
+                          const std::string &pythonExe,
                           const std::string &pkgPath,
                           const std::string &templateDir) {
-  auto pythonPath = llvm::sys::findProgramByName("python3");
+  auto pythonPath =
+      mlir::pto::resolvePythonExecutable(pythonExe.empty() ? "python3" : pythonExe);
   if (!pythonPath) {
-    llvm::errs() << "Error: Cannot find python3 executable for daemon\n";
+    llvm::errs() << "Error: Cannot find Python executable '"
+                 << (pythonExe.empty() ? "python3" : pythonExe)
+                 << "' for daemon\n";
     return false;
   }
 

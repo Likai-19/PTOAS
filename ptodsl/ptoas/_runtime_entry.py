@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import MutableMapping, Sequence
@@ -113,6 +114,7 @@ def launch(layout: PTOASRuntimeLayout, user_args: Sequence[str]) -> int:
     env["PTOAS_HOME"] = str(layout.runtime_root)
     env["PTOAS_BIN"] = str(layout.wrapper)
     env["PTOAS_TILEOPS_DIR"] = str(layout.tileops_dir)
+    env["PTOAS_PYTHON_EXE"] = sys.executable
 
     _prepend_env_path(env, "PATH", layout.wrapper.parent)
     runtime_lib_dir = layout.runtime_root / "lib"

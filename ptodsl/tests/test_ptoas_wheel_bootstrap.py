@@ -247,6 +247,8 @@ class WheelBootstrapTests(unittest.TestCase):
                 textwrap.dedent(
                     f"""
                     #!{sys.executable}
+                    import sys
+                    sys.path.insert(0, {str(wheel_root)!r})
                     import ptoas_wheel_bootstrap
                     ptoas_wheel_bootstrap.main()
                     """

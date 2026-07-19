@@ -25,6 +25,7 @@ public:
 
   static bool start(const std::string &socketPath,
                     const std::string &daemonModule,
+                    const std::string &pythonExe,
                     const std::string &pkgPath,
                     const std::string &templateDir = "");
 
