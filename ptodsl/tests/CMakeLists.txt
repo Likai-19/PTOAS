@@ -8,6 +8,7 @@
 
 if(NOT DEFINED _pto_python_test_env)
   get_filename_component(_llvm_root "${LLVM_DIR}/../../.." ABSOLUTE)
+  get_filename_component(_pto_python_bin_dir "${Python3_EXECUTABLE}" DIRECTORY)
   set(_ptodsl_test_pythonpath
     "${CMAKE_BINARY_DIR}/python:${MLIR_PYTHON_PACKAGE_DIR}:${CMAKE_INSTALL_PREFIX}:$ENV{PYTHONPATH}"
   )
@@ -17,7 +18,7 @@ if(NOT DEFINED _pto_python_test_env)
   set(_pto_python_test_env
     "PYTHONPATH=${_ptodsl_test_pythonpath}"
     "LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/lib:${_llvm_root}/lib:${CMAKE_INSTALL_PREFIX}/lib:$ENV{LD_LIBRARY_PATH}"
-    "PATH=${CMAKE_BINARY_DIR}/tools/ptoas:${CMAKE_INSTALL_PREFIX}/bin:$ENV{PATH}"
+    "PATH=${CMAKE_BINARY_DIR}/tools/ptoas:${CMAKE_INSTALL_PREFIX}/bin:${_pto_python_bin_dir}:$ENV{PATH}"
   )
 endif()
 

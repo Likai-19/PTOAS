@@ -460,11 +460,19 @@ static llvm::cl::opt<TileLibBackend> tileLibBackend(
                    "Use the PTODSL TileLib daemon")),
     llvm::cl::init(TileLibBackend::PTODSL));
 
+static std::string resolveTileLibPythonExe() {
+  const char *pythonExe = ::getenv("PTOAS_PYTHON_EXE");
+  if (pythonExe && pythonExe[0] != '\0')
+    return pythonExe;
+  return "python3";
+}
+
 static pto::ExpandTileOpOptions resolveExpandTileOpOptions(int argc,
                                                            char **argv) {
   pto::ExpandTileOpOptions expandOpts;
   expandOpts.tilelangPath = tilelangPath;
   expandOpts.tilelangPkgPath = tilelangPkgPath;
+  expandOpts.pythonExe = resolveTileLibPythonExe();
   const bool usePTODSLTileLib = tileLibBackend == TileLibBackend::PTODSL;
   std::string resolvedPtodslPkgPath = ptodslPkgPath;
 
@@ -506,7 +514,7 @@ static pto::ExpandTileOpOptions resolveExpandTileOpOptions(int argc,
         usePTODSLTileLib ? "" : std::string(expandOpts.tilelangPath);
 
     // Try to start daemon automatically
-    if (ptoas::DaemonManager::start(socket, daemonModule,
+    if (ptoas::DaemonManager::start(socket, daemonModule, expandOpts.pythonExe,
                                     expandOpts.tileLibPkgPath, templateDir)) {
       expandOpts.daemonSocketPath = socket;
       llvm::errs() << "Info: " << expandOpts.tileLibBackend

@@ -29,6 +29,7 @@
 
 #include "PTO/IR/PTO.h"
 #include "PTO/IR/PTOTypeUtils.h"
+#include "PTO/Support/PythonExecutable.h"
 #include "PTO/Transforms/Passes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -912,7 +913,7 @@ static std::string buildContextAttrsJson(const SpecKey &key) {
 std::optional<std::string>
 ExpandState::invokeTileLibHelper(const SpecKey &key,
                                 StringRef candidateId) {
-  auto pythonPath = llvm::sys::findProgramByName(pythonExe);
+  auto pythonPath = pto::resolvePythonExecutable(pythonExe);
   if (!pythonPath) {
     llvm::errs() << "ExpandTileOp: cannot find '" << pythonExe << "'\n";
     return std::nullopt;
@@ -1141,7 +1142,7 @@ func::FuncOp ExpandState::invokeTileLib(const SpecKey &key,
   }
 
   // 1. Locate the Python executable.
-  auto pythonPath = llvm::sys::findProgramByName(pythonExe);
+  auto pythonPath = pto::resolvePythonExecutable(pythonExe);
   if (!pythonPath) {
     llvm::errs() << "ExpandTileOp: cannot find '" << pythonExe << "'\n";
     return nullptr;

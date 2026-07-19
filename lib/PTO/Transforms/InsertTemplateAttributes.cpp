@@ -8,6 +8,7 @@
 
 #include "PTO/IR/PTO.h"
 #include "PTO/IR/PTOTypeUtils.h"
+#include "PTO/Support/PythonExecutable.h"
 #include "PTO/Transforms/Passes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -725,7 +726,7 @@ static std::optional<std::string>
 invokeMetadataHelper(Operation *operation, StringRef pythonExe,
                      StringRef daemonSocketPath, StringRef tileLibPkgPath,
                      StringRef daemonHelperModule) {
-  auto pythonPath = llvm::sys::findProgramByName(pythonExe);
+  auto pythonPath = pto::resolvePythonExecutable(pythonExe);
   if (!pythonPath) {
     operation->emitError("InsertTemplateAttributes cannot find Python '")
         << pythonExe << "'";
