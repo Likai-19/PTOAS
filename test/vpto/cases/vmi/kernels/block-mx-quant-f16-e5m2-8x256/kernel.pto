@@ -102,7 +102,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
         %scaled = pto.vmi.mulf %x, %scale_vec
             : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
             -> !pto.vmi.vreg<256xf32>
-        %q8 = pto.vmi.truncf %scaled
+        %q8 = pto.vmi.truncf %scaled {saturate = "SAT"}
             : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E5M2>
         pto.vmi.store %q8, %ub_out_f8[%elem_off]
             : !pto.vmi.vreg<256xf8E5M2>, !pto.ptr<f8E5M2, ub>
@@ -126,7 +126,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
           : !pto.vmi.mask<256xpred>, !pto.vmi.vreg<256xi32>,
             !pto.vmi.vreg<256xi32>
           -> !pto.vmi.vreg<256xi32>
-      %scale2_u8 = pto.vmi.trunci %scale2_i32
+      %scale2_u8 = pto.vmi.trunci %scale2_i32 {saturate = "SAT"}
           : !pto.vmi.vreg<256xi32> -> !pto.vmi.vreg<256xui8>
       pto.vmi.store %scale2_u8, %ub_scale2[%c0]
           : !pto.vmi.vreg<256xui8>, !pto.ptr<ui8, ub>

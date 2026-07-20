@@ -68,7 +68,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
         %q = pto.vmi.divf %x, %scale_vec
             : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
             -> !pto.vmi.vreg<256xf32>
-        %q8 = pto.vmi.truncf %q
+        %q8 = pto.vmi.truncf %q {saturate = "SAT"}
             : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
         pto.vmi.store %q8, %ub_out_f8[%elem_off]
             : !pto.vmi.vreg<256xf8E4M3FN>, !pto.ptr<f8E4M3FN, ub>
