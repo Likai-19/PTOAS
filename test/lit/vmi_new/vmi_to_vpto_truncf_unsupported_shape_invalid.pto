@@ -18,6 +18,4 @@ module {
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.truncf supports only f32 deinterleaved=2 source parts
-// CHECK-SAME: dense f16 results
-// CHECK-SAME: f32 source layouts whose factor times the result lane_stride matches the fp8-like narrowing factor
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.truncf supports f32/f16/bf16 source narrowing
