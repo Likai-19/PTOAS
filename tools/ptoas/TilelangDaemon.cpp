@@ -35,7 +35,8 @@ bool DaemonManager::start(const std::string &socketPath,
                           const std::string &pkgPath,
                           const std::string &templateDir) {
   auto pythonPath =
-      mlir::pto::resolvePythonExecutable(pythonExe.empty() ? "python3" : pythonExe);
+      mlir::pto::resolvePythonExecutable(pythonExe.empty() ? "python3"
+                                                           : pythonExe);
   if (!pythonPath) {
     llvm::errs() << "Error: Cannot find Python executable '"
                  << (pythonExe.empty() ? "python3" : pythonExe)
@@ -75,7 +76,7 @@ bool DaemonManager::start(const std::string &socketPath,
 
   std::string errMsg;
   bool executionFailed = false;
-  
+
   llvm::sys::ProcessInfo procInfo = llvm::sys::ExecuteNoWait(
       *pythonPath, args,
       !pkgPath.empty()

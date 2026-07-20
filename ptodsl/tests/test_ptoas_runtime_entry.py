@@ -59,7 +59,11 @@ class RuntimeEntryTests(unittest.TestCase):
                 env = dict(_runtime_entry.os.environ)
 
         self.assertEqual(exit_code, 0)
-        load_shared_entrypoint.assert_called_once_with(layout.shared_module, layout.runtime_root / "lib")
+        load_shared_entrypoint.assert_called_once_with(
+            layout.shared_module,
+            layout.runtime_root / "lib",
+            preload_runtime_libraries=True,
+        )
         argc, c_argv = entrypoint.call_args.args
         self.assertEqual(
             [c_argv[i].decode("utf-8") for i in range(argc)],
@@ -118,11 +122,16 @@ class RuntimeEntryTests(unittest.TestCase):
                 _runtime_entry,
                 "_load_shared_entrypoint",
                 return_value=entrypoint,
-            ):
+            ) as load_shared_entrypoint:
                 exit_code = _runtime_entry.launch(layout, ["--help"])
                 env = dict(_runtime_entry.os.environ)
 
         self.assertEqual(exit_code, 0)
+        load_shared_entrypoint.assert_called_once_with(
+            layout.shared_module,
+            layout.runtime_root / "lib",
+            preload_runtime_libraries=False,
+        )
         self.assertEqual(env["PYTHONPATH"], str(layout.python_root))
         self.assertEqual(env["LD_LIBRARY_PATH"], str(layout.runtime_root / "lib"))
         self.assertEqual(env["DYLD_LIBRARY_PATH"], str(layout.runtime_root / "lib"))
@@ -143,7 +152,11 @@ class RuntimeEntryTests(unittest.TestCase):
             with mock.patch.object(
                 _runtime_entry.ctypes, "CDLL", side_effect=[dep_library, shared_library]
             ) as load_library:
-                entrypoint = _runtime_entry._load_shared_entrypoint(shared_module, runtime_lib_dir)
+                entrypoint = _runtime_entry._load_shared_entrypoint(
+                    shared_module,
+                    runtime_lib_dir,
+                    preload_runtime_libraries=True,
+                )
 
         self.assertEqual(
             [call.args[0] for call in load_library.call_args_list],
@@ -161,6 +174,30 @@ class RuntimeEntryTests(unittest.TestCase):
             [_runtime_entry.ctypes.c_int, _runtime_entry.ctypes.POINTER(_runtime_entry.ctypes.c_char_p)],
         )
         self.assertIs(entrypoint.restype, _runtime_entry.ctypes.c_int)
+
+    def test_load_shared_entrypoint_can_skip_preloading_runtime_libraries(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            runtime_lib_dir = temp_root / "runtime" / "lib"
+            runtime_lib_dir.mkdir(parents=True, exist_ok=True)
+            dep = runtime_lib_dir / "libLLVMOption.so.21.1"
+            dep.write_text("fake dep", encoding="utf-8")
+            shared_module = runtime_lib_dir / "ptoas.so"
+            shared_module.write_text("fake shared module", encoding="utf-8")
+
+            shared_library = mock.Mock()
+            with mock.patch.object(_runtime_entry.ctypes, "CDLL", return_value=shared_library) as load_library:
+                entrypoint = _runtime_entry._load_shared_entrypoint(
+                    shared_module,
+                    runtime_lib_dir,
+                    preload_runtime_libraries=False,
+                )
+
+        load_library.assert_called_once_with(
+            str(shared_module),
+            mode=getattr(_runtime_entry.ctypes, "RTLD_GLOBAL", 0),
+        )
+        self.assertIs(entrypoint, shared_library.ptoas_entrypoint)
 
     def test_preload_runtime_libraries_retries_until_dependencies_resolve(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -100,8 +100,9 @@ def _preload_runtime_libraries(shared_module: Path, runtime_lib_dir: Path) -> No
         pending = next_pending
 
 
-def _load_shared_entrypoint(shared_module: Path, runtime_lib_dir: Path):
-    _preload_runtime_libraries(shared_module, runtime_lib_dir)
+def _load_shared_entrypoint(shared_module: Path, runtime_lib_dir: Path, *, preload_runtime_libraries: bool):
+    if preload_runtime_libraries:
+        _preload_runtime_libraries(shared_module, runtime_lib_dir)
     library = ctypes.CDLL(str(shared_module), mode=getattr(ctypes, "RTLD_GLOBAL", 0))
     entrypoint = library.ptoas_entrypoint
     entrypoint.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_char_p)]
@@ -136,7 +137,11 @@ def launch(layout: PTOASRuntimeLayout, user_args: Sequence[str]) -> int:
         argv.extend(["--ptodsl-pkg-path", str(layout.python_root)])
     argv.extend(user_args)
 
-    entrypoint = _load_shared_entrypoint(layout.shared_module, runtime_lib_dir)
+    entrypoint = _load_shared_entrypoint(
+        layout.shared_module,
+        runtime_lib_dir,
+        preload_runtime_libraries=not layout.isolated_env,
+    )
     argv_bytes = [os.fsencode(arg) for arg in argv]
     c_argv = (ctypes.c_char_p * len(argv_bytes))(*argv_bytes)
     return int(entrypoint(len(argv_bytes), c_argv))
