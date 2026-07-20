@@ -1,6 +1,6 @@
 # VMI MXFP8 32x32 Expected VPTO Lowering
 
-本文记录 `test/vpto/cases/vmi/kernels/tquant-mxfp8-32x32-nd/kernel.pto`
+本文记录 `test/vpto/cases/vmi_new/kernels/tquant-mxfp8-32x32-nd/kernel.pto`
 的预期 VPTO lower 结果。输入 VMI case 在 `vecscope` 内按 8 行一组循环，
 每次处理一个 `256xf32` tile，也就是 8 行 x 32 列。
 

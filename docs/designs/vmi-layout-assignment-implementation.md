@@ -180,7 +180,7 @@ small layout fact/materialization helpers under lib/PTO/Transforms
 
 test/lit/vmi/vmi_layout_assignment_*.pto
 test/lit/vmi/vmi_to_vpto_*.pto
-test/vpto/cases/vmi/*/
+test/vpto/cases/vmi_new/*/
 ```
 
 Exact names may follow project conventions, but the layering should remain:
@@ -1554,7 +1554,7 @@ Repository locations:
 
 ```text
 test/lit/vmi/
-test/vpto/cases/vmi/
+test/vpto/cases/vmi_new/
 ```
 
 The current repository uses descriptive flat lit names rather than
@@ -1604,7 +1604,7 @@ the case catalog.
 Current broad runtime sweep:
 
 ```text
-WORK_SPACE=$PWD/.tmp/vmi-runtime-batch-final CASE_PREFIX='vmi/' JOBS=4 \
+WORK_SPACE=$PWD/.tmp/vmi-runtime-batch-final CASE_PREFIX='vmi_new/' JOBS=4 \
   test/vpto/scripts/run_host_vpto_validation_parallel.sh
 
 TOTAL_CASES=47
@@ -1706,7 +1706,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_f8_compute_f8.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/f8-compute-f8
+  test/vpto/cases/vmi_new/f8-compute-f8
 ```
 
 Current checked-in coverage for 3.1/3.2 dense f16/f32 conversion stores:
@@ -1716,8 +1716,8 @@ lit:
   test/lit/vmi/vmi_layout_assignment_dense_f16_f32_store.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/widen-f16-to-f32-store-reduce
-  test/vpto/cases/vmi/quant-f32-to-f16-tail
+  test/vpto/cases/vmi_new/widen-f16-to-f32-store-reduce
+  test/vpto/cases/vmi_new/quant-f32-to-f16-tail
 ```
 
 Current checked-in coverage for basic packed group_reduce -> group_store paths
@@ -1730,7 +1730,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_reduce_s32_store.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-reduce-basic-store
+  test/vpto/cases/vmi_new/group-reduce-basic-store
 ```
 
 Current checked-in coverage for S=16 group broadcast continuation:
@@ -1740,7 +1740,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_slots_fanout.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-reduce-s16-broadcast-reduce-store
+  test/vpto/cases/vmi_new/group-reduce-s16-broadcast-reduce-store
 ```
 
 Current checked-in coverage for 3.35 group_slots fanout to direct group_store
@@ -1751,7 +1751,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_slots_fanout.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-slots-fanout-store-broadcast
+  test/vpto/cases/vmi_new/group-slots-fanout-store-broadcast
 ```
 
 Current checked-in coverage for 3.8 `group_reduce -> group_broadcast ->
@@ -1763,7 +1763,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_reduce_s16_truncf_broadcast_store.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-reduce-s16-truncf-broadcast-store
+  test/vpto/cases/vmi_new/group-reduce-s16-truncf-broadcast-store
 ```
 
 Current checked-in coverage for 3.18 one dense value with dense and
@@ -1774,7 +1774,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_dense_group_reduce_multi_consumer.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/dense-group-reduce-multi-consumer
+  test/vpto/cases/vmi_new/dense-group-reduce-multi-consumer
 ```
 
 Current checked-in coverage for 3.10 non-load producer feeding S=32
@@ -1785,7 +1785,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_non_load_s32_reduce.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-reduce-s32-add-bias-store
+  test/vpto/cases/vmi_new/group-reduce-s32-add-bias-store
 ```
 
 Current checked-in coverage for 3.23 group_broadcast with multiple dense
@@ -1796,7 +1796,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_broadcast_multi_consumer.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-broadcast-multi-consumer
+  test/vpto/cases/vmi_new/group-broadcast-multi-consumer
 ```
 
 Current checked-in coverage for S=32 contiguous group broadcast continuation:
@@ -1806,7 +1806,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_reduce_s32_broadcast_reduce.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-reduce-s32-broadcast-reduce-store
+  test/vpto/cases/vmi_new/group-reduce-s32-broadcast-reduce-store
 ```
 
 Current checked-in coverage for 3.21 S=32 tail with a statically safe
@@ -1817,7 +1817,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_reduce_s32_tail_full_tile.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-reduce-s32-tail-full-tile-store
+  test/vpto/cases/vmi_new/group-reduce-s32-tail-full-tile-store
   This case has `ptoas.flags` with `--enable-vmi`, because the partial pointer
   load must run through layout assignment before VPTO/LLVM emission.
 ```
@@ -1830,7 +1830,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_masked_load_group_tail_s32.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/masked-load-group-tail-s32-reduce-store
+  test/vpto/cases/vmi_new/masked-load-group-tail-s32-reduce-store
 ```
 
 Current checked-in coverage for 3.45 dynamic S=32 `create_group_mask`:
@@ -1840,7 +1840,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_create_group_mask_s32_dynamic.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/dynamic-create-group-mask-s32-reduce-store
+  test/vpto/cases/vmi_new/dynamic-create-group-mask-s32-reduce-store
 
 runtime scalar source:
   active_cols is passed as a kernel i32 scalar argument and cast to index inside
@@ -1857,7 +1857,7 @@ lit:
   test/lit/vmi/vmi_to_vpto_cf_branch.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-reduce-s32-cf-join-store
+  test/vpto/cases/vmi_new/group-reduce-s32-cf-join-store
 ```
 
 Current checked-in runtime coverage for 3.20 `group_slots` control-flow join:
@@ -1867,7 +1867,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_slots_cf_join.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-slots-cf-join-store
+  test/vpto/cases/vmi_new/group-slots-cf-join-store
 ```
 
 Current checked-in runtime coverage for 3.22 `scf.for` loop-carried VMI layout:
@@ -1878,7 +1878,7 @@ lit:
   test/lit/vmi/vmi_to_vpto_scf_for.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/scf-for-loop-carried-store
+  test/vpto/cases/vmi_new/scf-for-loop-carried-store
 ```
 
 Current checked-in runtime coverage for 3.42 `group_slots` `scf.for`
@@ -1889,7 +1889,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_slots_scf_for.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-slots-scf-for-store
+  test/vpto/cases/vmi_new/group-slots-scf-for-store
 ```
 
 Current checked-in coverage for 3.25.1 private function result boundary:
@@ -1899,7 +1899,7 @@ lit:
   test/lit/vmi/vmi_ptoas_private_call_inline.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/private-call-inline-store
+  test/vpto/cases/vmi_new/private-call-inline-store
 
 implementation note:
   after vmi-to-vpto physicalizes the private helper, ptoas inlines private
@@ -1917,7 +1917,7 @@ lit:
   test/lit/vmi/vmi_ptoas_call_boundary_vecscope.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/private-call-argument-boundary-store
+  test/vpto/cases/vmi_new/private-call-argument-boundary-store
 
 implementation note:
   private physical helper inlining also covers void helper calls with physical
@@ -1933,7 +1933,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_slot_load_dual_layout.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-reduce-slot-add-store
+  test/vpto/cases/vmi_new/group-reduce-slot-add-store
 ```
 
 Current checked-in coverage for S=64 row-local group broadcast continuation
@@ -1944,7 +1944,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_reduce_s64_broadcast_reduce.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-reduce-s64-broadcast-reduce-store
+  test/vpto/cases/vmi_new/group-reduce-s64-broadcast-reduce-store
 ```
 
 Current checked-in coverage for S=64 active-row tail with aligned row_stride:
@@ -1954,7 +1954,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_reduce_s64_tail_store.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-reduce-s64-tail-store
+  test/vpto/cases/vmi_new/group-reduce-s64-tail-store
 ```
 
 The companion lit case for non-unit slots=1 point-store lowering is:
@@ -1971,7 +1971,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_slot_load_dual_layout.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-reduce-s64-slot-add-store
+  test/vpto/cases/vmi_new/group-reduce-s64-slot-add-store
 ```
 
 Current checked-in coverage for 3.34 S=64 `slots = 1` group-slot f32->f16 cast:
@@ -1981,7 +1981,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_reduce_s64_truncf.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-reduce-s64-truncf-store
+  test/vpto/cases/vmi_new/group-reduce-s64-truncf-store
 ```
 
 The companion negative lit cases for dynamic or unaligned `%c2` slots=1
@@ -2004,9 +2004,9 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_load_s32_unaligned_stride_invalid.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-load-s16-stride-store
-  test/vpto/cases/vmi/group-load-s32-stride-store
-  test/vpto/cases/vmi/group-load-s32-stride-broadcast-reduce
+  test/vpto/cases/vmi_new/group-load-s16-stride-store
+  test/vpto/cases/vmi_new/group-load-s32-stride-store
+  test/vpto/cases/vmi_new/group-load-s32-stride-broadcast-reduce
 ```
 
 Current checked-in coverage for grouped mask S=16 tail:
@@ -2017,9 +2017,9 @@ lit:
   test/lit/vmi/vmi_create_group_mask_invalid.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-reduce-s16-group-mask-tail-store
-  test/vpto/cases/vmi/group-reduce-s16-stride-group-mask-tail-store
-  test/vpto/cases/vmi/group-reduce-s16-group-mask-broadcast-reduce-store
+  test/vpto/cases/vmi_new/group-reduce-s16-group-mask-tail-store
+  test/vpto/cases/vmi_new/group-reduce-s16-stride-group-mask-tail-store
+  test/vpto/cases/vmi_new/group-reduce-s16-group-mask-broadcast-reduce-store
 ```
 
 Current checked-in coverage for 3.24 mask/select/masked-store semantics:
@@ -2029,7 +2029,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_mask_select_store.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/mask-select-store
+  test/vpto/cases/vmi_new/mask-select-store
 ```
 
 Current checked-in coverage for 3.29 one semantic mask with f32 and f16
@@ -2040,7 +2040,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_mask_granularity_f32_f16_store.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/mask-granularity-f32-f16-store
+  test/vpto/cases/vmi_new/mask-granularity-f32-f16-store
 ```
 
 Current checked-in coverage for 3.31 f16->f32 feeding dense store and S=16
@@ -2051,7 +2051,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_widen_f16_store_reduce.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/widen-f16-to-f32-store-reduce
+  test/vpto/cases/vmi_new/widen-f16-to-f32-store-reduce
 ```
 
 Current checked-in lit coverage for the first `vmi-layout-fold`
@@ -2120,7 +2120,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_f32_f8_store_reduce.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/f32-to-f8-store-reduce
+  test/vpto/cases/vmi_new/f32-to-f8-store-reduce
 ```
 
 Current checked-in coverage for multi-tile group-slot arity:
@@ -2130,7 +2130,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_group_reduce_s32_multitile_store.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/group-reduce-s32-multitile-store
+  test/vpto/cases/vmi_new/group-reduce-s32-multitile-store
 ```
 
 Current checked-in coverage for 3.40 scalar broadcast feeding dense and grouped
@@ -2141,7 +2141,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_broadcast_dense_group_users.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/broadcast-dense-group-users
+  test/vpto/cases/vmi_new/broadcast-dense-group-users
 ```
 
 Current checked-in coverage for 3.41 non-rematerializable `masked_load` feeding
@@ -2152,7 +2152,7 @@ lit:
   test/lit/vmi/vmi_layout_assignment_masked_load_dense_group_users.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/masked-load-dense-group-users
+  test/vpto/cases/vmi_new/masked-load-dense-group-users
 ```
 
 Diagnostic-only cases:
