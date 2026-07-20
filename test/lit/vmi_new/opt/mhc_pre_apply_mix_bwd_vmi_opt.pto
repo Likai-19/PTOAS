@@ -1,0 +1,253 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --enable-vmi --emit-vpto %s | FileCheck %s --implicit-check-not=pto.vdintlv --implicit-check-not=pto.vintlv --implicit-check-not=pto.vpack
+
+// This is an optimization capability guard for the MHC pre_apply_mix backward
+// VMI path, derived from a5-kernel-standalone
+// vf_sim/mhc/pre_apply_mix/pto/mhc_pre_apply_mix_bwd.vmi.pto at commit
+// 0fe22b941fd7bb6a5fca4a260b6339a669cfaf91. Do not weaken the checks when the
+// output shape regresses. The intended shape is:
+// - scalar mix factors lower to direct BRC_B32 loads, not vdup-based broadcast;
+// - bf16 vectors lower through UNPK_B16 loads plus EVEN vcvt;
+// - f32->bf16 stores lower through EVEN vcvt plus PK_B32 stores;
+// - group_reduce_addf feeding slots=1 group_store lowers directly to vcadd plus
+//   1PT_B32 store without clearing inactive lanes through vdup/vsel.
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @mhc_pre_apply_mix_bwd_tile_mhc4_ub(
+      %o_grad_ub16: !pto.ptr<ui16, ub>,
+      %x_ub16: !pto.ptr<ui16, ub>,
+      %mix_ub: !pto.ptr<f32, ub>,
+      %x_grad_ub16: !pto.ptr<ui16, ub>,
+      %mix_grad_acc_ub: !pto.ptr<f32, ub>,
+      %numChunks: i32) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c3 = arith.constant 3 : index
+    %c64 = arith.constant 64 : index
+    %c128 = arith.constant 128 : index
+    %c192 = arith.constant 192 : index
+
+    %o_grad_ub = pto.castptr %o_grad_ub16 : !pto.ptr<ui16, ub> -> !pto.ptr<bf16, ub>
+    %x_ub = pto.castptr %x_ub16 : !pto.ptr<ui16, ub> -> !pto.ptr<bf16, ub>
+    %x_grad_ub = pto.castptr %x_grad_ub16 : !pto.ptr<ui16, ub> -> !pto.ptr<bf16, ub>
+    %num_chunks = arith.index_cast %numChunks : i32 to index
+    %h_blk = arith.muli %num_chunks, %c64 : index
+
+    pto.vecscope {
+      %mix0_slot = pto.vmi.vload %mix_ub[%c0], %c1 {group = 1}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<1xf32>
+      %mix1_slot = pto.vmi.vload %mix_ub[%c1], %c1 {group = 1}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<1xf32>
+      %mix2_slot = pto.vmi.vload %mix_ub[%c2], %c1 {group = 1}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<1xf32>
+      %mix3_slot = pto.vmi.vload %mix_ub[%c3], %c1 {group = 1}
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<1xf32>
+
+      %mix0 = pto.vmi.vbrc %mix0_slot {group = 1}
+          : !pto.vmi.vreg<1xf32> -> !pto.vmi.vreg<64xf32>
+      %mix1 = pto.vmi.vbrc %mix1_slot {group = 1}
+          : !pto.vmi.vreg<1xf32> -> !pto.vmi.vreg<64xf32>
+      %mix2 = pto.vmi.vbrc %mix2_slot {group = 1}
+          : !pto.vmi.vreg<1xf32> -> !pto.vmi.vreg<64xf32>
+      %mix3 = pto.vmi.vbrc %mix3_slot {group = 1}
+          : !pto.vmi.vreg<1xf32> -> !pto.vmi.vreg<64xf32>
+
+      scf.for %chunk = %c0 to %num_chunks step %c1 {
+        %chunk_base = arith.muli %chunk, %c64 : index
+        %row1_base = arith.addi %h_blk, %chunk_base : index
+        %h2 = arith.muli %h_blk, %c2 : index
+        %row2_base = arith.addi %h2, %chunk_base : index
+        %h3 = arith.muli %h_blk, %c3 : index
+        %row3_base = arith.addi %h3, %chunk_base : index
+
+        %o_grad16 = pto.vmi.vload %o_grad_ub[%chunk_base]
+            : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+        %o_grad = pto.vmi.vcvt %o_grad16
+            : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+
+        %x0_16 = pto.vmi.vload %x_ub[%chunk_base]
+            : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+        %xg0_16 = pto.vmi.vload %x_grad_ub[%chunk_base]
+            : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+        %x0 = pto.vmi.vcvt %x0_16
+            : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+        %xg0 = pto.vmi.vcvt %xg0_16
+            : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+        %mix_acc0_old = pto.vmi.vload %mix_grad_acc_ub[%c0]
+            : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+        %xg0_new = pto.vmi.vmula %xg0, %o_grad, %mix0
+            : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+              -> !pto.vmi.vreg<64xf32>
+        %mix_acc0 = pto.vmi.vmula %mix_acc0_old, %o_grad, %x0
+            : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+              -> !pto.vmi.vreg<64xf32>
+        %xg0_out16 = pto.vmi.vcvt %xg0_new {saturate = "SAT"}
+            : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+        pto.vmi.vstore %xg0_out16, %x_grad_ub[%chunk_base]
+            : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+        pto.vmi.vstore %mix_acc0, %mix_grad_acc_ub[%c0]
+            : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+
+        %x1_16 = pto.vmi.vload %x_ub[%row1_base]
+            : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+        %xg1_16 = pto.vmi.vload %x_grad_ub[%row1_base]
+            : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+        %x1 = pto.vmi.vcvt %x1_16
+            : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+        %xg1 = pto.vmi.vcvt %xg1_16
+            : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+        %mix_acc1_old = pto.vmi.vload %mix_grad_acc_ub[%c64]
+            : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+        %xg1_new = pto.vmi.vmula %xg1, %o_grad, %mix1
+            : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+              -> !pto.vmi.vreg<64xf32>
+        %mix_acc1 = pto.vmi.vmula %mix_acc1_old, %o_grad, %x1
+            : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+              -> !pto.vmi.vreg<64xf32>
+        %xg1_out16 = pto.vmi.vcvt %xg1_new {saturate = "SAT"}
+            : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+        pto.vmi.vstore %xg1_out16, %x_grad_ub[%row1_base]
+            : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+        pto.vmi.vstore %mix_acc1, %mix_grad_acc_ub[%c64]
+            : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+
+        %x2_16 = pto.vmi.vload %x_ub[%row2_base]
+            : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+        %xg2_16 = pto.vmi.vload %x_grad_ub[%row2_base]
+            : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+        %x2 = pto.vmi.vcvt %x2_16
+            : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+        %xg2 = pto.vmi.vcvt %xg2_16
+            : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+        %mix_acc2_old = pto.vmi.vload %mix_grad_acc_ub[%c128]
+            : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+        %xg2_new = pto.vmi.vmula %xg2, %o_grad, %mix2
+            : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+              -> !pto.vmi.vreg<64xf32>
+        %mix_acc2 = pto.vmi.vmula %mix_acc2_old, %o_grad, %x2
+            : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+              -> !pto.vmi.vreg<64xf32>
+        %xg2_out16 = pto.vmi.vcvt %xg2_new {saturate = "SAT"}
+            : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+        pto.vmi.vstore %xg2_out16, %x_grad_ub[%row2_base]
+            : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+        pto.vmi.vstore %mix_acc2, %mix_grad_acc_ub[%c128]
+            : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+
+        %x3_16 = pto.vmi.vload %x_ub[%row3_base]
+            : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+        %xg3_16 = pto.vmi.vload %x_grad_ub[%row3_base]
+            : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xbf16>
+        %x3 = pto.vmi.vcvt %x3_16
+            : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+        %xg3 = pto.vmi.vcvt %xg3_16
+            : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xf32>
+        %mix_acc3_old = pto.vmi.vload %mix_grad_acc_ub[%c192]
+            : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+        %xg3_new = pto.vmi.vmula %xg3, %o_grad, %mix3
+            : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+              -> !pto.vmi.vreg<64xf32>
+        %mix_acc3 = pto.vmi.vmula %mix_acc3_old, %o_grad, %x3
+            : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+              -> !pto.vmi.vreg<64xf32>
+        %xg3_out16 = pto.vmi.vcvt %xg3_new {saturate = "SAT"}
+            : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+        pto.vmi.vstore %xg3_out16, %x_grad_ub[%row3_base]
+            : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
+        pto.vmi.vstore %mix_acc3, %mix_grad_acc_ub[%c192]
+            : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      }
+    }
+
+    return
+  }
+
+  func.func @mhc_pre_apply_mix_bwd_reduce_acc_mhc4_ub(
+      %mix_grad_acc_ub: !pto.ptr<f32, ub>,
+      %mix_grad_ub: !pto.ptr<f32, ub>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c4 = arith.constant 4 : index
+    %c64 = arith.constant 64 : index
+
+    pto.vecscope {
+      %full_mask = pto.vmi.create_mask %c64 : index -> !pto.vmi.mask<64xpred>
+
+      scf.for %row = %c0 to %c4 step %c1 {
+        %in_off = arith.muli %row, %c64 : index
+        %acc = pto.vmi.vload %mix_grad_acc_ub[%in_off]
+            : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+        %sum = pto.vmi.vcadd %acc, %full_mask {group = 1, reassoc}
+            : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xf32>
+        pto.vmi.vstore %sum, %mix_grad_ub[%row], %c1 {group = 1}
+            : !pto.vmi.vreg<1xf32>, !pto.ptr<f32, ub>
+      }
+    }
+
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @mhc_pre_apply_mix_bwd_tile_mhc4_ub
+// CHECK-COUNT-4: pto.vlds {{.*}} {dist = "BRC_B32"} : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+// CHECK: scf.for
+// CHECK: pto.vlds {{.*}} {dist = "UNPK_B16"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+// CHECK: pto.vcvt {{.*}} {part = "EVEN"} : !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<64xf32>
+// CHECK: pto.vlds {{.*}} {dist = "UNPK_B16"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+// CHECK: pto.vlds {{.*}} {dist = "UNPK_B16"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+// CHECK: pto.vcvt {{.*}} {part = "EVEN"} : !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<64xf32>
+// CHECK: pto.vcvt {{.*}} {part = "EVEN"} : !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<64xf32>
+// CHECK: pto.vmula
+// CHECK: pto.vmula
+// CHECK: pto.vcvt {{.*}} {part = "EVEN", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<128xbf16>
+// CHECK: pto.vsts {{.*}} {dist = "PK_B32"} : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, !pto.mask<b32>
+// CHECK: pto.vsts {{.*}} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+// CHECK: pto.vlds {{.*}} {dist = "UNPK_B16"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+// CHECK: pto.vlds {{.*}} {dist = "UNPK_B16"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+// CHECK: pto.vcvt {{.*}} {part = "EVEN"} : !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<64xf32>
+// CHECK: pto.vcvt {{.*}} {part = "EVEN"} : !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<64xf32>
+// CHECK: pto.vmula
+// CHECK: pto.vmula
+// CHECK: pto.vcvt {{.*}} {part = "EVEN", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<128xbf16>
+// CHECK: pto.vsts {{.*}} {dist = "PK_B32"} : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, !pto.mask<b32>
+// CHECK: pto.vsts {{.*}} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+// CHECK: pto.vlds {{.*}} {dist = "UNPK_B16"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+// CHECK: pto.vlds {{.*}} {dist = "UNPK_B16"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+// CHECK: pto.vcvt {{.*}} {part = "EVEN"} : !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<64xf32>
+// CHECK: pto.vcvt {{.*}} {part = "EVEN"} : !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<64xf32>
+// CHECK: pto.vmula
+// CHECK: pto.vmula
+// CHECK: pto.vcvt {{.*}} {part = "EVEN", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<128xbf16>
+// CHECK: pto.vsts {{.*}} {dist = "PK_B32"} : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, !pto.mask<b32>
+// CHECK: pto.vsts {{.*}} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+// CHECK: pto.vlds {{.*}} {dist = "UNPK_B16"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+// CHECK: pto.vlds {{.*}} {dist = "UNPK_B16"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+// CHECK: pto.vcvt {{.*}} {part = "EVEN"} : !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<64xf32>
+// CHECK: pto.vcvt {{.*}} {part = "EVEN"} : !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<64xf32>
+// CHECK: pto.vmula
+// CHECK: pto.vmula
+// CHECK: pto.vcvt {{.*}} {part = "EVEN", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<128xbf16>
+// CHECK: pto.vsts {{.*}} {dist = "PK_B32"} : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, !pto.mask<b32>
+// CHECK: pto.vsts {{.*}} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+// CHECK-NOT: pto.vdup
+// CHECK-NOT: pto.vsel
+
+// CHECK-LABEL: func.func @mhc_pre_apply_mix_bwd_reduce_acc_mhc4_ub
+// CHECK-NOT: pto.vdup
+// CHECK-NOT: pto.vsel
+// CHECK: scf.for
+// CHECK: pto.vcadd
+// CHECK-NOT: pto.vdup
+// CHECK-NOT: pto.vsel
+// CHECK: pto.vsts {{.*}} {dist = "1PT_B32"} : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast
