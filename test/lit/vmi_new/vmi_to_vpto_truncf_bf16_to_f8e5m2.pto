@@ -1,0 +1,34 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto | FileCheck %s
+
+// Contract: bf16 -> f8E5M2 requires rnd (allowed "RAFZC") + sat.  Default
+// getTruncFRoundModeForResult(f8E5M2) is "R".
+
+module {
+  func.func @vmi_to_vpto_truncf_bf16_to_f8e5m2(
+      %wide: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<deinterleaved = 2>>)
+      -> !pto.vreg<256xf8E5M2> {
+    %packed = pto.vmi.vcvt %wide
+        : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<128xf8E5M2, #pto.vmi.layout<contiguous>>
+    %p = "pto.vmi.unpack"(%packed)
+        : (!pto.vmi.vreg<128xf8E5M2, #pto.vmi.layout<contiguous>>)
+        -> !pto.vreg<256xf8E5M2>
+    return %p : !pto.vreg<256xf8E5M2>
+  }
+}
+
+// CHECK-LABEL: func.func @vmi_to_vpto_truncf_bf16_to_f8e5m2(
+// CHECK: pto.vcvt {{.*}} {part = "EVEN", rnd = "R", sat = "SAT"} : !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<256xf8E5M2>
+// CHECK: pto.vcvt {{.*}} {part = "ODD",  rnd = "R", sat = "SAT"} : !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<256xf8E5M2>
+// CHECK: pto.vor
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

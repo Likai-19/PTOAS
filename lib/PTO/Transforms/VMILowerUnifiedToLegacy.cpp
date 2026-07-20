@@ -87,6 +87,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PTO/IR/PTO.h"
+#include "PTO/IR/PTOTypeUtils.h"
 #include "PTO/Transforms/Passes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -212,8 +213,10 @@ static std::string mapCmpPredicate(StringRef cmp, Type elemType,
 }
 
 /// Return true when \p elemType is a floating-point type.
+/// Return true for MLIR FloatType and PTO low-precision float-like types
+/// (hif8, f8, f4, etc.).
 static bool isFloatType(Type elemType) {
-  return isa<FloatType>(elemType);
+  return isa<FloatType>(elemType) || pto::isPTOLowPrecisionType(elemType);
 }
 
 /// Return the element type of a VMIVRegType.
@@ -221,18 +224,22 @@ static Type getVMIElementType(Value v) {
   return cast<VMIVRegType>(v.getType()).getElementType();
 }
 
+/// Return the storage bit width for VMI element types (float / float-like / int).
+static unsigned getVMIElementBitWidth(Type type) {
+  if (isa<IndexType>(type))
+    return 64;
+  return pto::getPTOStorageElemBitWidth(type);
+}
+
 /// Inspect the source and result element types of a vcvt and classify the
-/// conversion direction.  Returns one of:
-///   "widen_fp", "narrow_fp", "fptosi", "sitofp",
-///   "widen_int", "narrow_int"
 /// conversion direction.  Returns one of:
 ///   "widen_fp", "narrow_fp", "fptosi", "sitofp",
 ///   "widen_int", "narrow_int"
 static StringRef classifyCvtDirection(Type srcElem, Type dstElem) {
   bool srcFp = isFloatType(srcElem);
   bool dstFp = isFloatType(dstElem);
-  unsigned srcBits = srcElem.getIntOrFloatBitWidth();
-  unsigned dstBits = dstElem.getIntOrFloatBitWidth();
+  unsigned srcBits = getVMIElementBitWidth(srcElem);
+  unsigned dstBits = getVMIElementBitWidth(dstElem);
 
   if (srcFp && dstFp)
     return dstBits > srcBits ? "widen_fp" : "narrow_fp";
