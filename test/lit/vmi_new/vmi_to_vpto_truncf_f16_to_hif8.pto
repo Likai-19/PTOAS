@@ -1,0 +1,34 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto | FileCheck %s
+
+// Contract: f16 -> hif8 requires rnd (allowed "AH"); the lowering default
+// getTruncFRoundModeForResult(hif8) is "A".  sat is required by contract.
+
+module {
+  func.func @vmi_to_vpto_truncf_f16_to_hif8(
+      %wide: !pto.vmi.vreg<128xf16, #pto.vmi.layout<deinterleaved = 2>>)
+      -> !pto.vreg<256x!pto.hif8> {
+    %packed = pto.vmi.vcvt %wide
+        : !pto.vmi.vreg<128xf16, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<128x!pto.hif8, #pto.vmi.layout<contiguous>>
+    %p = "pto.vmi.unpack"(%packed)
+        : (!pto.vmi.vreg<128x!pto.hif8, #pto.vmi.layout<contiguous>>)
+        -> !pto.vreg<256x!pto.hif8>
+    return %p : !pto.vreg<256x!pto.hif8>
+  }
+}
+
+// CHECK-LABEL: func.func @vmi_to_vpto_truncf_f16_to_hif8(
+// CHECK: pto.vcvt {{.*}} {part = "EVEN", rnd = "A", sat = "SAT"} : !pto.vreg<128xf16>, !pto.mask<b16> -> !pto.vreg<256x!pto.hif8>
+// CHECK: pto.vcvt {{.*}} {part = "ODD",  rnd = "A", sat = "SAT"} : !pto.vreg<128xf16>, !pto.mask<b16> -> !pto.vreg<256x!pto.hif8>
+// CHECK: pto.vor
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast
