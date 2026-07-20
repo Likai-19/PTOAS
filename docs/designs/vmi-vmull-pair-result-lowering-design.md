@@ -52,8 +52,7 @@ while retaining VMI's logical lane count.
 - Lower a contiguous 64/128/256-lane operation to exactly 1/2/4 physical
   `pto.vmull` operations.
 - Support same-layout contiguous and deinterleaved factor-2/factor-4 dense
-  values with `lane_stride = 1`; the initial deinterleaved contract requires
-  `block_elems = 1`.
+  values with `lane_stride = 1`.
 - Preserve one common layout relation across both inputs, the mask, and both
   results.
 - Preserve the low-result and high-result grouping expected by MLIR 1:N type
@@ -69,7 +68,7 @@ while retaining VMI's logical lane count.
 - Adding a new VPTO op or changing the existing VPTO emitter.
 - Supporting merge predication without explicit low/high passthrough values.
 - Adding partial-register or tail-specific VMULL behavior.
-- Supporting deinterleaved VMULL layouts with `block_elems != 1`.
+- Supporting `block_deinterleaved` VMULL layouts.
 - Implementing the code in the design-only pull request.
 
 ## 3. Proposed VMI operation contract
@@ -183,13 +182,13 @@ layout(a) == layout(b) == layout(mask) == layout(low) == layout(high)
 The initial implementation supports exactly these dense layouts:
 
 - contiguous with `lane_stride = 1`;
-- deinterleaved factor 2 with `block_elems = 1` and `lane_stride = 1`;
-- deinterleaved factor 4 with `block_elems = 1` and `lane_stride = 1`.
+- deinterleaved factor 2 with `lane_stride = 1`;
+- deinterleaved factor 4 with `lane_stride = 1`.
 
 Group-slot layouts, dense lane strides greater than one, and deinterleaved
-layouts with any other positive `block_elems` are not part of the initial
-contract. `VMILayoutAttr` may represent those layouts for other operations,
-but VMULL preflight must reject them with an actionable diagnostic.
+block layouts are not part of the initial contract. `VMILayoutAttr` represents
+the latter as `block_deinterleaved` for other operations, but VMULL preflight
+must reject them with an actionable diagnostic.
 
 Contiguous is the default layout and gives the required canonical expansion:
 
@@ -199,7 +198,7 @@ Contiguous is the default layout and gives the required canonical expansion:
 | `128xi32` | 2 | 2 | 2 low + 2 high |
 | `256xi32` | 4 | 4 | 4 low + 4 high |
 
-For the supported `block_elems = 1` deinterleaved layouts, the exact physical
+For the supported ordinary deinterleaved layouts, the exact physical
 arity is:
 
 | Logical lanes | factor 2 | factor 4 |
@@ -213,10 +212,9 @@ hard-coding the table in the conversion pattern. All five logical values must
 have the same physical arity. Corresponding parts of the four data values
 `%a`, `%b`, `%low`, and `%high` must have the same `!pto.vreg<64xi32/ui32>`
 type, while each mask part must be the corresponding `!pto.mask<b32>`.
-Restricting `block_elems` closes the initial support set explicitly; for
-example,
-`256xi32` with `block_elems = 65` is rejected instead of silently producing
-the otherwise computable factor-2 arity 5 or factor-4 arity 7.
+Restricting the layout kind closes the initial support set explicitly;
+`block_deinterleaved=2/4` is rejected even when its physical arity is otherwise
+computable.
 
 ### 4.1 Assignment and propagation integration
 
@@ -303,7 +301,7 @@ segment belongs to `%high`.
 conversion. The check requires:
 
 - assigned, equal, supported dense layouts on all ports;
-- contiguous, or deinterleaved factor 2/4 with `block_elems = 1`;
+- contiguous, or deinterleaved factor 2/4;
 - `lane_stride = 1` on every port;
 - `b32` mask granularity;
 - element type exactly signless `i32` or unsigned `ui32`, and a legal lane
@@ -386,14 +384,13 @@ Add negative coverage for:
 - Verify that `%a`, `%b`, `%mask`, `%low`, and `%high` receive the same layout.
 - Verify that a conflicting consumer layout inserts an explicit
   materialization rather than silently changing one VMULL port.
-- Cover deinterleaved factor-2 and factor-4 same-layout cases with
-  `block_elems = 1`. Both are mandatory first-version tests and must check the
+- Cover ordinary deinterleaved factor-2 and factor-4 same-layout cases. Both
+  are mandatory first-version tests and must check the
   exact arities above, corresponding `%a`/`%b`/`%mask` part alignment,
   low/high result grouping, and inactive or padding-lane mask alignment.
-- Add preflight rejection tests for deinterleaved `block_elems != 1`, including
-  `256xi32` factor-2/factor-4 with `block_elems = 65`. These cases would have
-  arity 5/7 and ensure the implementation does not accept arbitrary layouts
-  merely because `getVMIPhysicalArity` can compute them.
+- Add preflight rejection tests for `block_deinterleaved=2/4`. These cases
+  ensure the implementation does not accept arbitrary layout kinds merely
+  because `getVMIPhysicalArity` can compute them.
 
 ### 8.3 VMI-to-VPTO tests
 
@@ -467,7 +464,7 @@ The numerical suite must also include:
   128, and 255 when present;
 - inactive input lanes containing non-zero sentinel values, with both output
   halves checked to be zero;
-- deinterleaved factor-2 and factor-4 `block_elems = 1` cases, including
+- ordinary deinterleaved factor-2 and factor-4 cases, including
   logical lanes that map to different physical parts.
 
 Inactive lanes must remain observable. The test kernel uses a sparse mask for
@@ -512,9 +509,9 @@ The implementation is complete when:
 4. Low and high result parts are associated with the correct logical result.
 5. Signed and unsigned forms select their existing physical backend forms.
 6. Merge predication is rejected before physical conversion.
-7. Deinterleaved factor-2 and factor-4 with `block_elems = 1` pass mandatory
-   arity, part-alignment, result-grouping, and mask-alignment tests, while
-   non-1 `block_elems` receives a preflight diagnostic.
+7. Deinterleaved factor-2 and factor-4 pass mandatory arity, part-alignment,
+   result-grouping, and mask-alignment tests, while `block_deinterleaved`
+   receives a preflight diagnostic.
 8. CPU simulator or A5 numerical validation confirms signed/unsigned high and
    low halves and zeroing for sparse inactive lanes observed through full-lane
    output stores.

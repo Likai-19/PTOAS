@@ -40,6 +40,7 @@ struct VMIPhysicalLane {
 
 FailureOr<int64_t> getDataLanesPerPart(Type elementType);
 FailureOr<int64_t> getMaskLanesPerPart(StringRef granularity);
+FailureOr<int64_t> getVMILayoutBlockElems(Type type);
 FailureOr<int64_t> getVMIPhysicalArity(Type type);
 FailureOr<VMIPhysicalLane> mapLogicalLaneToPhysical(Type type,
                                                      int64_t logicalLane);

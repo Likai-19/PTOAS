@@ -17,7 +17,7 @@ module {
     %out = pto.vmi.group_load %src[%off], %stride
         {num_groups = 8}
         : !pto.ptr<f32, ub>
-        -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+        -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<block_deinterleaved = 2>>
     return
   }
 }

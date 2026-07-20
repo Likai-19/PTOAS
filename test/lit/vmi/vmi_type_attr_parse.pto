@@ -12,8 +12,8 @@ module attributes {
   pto.vmi_contiguous = #pto.vmi.layout<contiguous>,
   pto.vmi_deinterleaved2 = #pto.vmi.layout<deinterleaved = 2>,
   pto.vmi_deinterleaved4 = #pto.vmi.layout<deinterleaved = 4>,
-  pto.vmi_deinterleaved4_block8 =
-      #pto.vmi.layout<deinterleaved = 4, block_elems = 8>,
+  pto.vmi_block_deinterleaved4 =
+      #pto.vmi.layout<block_deinterleaved = 4>,
   pto.vmi_group_slots8 = #pto.vmi.layout<num_groups = 8, slots = 8>,
   pto.vmi_group_slots_partial =
       #pto.vmi.layout<num_groups = 10, slots = 8>
@@ -23,22 +23,22 @@ module attributes {
       %contiguous: !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>,
       %wide2: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>,
       %wide4: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>,
-      %wide4_block8: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>,
+      %wide4_block: !pto.vmi.vreg<256xf32, #pto.vmi.layout<block_deinterleaved = 4>>,
       %group_slots8: !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>,
       %group_slots_partial: !pto.vmi.vreg<10xf32, #pto.vmi.layout<num_groups = 10, slots = 8>>,
       %surface_mask: !pto.vmi.mask<128xpred>,
       %mask_b8: !pto.vmi.mask<128xb8, #pto.vmi.layout<contiguous>>,
       %mask_b16: !pto.vmi.mask<128xb16, #pto.vmi.layout<deinterleaved = 2>>,
       %mask_b32: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 4>>,
-      %mask_b32_block8: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>) {
+      %mask_b32_block: !pto.vmi.mask<128xb32, #pto.vmi.layout<block_deinterleaved = 4>>) {
     return
   }
 }
 
+// CHECK: pto.vmi_block_deinterleaved4 = #pto.vmi.layout<block_deinterleaved = 4>
 // CHECK: pto.vmi_contiguous = #pto.vmi.layout<contiguous>
 // CHECK: pto.vmi_deinterleaved2 = #pto.vmi.layout<deinterleaved = 2>
 // CHECK: pto.vmi_deinterleaved4 = #pto.vmi.layout<deinterleaved = 4>
-// CHECK: pto.vmi_deinterleaved4_block8 = #pto.vmi.layout<deinterleaved = 4, block_elems = 8>
 // CHECK: pto.vmi_group_slots8 = #pto.vmi.layout<num_groups = 8, slots = 8>
 // CHECK: pto.vmi_group_slots_partial = #pto.vmi.layout<num_groups = 10, slots = 8>
 // CHECK-LABEL: func.func @vmi_type_attr_parse(
@@ -46,11 +46,11 @@ module attributes {
 // CHECK-SAME: %{{.*}}: !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
 // CHECK-SAME: %{{.*}}: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
 // CHECK-SAME: %{{.*}}: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
-// CHECK-SAME: %{{.*}}: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+// CHECK-SAME: %{{.*}}: !pto.vmi.vreg<256xf32, #pto.vmi.layout<block_deinterleaved = 4>>
 // CHECK-SAME: %{{.*}}: !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 // CHECK-SAME: %{{.*}}: !pto.vmi.vreg<10xf32, #pto.vmi.layout<num_groups = 10, slots = 8>>
 // CHECK-SAME: %{{.*}}: !pto.vmi.mask<128xpred>
 // CHECK-SAME: %{{.*}}: !pto.vmi.mask<128xb8, #pto.vmi.layout<contiguous>>
 // CHECK-SAME: %{{.*}}: !pto.vmi.mask<128xb16, #pto.vmi.layout<deinterleaved = 2>>
 // CHECK-SAME: %{{.*}}: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 4>>
-// CHECK-SAME: %{{.*}}: !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+// CHECK-SAME: %{{.*}}: !pto.vmi.mask<128xb32, #pto.vmi.layout<block_deinterleaved = 4>>

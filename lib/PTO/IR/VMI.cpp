@@ -184,14 +184,11 @@ static FailureOr<int64_t> getLayoutFactor(Type type) {
   FailureOr<VMILayoutAttr> layout = getAssignedVMILayout(type);
   if (failed(layout))
     return failure();
-  return (*layout).isDeinterleaved() ? (*layout).getFactor() : 1;
+  return (*layout).isDenseSplit() ? (*layout).getFactor() : 1;
 }
 
 static FailureOr<int64_t> getLayoutBlockElems(Type type) {
-  FailureOr<VMILayoutAttr> layout = getAssignedVMILayout(type);
-  if (failed(layout))
-    return failure();
-  return (*layout).isDeinterleaved() ? (*layout).getBlockElems() : 1;
+  return getVMILayoutBlockElems(type);
 }
 
 static FailureOr<Type> getVMIPhysicalElementType(VMIVRegType type) {
@@ -599,10 +596,14 @@ VMILayoutAttr VMILayoutAttr::getContiguous(MLIRContext *context,
 
 VMILayoutAttr VMILayoutAttr::getDeinterleaved(MLIRContext *context,
                                               int64_t factor,
-                                              int64_t blockElems,
                                               int64_t laneStride) {
-  return VMILayoutAttr::get(context, "deinterleaved", factor, blockElems, 0,
+  return VMILayoutAttr::get(context, "deinterleaved", factor, 1, 0,
                             laneStride);
+}
+
+VMILayoutAttr VMILayoutAttr::getBlockDeinterleaved(MLIRContext *context,
+                                                   int64_t factor) {
+  return VMILayoutAttr::get(context, "block_deinterleaved", factor, 1, 0, 1);
 }
 
 VMILayoutAttr VMILayoutAttr::getGroupSlots(MLIRContext *context,
@@ -641,19 +642,18 @@ Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
       StringRef field;
       if (failed(parser.parseKeyword(&field)) || failed(parser.parseEqual()))
         return {};
-      if (field == "block_elems") {
-        if (failed(parser.parseInteger(blockElems)))
-          return {};
-      } else if (field == "lane_stride") {
+      if (field == "lane_stride") {
         if (failed(parser.parseInteger(laneStride)))
           return {};
       } else {
         parser.emitError(parser.getCurrentLocation(),
-                         "expected 'block_elems = <integer>' or "
-                         "'lane_stride = <integer>'");
+                         "expected 'lane_stride = <integer>'");
         return {};
       }
     }
+  } else if (kind == "block_deinterleaved") {
+    if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor)))
+      return {};
   } else if (kind == "num_groups") {
     if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor)))
       return {};
@@ -677,7 +677,8 @@ Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
   } else {
     parser.emitError(parser.getCurrentLocation(),
                      "expected VMI layout kind 'contiguous' or "
-                     "'deinterleaved' or 'num_groups'");
+                     "'deinterleaved' or 'block_deinterleaved' or "
+                     "'num_groups'");
     return {};
   }
 
@@ -696,10 +697,10 @@ void VMILayoutAttr::print(AsmPrinter &printer) const {
       printer << ", lane_stride = " << getLaneStride();
   } else if (isDeinterleaved()) {
     printer << " = " << getFactor();
-    if (getBlockElems() != 1)
-      printer << ", block_elems = " << getBlockElems();
     if (getLaneStride() != 1)
       printer << ", lane_stride = " << getLaneStride();
+  } else if (isBlockDeinterleaved()) {
+    printer << " = " << getFactor();
   } else if (isGroupSlots()) {
     printer << " = " << getFactor();
     if (getSlots() != 0)
@@ -730,13 +731,24 @@ VMILayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
     if (factor != 2 && factor != 4)
       return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
                          << "> expected factor to be 2 or 4";
-    if (blockElems <= 0)
+    if (blockElems != 1)
       return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
                          << ", block_elems = " << blockElems
-                         << "> requires block_elems to be positive";
+                         << "> requires block_elems to be omitted";
     if (slots != 0)
       return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
                          << "> requires slots to be omitted";
+    return success();
+  }
+
+  if (kind == "block_deinterleaved") {
+    if (factor != 2 && factor != 4)
+      return emitError() << "#pto.vmi.layout<block_deinterleaved = " << factor
+                         << "> expected factor to be 2 or 4";
+    if (blockElems != 1 || slots != 0 || laneStride != 1)
+      return emitError()
+             << "#pto.vmi.layout<block_deinterleaved = " << factor
+             << "> does not accept block_elems, slots, or lane_stride";
     return success();
   }
 
@@ -755,7 +767,8 @@ VMILayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   }
 
   return emitError() << "expected VMI layout kind to be 'contiguous' or "
-                        "'deinterleaved' or 'num_groups'";
+                        "'deinterleaved' or 'block_deinterleaved' or "
+                        "'num_groups'";
 }
 
 Type VMIVRegType::parse(AsmParser &parser) {
@@ -1464,16 +1477,12 @@ static LogicalResult verifyGroupReduceFloatOp(OpTy op, bool requiresReassoc) {
   if (auto sourceLayout = sourceType.getLayoutAttr()) {
     bool supportedSourceLayout =
         sourceLayout.isContiguous() ||
-        (sourceLayout.isDeinterleaved() && sourceLayout.getFactor() == 2 &&
-         (sourceLayout.getBlockElems() == 1 ||
-          sourceLayout.getBlockElems() == 8)) ||
-        (sourceLayout.isDeinterleaved() && sourceLayout.getFactor() == 4 &&
-         (sourceLayout.getBlockElems() == 1 ||
-          sourceLayout.getBlockElems() == 8));
+        (sourceLayout.isDenseSplit() &&
+         (sourceLayout.getFactor() == 2 || sourceLayout.getFactor() == 4));
     if (!supportedSourceLayout)
       return op.emitOpError(
           "requires layout-assigned source to use contiguous layout or "
-          "deinterleaved=2/4 layout with block_elems=1 or block_elems=8");
+          "deinterleaved=2/4 or block_deinterleaved=2/4 layout");
   }
   if (auto resultLayout = resultType.getLayoutAttr()) {
     if (!resultLayout.isGroupSlots() ||
@@ -1519,16 +1528,12 @@ static LogicalResult verifyGroupReduceIntegerOp(OpTy op) {
   if (auto sourceLayout = sourceType.getLayoutAttr()) {
     bool supportedSourceLayout =
         sourceLayout.isContiguous() ||
-        (sourceLayout.isDeinterleaved() && sourceLayout.getFactor() == 2 &&
-         (sourceLayout.getBlockElems() == 1 ||
-          sourceLayout.getBlockElems() == 8)) ||
-        (sourceLayout.isDeinterleaved() && sourceLayout.getFactor() == 4 &&
-         (sourceLayout.getBlockElems() == 1 ||
-          sourceLayout.getBlockElems() == 8));
+        (sourceLayout.isDenseSplit() &&
+         (sourceLayout.getFactor() == 2 || sourceLayout.getFactor() == 4));
     if (!supportedSourceLayout)
       return op.emitOpError(
           "requires layout-assigned source to use contiguous layout or "
-          "deinterleaved=2/4 layout with block_elems=1 or block_elems=8");
+          "deinterleaved=2/4 or block_deinterleaved=2/4 layout");
   }
   if (auto resultLayout = resultType.getLayoutAttr()) {
     if (!resultLayout.isGroupSlots() ||
@@ -4110,6 +4115,21 @@ FailureOr<int64_t> mlir::pto::getMaskLanesPerPart(StringRef granularity) {
   return failure();
 }
 
+FailureOr<int64_t> mlir::pto::getVMILayoutBlockElems(Type type) {
+  FailureOr<VMILayoutAttr> layout = getAssignedVMILayout(type);
+  if (failed(layout))
+    return failure();
+  if (!(*layout).isBlockDeinterleaved())
+    return 1;
+
+  FailureOr<int64_t> lanesPerPart = getPhysicalLanesPerPart(type);
+  constexpr int64_t kVCGBlocksPerPart = 8;
+  if (failed(lanesPerPart) || *lanesPerPart <= 0 ||
+      *lanesPerPart % kVCGBlocksPerPart != 0)
+    return failure();
+  return *lanesPerPart / kVCGBlocksPerPart;
+}
+
 FailureOr<int64_t> mlir::pto::getVMIPhysicalArity(Type type) {
   FailureOr<int64_t> elementCount = getVMIElementCount(type);
   FailureOr<int64_t> lanesPerPart = getPhysicalLanesPerPart(type);
@@ -4121,9 +4141,10 @@ FailureOr<int64_t> mlir::pto::getVMIPhysicalArity(Type type) {
     return divideCeilNonNegative((*layout).getNumGroups(),
                                  (*layout).getSlots());
 
-  int64_t factor = (*layout).isDeinterleaved() ? (*layout).getFactor() : 1;
-  int64_t blockElems =
-      (*layout).isDeinterleaved() ? (*layout).getBlockElems() : 1;
+  int64_t factor = (*layout).isDenseSplit() ? (*layout).getFactor() : 1;
+  FailureOr<int64_t> blockElems = getVMILayoutBlockElems(type);
+  if (failed(blockElems))
+    return failure();
   int64_t laneStride =
       isa<VMIMaskType>(type) ? 1
                              : ((*layout).isDense() ? (*layout).getLaneStride()
@@ -4131,7 +4152,7 @@ FailureOr<int64_t> mlir::pto::getVMIPhysicalArity(Type type) {
   int64_t arity = 0;
   for (int64_t part = 0; part < factor; ++part) {
     int64_t lanesInPart =
-        getDenseLogicalLanesInPart(*elementCount, factor, blockElems, part);
+        getDenseLogicalLanesInPart(*elementCount, factor, *blockElems, part);
     int64_t requiredPhysicalLanes =
         lanesInPart == 0 ? 0 : (lanesInPart - 1) * laneStride + 1;
     arity += divideCeilNonNegative(requiredPhysicalLanes, *lanesPerPart);

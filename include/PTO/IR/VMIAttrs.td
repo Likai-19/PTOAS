@@ -29,8 +29,9 @@ def VMILayoutAttr : PTO_Attr<"VMILayout", "vmi.layout"> {
                                        int64_t laneStride = 1);
     static VMILayoutAttr getDeinterleaved(::mlir::MLIRContext *context,
                                           int64_t factor,
-                                          int64_t blockElems = 1,
                                           int64_t laneStride = 1);
+    static VMILayoutAttr getBlockDeinterleaved(
+        ::mlir::MLIRContext *context, int64_t factor);
     static VMILayoutAttr getGroupSlots(::mlir::MLIRContext *context,
                                        int64_t numGroups,
                                        int64_t slots = 0,
@@ -38,8 +39,14 @@ def VMILayoutAttr : PTO_Attr<"VMILayout", "vmi.layout"> {
 
     bool isContiguous() const { return getKind() == "contiguous"; }
     bool isDeinterleaved() const { return getKind() == "deinterleaved"; }
+    bool isBlockDeinterleaved() const {
+      return getKind() == "block_deinterleaved";
+    }
     bool isGroupSlots() const { return getKind() == "num_groups"; }
-    bool isDense() const { return isContiguous() || isDeinterleaved(); }
+    bool isDenseSplit() const {
+      return isDeinterleaved() || isBlockDeinterleaved();
+    }
+    bool isDense() const { return isContiguous() || isDenseSplit(); }
     int64_t getNumGroups() const { return getFactor(); }
     bool hasDenseLaneStride() const {
       return isDense() && getLaneStride() != 1;
