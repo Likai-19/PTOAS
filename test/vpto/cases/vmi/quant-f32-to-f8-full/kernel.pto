@@ -32,7 +32,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
 
     pto.vecscope {
       %wide = pto.vmi.load %ub_src[%c0] : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
-      %packed = pto.vmi.truncf %wide : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
+      %packed = pto.vmi.truncf %wide {saturate = "SAT"} : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
       pto.vmi.store %packed, %ub_dst_f8[%c0] : !pto.vmi.vreg<256xf8E4M3FN>, !pto.ptr<f8E4M3FN, ub>
     }
 

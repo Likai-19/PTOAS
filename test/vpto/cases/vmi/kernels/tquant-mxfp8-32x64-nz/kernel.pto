@@ -111,7 +111,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
         %scaled = pto.vmi.mulf %x, %scaling_vec
             : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
             -> !pto.vmi.vreg<256xf32>
-        %q8 = pto.vmi.truncf %scaled
+        %q8 = pto.vmi.truncf %scaled {saturate = "SAT"}
             : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
         pto.vmi.store %q8, %ub_fp8_nd_f8[%nd_off]
             : !pto.vmi.vreg<256xf8E4M3FN>, !pto.ptr<f8E4M3FN, ub>
@@ -136,7 +136,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
       %e8m0_256_i32 = pto.vmi.subi %exp256, %emax256
           : !pto.vmi.vreg<256xi32>, !pto.vmi.vreg<256xi32>
           -> !pto.vmi.vreg<256xi32>
-      %e8m0_256_u8 = pto.vmi.trunci %e8m0_256_i32
+      %e8m0_256_u8 = pto.vmi.trunci %e8m0_256_i32 {saturate = "SAT"}
           : !pto.vmi.vreg<256xi32> -> !pto.vmi.vreg<256xui8>
       pto.vmi.store %e8m0_256_u8, %ub_e8m0_nd_u8[%c0]
           : !pto.vmi.vreg<256xui8>, !pto.ptr<ui8, ub>
