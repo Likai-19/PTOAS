@@ -413,7 +413,9 @@ struct LegalMaskGranularityCastLayoutPattern {
 };
 
 struct InterleaveLayoutPattern {
+  ElementBitsPattern elementBits;
   PhysicalChunkCountPattern chunks;
+  int64_t maxPhysicalParts = 0;
   LayoutPattern lhsLayout;
   LayoutPattern rhsLayout;
   LayoutPattern maskLayout;
@@ -527,15 +529,29 @@ static constexpr LegalMaskGranularityCastLayoutPattern
 };
 
 static constexpr InterleaveLayoutPattern kVdintlvLayoutPatterns[] = {
-    {chunk<2, 4>(), d(2), d(2), d(2), c(), c()},
-    {chunk<4>(), d(4), d(4), d(4), d(2), d(2)},
-    {chunk<1>(), c(), c(), c(), c(), c()},
+    {bits<8, 16, 32, 64>(), chunk<2, 4>(), 0, d(2), d(2), d(2), c(),
+     c()},
+    {bits<8, 16, 32, 64>(), chunk<4>(), 0, d(4), d(4), d(4), d(2),
+     d(2)},
+    {bits<8, 16, 32, 64>(), chunk<1>(), 0, c(), c(), c(), c(), c()},
+
+    // A dense lane-stride layout is a dense vector of wider carrier slots.
+    // Preserve the layout by selecting the interleave instruction whose lane
+    // width is element_bits * lane_stride.  The direct hardware operation is
+    // valid only while the logical vector occupies one carrier register;
+    // wider shapes need a cross-register layout relation instead.
+    {bits<8, 16>(), chunk<1>(), 1, ls(2), ls(2), ls(2), ls(2), ls(2)},
+    {bits<8>(), chunk<1>(), 1, ls(4), ls(4), ls(4), ls(4), ls(4)},
 };
 
 static constexpr InterleaveLayoutPattern kVintlvLayoutPatterns[] = {
-    {chunk<2, 4>(), c(), c(), c(), d(2), d(2)},
-    {chunk<4>(), d(2), d(2), d(2), d(4), d(4)},
-    {chunk<1>(), c(), c(), c(), c(), c()},
+    {bits<8, 16, 32, 64>(), chunk<2, 4>(), 0, c(), c(), c(), d(2),
+     d(2)},
+    {bits<8, 16, 32, 64>(), chunk<4>(), 0, d(2), d(2), d(2), d(4),
+     d(4)},
+    {bits<8, 16, 32, 64>(), chunk<1>(), 0, c(), c(), c(), c(), c()},
+    {bits<8, 16>(), chunk<1>(), 1, ls(2), ls(2), ls(2), ls(2), ls(2)},
+    {bits<8>(), chunk<1>(), 1, ls(4), ls(4), ls(4), ls(4), ls(4)},
 };
 
 struct SupplementalCastLayoutPattern {
@@ -860,6 +876,26 @@ static bool matchesPhysicalChunkCountPattern(
     if (pattern.values[i] == key.physicalChunkCount)
       return true;
   return false;
+}
+
+static bool matchesInterleaveLayoutPattern(
+    const InterleaveLayoutPattern &pattern, VMIVRegType valueType,
+    InterleaveLayoutKey key) {
+  if (!matchesElementBitsPattern(pattern.elementBits,
+                                 valueType.getElementType()) ||
+      !matchesPhysicalChunkCountPattern(pattern.chunks, key))
+    return false;
+  if (pattern.maxPhysicalParts <= 0)
+    return true;
+
+  VMILayoutAttr lhsLayout =
+      materializeLayoutPattern(valueType.getContext(), pattern.lhsLayout);
+  auto lhsType = VMIVRegType::get(valueType.getContext(),
+                                  valueType.getElementCount(),
+                                  valueType.getElementType(), lhsLayout);
+  FailureOr<int64_t> physicalParts = getVMIPhysicalArity(lhsType);
+  return succeeded(physicalParts) &&
+         *physicalParts <= pattern.maxPhysicalParts;
 }
 
 static FailureOr<InterleaveLayoutKey>
@@ -1639,7 +1675,7 @@ static FailureOr<VMIInterleaveLayoutFact> getPreferredInterleaveLayoutFactImpl(
     return failure();
 
   for (const InterleaveLayoutPattern &pattern : patterns) {
-    if (!matchesPhysicalChunkCountPattern(pattern.chunks, *key))
+    if (!matchesInterleaveLayoutPattern(pattern, valueType, *key))
       continue;
     return materializeInterleaveLayoutFact(valueType.getContext(), pattern,
                                            *key);
@@ -1670,7 +1706,7 @@ getInterleaveLayoutFactsForLayoutImpl(
 
   SmallVector<VMIInterleaveLayoutFact, 4> facts;
   for (const InterleaveLayoutPattern &pattern : patterns) {
-    if (!matchesPhysicalChunkCountPattern(pattern.chunks, *key))
+    if (!matchesInterleaveLayoutPattern(pattern, valueType, *key))
       continue;
     VMIInterleaveLayoutFact candidate =
         materializeInterleaveLayoutFact(valueType.getContext(), pattern, *key);

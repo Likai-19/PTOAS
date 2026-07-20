@@ -1159,9 +1159,7 @@ struct LayoutSolver {
         requestDataUse(vintlv.getLhsMutable(), fact->lhsLayout);
         requestDataUse(vintlv.getRhsMutable(), fact->rhsLayout);
         if (failed(requestMaskUse(vintlv.getMaskMutable(), fact->maskLayout,
-                                  op)) ||
-            failed(setPreferredLayout(vintlv.getLow(), fact->lowLayout, op)) ||
-            failed(setPreferredLayout(vintlv.getHigh(), fact->highLayout, op)))
+                                  op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
@@ -1175,9 +1173,7 @@ struct LayoutSolver {
         requestDataUse(vdintlv.getLhsMutable(), fact->lhsLayout);
         requestDataUse(vdintlv.getRhsMutable(), fact->rhsLayout);
         if (failed(requestMaskUse(vdintlv.getMaskMutable(), fact->maskLayout,
-                                  op)) ||
-            failed(setPreferredLayout(vdintlv.getLow(), fact->lowLayout, op)) ||
-            failed(setPreferredLayout(vdintlv.getHigh(), fact->highLayout, op)))
+                                  op)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
