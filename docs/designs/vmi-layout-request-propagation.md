@@ -1654,7 +1654,7 @@ VMI simulator baseline:
 
 ```bash
 WORK_SPACE=/tmp/ptoas-vmi-baseline-latest/sim \
-CASE_PREFIX='vmi/' \
+CASE_PREFIX='vmi_new/' \
 JOBS=16 \
 test/vpto/scripts/run_host_vpto_validation_parallel.sh
 ```

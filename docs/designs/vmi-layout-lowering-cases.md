@@ -3373,7 +3373,7 @@ lit:
   test/lit/vmi/vmi_ptoas_private_call_inline.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/private-call-inline-store
+  test/vpto/cases/vmi_new/private-call-inline-store
 
 ptoas pipeline:
   vmi-layout-assignment makes the private result layout explicit
@@ -5255,7 +5255,7 @@ lit:
   test/lit/vmi/vmi_ptoas_call_boundary_vecscope.pto
 
 runtime SIM:
-  test/vpto/cases/vmi/private-call-argument-boundary-store
+  test/vpto/cases/vmi_new/private-call-argument-boundary-store
 
 ptoas pipeline:
   vmi-layout-assignment inserts explicit callee-entry materialization
@@ -5381,7 +5381,7 @@ stable gather fallback.
 Runtime coverage:
 
 ```text
-test/vpto/cases/vmi/masked-load-group-tail-s32-reduce-store
+test/vpto/cases/vmi_new/masked-load-group-tail-s32-reduce-store
 ```
 
 ### 3.45 Dynamic S=32 `create_group_mask`
@@ -5448,7 +5448,7 @@ Current coverage validates both IR lowering and runtime behavior:
 
 ```text
 test/lit/vmi/vmi_layout_assignment_create_group_mask_s32_dynamic.pto
-test/vpto/cases/vmi/dynamic-create-group-mask-s32-reduce-store
+test/vpto/cases/vmi_new/dynamic-create-group-mask-s32-reduce-store
 ```
 
 The runtime case passes `active_cols` as a kernel scalar argument and casts it
