@@ -11,45 +11,45 @@
 // RUN: not pto-test-opt %s -split-input-file -vmi-to-vpto 2>&1 | FileCheck %s
 
 module {
-  func.func @vmull_deint2_block65(
-      %a: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2, block_elems = 65>>,
-      %b: !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2, block_elems = 65>>,
-      %mask: !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 2, block_elems = 65>>)
-      -> (!pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2, block_elems = 65>>,
-          !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2, block_elems = 65>>) {
+  func.func @vmull_block_deint2(
+      %a: !pto.vmi.vreg<256xi32, #pto.vmi.layout<block_deinterleaved = 2>>,
+      %b: !pto.vmi.vreg<256xi32, #pto.vmi.layout<block_deinterleaved = 2>>,
+      %mask: !pto.vmi.mask<256xb32, #pto.vmi.layout<block_deinterleaved = 2>>)
+      -> (!pto.vmi.vreg<256xi32, #pto.vmi.layout<block_deinterleaved = 2>>,
+          !pto.vmi.vreg<256xi32, #pto.vmi.layout<block_deinterleaved = 2>>) {
     // CHECK: VMI-UNSUPPORTED: pto.vmi.vmull
-    // CHECK-SAME: requires contiguous layout or deinterleaved factor 2/4 with block_elems=1 and lane_stride=1
+    // CHECK-SAME: requires contiguous or deinterleaved factor 2/4 layout with lane_stride=1
     %low, %high = pto.vmi.vmull %a, %b, %mask
-        : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2, block_elems = 65>>,
-          !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2, block_elems = 65>>,
-          !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 2, block_elems = 65>>
-        -> !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2, block_elems = 65>>,
-           !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2, block_elems = 65>>
+        : !pto.vmi.vreg<256xi32, #pto.vmi.layout<block_deinterleaved = 2>>,
+          !pto.vmi.vreg<256xi32, #pto.vmi.layout<block_deinterleaved = 2>>,
+          !pto.vmi.mask<256xb32, #pto.vmi.layout<block_deinterleaved = 2>>
+        -> !pto.vmi.vreg<256xi32, #pto.vmi.layout<block_deinterleaved = 2>>,
+           !pto.vmi.vreg<256xi32, #pto.vmi.layout<block_deinterleaved = 2>>
     return %low, %high
-        : !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2, block_elems = 65>>,
-          !pto.vmi.vreg<256xi32, #pto.vmi.layout<deinterleaved = 2, block_elems = 65>>
+        : !pto.vmi.vreg<256xi32, #pto.vmi.layout<block_deinterleaved = 2>>,
+          !pto.vmi.vreg<256xi32, #pto.vmi.layout<block_deinterleaved = 2>>
   }
 }
 
 // -----
 
 module {
-  func.func @vmull_deint4_block65(
-      %a: !pto.vmi.vreg<256xui32, #pto.vmi.layout<deinterleaved = 4, block_elems = 65>>,
-      %b: !pto.vmi.vreg<256xui32, #pto.vmi.layout<deinterleaved = 4, block_elems = 65>>,
-      %mask: !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 65>>)
-      -> (!pto.vmi.vreg<256xui32, #pto.vmi.layout<deinterleaved = 4, block_elems = 65>>,
-          !pto.vmi.vreg<256xui32, #pto.vmi.layout<deinterleaved = 4, block_elems = 65>>) {
+  func.func @vmull_block_deint4(
+      %a: !pto.vmi.vreg<256xui32, #pto.vmi.layout<block_deinterleaved = 4>>,
+      %b: !pto.vmi.vreg<256xui32, #pto.vmi.layout<block_deinterleaved = 4>>,
+      %mask: !pto.vmi.mask<256xb32, #pto.vmi.layout<block_deinterleaved = 4>>)
+      -> (!pto.vmi.vreg<256xui32, #pto.vmi.layout<block_deinterleaved = 4>>,
+          !pto.vmi.vreg<256xui32, #pto.vmi.layout<block_deinterleaved = 4>>) {
     // CHECK: VMI-UNSUPPORTED: pto.vmi.vmull
-    // CHECK-SAME: requires contiguous layout or deinterleaved factor 2/4 with block_elems=1 and lane_stride=1
+    // CHECK-SAME: requires contiguous or deinterleaved factor 2/4 layout with lane_stride=1
     %low, %high = pto.vmi.vmull %a, %b, %mask
-        : !pto.vmi.vreg<256xui32, #pto.vmi.layout<deinterleaved = 4, block_elems = 65>>,
-          !pto.vmi.vreg<256xui32, #pto.vmi.layout<deinterleaved = 4, block_elems = 65>>,
-          !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4, block_elems = 65>>
-        -> !pto.vmi.vreg<256xui32, #pto.vmi.layout<deinterleaved = 4, block_elems = 65>>,
-           !pto.vmi.vreg<256xui32, #pto.vmi.layout<deinterleaved = 4, block_elems = 65>>
+        : !pto.vmi.vreg<256xui32, #pto.vmi.layout<block_deinterleaved = 4>>,
+          !pto.vmi.vreg<256xui32, #pto.vmi.layout<block_deinterleaved = 4>>,
+          !pto.vmi.mask<256xb32, #pto.vmi.layout<block_deinterleaved = 4>>
+        -> !pto.vmi.vreg<256xui32, #pto.vmi.layout<block_deinterleaved = 4>>,
+           !pto.vmi.vreg<256xui32, #pto.vmi.layout<block_deinterleaved = 4>>
     return %low, %high
-        : !pto.vmi.vreg<256xui32, #pto.vmi.layout<deinterleaved = 4, block_elems = 65>>,
-          !pto.vmi.vreg<256xui32, #pto.vmi.layout<deinterleaved = 4, block_elems = 65>>
+        : !pto.vmi.vreg<256xui32, #pto.vmi.layout<block_deinterleaved = 4>>,
+          !pto.vmi.vreg<256xui32, #pto.vmi.layout<block_deinterleaved = 4>>
   }
 }

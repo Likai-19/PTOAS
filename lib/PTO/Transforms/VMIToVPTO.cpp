@@ -784,7 +784,7 @@ FailureOr<int64_t> getDataLayoutFactor(VMIVRegType type) {
   VMILayoutAttr layout = type.getLayoutAttr();
   if (!layout)
     return failure();
-  return layout.isDeinterleaved() ? layout.getFactor() : 1;
+  return layout.isDenseSplit() ? layout.getFactor() : 1;
 }
 
 FailureOr<int64_t> getDataChunksInPart(VMIVRegType type, int64_t part) {
@@ -864,7 +864,7 @@ FailureOr<int64_t> getVMITypeLayoutFactor(Type type) {
   auto layoutAttr = dyn_cast_or_null<VMILayoutAttr>(layout);
   if (!layoutAttr)
     return failure();
-  return layoutAttr.isDeinterleaved() ? layoutAttr.getFactor() : 1;
+  return layoutAttr.isDenseSplit() ? layoutAttr.getFactor() : 1;
 }
 
 FailureOr<int64_t> getVMITypeElementCount(Type type) {
@@ -977,9 +977,10 @@ FailureOr<int64_t> getContiguousMaterializationPartCount(Type type,
     return fail("requires assigned layout");
   if (layout.isContiguous() && layout.getLaneStride() == 1)
     return *arity;
-  if (!layout.isDeinterleaved() ||
+  if (!layout.isDenseSplit() ||
       (layout.getFactor() != 2 && layout.getFactor() != 4))
-    return fail("requires contiguous or deinterleaved=2/4 layout");
+    return fail("requires contiguous, deinterleaved=2/4, or "
+                "block_deinterleaved=2/4 layout");
 
   FailureOr<int64_t> chunksPerGroup = getVMITypeChunksInPart(type, 0);
   if (failed(chunksPerGroup))
@@ -1505,7 +1506,7 @@ LogicalResult checkDeinterleaved2GroupStoreChunkShape(
 
   VMILayoutAttr layout = type.getLayoutAttr();
   if (!layout || !layout.isDeinterleaved() || layout.getFactor() != 2 ||
-      layout.getBlockElems() != 1 || layout.getLaneStride() != 1)
+      layout.getLaneStride() != 1)
     return fail("requires deinterleaved=2 value layout");
   std::string fullChunkReason;
   if (failed(checkFullDataPhysicalChunks(type, &fullChunkReason)))
@@ -1567,7 +1568,7 @@ checkSupportedGroupLoadShape(VMIGroupLoadOp op, std::string *reason) {
     return checkSupportedGroupChunkShape(resultType, *groupSize, reason);
   }
 
-  if (resultLayout.isDeinterleaved() && resultLayout.getBlockElems() == 8 &&
+  if (resultLayout.isBlockDeinterleaved() &&
       resultType.getElementType().isF32()) {
     VMILayoutSupport supports;
     if (failed(supports.getGroupLoadLayoutFact(op, reason)))
@@ -1577,23 +1578,25 @@ checkSupportedGroupLoadShape(VMIGroupLoadOp op, std::string *reason) {
     if (!accessPlan.layoutSupport.isSupported())
       return fail(accessPlan.layoutSupport.reason);
     if (!isa<PtrType>(op.getSource().getType()))
-      return fail("block8 strided group_load requires !pto.ptr source");
+      return fail(
+          "block_deinterleaved group_load requires !pto.ptr source");
     if (op.getNumGroupsAttr().getInt() % 8 != 0)
       return fail(
-          "block8 strided group_load requires num_groups multiple of 8");
+          "block_deinterleaved group_load requires num_groups multiple of 8");
     std::optional<int64_t> rowStride = getConstantIndexValue(op.getRowStride());
     if (!rowStride || *rowStride <= 0 || *rowStride % 8 != 0)
-      return fail("block8 strided group_load requires constant positive "
+      return fail("block_deinterleaved group_load requires constant positive "
                   "row_stride divisible by 8 f32 elements");
     std::string fullChunkReason;
     if (failed(checkFullDataPhysicalChunks(resultType, &fullChunkReason)))
-      return fail(Twine("block8 strided group_load requires full physical "
+      return fail(Twine("block_deinterleaved group_load requires full physical "
                         "result chunks; ") +
                   fullChunkReason);
     return success();
   }
 
-  return fail("requires contiguous layout or deinterleaved block8 f32 layout");
+  return fail(
+      "requires contiguous or block_deinterleaved f32 result layout");
 }
 
 LogicalResult checkSupportedGroupSlotLoadShape(
@@ -2536,7 +2539,7 @@ computeConstantMaskMaterialization(VMIConstantMaskOp op, std::string *reason) {
     return fail("requires known physical mask lanes per part");
 
   auto boolValues = denseAttr.getValues<bool>();
-  int64_t factor = layout.isDeinterleaved() ? layout.getFactor() : 1;
+  int64_t factor = layout.isDenseSplit() ? layout.getFactor() : 1;
   SmallVector<ConstantMaskChunkMaterialization> materializations;
   for (int64_t part = 0; part < factor; ++part) {
     for (int64_t chunk = 0;; ++chunk) {
@@ -2614,7 +2617,7 @@ computeGroupMaskMaterializationForType(VMICreateGroupMaskOp op,
   if (activeElems > groupSize)
     activeElems = groupSize;
 
-  int64_t factor = layout.isDeinterleaved() ? layout.getFactor() : 1;
+  int64_t factor = layout.isDenseSplit() ? layout.getFactor() : 1;
   SmallVector<ConstantMaskChunkMaterialization> materializations;
   for (int64_t part = 0; part < factor; ++part) {
     for (int64_t chunk = 0;; ++chunk) {
@@ -2733,14 +2736,15 @@ FailureOr<SmallVector<Value>> materializeDynamicGroupMaskForType(
     return fail("dynamic create_group_mask currently requires power-of-two "
                 "group_size");
 
-  int64_t factor = layout.isDeinterleaved() ? layout.getFactor() : 1;
-  int64_t blockElems = layout.isDeinterleaved() ? layout.getBlockElems() : 1;
-  if (factor <= 0 || blockElems <= 0 ||
+  int64_t factor = layout.isDenseSplit() ? layout.getFactor() : 1;
+  FailureOr<int64_t> blockElems = getVMILayoutBlockElems(resultVMIType);
+  if (factor <= 0 || failed(blockElems) || *blockElems <= 0 ||
       static_cast<int64_t>(resultTypes.size()) % factor != 0)
     return fail("dynamic create_group_mask physical result count does not "
                 "match layout factor");
-  if (!getPowerOfTwoLog2(blockElems))
-    return fail("dynamic create_group_mask requires power-of-two block_elems");
+  if (!getPowerOfTwoLog2(*blockElems))
+    return fail("dynamic create_group_mask requires a power-of-two physical "
+                "block element count");
 
   Location loc = op.getLoc();
   MLIRContext *ctx = rewriter.getContext();
@@ -2771,7 +2775,7 @@ FailureOr<SmallVector<Value>> materializeDynamicGroupMaskForType(
       Value partBlock = indexInPart;
       Value inBlockLane = createI32Constant(loc, 0, rewriter);
       if (blockElems != 1) {
-        Value blockShift = createI16Constant(loc, *getPowerOfTwoLog2(blockElems),
+        Value blockShift = createI16Constant(loc, *getPowerOfTwoLog2(*blockElems),
                                              rewriter);
         partBlock =
             rewriter
@@ -2807,7 +2811,7 @@ FailureOr<SmallVector<Value>> materializeDynamicGroupMaskForType(
 
       Value logicalLane = logicalBlock;
       if (blockElems != 1) {
-        Value blockShift = createI16Constant(loc, *getPowerOfTwoLog2(blockElems),
+        Value blockShift = createI16Constant(loc, *getPowerOfTwoLog2(*blockElems),
                                              rewriter);
         Value logicalBlockBase =
             rewriter
@@ -3066,11 +3070,12 @@ LogicalResult checkFullGroupBroadcastResultShape(
       return fail("group_broadcast contiguous result requires group size to "
                   "divide or be a multiple of physical lanes per part");
   } else {
+    FailureOr<int64_t> blockElems = getVMILayoutBlockElems(type);
     bool blockFragmentSmallGroup =
-        layout.isDeinterleaved() && layout.getBlockElems() > 1 &&
-        groupSize < lanesPerPart && lanesPerPart % layout.getBlockElems() == 0;
+        layout.isBlockDeinterleaved() && succeeded(blockElems) &&
+        groupSize < lanesPerPart && lanesPerPart % *blockElems == 0;
     bool deinterleavedSmallGroup =
-        layout.isDeinterleaved() && layout.getBlockElems() == 1 &&
+        layout.isDeinterleaved() &&
         groupSize < lanesPerPart && groupSize >= *factor &&
         groupSize % *factor == 0 && lanesPerPart % (groupSize / *factor) == 0;
     int64_t logicalSpanPerResultChunk = lanesPerPart * *factor;
@@ -3731,26 +3736,21 @@ FailureOr<SmallVector<Value>> materializeDataLayoutConversion(
 
   auto isElementDeinterleaved = [](VMILayoutAttr layout, int64_t factor) {
     return layout.isDeinterleaved() && layout.getFactor() == factor &&
-           layout.getLaneStride() == 1 && layout.getBlockElems() == 1;
+           layout.getLaneStride() == 1;
   };
-  auto isBlock8Deinterleaved = [](VMILayoutAttr layout, int64_t factor) {
-    return layout.isDeinterleaved() && layout.getFactor() == factor &&
-           layout.getBlockElems() == 8;
+  auto isBlockDeinterleaved = [](VMILayoutAttr layout, int64_t factor) {
+    return layout.isBlockDeinterleaved() && layout.getFactor() == factor;
   };
 
-  bool contiguousToBlock8 =
+  bool contiguousToBlock =
       sourceLayout.isContiguous() && sourceLayout.getLaneStride() == 1 &&
-      ((resultLayout.isDeinterleaved() &&
-        isBlock8Deinterleaved(resultLayout, 2)) ||
-       (resultLayout.isDeinterleaved() &&
-        isBlock8Deinterleaved(resultLayout, 4)));
-  bool block8ToContiguous =
+      (isBlockDeinterleaved(resultLayout, 2) ||
+       isBlockDeinterleaved(resultLayout, 4));
+  bool blockToContiguous =
       resultLayout.isContiguous() && resultLayout.getLaneStride() == 1 &&
-      ((sourceLayout.isDeinterleaved() &&
-        isBlock8Deinterleaved(sourceLayout, 2)) ||
-       (sourceLayout.isDeinterleaved() &&
-        isBlock8Deinterleaved(sourceLayout, 4)));
-  if (contiguousToBlock8 || block8ToContiguous) {
+      (isBlockDeinterleaved(sourceLayout, 2) ||
+       isBlockDeinterleaved(sourceLayout, 4));
+  if (contiguousToBlock || blockToContiguous) {
     if (sourceParts.size() == 1) {
       if (auto cast =
               sourceParts.front().getDefiningOp<UnrealizedConversionCastOp>()) {
@@ -4055,7 +4055,6 @@ FailureOr<SmallVector<Value>> materializeDataLayoutConversion(
 
   if (sourceLayout.isDeinterleaved() && resultLayout.isDeinterleaved() &&
       sourceLayout.getLaneStride() == 1 && resultLayout.getLaneStride() == 1 &&
-      sourceLayout.getBlockElems() == 1 && resultLayout.getBlockElems() == 1 &&
       (sourceLayout.getFactor() == 2 || sourceLayout.getFactor() == 4) &&
       (resultLayout.getFactor() == 2 || resultLayout.getFactor() == 4)) {
     VMILayoutAttr contiguous =
@@ -4135,7 +4134,7 @@ FailureOr<SmallVector<Value>> materializeMaskLayoutConversion(
 
   auto isElementDeinterleaved = [](VMILayoutAttr layout, int64_t factor) {
     return layout.isDeinterleaved() && layout.getFactor() == factor &&
-           layout.getLaneStride() == 1 && layout.getBlockElems() == 1;
+           layout.getLaneStride() == 1;
   };
 
   bool deint2ToContiguous = sourceLayout.isDeinterleaved() &&
@@ -4622,8 +4621,9 @@ getVMIMaskPhysicalCarrierLayout(VMIMaskType type) {
   if (layout.isContiguous())
     return VMILayoutAttr::getContiguous(ctx);
   if (layout.isDeinterleaved())
-    return VMILayoutAttr::getDeinterleaved(ctx, layout.getFactor(),
-                                           layout.getBlockElems());
+    return VMILayoutAttr::getDeinterleaved(ctx, layout.getFactor());
+  if (layout.isBlockDeinterleaved())
+    return VMILayoutAttr::getBlockDeinterleaved(ctx, layout.getFactor());
   if (layout.isGroupSlots())
     return VMILayoutAttr::getGroupSlots(ctx, layout.getNumGroups(),
                                         layout.getSlots());
@@ -4645,7 +4645,7 @@ getVMIMaskPhysicalCarrierType(VMIMaskType type) {
 static bool isElementDeinterleavedLayout(VMILayoutAttr layout,
                                          int64_t factor) {
   return layout && layout.isDeinterleaved() && layout.getFactor() == factor &&
-         layout.getLaneStride() == 1 && layout.getBlockElems() == 1;
+         layout.getLaneStride() == 1;
 }
 
 FailureOr<Value> createAllFalseMaskLike(Location loc, Value value,
@@ -4872,7 +4872,7 @@ FailureOr<SmallVector<Value>> materializeMaskGranularityCastLayoutConversion(
     return materializeStagingContiguousToDeintMaskLayout(
         op, sourceParts, resultTypes, /*factor=*/4, rewriter);
 
-  if (sourceLayout.isDeinterleaved() || resultLayout.isDeinterleaved())
+  if (sourceLayout.isDenseSplit() || resultLayout.isDenseSplit())
     return materializeMaskGranularityCastLayoutConversionViaContiguous(
         op, sourceType, resultType, sourceParts, resultTypes, rewriter);
 
@@ -5411,7 +5411,7 @@ struct OneToNVMICreateMaskOpPattern
         return failure();
 
       SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
-      int64_t factor = layout.isDeinterleaved() ? layout.getFactor() : 1;
+      int64_t factor = layout.isDenseSplit() ? layout.getFactor() : 1;
       if (resultTypes.size() % factor != 0)
         return rewriter.notifyMatchFailure(
             op, "dynamic create_mask physical result count does not match "
@@ -5466,7 +5466,7 @@ struct OneToNVMICreateMaskOpPattern
       return failure();
 
     SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
-    int64_t factor = layout.isDeinterleaved() ? layout.getFactor() : 1;
+    int64_t factor = layout.isDenseSplit() ? layout.getFactor() : 1;
     SmallVector<Value> results;
     results.reserve(resultTypes.size());
 
@@ -5548,8 +5548,8 @@ struct OneToNVMICreateGroupMaskOpPattern
     SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     auto resultVMIType = cast<VMIMaskType>(op.getResult().getType());
     VMILayoutAttr resultLayout = resultVMIType.getLayoutAttr();
-    if (resultLayout && resultLayout.isDeinterleaved() &&
-        resultLayout.getFactor() == 4 && resultLayout.getBlockElems() == 8) {
+    if (resultLayout && resultLayout.isBlockDeinterleaved() &&
+        resultLayout.getFactor() == 4) {
       VMILayoutAttr contiguousLayout =
           VMILayoutAttr::getContiguous(op.getContext());
       auto contiguousType =
@@ -5624,8 +5624,7 @@ struct OneToNVMICreateGroupMaskOpPattern
         return failure();
 
       VMILayoutAttr resultLayout = resultVMIType.getLayoutAttr();
-      if (resultLayout && resultLayout.isDeinterleaved() &&
-          resultLayout.getBlockElems() == 1) {
+      if (resultLayout && resultLayout.isDeinterleaved()) {
         VMILayoutAttr contiguousLayout =
             VMILayoutAttr::getContiguous(op.getContext());
         auto contiguousType =
@@ -5791,7 +5790,7 @@ struct OneToNVMILoadOpPattern : OpConversionPattern<VMILoadOp> {
     }
 
     if (resultLayout && resultLayout.isDeinterleaved() &&
-        resultLayout.getFactor() == 4 && resultLayout.getBlockElems() == 1 &&
+        resultLayout.getFactor() == 4 &&
         *noWiderThanContiguous) {
       std::optional<std::string> dist =
           getX2MemoryDistToken(resultVMIType.getElementType(), "DINTLV");
@@ -5974,8 +5973,7 @@ struct OneToNVMIGroupLoadOpPattern : OpConversionPattern<VMIGroupLoadOp> {
       return failure();
 
     VMILayoutAttr resultLayout = resultVMIType.getLayoutAttr();
-    if (resultLayout && resultLayout.isDeinterleaved() &&
-        resultLayout.getBlockElems() == 8 &&
+    if (resultLayout && resultLayout.isBlockDeinterleaved() &&
         resultVMIType.getElementType().isF32()) {
       FailureOr<int64_t> groupSize = getGroupSizeFromNumGroups(
           resultVMIType, op.getNumGroupsAttr().getInt());
@@ -5985,20 +5983,23 @@ struct OneToNVMIGroupLoadOpPattern : OpConversionPattern<VMIGroupLoadOp> {
       if ((*groupSize != 16 || resultLayout.getFactor() != 2) &&
           (*groupSize != 32 || resultLayout.getFactor() != 4))
         return rewriter.notifyMatchFailure(
-            op, "block8 group_load requires S=16/factor=2 or S=32/factor=4");
+            op, "block_deinterleaved group_load requires S=16/factor=2 or "
+                "S=32/factor=4");
       if (op.getNumGroupsAttr().getInt() % 8 != 0)
         return rewriter.notifyMatchFailure(
-            op, "block8 group_load requires num_groups multiple of 8");
+            op, "block_deinterleaved group_load requires num_groups multiple "
+                "of 8");
       std::optional<int64_t> constantRowStride =
           getConstantIndexValue(op.getRowStride());
       if (!constantRowStride || *constantRowStride <= 0 ||
           *constantRowStride % 8 != 0)
         return rewriter.notifyMatchFailure(
-            op, "block8 group_load requires constant positive row_stride "
+            op, "block_deinterleaved group_load requires constant positive "
+                "row_stride "
                 "divisible by 8 f32 elements");
       if (!isa<PtrType>((*source).getType()))
         return rewriter.notifyMatchFailure(
-            op, "block8 group_load requires !pto.ptr source");
+            op, "block_deinterleaved group_load requires !pto.ptr source");
 
       FailureOr<SmallVector<Type>> maybe_resultTypes =
 
@@ -6010,20 +6011,26 @@ struct OneToNVMIGroupLoadOpPattern : OpConversionPattern<VMIGroupLoadOp> {
 
       SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
       int64_t factor = resultLayout.getFactor();
+      FailureOr<int64_t> blockElems =
+          getVMILayoutBlockElems(resultVMIType);
       FailureOr<int64_t> chunksPerPart = getDataChunksInPart(resultVMIType, 0);
-      if (failed(chunksPerPart) || *chunksPerPart <= 0)
+      if (failed(blockElems) || failed(chunksPerPart) ||
+          *chunksPerPart <= 0)
         return rewriter.notifyMatchFailure(
-            op, "block8 group_load requires known chunks per part");
+            op, "block_deinterleaved group_load requires known block and "
+                "chunks per part");
       for (int64_t part = 1; part < factor; ++part) {
         FailureOr<int64_t> currentChunks =
             getDataChunksInPart(resultVMIType, part);
         if (failed(currentChunks) || *currentChunks != *chunksPerPart)
           return rewriter.notifyMatchFailure(
-              op, "block8 group_load requires uniform chunks per part");
+              op, "block_deinterleaved group_load requires uniform chunks "
+                  "per part");
       }
       if (static_cast<int64_t>(resultTypes.size()) != factor * *chunksPerPart)
         return rewriter.notifyMatchFailure(op,
-                                           "block8 group_load arity mismatch");
+                                           "block_deinterleaved group_load "
+                                           "arity mismatch");
 
       auto makeI16 = [&](int64_t value) -> Value {
         return rewriter.create<arith::ConstantIntOp>(op.getLoc(), value, 16);
@@ -6039,22 +6046,22 @@ struct OneToNVMIGroupLoadOpPattern : OpConversionPattern<VMIGroupLoadOp> {
 
       SmallVector<Value> results;
       results.reserve(resultTypes.size());
-      constexpr int64_t kGroupsPerBlock8Load = 8;
+      constexpr int64_t kGroupsPerBlockLoad = 8;
       for (int64_t part = 0; part < factor; ++part) {
         for (int64_t chunk = 0; chunk < *chunksPerPart; ++chunk) {
           int64_t flatIndex = part * *chunksPerPart + chunk;
           auto vregType = dyn_cast<VRegType>(resultTypes[flatIndex]);
           if (!vregType)
             return rewriter.notifyMatchFailure(
-                op, "block8 group_load result must be vreg");
+                op, "block_deinterleaved group_load result must be vreg");
           FailureOr<Value> allMask =
               createAllTrueMaskForVReg(op.getLoc(), vregType, rewriter);
           if (failed(allMask))
             return rewriter.notifyMatchFailure(
-                op, "failed to create block8 group_load mask");
+                op, "failed to create block_deinterleaved group_load mask");
           Value chunkOffset = createGroupChunkOffset(
-              op.getLoc(), *offset, *rowStride, chunk * kGroupsPerBlock8Load,
-              part * resultLayout.getBlockElems(), rewriter);
+              op.getLoc(), *offset, *rowStride, chunk * kGroupsPerBlockLoad,
+              part * *blockElems, rewriter);
           Value chunkBase = makePtr(chunkOffset);
           results.push_back(rewriter
                                 .create<VsldbOp>(op.getLoc(), vregType,
@@ -6330,11 +6337,16 @@ static LogicalResult lowerGroupBroadcastParts(
         op, "failed to create group_broadcast all mask");
   VMILayoutAttr resultLayout = resultVMIType.getLayoutAttr();
   VMILayoutAttr sourceLayout = sourceVMIType.getLayoutAttr();
+  FailureOr<int64_t> resultBlockElems =
+      getVMILayoutBlockElems(resultVMIType);
+  if (failed(resultBlockElems))
+    return rewriter.notifyMatchFailure(
+        op, "group_broadcast requires a computable result block size");
   int64_t selectionGroupSize = *groupSize;
   if (resultLayoutFactor != 1 && resultLayout &&
-      resultLayout.isDeinterleaved() && resultLayout.getBlockElems() > 1 &&
+      resultLayout.isBlockDeinterleaved() &&
       *groupSize < lanesPerPart)
-    selectionGroupSize = resultLayout.getBlockElems();
+    selectionGroupSize = *resultBlockElems;
   auto resolveLargeGroupSource = [&](int64_t group, int64_t chunksPerGroup,
                                      int64_t &sourceChunk,
                                      int64_t &baseGroupSlot) {
@@ -6405,11 +6417,11 @@ static LogicalResult lowerGroupBroadcastParts(
       }
     } else {
       bool blockFragmentSmallGroup =
-          resultLayout && resultLayout.isDeinterleaved() &&
-          resultLayout.getBlockElems() > 1 && *groupSize < lanesPerPart;
+          resultLayout && resultLayout.isBlockDeinterleaved() &&
+          *groupSize < lanesPerPart;
       bool deinterleavedSmallGroup =
           resultLayout && resultLayout.isDeinterleaved() &&
-          resultLayout.getBlockElems() == 1 && *groupSize < lanesPerPart;
+          *groupSize < lanesPerPart;
       if (blockFragmentSmallGroup) {
         int64_t runningFlatIndex = 0;
         bool found = false;
@@ -6423,7 +6435,7 @@ static LogicalResult lowerGroupBroadcastParts(
             if (runningFlatIndex != static_cast<int64_t>(flatIndex))
               continue;
             int64_t groupsPerResultChunk =
-                lanesPerPart / resultLayout.getBlockElems();
+                lanesPerPart / *resultBlockElems;
             int64_t firstGroup = chunk * groupsPerResultChunk;
             int64_t slots = sourceLayout.getSlots();
             if (slots <= 0) {
@@ -6544,12 +6556,10 @@ static LogicalResult lowerGroupBroadcastParts(
                 .getResult();
       }
     } else {
-      bool blockFragmentSmallGroup = resultLayout &&
-                                     resultLayout.isDeinterleaved() &&
-                                     resultLayout.getBlockElems() > 1;
+      bool blockFragmentSmallGroup =
+          resultLayout && resultLayout.isBlockDeinterleaved();
       bool deinterleavedSmallGroup = resultLayout &&
-                                     resultLayout.isDeinterleaved() &&
-                                     resultLayout.getBlockElems() == 1;
+                                     resultLayout.isDeinterleaved();
       if (resultLayoutFactor != 1 && !blockFragmentSmallGroup &&
           !deinterleavedSmallGroup)
         return rewriter.notifyMatchFailure(
@@ -7765,12 +7775,12 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
     bool splitPacketLayout = layout && layout.isDeinterleaved() &&
                              (layout.getFactor() == 2 ||
                               layout.getFactor() == 4) &&
-                             layout.getBlockElems() == 1;
+                             layout.getLaneStride() == 1;
     if (!contiguousPacketLayout && !splitPacketLayout)
       return rewriter.notifyMatchFailure(
           op, "group_broadcast_load E2B lowering requires "
               "contiguous result layout for direct group size or "
-              "deinterleaved=2/4, block_elems=1 result layout for split "
+              "deinterleaved=2/4 result layout for split "
               "group size");
 
     unsigned elementBits = directFact->layout.elementBits;
@@ -8143,8 +8153,7 @@ struct OneToNVMIInterleaveOpPattern : OpConversionPattern<SourceOp> {
     auto getElementDeintFactor = [](VMILayoutAttr layout) -> int64_t {
       if (layout && layout.isContiguous() && layout.getLaneStride() == 1)
         return 1;
-      if (layout && layout.isDeinterleaved() &&
-          layout.getBlockElems() == 1 && layout.getLaneStride() == 1)
+      if (layout && layout.isDeinterleaved() && layout.getLaneStride() == 1)
         return layout.getFactor();
       return 0;
     };
@@ -8871,8 +8880,7 @@ classifyGroupReduceLoweringPlan(VMIVRegType sourceType, VMIMaskType maskType,
     return GroupReduceLoweringPlan::FourBlockDeinterleaved4VcgaddTree;
   case VMIGroupBlockClass::FullPartMultiple:
     if (fact->sourceLayout && fact->sourceLayout.isDeinterleaved() &&
-        fact->sourceLayout.getFactor() == 2 &&
-        fact->sourceLayout.getBlockElems() == 1)
+        fact->sourceLayout.getFactor() == 2)
       return GroupReduceLoweringPlan::FullDeinterleaved2VcaddRows;
     return GroupReduceLoweringPlan::ContiguousVcaddRows;
   }
@@ -8958,7 +8966,7 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
       if (static_cast<int64_t>(sourceParts.size()) != resultPartCount * 2 ||
           maskParts.size() != sourceParts.size())
         return rewriter.notifyMatchFailure(
-            op, "s16 block8 group_reduce arity mismatch");
+            op, "two-block group_reduce arity mismatch");
 
       SmallVector<Value> results;
       results.reserve(resultPartCount);
@@ -8966,7 +8974,7 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
       auto maskType = dyn_cast<MaskType>(maskParts.front().getType());
       if (!resultType || !maskType)
         return rewriter.notifyMatchFailure(
-            op, "s16 block8 group_reduce requires physical vreg/mask");
+            op, "two-block group_reduce requires physical vreg/mask");
       int64_t numGroups = op.getNumGroupsAttr().getInt();
 
       for (int64_t resultIndex = 0; resultIndex < resultPartCount;
@@ -8981,7 +8989,7 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
             hiSource.getType() != resultType || loMask.getType() != maskType ||
             hiMask.getType() != maskType)
           return rewriter.notifyMatchFailure(
-              op, "s16 block8 group_reduce requires uniform physical "
+              op, "two-block group_reduce requires uniform physical "
                   "types");
 
         SmallVector<Value, 2> sources{loSource, hiSource};
@@ -9003,7 +9011,7 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
             op.getLoc(), maskType, activeGroups, rewriter);
         if (failed(combineMask))
           return rewriter.notifyMatchFailure(
-              op, "failed to create s16 block8 combine mask");
+              op, "failed to create two-block group_reduce combine mask");
         Value lo = rewriter
                        .create<GroupReduceOpTy>(op.getLoc(), resultType,
                                                 loSource, loMask)
@@ -9027,7 +9035,7 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
       if (static_cast<int64_t>(sourceParts.size()) != resultPartCount * 4 ||
           maskParts.size() != sourceParts.size())
         return rewriter.notifyMatchFailure(
-            op, "s32 block8 group_reduce arity mismatch");
+            op, "four-block group_reduce arity mismatch");
 
       SmallVector<Value> results;
       results.reserve(resultPartCount);
@@ -9035,7 +9043,7 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
       auto maskType = dyn_cast<MaskType>(maskParts.front().getType());
       if (!resultType || !maskType)
         return rewriter.notifyMatchFailure(
-            op, "s32 block8 group_reduce requires physical vreg/mask");
+            op, "four-block group_reduce requires physical vreg/mask");
       int64_t numGroups = op.getNumGroupsAttr().getInt();
 
       for (int64_t resultIndex = 0; resultIndex < resultPartCount;
@@ -9054,7 +9062,7 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
           if (physicalResultType != resultType ||
               source.getType() != resultType || mask.getType() != maskType)
             return rewriter.notifyMatchFailure(
-                op, "s32 block8 group_reduce requires uniform physical "
+                op, "four-block group_reduce requires uniform physical "
                     "types");
           sources.push_back(source);
           masks.push_back(mask);
@@ -9077,7 +9085,7 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
             op.getLoc(), maskType, activeGroups, rewriter);
         if (failed(combineMask))
           return rewriter.notifyMatchFailure(
-              op, "failed to create s32 block8 combine mask");
+              op, "failed to create four-block group_reduce combine mask");
         for (auto [source, mask] : llvm::zip_equal(sources, masks))
           partials.push_back(rewriter
                                  .create<GroupReduceOpTy>(
@@ -9472,11 +9480,16 @@ struct OneToNVMIGroupBroadcastOpPattern
           op, "failed to create group_broadcast all mask");
     VMILayoutAttr resultLayout = resultVMIType.getLayoutAttr();
     VMILayoutAttr sourceLayout = sourceVMIType.getLayoutAttr();
+    FailureOr<int64_t> resultBlockElems =
+        getVMILayoutBlockElems(resultVMIType);
+    if (failed(resultBlockElems))
+      return rewriter.notifyMatchFailure(
+          op, "group_broadcast requires a computable result block size");
     int64_t selectionGroupSize = *groupSize;
     if (resultLayoutFactor != 1 && resultLayout &&
-        resultLayout.isDeinterleaved() && resultLayout.getBlockElems() > 1 &&
+        resultLayout.isBlockDeinterleaved() &&
         *groupSize < lanesPerPart)
-      selectionGroupSize = resultLayout.getBlockElems();
+      selectionGroupSize = *resultBlockElems;
     auto resolveLargeGroupSource = [&](int64_t group, int64_t chunksPerGroup,
                                        int64_t &sourceChunk,
                                        int64_t &baseGroupSlot) {
@@ -9547,11 +9560,11 @@ struct OneToNVMIGroupBroadcastOpPattern
         }
       } else {
         bool blockFragmentSmallGroup =
-            resultLayout && resultLayout.isDeinterleaved() &&
-            resultLayout.getBlockElems() > 1 && *groupSize < lanesPerPart;
+            resultLayout && resultLayout.isBlockDeinterleaved() &&
+            *groupSize < lanesPerPart;
         bool deinterleavedSmallGroup =
             resultLayout && resultLayout.isDeinterleaved() &&
-            resultLayout.getBlockElems() == 1 && *groupSize < lanesPerPart;
+            *groupSize < lanesPerPart;
         if (blockFragmentSmallGroup) {
           int64_t runningFlatIndex = 0;
           bool found = false;
@@ -9566,7 +9579,7 @@ struct OneToNVMIGroupBroadcastOpPattern
               if (runningFlatIndex != static_cast<int64_t>(flatIndex))
                 continue;
               int64_t groupsPerResultChunk =
-                  lanesPerPart / resultLayout.getBlockElems();
+                  lanesPerPart / *resultBlockElems;
               int64_t firstGroup = chunk * groupsPerResultChunk;
               int64_t slots = sourceLayout.getSlots();
               if (slots <= 0) {
@@ -9690,12 +9703,10 @@ struct OneToNVMIGroupBroadcastOpPattern
                   .getResult();
         }
       } else {
-        bool blockFragmentSmallGroup = resultLayout &&
-                                       resultLayout.isDeinterleaved() &&
-                                       resultLayout.getBlockElems() > 1;
+        bool blockFragmentSmallGroup =
+            resultLayout && resultLayout.isBlockDeinterleaved();
         bool deinterleavedSmallGroup = resultLayout &&
-                                       resultLayout.isDeinterleaved() &&
-                                       resultLayout.getBlockElems() == 1;
+                                       resultLayout.isDeinterleaved();
         if (resultLayoutFactor != 1 && !blockFragmentSmallGroup &&
             !deinterleavedSmallGroup)
           return rewriter.notifyMatchFailure(
@@ -11860,12 +11871,13 @@ LogicalResult checkSupportedGroupBroadcastShape(
   }
   if (*resultFactor == 1)
     return success();
+  FailureOr<int64_t> resultBlockElems =
+      getVMILayoutBlockElems(resultType);
   bool blockFragmentSmallGroup =
-      resultLayout.isDeinterleaved() && resultLayout.getBlockElems() > 1 &&
-      *groupSize < *lanesPerPart &&
-      *lanesPerPart % resultLayout.getBlockElems() == 0;
+      resultLayout.isBlockDeinterleaved() && succeeded(resultBlockElems) &&
+      *groupSize < *lanesPerPart && *lanesPerPart % *resultBlockElems == 0;
   bool deinterleavedSmallGroup =
-      resultLayout.isDeinterleaved() && resultLayout.getBlockElems() == 1 &&
+      resultLayout.isDeinterleaved() &&
       *groupSize < *lanesPerPart && *groupSize >= *resultFactor &&
       *groupSize % *resultFactor == 0 &&
       *lanesPerPart % (*groupSize / *resultFactor) == 0;
@@ -11925,11 +11937,11 @@ LogicalResult checkSupportedVmullShape(VMIVmullOp op,
   bool supportedLayout =
       layout.getLaneStride() == 1 &&
       (layout.isContiguous() ||
-       (layout.isDeinterleaved() && layout.getBlockElems() == 1 &&
+       (layout.isDeinterleaved() &&
         (layout.getFactor() == 2 || layout.getFactor() == 4)));
   if (!supportedLayout)
-    return fail("requires contiguous layout or deinterleaved factor 2/4 with "
-                "block_elems=1 and lane_stride=1");
+    return fail("requires contiguous or deinterleaved factor 2/4 layout with "
+                "lane_stride=1");
   if (maskType.getLayoutAttr() != layout)
     return fail("requires the mask and all four data values to share one "
                 "layout");
@@ -12382,7 +12394,7 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
           << kVMIDiagUnsupportedPrefix
           << "pto.vmi.vmull requires equal 64/128/256-lane i32/ui32 data "
              "ports, a matching b32 mask, and contiguous or deinterleaved "
-             "factor-2/factor-4 block_elems=1 lane_stride=1 layout ("
+             "factor-2/factor-4 lane_stride=1 layout ("
           << reason << ")";
       return WalkResult::interrupt();
     }

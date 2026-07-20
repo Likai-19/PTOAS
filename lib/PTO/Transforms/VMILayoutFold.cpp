@@ -61,8 +61,7 @@ static bool isLoadProducerLayout(VMIVRegType type) {
     unsigned elementBits = pto::getPTOStorageElemBitWidth(type.getElementType());
     return elementBits == 8;
   }
-  if (!layout.isDeinterleaved() || layout.getBlockElems() != 1 ||
-      layout.getLaneStride() != 1 ||
+  if (!layout.isDeinterleaved() || layout.getLaneStride() != 1 ||
       (layout.getFactor() != 2 && layout.getFactor() != 4))
     return false;
   unsigned elementBits = pto::getPTOStorageElemBitWidth(type.getElementType());

@@ -23,37 +23,39 @@ chunk c, lane l -> logical lane c * L + l
 `L` is the physical lanes per 256B VPTO vector register for the element type.
 
 ```text
-#pto.vmi.layout<deinterleaved = F, block_elems = B>
+#pto.vmi.layout<deinterleaved = F>
+#pto.vmi.layout<block_deinterleaved = F>
 ```
 
-`block_elems` defaults to `1`. Existing spellings are shorthands:
+The two split layouts are independent kinds:
 
 ```text
-#pto.vmi.layout<deinterleaved = 2>
-  == #pto.vmi.layout<deinterleaved = 2, block_elems = 1>
-
-#pto.vmi.layout<deinterleaved = 4>
-  == #pto.vmi.layout<deinterleaved = 4, block_elems = 1>
+deinterleaved=F distributes individual elements by logical lane modulo F.
+block_deinterleaved=F distributes fixed 32B blocks modulo F; the element count
+per block is derived from the carrier type.
 ```
 
 Logical-to-physical mapping:
 
 ```text
-logical lane i
-block q        = i / B
-in_block lane r = i % B
-part p         = q % F
-part_block t   = q / F
+deinterleaved:
+  part p = i % F
+  physical lane = i / F
 
-physical part p, physical lane t * B + r
+block_deinterleaved:
+  B = 32B / sizeof(carrier element)
+  block q = i / B
+  in_block lane r = i % B
+  part p = q % F
+  part_block t = q / F
+  physical lane = t * B + r
 ```
 
 Required invariants:
 
 ```text
-F > 0
-B > 0
-N % (F * B) == 0 for the direct full-chunk paths in this document
+F is 2 or 4
+N must fill the physical chunks required by each direct lowering in this document
 ```
 
 ### 1.2 Group-Slot Layout
@@ -115,7 +117,7 @@ support queries only answer whether that layout can be materialized or lowered.
 ```text
 dense cast:
   source/result are dense layouts.
-  lowering may require deinterleaved(F, block_elems=1) around VCVT.
+  lowering may require ordinary deinterleaved(F) around VCVT.
 
 group-slot cast:
   source/result are both group_slots(G,K).
@@ -147,16 +149,16 @@ pto.vmi.load -> #pto.vmi.layout<contiguous>
   lower as:
     vlds NORM for each physical chunk
 
-pto.vmi.load -> #pto.vmi.layout<deinterleaved = 2, block_elems = 1>
+pto.vmi.load -> #pto.vmi.layout<deinterleaved=2>
   lower as:
     vldsx2 DINTLV_B* for each pair of physical chunks
 
-pto.vmi.load -> #pto.vmi.layout<deinterleaved = 4, block_elems = 1>
+pto.vmi.load -> #pto.vmi.layout<deinterleaved=4>
   lower as:
     two vldsx2 DINTLV_B* operations for each four-chunk group
     followed by two vdintlv operations to split mod4 parts
 
-pto.vmi.load -> #pto.vmi.layout<deinterleaved = F, block_elems != 1>
+pto.vmi.load -> #pto.vmi.layout<block_deinterleaved = F>
   lower using the producer-specific path or fall back to explicit
   materialization.  Do not treat DINTLV_B* as a block-fragment layout.
 ```
@@ -240,7 +242,7 @@ the immediately following complete endpoints.
 3.16 group_slot_load layout contract                     complete
 3.17 group_broadcast feeding deinterleaved consumer      complete
 3.18 one value with dense and group-reduce consumers     complete/materialization
-3.19 S=16 reduce block_elems support selection           complete/diagnostic
+3.19 S=16 split-layout support selection                 complete/diagnostic
 3.20 group_slots control-flow join                       complete
 3.21 S=32 tail with full-tile-readable source            complete
 3.22 scf.for loop-carried layout                         complete
@@ -587,7 +589,7 @@ Assigned layouts:
 
 ```text
 %x : !pto.vmi.vreg<Nxf32,
-       #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+       #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum : !pto.vmi.vreg<Nxf32,
          #pto.vmi.layout<num_groups = N / 16, slots = 8>>
@@ -634,7 +636,8 @@ pto.vsts %sum_block, %sum_out[%group_tile_off], %store8 {dist = "NORM_B32"}
 `BDINTLV` here denotes the ISA `#bdintlv` block-based interleaving load mode:
 it loads `2 * VL` bytes and sends even 32B blocks to the first destination
 register and odd 32B blocks to the second destination register. For f32,
-one 32B block is `8xf32`, matching `block_elems = 8`.
+one 32B block is `8xf32`; f16 and f8 carriers instead derive 16 and 32
+elements per block.
 
 Tail tiles use the same dataflow with `%all_b32` replaced by masks derived from
 the VMI mask for the low and high 8-lane halves of each row.
@@ -686,13 +689,13 @@ Assigned layouts:
 
 ```text
 %x   : !pto.vmi.vreg<Nxf32,
-         #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+         #pto.vmi.layout<block_deinterleaved=2>>
 %sum : !pto.vmi.vreg<Nxf32,
          #pto.vmi.layout<num_groups = N / 16, slots = 8>>
 %b   : !pto.vmi.vreg<Nxf32,
-         #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+         #pto.vmi.layout<block_deinterleaved=2>>
 %y   : !pto.vmi.vreg<Nxf32,
-         #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+         #pto.vmi.layout<block_deinterleaved=2>>
 %ysum : !pto.vmi.vreg<Nxf32,
           #pto.vmi.layout<num_groups = N / 16, slots = 8>>
 ```
@@ -812,7 +815,7 @@ If a later consumer requires row-major contiguous order, `vmi-to-vpto` must
 materialize:
 
 ```text
-deinterleaved=2, block_elems=8 -> contiguous
+block_deinterleaved=2 -> contiguous
 ```
 
 This materialization cannot be implemented with `vstsx2 INTLV_B32`, because
@@ -823,7 +826,7 @@ row-major store of this layout must be rejected with:
 ```text
 VMI-LAYOUT-CONTRACT:
   pto.vmi.store requires materializing
-  #pto.vmi.layout<deinterleaved = 2, block_elems = 8> to contiguous, but no
+  #pto.vmi.layout<block_deinterleaved=2> to contiguous, but no
   VPTO block-interleave materialization/store support exists.
 ```
 
@@ -851,7 +854,7 @@ Assigned layouts:
 ```text
 %x for reduce:
   !pto.vmi.vreg<128xf32,
-    #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum:
   !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
@@ -1578,19 +1581,19 @@ Final assigned IR:
 
 %x = pto.vmi.load %base[%off]
   : memref<128xf32> -> !pto.vmi.vreg<128xf32,
-       #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+       #pto.vmi.layout<block_deinterleaved=2>>
 
 %mask_d2 = pto.vmi.ensure_mask_layout %mask
   : !pto.vmi.mask<128xb32,
        #pto.vmi.layout<contiguous>>
  -> !pto.vmi.mask<128xb32,
-       #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+       #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum32 = pto.vmi.group_reduce_addf %x, %mask_d2 {num_groups = 8}
   : !pto.vmi.vreg<128xf32,
-       #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>,
+       #pto.vmi.layout<block_deinterleaved=2>>,
     !pto.vmi.mask<128xb32,
-       #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+       #pto.vmi.layout<block_deinterleaved=2>>
  -> !pto.vmi.vreg<8xf32,
        #pto.vmi.layout<num_groups = 8, slots = 8>>
 
@@ -1729,7 +1732,7 @@ Assigned layouts:
 
 ```text
 %a, %bias, %x:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+  !pto.vmi.vreg<256xf32, #pto.vmi.layout<block_deinterleaved=4>>
 
 %sum:
   !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
@@ -1994,7 +1997,7 @@ Assigned layouts before the illegal cast:
 ```text
 %x:
   !pto.vmi.vreg<128xf32,
-    #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum32:
   !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
@@ -2126,11 +2129,11 @@ Assigned layouts:
 ```text
 %x:
   !pto.vmi.vreg<128xf32,
-    #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=2>>
 
 %mask:
   !pto.vmi.mask<128xpred,
-    #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum:
   !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
@@ -2231,7 +2234,7 @@ Assigned layouts are the same as section 3.15.1:
 
 ```text
 %x, %mask:
-  #pto.vmi.layout<deinterleaved = 2, block_elems = 8>
+  #pto.vmi.layout<block_deinterleaved=2>
 %sum:
   #pto.vmi.layout<num_groups = 8, slots = 8>
 ```
@@ -2466,7 +2469,7 @@ Assigned layouts:
 ```text
 %x:
   !pto.vmi.vreg<128xf32,
-    #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum:
   !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
@@ -2651,27 +2654,28 @@ VMI-LAYOUT-CONTRACT:
   pto.vmi.store, but no materialization support exists at the store use site.
 ```
 
-### 3.19 S=16 Reduce `block_elems` Support Selection
+### 3.19 S=16 Reduce Split-Layout Support Selection
 
 S=16 f32 group reduction has two legal dense input layouts:
 
 ```text
-#pto.vmi.layout<deinterleaved = 2, block_elems = 1>
-#pto.vmi.layout<deinterleaved = 2, block_elems = 8>
+#pto.vmi.layout<deinterleaved=2>
+#pto.vmi.layout<block_deinterleaved=2>
 ```
 
-`block_elems = 1` is the element-parity layout required by f32->f16 `truncf`.
+Ordinary `deinterleaved=2` is the element-parity layout required by f32->f16
+`truncf`.
 It is also a valid S=16 reduction layout: each physical part contains eight
 values per row, so `VCGADD` can reduce each part and `VADD` can combine the two
 partial sums.
 
-`block_elems = 8` is still useful when the producer is a block load shape such
-as `BDINTLV` or `vsldb` over 32B row fragments.  Baseline layout assignment must
+`block_deinterleaved=2` is still useful when the producer is a block load shape
+such as `BDINTLV` or `vsldb` over 32B row fragments. Baseline layout assignment must
 express any mismatch with an explicit `ensure_layout`; producer rematerialization
 or consumer folding can choose the cheaper equivalent form later.  Assignment
-must not hard-code S=16 reduce to `block_elems = 8`.
+must not hard-code S=16 reduce to `block_deinterleaved=2`.
 
-#### 3.19.1 Continuous S=16 Reduce And Truncf, `block_elems = 1`
+#### 3.19.1 Continuous S=16 Reduce And Truncf
 
 VMI input:
 
@@ -2749,11 +2753,11 @@ for i = 0..127:
   out[off + i] = truncf(base[off + i])
 ```
 
-#### 3.19.2 Block-Load Producer Fixed To `block_elems = 8`
+#### 3.19.2 Block-Load Producer Fixed To `block_deinterleaved=2`
 
-This is the real conflict case.  The value is fixed to `block_elems = 8`
-because the producer uses block-load support.  A later `truncf`
-requires element-parity `block_elems = 1`.
+This is the real conflict case. The value is fixed to `block_deinterleaved=2`
+because the producer uses block-load support. A later `truncf` requires
+ordinary element-parity `deinterleaved=2`.
 
 VMI input:
 
@@ -2774,7 +2778,7 @@ Assigned layouts before the conflicting `truncf` use:
 ```text
 %x from strided block group_load:
   !pto.vmi.vreg<128xf32,
-    #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum:
   !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
@@ -2785,8 +2789,8 @@ section 3.15.2.  The `truncf` path is legal only if one of these transforms
 exists:
 
 ```text
-1. rematerialize the original memory producer as block_elems=1
-2. materialize block_elems=8 -> block_elems=1 in registers
+1. rematerialize the original memory producer as deinterleaved=2
+2. materialize block_deinterleaved=2 -> deinterleaved=2 in registers
 3. use an explicitly enabled scratch/reload fallback
 ```
 
@@ -2795,8 +2799,8 @@ If no such transform exists, the required diagnostic is:
 ```text
 VMI-LAYOUT-CONTRACT:
   pto.vmi.truncf requires
-  #pto.vmi.layout<deinterleaved = 2, block_elems = 1>, but the source value is
-  fixed to #pto.vmi.layout<deinterleaved = 2, block_elems = 8> by the strided
+  #pto.vmi.layout<deinterleaved=2>, but the source value is
+  fixed to #pto.vmi.layout<block_deinterleaved=2> by the strided
   group_load. Add rematerialization or preserving materialization support, or
   avoid consuming this block-loaded value with truncf.
 ```
@@ -2830,7 +2834,7 @@ Assigned layouts:
 ```text
 %x:
   !pto.vmi.vreg<128xf32,
-    #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=2>>
 
 %a, %b, %sum, %bias, %outv:
   !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
@@ -2910,11 +2914,11 @@ Assigned layouts:
 
 ```text
 %x:
-  !pto.vmi.vreg<192xf32, #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+  !pto.vmi.vreg<192xf32, #pto.vmi.layout<block_deinterleaved=4>>
 
 %mask:
   !pto.vmi.mask<192xpred,
-    #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=4>>
 
 %sum:
   !pto.vmi.vreg<192xf32, #pto.vmi.layout<num_groups = 6, slots = 8>>
@@ -3107,7 +3111,7 @@ Assigned layouts in the current implementation:
 
 %x_for_reduce:
   !pto.vmi.vreg<128xf32,
-    #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum, %ysum:
   !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
@@ -3117,7 +3121,7 @@ Assigned layouts in the current implementation:
 
 %y_for_reduce:
   !pto.vmi.vreg<128xf32,
-    #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=2>>
 
 %b_for_cast:
   !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
@@ -3429,11 +3433,11 @@ Assigned layouts:
 ```text
 %x, %b, %y:
   !pto.vmi.vreg<128xf32,
-    #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=2>>
 
 %mask:
   !pto.vmi.mask<128xpred,
-    #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum, %ysum:
   !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
@@ -3527,11 +3531,11 @@ Assigned layouts:
 ```text
 %x:
   !pto.vmi.vreg<256xf32,
-    #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=4>>
 
 %mask:
   !pto.vmi.mask<256xpred,
-    #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=4>>
 
 %sum:
   !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
@@ -3598,10 +3602,10 @@ Required assignment rule:
 
 ```text
 This producer requires the S=32 block-fragment layout:
-  #pto.vmi.layout<deinterleaved = 4, block_elems = 8>
+  #pto.vmi.layout<block_deinterleaved=4>
 
 It must not be unified with the contiguous-load S=32 plan from section 3.6:
-  #pto.vmi.layout<deinterleaved = 4, block_elems = 1>
+  #pto.vmi.layout<deinterleaved=4>
 
 Both layouts are legal inputs to group_reduce_addf S=32, but they require
 different producer materialization/lowering support.
@@ -3888,7 +3892,7 @@ user.
 This case proves that the `deinterleaved = 2` layout produced by widening
 `f16 -> f32` is not just a store layout.  It must also be a legal S=16 grouped
 reduction input.  Layout assignment must not force the reduce consumer to
-`block_elems = 8` and then rematerialize the widened value.
+`block_deinterleaved=2` and then rematerialize the widened value.
 
 VMI input:
 
@@ -3967,17 +3971,17 @@ Required assignment rule:
 
 ```text
 When S=16 group_reduce consumes an existing `deinterleaved = 2` dense value,
-the reduce plan must accept `block_elems = 1`.  `block_elems = 8` is only a
-producer-driven fast plan for block-fragment loads, not the semantic
-requirement of S=16 reduction.
+the reduce plan must accept ordinary `deinterleaved=2`.
+`block_deinterleaved=2` is only a producer-driven fast plan for block-fragment
+loads, not the semantic requirement of S=16 reduction.
 ```
 
 ### 3.32 `f32` Feeding f8 Store And S=32 Reduce
 
 This is the `f32 -> f8` counterpart to section 3.31.  A 256-lane f32 value can
 serve both `truncf -> f8` and S=32 group reduction with the same
-`deinterleaved = 4, block_elems = 1` layout.  The value must not be forced to a
-block-fragment `block_elems = 8` layout unless its producer requires that plan.
+`deinterleaved=4` layout.  The value must not be forced to a
+`block_deinterleaved=4` layout unless its producer requires that plan.
 
 VMI input:
 
@@ -4070,9 +4074,9 @@ Required assignment rule:
 
 ```text
 The common layout selected for `%x32` is
-`#pto.vmi.layout<deinterleaved = 4, block_elems = 1>`.  This satisfies both
+`#pto.vmi.layout<deinterleaved=4>`.  This satisfies both
 `truncf f32 -> f8` and S=32 `group_reduce_addf`.  A later strided block-load
-producer may introduce `block_elems = 8`, but that is a different case and
+producer may introduce `block_deinterleaved=4`, but that is a different case and
 requires an explicit materialization/rematerialization decision.
 
 When `%x32` is produced by a full contiguous `pto.vmi.load`, `vmi-to-vpto`
@@ -4080,7 +4084,7 @@ should not first materialize four contiguous f32 chunks and then run a full
 four-op `vdintlv` tree.  The load lowering should fold the first deinterleave
 level into two `vldsx2 DINTLV_B32` operations and then run only the second
 `vdintlv` level, as shown above.  The layout remains just
-`deinterleaved = 4, block_elems = 1`; it does not encode the fact that `vldsx2`
+`deinterleaved=4`; it does not encode the fact that `vldsx2`
 was used.
 ```
 
@@ -4321,11 +4325,11 @@ Assigned layouts:
 
 %x_for_reduce:
   !pto.vmi.vreg<128xf32,
-    #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=2>>
 
 %mask_for_reduce:
   !pto.vmi.mask<128xb32,
-    #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum, %ysum:
   !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
@@ -4335,7 +4339,7 @@ Assigned layouts:
 
 %y_for_reduce:
   !pto.vmi.vreg<128xf32,
-    #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=2>>
 ```
 
 VPTO lowering result for one full 8-row tile:
@@ -4447,7 +4451,7 @@ Assigned layouts:
   !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 
 %x16, %mask16:
-  #pto.vmi.layout<deinterleaved = 2, block_elems = 8>
+  #pto.vmi.layout<block_deinterleaved=2>
 
 %rhs64, %sum64, %out64v:
   !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
@@ -4592,7 +4596,7 @@ Assigned layouts:
 ```text
 %x, %mask:
   !pto.vmi.vreg<512xf32,
-    #pto.vmi.layout<deinterleaved = 4, block_elems = 1>>
+    #pto.vmi.layout<deinterleaved=4>>
 
 %sum:
   !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 16, slots = 8>>
@@ -4651,7 +4655,7 @@ blocks in group order.  `group_store` stores both blocks with offsets
 Section 3.27 covers strided S=32 `group_load -> group_reduce -> group_store`.
 This case adds the missing dense continuation.  The important layout fact is
 that a strided block load naturally produces
-`deinterleaved = 4, block_elems = 8`; `group_broadcast` must materialize the
+`block_deinterleaved=4`; `group_broadcast` must materialize the
 broadcast into that same block-fragment layout when the broadcast feeds
 elementwise compute and another S=32 group reduction.
 
@@ -4676,7 +4680,7 @@ Assigned layouts:
 ```text
 %x, %mask, %b, %y:
   !pto.vmi.vreg<256xf32,
-    #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=4>>
 
 %sum, %ysum:
   !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
@@ -4712,7 +4716,7 @@ VPTO lowering result:
 
 // Materialize the same per-row scalar into every 32B row fragment.  The four
 // bundle entries have the same lane contents, but the result layout remains
-// deinterleaved=4, block_elems=8 because the consumer `%y = mulf %x, %b`
+// block_deinterleaved=4 because the consumer `%y = mulf %x, %b`
 // operates on the block-fragment layout.
 %b_p0 = pto.vselr %sum_block, %broadcast_idx
   : !pto.vreg<64xf32>, !pto.vreg<64xi32> -> !pto.vreg<64xf32>
@@ -4752,10 +4756,10 @@ for r = 0..7:
 Required assignment rule:
 
 ```text
-`block_elems` is part of dense layout compatibility.  A broadcast result feeding
-an elementwise op with `%x : deinterleaved=4, block_elems=8` must also be
-assigned `deinterleaved=4, block_elems=8`.  Reusing a
-`deinterleaved=4, block_elems=1` broadcast would be a layout mismatch even
+The split layout kind is part of dense layout compatibility. A broadcast result feeding
+an elementwise op with `%x : block_deinterleaved=4` must also be
+assigned `block_deinterleaved=4`.  Reusing a
+`deinterleaved=4` broadcast would be a layout mismatch even
 though both have four physical parts.
 ```
 
@@ -4791,15 +4795,15 @@ Assigned layouts:
 ```text
 %x, %scale, %copy, %prod:
   !pto.vmi.vreg<256xf32,
-    #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=4>>
 
 %copy_dense = pto.vmi.ensure_layout %copy:
-  #pto.vmi.layout<deinterleaved = 4, block_elems = 8>
+  #pto.vmi.layout<block_deinterleaved=4>
     -> #pto.vmi.layout<contiguous>
 
 %mask:
   !pto.vmi.mask<256xpred,
-    #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=4>>
 
 %sum:
   !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
@@ -4811,7 +4815,7 @@ VPTO lowering result:
 %all_b32 = pto.pge_b32 "PAT_ALL"
 %slot8 = pto.pge_b32 "PAT_VL8"
 
-// The shared load is assigned deinterleaved=4, block_elems=8 because the
+// The shared load is assigned block_deinterleaved=4 because the
 // grouped consumer dominates the useful compute layout.
 %x0 = pto.vlds %base[%off] : !pto.ptr<f32, ub>, index -> !pto.vreg<64xf32>
 %x1 = pto.vlds %base[%off_plus_64] : !pto.ptr<f32, ub>, index -> !pto.vreg<64xf32>
@@ -5041,11 +5045,11 @@ Assigned layouts:
 
 %x:
   !pto.vmi.vreg<128xf32,
-    #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=2>>
 
 %mask:
   !pto.vmi.mask<128xpred,
-    #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=2>>
 ```
 
 VPTO lowering result:
@@ -5141,11 +5145,11 @@ Assigned layouts:
 inside @consume:
   %x_split = pto.vmi.ensure_layout %x
     : #pto.vmi.layout<contiguous>
-   -> #pto.vmi.layout<deinterleaved = 4, block_elems = 8>
+   -> #pto.vmi.layout<block_deinterleaved=4>
 
   %mask_split = pto.vmi.ensure_mask_layout %mask
     : #pto.vmi.layout<contiguous>
-   -> #pto.vmi.layout<deinterleaved = 4, block_elems = 8>
+   -> #pto.vmi.layout<block_deinterleaved=4>
 
 @caller %x and %mask:
   !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>
@@ -5168,8 +5172,7 @@ func.func private @consume(%x_p0: !pto.vreg<64xf32>,
                            %m3: !pto.mask<b32>,
                            %out: !pto.ptr<f32, ub>,
                            %group_off: index) {
-  // Callee-entry lowering of ensure_layout contiguous -> deinterleaved=4,
-  // block_elems=8.
+  // Callee-entry lowering of ensure_layout contiguous -> block_deinterleaved=4.
   %x01_lo, %x01_hi = pto.vdintlv %x_p0, %x_p1
     : !pto.vreg<64xf32>, !pto.vreg<64xf32> -> !pto.vreg<64xf32>, !pto.vreg<64xf32>
   %x23_lo, %x23_hi = pto.vdintlv %x_p2, %x_p3
@@ -5239,7 +5242,7 @@ ABI and inserts callee-entry materialization for the grouped body requirement.
 not inspect callers while lowering the callee block argument.
 
 Future optimization may specialize private VMI function signatures directly to
-`deinterleaved = 4, block_elems = 8` when all call sites agree.  That
+`block_deinterleaved=4` when all call sites agree.  That
 optimization must still be expressed in the assigned VMI function type before
 `vmi-to-vpto` runs.
 ```
@@ -5293,12 +5296,12 @@ Assigned layouts:
 
 %x_for_reduce = pto.vmi.ensure_layout %x:
   #pto.vmi.layout<contiguous>
-    -> #pto.vmi.layout<deinterleaved = 4, block_elems = 8>
+    -> #pto.vmi.layout<block_deinterleaved=4>
 
 %mask_for_reduce:
   pto.vmi.create_group_mask %c25 {num_groups = 8, group_size = 32}
     -> !pto.vmi.mask<256xpred,
-         #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+         #pto.vmi.layout<block_deinterleaved=4>>
 
 %sum:
   !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
@@ -5322,7 +5325,7 @@ Lowering:
 %x2 = pto.vsel %l2, %z2, %m2 : !pto.vreg<64xf32>
 %x3 = pto.vsel %l3, %z3, %m3 : !pto.vreg<64xf32>
 
-// ensure_layout contiguous -> deinterleaved=4, block_elems=8.
+// ensure_layout contiguous -> block_deinterleaved=4.
 %x01_lo, %x01_hi = pto.vdintlv %x0, %x1
 %x23_lo, %x23_hi = pto.vdintlv %x2, %x3
 %x_p0, %x_p2 = pto.vdintlv %x01_lo, %x23_lo
@@ -5406,7 +5409,7 @@ Assigned layouts:
 
 %mask for S=32 group_reduce:
   !pto.vmi.mask<256xb32,
-    #pto.vmi.layout<deinterleaved = 4, block_elems = 8>>
+    #pto.vmi.layout<block_deinterleaved=4>>
 ```
 
 Contiguous VPTO lowering for one b32 physical chunk:
@@ -5429,7 +5432,7 @@ Contiguous VPTO lowering for one b32 physical chunk:
   : !pto.vreg<64xi32>, i32, !pto.mask<b32> -> !pto.mask<b32>
 ```
 
-For `deinterleaved = 4, block_elems = 8`, lowering first emits four contiguous
+For `block_deinterleaved=4`, lowering first emits four contiguous
 chunks with the sequence above, then applies the same predicate deinterleave
 tree used by section 3.44:
 
@@ -5845,7 +5848,7 @@ Assigned layouts:
 
 ```text
 %x, %mask:
-  #pto.vmi.layout<deinterleaved = 4, block_elems = 8>
+  #pto.vmi.layout<block_deinterleaved=4>
 
 %sum:
   !pto.vmi.vreg<256xf16, #pto.vmi.layout<num_groups = 4, slots = 8>>
@@ -5854,7 +5857,7 @@ Assigned layouts:
 VPTO lowering shape for the only result chunk:
 
 ```text
-%x_p0, %x_p1, %x_p2, %x_p3 = materialize deinterleaved=4, block_elems=8 input
+%x_p0, %x_p1, %x_p2, %x_p3 = materialize block_deinterleaved=4 input
   : four !pto.vreg<128xf16>
 
 %lane64_b16 = pto.pge_b16 "PAT_VL64"  // A * 16 = 4 * 16

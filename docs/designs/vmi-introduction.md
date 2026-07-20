@@ -58,14 +58,30 @@ dense load/store
 caller/callee 约定 dense order 时的 control-flow/function boundary
 ```
 
-### 2.2 `deinterleaved = F, block_elems = B`
+### 2.2 `deinterleaved = F` 与 `block_deinterleaved = F`
 
 ```mlir
 #pto.vmi.layout<deinterleaved = 2>
-#pto.vmi.layout<deinterleaved = 4, block_elems = 8>
+#pto.vmi.layout<block_deinterleaved = 4>
 ```
 
-`block_elems` 缺省为 `1`。逻辑 lane 到物理 part 的映射是：
+`deinterleaved` 按 element 拆分：
+
+```text
+part p        = i % F
+physical lane = i / F
+```
+
+`block_deinterleaved` 是独立 layout kind，按固定 32B VCG block 拆分。block
+中的 element 数量由 element type 推导，不编码在 layout 中：
+
+```text
+f32/b32 -> 8 elements
+f16/b16 -> 16 elements
+f8/b8   -> 32 elements
+```
+
+令 `B = 32B / sizeof(element)`，其逻辑 lane 到物理 part 的映射是：
 
 ```text
 logical lane i
@@ -85,7 +101,7 @@ physical part0:  0   2   4   ...
 physical part1:    1   3   5 ...
 ```
 
-`deinterleaved=4, block_elems=8` 的直观例子：
+`block_deinterleaved=4` 对 f32 的直观例子（此时 `B=8`）：
 
 ```text
 logical group S=32:
@@ -107,18 +123,19 @@ f32 -> f16:
 
 S=32 group_reduce f32:
   一个 group 有 32 个 f32 element。高效 reduce path 消费四个 8-lane block，
-  所以 source/mask 使用 deinterleaved=4, block_elems=8。
+  所以 source/mask 使用 block_deinterleaved=4。
 ```
 
-`block_elems=8` 表示一种按 32B row fragment 组织的输入形态，不表示
+`block_deinterleaved` 表示一种按 32B row fragment 组织的输入形态，不表示
 S=32 reduce 只能接受这一种形态。如果同一个 value 还要服务 narrow cast 等
-element-parity consumer，assignment 可以选择 `deinterleaved=4, block_elems=1`
-作为共同 layout，再由 lowering 生成对应的物理指令序列。
+element-parity consumer，assignment 可以选择普通 `deinterleaved=4` 作为共同
+layout，再由 lowering 生成对应的物理指令序列。
 
-`deinterleaved` 只描述最终物理 part 中有哪些 logical lane，不描述这个 layout
-由哪条指令生成。不同 producer 可以用不同方式直接产生同一个 layout；如果不能
-直接产生，后续 lowering 再通过显式 materialization helper 把 source layout
-转换成 consumer 需要的 layout。具体 lowering 形状见 case catalog。
+两种 layout 都只描述最终物理 part 中有哪些 logical lane，不描述这个 layout
+由哪条指令生成。它们是不同的 layout kind，不能因为 factor 相同就视为兼容。
+不同 producer 可以用不同方式直接产生同一个 layout；如果不能直接产生，后续
+lowering 再通过显式 materialization helper 把 source layout 转换成 consumer
+需要的 layout。具体 lowering 形状见 case catalog。
 
 ### 2.3 `num_groups = G, slots = K`
 
@@ -790,11 +807,11 @@ S=8:
 
 S=16:
   如果 input 来自 f16->f32 vcvt，layout 可以是 deinterleaved=2。
-  如果 input 从 dense 拆出，layout 可以是 deinterleaved=2, block_elems=8。
+  如果 input 从 dense 拆出，layout 可以是 block_deinterleaved=2。
   result 通常使用 layout<num_groups=G, slots=8>。
 
 S=32:
-  input layout 使用 deinterleaved=4, block_elems=8。
+  input layout 使用 block_deinterleaved=4。
   VPTO 形状是四个部分 group reduction 后接 add tree。
   result 通常使用 layout<num_groups=G, slots=8>。
 
@@ -807,7 +824,7 @@ S=32 例子：
 
 ```text
 assignment:
-  source/mask = deinterleaved=4, block_elems=8
+  source/mask = block_deinterleaved=4
   result      = group_slots(num_groups=8, slots=8)
 
 VPTO:
@@ -817,7 +834,7 @@ VPTO:
   通过一次 PAT_VL8 store 完成 group_store
 ```
 
-这个场景说明为什么需要 `block_elems`。
+这个场景说明为什么 `block_deinterleaved` 必须是独立的 layout kind。
 
 ### 4.5 Group Result 继续作为 Dense Rows 使用
 

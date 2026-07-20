@@ -1019,12 +1019,12 @@ gb(1):
   result gs(8)
 
 gb(2):
-  source d(2, block_elems=1)
+  source d(2)
   mask   same(source)
   result gs(8)
 
 gb(4):
-  source d(4, block_elems=1)
+  source d(4)
   mask   same(source)
   result gs(8)
 
@@ -1043,9 +1043,9 @@ getGroupReduceLayoutFactForLayouts(source, mask, result, num_groups)
 
 It matches the assigned source/mask/result layouts against legal rows for the
 classified group block.  Legal rows include additional source/mask alternatives
-for the same semantic row, such as `block_elems=1` for the two-block and
-four-block cases.  Those alternatives are part of the layout relation, not
-ad-hoc support relaxations.
+for the same semantic row, such as ordinary `d(2|4)` and block-based `bd(2|4)`
+for the two-block and four-block cases. Those alternatives are part of the
+layout relation, not ad-hoc support relaxations.
 
 The concrete query is the single source of truth for layout-driven shape
 legality.  It may compute physical arity from the concrete VMI types, but only
@@ -1101,7 +1101,7 @@ store:
   bits(8,16,32), contiguous
   bits(8,16,32), lane_stride=2
   bits(8),       lane_stride=4
-  bits(8,16,32), deinterleaved=2/4, block_elems=1
+  bits(8,16,32), deinterleaved=2/4
 ```
 
 The fact query records only the dense memory layout pattern and element-bit
@@ -1130,8 +1130,8 @@ Group memory facts are also table relations:
 
 ```text
 group_load:
-  bits(32), gb(2) -> result d(2, block_elems=8)
-  bits(32), gb(4) -> result d(4, block_elems=8)
+  bits(32), gb(2) -> result bd(2)
+  bits(32), gb(4) -> result bd(4)
 
 group_slot_load:
   result group_slots(num_groups=G, slots=1)

@@ -411,9 +411,9 @@ struct LayoutSolver {
       return getContiguousLayout();
 
     if (groupSize == 16)
-      return VMILayoutAttr::getDeinterleaved(ctx, 2, /*blockElems=*/8);
+      return VMILayoutAttr::getBlockDeinterleaved(ctx, 2);
     if (groupSize == 32)
-      return VMILayoutAttr::getDeinterleaved(ctx, 4, /*blockElems=*/8);
+      return VMILayoutAttr::getBlockDeinterleaved(ctx, 4);
 
     return getContiguousLayout();
   }
@@ -460,12 +460,11 @@ struct LayoutSolver {
     if (known && known.isGroupSlots() && known.getNumGroups() == numGroups &&
         known.getSlots() > 0)
       return known;
-    if (known && known.isDeinterleaved() && known.getBlockElems() == 1) {
+    if (known && known.isDeinterleaved()) {
       if (known.getFactor() == 2)
         return known;
       if (known.getFactor() == 4)
-        return VMILayoutAttr::getDeinterleaved(ctx, /*factor=*/2,
-                                               /*blockElems=*/1);
+        return VMILayoutAttr::getDeinterleaved(ctx, /*factor=*/2);
     }
     if (auto castOp = value.getDefiningOp()) {
       if (isa<VMIExtFOp, VMIExtSIOp, VMIExtUIOp, VMITruncFOp, VMITruncIOp>(
