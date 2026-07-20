@@ -1551,7 +1551,7 @@ pto.vmi.group_store %sum, %out[%group_off], %c1 {num_groups = 8}
 Current checked-in coverage for the point-store path is:
 
 ```text
-test/lit/vmi/vmi_to_vpto_group_store_slots1_1pt.pto
+test/lit/vmi_new/vmi_to_vpto_group_store_slots1_1pt.pto
 ```
 
 ### 3.8 `group_reduce -> truncf -> group_broadcast -> store`
@@ -3370,7 +3370,7 @@ Runtime closure:
 
 ```text
 lit:
-  test/lit/vmi/vmi_ptoas_private_call_inline.pto
+  test/lit/vmi_new/vmi_ptoas_private_call_inline.pto
 
 runtime SIM:
   test/vpto/cases/vmi_new/private-call-inline-store
@@ -5251,8 +5251,8 @@ Runtime closure:
 
 ```text
 lit:
-  test/lit/vmi/vmi_layout_assignment_call_argument_boundary.pto
-  test/lit/vmi/vmi_ptoas_call_boundary_vecscope.pto
+  test/lit/vmi_new/vmi_layout_assignment_call_argument_boundary.pto
+  test/lit/vmi_new/vmi_ptoas_call_boundary_vecscope.pto
 
 runtime SIM:
   test/vpto/cases/vmi_new/private-call-argument-boundary-store
@@ -5447,7 +5447,7 @@ tree used by section 3.44:
 Current coverage validates both IR lowering and runtime behavior:
 
 ```text
-test/lit/vmi/vmi_layout_assignment_create_group_mask_s32_dynamic.pto
+test/lit/vmi_new/vmi_layout_assignment_create_group_mask_s32_dynamic.pto
 test/vpto/cases/vmi_new/dynamic-create-group-mask-s32-reduce-store
 ```
 

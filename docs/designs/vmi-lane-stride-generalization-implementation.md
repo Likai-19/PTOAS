@@ -587,7 +587,7 @@ lib/PTO/Transforms/VPTOCANN900LLVMEmitter.cpp
   extend vpack/vsunpack/vzunpack verifier/emitter only if the first implemented
   fallback needs currently unsupported b64->b32 or floating-point carrier paths
 
-test/lit/vmi
+test/lit/vmi_new
   add parser/verifier tests for dense laneStride attrs
   add assignment tests for ext lane-stride facts
   add fold/remat/sink tests for helper-driven rewrites
