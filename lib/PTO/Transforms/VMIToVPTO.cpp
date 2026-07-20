@@ -8158,6 +8158,57 @@ struct OneToNVMIInterleaveOpPattern : OpConversionPattern<SourceOp> {
       return 0;
     };
 
+    bool allSameLaneStride = fact->lhsLayout == fact->rhsLayout &&
+                             fact->lhsLayout == fact->maskLayout &&
+                             fact->lhsLayout == fact->lowLayout &&
+                             fact->lhsLayout == fact->highLayout &&
+                             fact->lhsLayout.isContiguous() &&
+                             fact->lhsLayout.getLaneStride() > 1;
+    if (allSameLaneStride) {
+      if (lhsParts.size() != 1 || rhsParts.size() != 1 ||
+          lowTypes.size() != 1 || highTypes.size() != 1)
+        return rewriter.notifyMatchFailure(
+            op, "lane-stride interleave expects one physical carrier part");
+
+      unsigned elementBits =
+          pto::getPTOStorageElemBitWidth(lhsType.getElementType());
+      int64_t laneStride = fact->lhsLayout.getLaneStride();
+      int64_t carrierBits = static_cast<int64_t>(elementBits) * laneStride;
+      if (elementBits == 0 || laneStride <= 1 || carrierBits <= 0 ||
+          carrierBits > 32)
+        return rewriter.notifyMatchFailure(
+            op, "invalid lane-stride interleave carrier width");
+      FailureOr<VRegType> carrierType =
+          getUnsignedCarrierVRegType(rewriter.getContext(),
+                                     static_cast<unsigned>(carrierBits));
+      if (failed(carrierType))
+        return rewriter.notifyMatchFailure(
+            op, "unsupported lane-stride interleave carrier width");
+
+      FailureOr<Value> carrierLhs = bitcastVReg(
+          op.getLoc(), lhsParts.front(), *carrierType, rewriter);
+      FailureOr<Value> carrierRhs = bitcastVReg(
+          op.getLoc(), rhsParts.front(), *carrierType, rewriter);
+      if (failed(carrierLhs) || failed(carrierRhs))
+        return rewriter.notifyMatchFailure(
+            op, "failed to bitcast lane-stride interleave inputs");
+
+      auto interleave = rewriter.create<TargetOp>(
+          op.getLoc(), *carrierType, *carrierType, *carrierLhs, *carrierRhs);
+      FailureOr<Value> low = bitcastVReg(
+          op.getLoc(), interleave.getLow(), lowTypes.front(), rewriter);
+      FailureOr<Value> high = bitcastVReg(
+          op.getLoc(), interleave.getHigh(), highTypes.front(), rewriter);
+      if (failed(low) || failed(high))
+        return rewriter.notifyMatchFailure(
+            op, "failed to bitcast lane-stride interleave results");
+
+      SmallVector<Value, 2> results = {*low, *high};
+      replaceOpWithFlatConvertedValues(rewriter, op, results,
+                                       *this->getTypeConverter());
+      return success();
+    }
+
     bool allContiguous = isContiguous(fact->lhsLayout) &&
                          isContiguous(fact->rhsLayout) &&
                          isContiguous(fact->maskLayout) &&
