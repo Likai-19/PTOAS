@@ -259,7 +259,7 @@ ptoas test/lit/pto/empty_func.pto --pto-level=level3 -o outputfile.cpp
 # VPTO backend 默认启用 VMI -> VPTO 语义 pipeline
 # 可使用 --enable-vmi=false 临时关闭
 # public function signature 不能直接暴露 !pto.vmi.* 类型
-ptoas test/lit/vmi/vmi_ptoas_cli_pipeline.pto --pto-arch=a5 --pto-backend=vpto --emit-vpto -o -
+ptoas test/lit/vmi_new/vmi_ptoas_cli_pipeline.pto --pto-arch=a5 --pto-backend=vpto --emit-vpto -o -
 
 # 查看当前 ptoas release 版本号
 ptoas --version

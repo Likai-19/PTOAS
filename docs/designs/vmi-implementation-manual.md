@@ -53,7 +53,7 @@ lib/PTO/IR/VMI.cpp
 lib/PTO/Transforms/VMILayoutAssignment.cpp
 lib/PTO/Transforms/VMIToVPTO.cpp
 lib/PTO/Transforms/PTOValidateVMIIR.cpp
-test/lit/vmi/
+test/lit/vmi_new/
 ```
 
 修改文件：
@@ -261,7 +261,7 @@ Physicalization layer:
 Driver/test layer:
   tools/ptoas/ptoas.cpp
   tools/pto-test-opt/
-  test/lit/vmi/
+  test/lit/vmi_new/
 
   ptoas 对 VPTO backend 默认运行完整 pipeline；pto-test-opt 保留单 pass 和中间 IR 的调试入口。
 ```
@@ -4151,19 +4151,17 @@ currently routed through the plan:
     subview diagnostics name the missing normalized base/offset/stride lane-to-address plan
   target true masked/non-faulting load capability query
     current result is missing capability because pto.vlds has no mask operand
-    covered by vmi_to_vpto_masked_load_nonfull_invalid.pto
-  stable gather masked-load option
-    covered by vmi_to_vpto_stable_gather_masked_load_todo_invalid.pto
-    currently emits a TODO diagnostic instead of lowering through VGATHER2
+    unified masked-load semantics use a full vload followed by vsel
+    covered by vmi_to_vpto_masked_load_nonfull.pto and
+    vmi_to_vpto_masked_load_safe_tail_memref.pto
   direct pto.vmi.load source/layout capability check for full physical reads
   pto.vmi.masked_load partial/tail safe full-read proof
   pto.vmi.expand_load static all-active safe full-read proof
   VMI-to-VPTO rewrite match guard for supported direct load sources
   pto.vmi.store direct write target decision with all-true writeMask kind
   pto.vmi.masked_store direct write target decision with explicit writeMask kind
-  unsafe masked/expand partial/tail read fallback decision as RequiredUnavailable diagnostic
-    covered by vmi_to_vpto_masked_load_nonfull_invalid.pto and
-    vmi_to_vpto_expand_load_all_active_negative_offset_invalid.pto
+  unsafe expand-load partial/tail read fallback decision as RequiredUnavailable diagnostic
+    covered by vmi_to_vpto_expand_load_all_active_negative_offset_invalid.pto
 
 currently not implemented by the plan:
   paddingValue materialization (intentionally unsupported in the first implementation stage)
@@ -4317,7 +4315,7 @@ available materialization paths, if known
 Use a dedicated directory:
 
 ```text
-test/lit/vmi/
+test/lit/vmi_new/
 ```
 
 Minimum test files:
@@ -4422,7 +4420,7 @@ If any answer is no, the slice is not ready to be treated as complete.
    lib/PTO/Transforms/VMIToVPTO.cpp::populateVMIOneToNConversionPatterns
 
 7. focused lit tests:
-   test/lit/vmi/
+   test/lit/vmi_new/
 ```
 
 这七个落点的职责不同：

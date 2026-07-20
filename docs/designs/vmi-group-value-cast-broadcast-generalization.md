@@ -674,7 +674,7 @@ when they are proven equivalent to the same group-value lane map.
 Add or update focused lit tests:
 
 ```text
-test/lit/vmi/vmi_layout_assignment_group_reduce_s16_truncf_broadcast_store.pto
+test/lit/vmi_new/vmi_layout_assignment_group_reduce_s16_truncf_broadcast_store.pto
   CHECK assignment:
     group_reduce result: slots=8
     truncf result: slots=8, lane_stride=2
@@ -687,11 +687,11 @@ test/lit/vmi/vmi_layout_assignment_group_reduce_s16_truncf_broadcast_store.pto
     vselr before vsts
     no remaining pto.vmi ops
 
-test/lit/vmi/vmi_to_vpto_group_broadcast_lane_stride_source.pto
+test/lit/vmi_new/vmi_to_vpto_group_broadcast_lane_stride_source.pto
   Direct assigned-IR test where the source is
   group_values(G=8,K=8,LS=2); CHECK vselr is generated.
 
-test/lit/vmi/vmi_layout_gate_group_value_cast_invalid.pto
+test/lit/vmi_new/vmi_layout_gate_group_value_cast_invalid.pto
   Invalid relation, for example result LS not equal source LS * factor.
 ```
 

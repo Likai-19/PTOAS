@@ -1639,7 +1639,7 @@ VMI lit baseline:
 ```bash
 export PATH="/home/mouliangyu/projects/github.com/vpto-dev/llvm-project/build-shared/bin:$PATH"
 python3 /home/mouliangyu/projects/github.com/vpto-dev/llvm-project/llvm/utils/lit/lit.py \
-  -v -j16 build/test/lit/vmi
+  -v -j16 build/test/lit/vmi_new
 ```
 
 Result:
