@@ -219,12 +219,12 @@ BF16 output-type case，cross-check 有 7 个 byte-exact case，但当前快照�
 
 | CCE family | VMI case 目录 |
 | --- | --- |
-| `quant_minimum` / `tquant` | `tquant-mxfp8-32x32-nd`, `tquant-mxfp8-32x64-nz`, `tquant-int8-sym-64x128`, `tquant-int8-asym-64x128` |
+| `quant_minimum` / `tquant` | `tquant-mxfp8-32x32-nd`, `tquant-mxfp8-32x64-nz`, `tquant-int8-sym-8x128`, `tquant-int8-asym-8x128` |
 | `block_quant` | `block-quant-bf16-fp8-2x128`, `block-quant-bf16-fp8-4x128`, `block-quant-bf16-fp8-4x128-min-scale`, `block-quant-bf16-fp8-32x128`, `block-quant-f16-fp8-4x256`, `block-quant-f16-fp8-8x128`, `block-quant-f16-fp8-16x256` |
-| `dynamic_quant` | `dynamic-quant-pertoken-f16-4x32`, `dynamic-quant-pertoken-f16-16x128`, `dynamic-quant-pertoken-smooth-f16-8x64`, `dynamic-quant-pertoken-smooth-f16-16x128`, `dynamic-quant-perchannel-f16-128x128`, `dynamic-quant-perchannel-f16-256x256`, `dynamic-quant-pertoken-bf16-4x32`, `dynamic-quant-pertoken-smooth-bf16-8x64`, `dynamic-quant-perchannel-bf16-128x128` |
-| `dequant/anti_mx_quant` | `anti-mx-f8-bf16-scaled-4x128`, `anti-mx-f8-f32-scaled-4x128`, `anti-mx-f8-f16-scaled-4x128`, `anti-mx-f8-bf16-scaled-16x512`, `anti-mx-f8-bf16-scaled-64x2048`, `anti-mx-f8e5m2-bf16-scaled-4x128`, `anti-mx-f8e5m2-bf16-scaled-16x512` |
-| `block_mx_quant` | `block-mx-quant-bf16-e4m3-4x128`, `block-mx-quant-f16-e4m3-64x256`, `block-mx-quant-bf16-e5m2-4x128`, `block-mx-quant-f16-e5m2-8x256` |
-| `swiglu_mx_quant` | `swiglu-mx-quant-bf16-e4m3-4x8`, `swiglu-mx-quant-f16-e4m3-64x512`, `swiglu-mx-quant-bf16-e5m2-4x8`, `swiglu-mx-quant-f16-e5m2-128x256` |
+| `dynamic_quant` | `dynamic-quant-pertoken-f16-4x32`, `dynamic-quant-pertoken-f16-16x128`, `dynamic-quant-pertoken-smooth-f16-8x64`, `dynamic-quant-pertoken-smooth-f16-16x128`, `dynamic-quant-perchannel-f16-8x128`, `dynamic-quant-perchannel-f16-8x256`, `dynamic-quant-pertoken-bf16-4x32`, `dynamic-quant-pertoken-smooth-bf16-8x64`, `dynamic-quant-perchannel-bf16-8x128` |
+| `dequant/anti_mx_quant` | `anti-mx-f8-bf16-scaled-4x128`, `anti-mx-f8-f32-scaled-4x128`, `anti-mx-f8-f16-scaled-4x128`, `anti-mx-f8-bf16-scaled-4x512`, `anti-mx-f8-bf16-scaled-2x512`, `anti-mx-f8e5m2-bf16-scaled-4x128`, `anti-mx-f8e5m2-bf16-scaled-4x512` |
+| `block_mx_quant` | `block-mx-quant-bf16-e4m3-4x128`, `block-mx-quant-f16-e4m3-2x256`, `block-mx-quant-bf16-e5m2-4x128`, `block-mx-quant-f16-e5m2-8x256` |
+| `swiglu_mx_quant` | `swiglu-mx-quant-bf16-e4m3-4x8`, `swiglu-mx-quant-f16-e4m3-2x512`, `swiglu-mx-quant-bf16-e5m2-4x8`, `swiglu-mx-quant-f16-e5m2-2x256` |
 | `simdvf_per_block_cast` | `simdvf-per-block-cast-to-fp8` |
 
 | 已移除的 VMI 区域 | 范围说明 |

@@ -37,7 +37,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
       %sum32 = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8, reassoc}
           : !pto.vmi.vreg<512xf32>, !pto.vmi.mask<512xpred>
           -> !pto.vmi.vreg<8xf32>
-      %sum16 = pto.vmi.truncf %sum32
+      %sum16 = pto.vmi.truncf %sum32 {saturate = "SAT"}
           : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<8xf16>
       pto.vmi.group_store %sum16, %ub_dst[%c0], %c16 {num_groups = 8}
           : !pto.vmi.vreg<8xf16>, !pto.ptr<f16, ub>

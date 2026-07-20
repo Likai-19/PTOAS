@@ -33,7 +33,7 @@ struct MrgSortExecutedNumList {
 extern "C" __global__ [aicore] void
 vmi_quant_f32_to_f16_sat_explicit_kernel(__gm__ float *src, __gm__ half *dst);
 
-void Launchvmi_quant_f32_to_f16_sat_explicit_kernel(float *src, uint16_t *dst,
+void LaunchVmi_quant_f32_to_f16_sat_explicit_kernel(float *src, uint16_t *dst,
                                             void *stream) {
   vmi_quant_f32_to_f16_sat_explicit_kernel<<<1, nullptr, stream>>>(
       (__gm__ float *)src, (__gm__ half *)dst);

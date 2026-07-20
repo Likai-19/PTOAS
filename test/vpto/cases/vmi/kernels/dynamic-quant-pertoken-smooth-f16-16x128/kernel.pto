@@ -123,7 +123,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
         %clamped = pto.vmi.minf %clamped_lo, %hi
             : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
             -> !pto.vmi.vreg<256xf32>
-        %i32 = pto.vmi.fptosi %clamped
+        %i32 = pto.vmi.fptosi %clamped {saturate = "SAT"}
             : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xi32>
         %zero_i32 = pto.vmi.broadcast %c0_i32
             : i32 -> !pto.vmi.vreg<256xi32>
@@ -139,7 +139,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
             : !pto.vmi.mask<256xpred>, !pto.vmi.vreg<256xi32>,
               !pto.vmi.vreg<256xi32>
             -> !pto.vmi.vreg<256xi32>
-        %u8 = pto.vmi.trunci %byte_i32
+        %u8 = pto.vmi.trunci %byte_i32 {saturate = "SAT"}
             : !pto.vmi.vreg<256xi32> -> !pto.vmi.vreg<256xui8>
         pto.vmi.store %u8, %ub_out[%elem_offset]
             : !pto.vmi.vreg<256xui8>, !pto.ptr<ui8, ub>

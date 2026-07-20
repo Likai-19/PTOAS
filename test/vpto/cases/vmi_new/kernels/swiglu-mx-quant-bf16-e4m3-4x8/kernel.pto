@@ -117,7 +117,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
       %e8m0_i32 = pto.vmi.vsub %exp, %emax
           : !pto.vmi.vreg<8xi32>, !pto.vmi.vreg<8xi32>
           -> !pto.vmi.vreg<8xi32>
-      %e8m0_u8 = pto.vmi.vcvt %e8m0_i32
+      %e8m0_u8 = pto.vmi.vcvt %e8m0_i32 {saturate = "SAT"}
           : !pto.vmi.vreg<8xi32> -> !pto.vmi.vreg<8xui8>
       pto.vmi.vstore %e8m0_u8, %ub_scale[%c0], %c1 {group = 8}
           : !pto.vmi.vreg<8xui8>, !pto.ptr<ui8, ub>
@@ -134,7 +134,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
       %scaled = pto.vmi.vmul %swiglu, %scale_vec
           : !pto.vmi.vreg<256xf32>, !pto.vmi.vreg<256xf32>
           -> !pto.vmi.vreg<256xf32>
-      %q8 = pto.vmi.vcvt %scaled
+      %q8 = pto.vmi.vcvt %scaled {saturate = "SAT"}
           : !pto.vmi.vreg<256xf32> -> !pto.vmi.vreg<256xf8E4M3FN>
       pto.vmi.vstore %q8, %ub_out_f8[%c0]
           : !pto.vmi.vreg<256xf8E4M3FN>, !pto.ptr<f8E4M3FN, ub>
