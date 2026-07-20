@@ -47,7 +47,7 @@ PTOAS/
 ```bash
 # ================= 配置区域 (请修改这里) =================
 # 设置您的工作根目录 (建议创建一个专门的目录存放 LLVM 和 PTOAS)
-export WORKSPACE_DIR=$HOME/ptoas-workspace
+export WORKSPACE_DIR=$HOME/llvm-workspace
 
 # LLVM 源码与构建路径
 export LLVM_SOURCE_DIR=$WORKSPACE_DIR/llvm-project
