@@ -53,13 +53,13 @@ enum class LayoutPatternKind {
   Contiguous,
   LaneStride,
   Deinterleaved,
+  BlockDeinterleaved,
   GroupSlots,
 };
 
 struct LayoutPattern {
   LayoutPatternKind kind = LayoutPatternKind::Contiguous;
   int64_t value = 1;
-  int64_t blockElems = 0;
   int64_t laneStride = 1;
 };
 
@@ -172,18 +172,16 @@ static bool matchesMaskGranularityPattern(MaskGranularityPattern pattern,
 
 static VMILayoutAttr materializeLayoutPattern(MLIRContext *ctx,
                                               LayoutPattern pattern,
-                                              int64_t inheritedBlockElems = 1,
                                               int64_t numGroups = 0) {
   switch (pattern.kind) {
   case LayoutPatternKind::Contiguous:
     return VMILayoutAttr::getContiguous(ctx);
   case LayoutPatternKind::LaneStride:
     return VMILayoutAttr::getContiguous(ctx, pattern.value);
-  case LayoutPatternKind::Deinterleaved: {
-    int64_t blockElems =
-        pattern.blockElems > 0 ? pattern.blockElems : inheritedBlockElems;
-    return VMILayoutAttr::getDeinterleaved(ctx, pattern.value, blockElems);
-  }
+  case LayoutPatternKind::Deinterleaved:
+    return VMILayoutAttr::getDeinterleaved(ctx, pattern.value);
+  case LayoutPatternKind::BlockDeinterleaved:
+    return VMILayoutAttr::getBlockDeinterleaved(ctx, pattern.value);
   case LayoutPatternKind::GroupSlots:
     return numGroups > 0
                ? VMILayoutAttr::getGroupSlots(ctx, numGroups, pattern.value,
@@ -197,26 +195,27 @@ static bool matchesLayoutPattern(MLIRContext *ctx, LayoutPattern pattern,
                                  VMILayoutAttr layout, int64_t numGroups = 0) {
   if (!layout)
     return false;
-  int64_t inheritedBlockElems =
-      layout.isDeinterleaved() ? layout.getBlockElems() : 1;
-  return materializeLayoutPattern(ctx, pattern, inheritedBlockElems,
-                                  numGroups) == layout;
+  return materializeLayoutPattern(ctx, pattern, numGroups) == layout;
 }
 
 static constexpr LayoutPattern c() {
-  return {LayoutPatternKind::Contiguous, 1, 0, 1};
+  return {LayoutPatternKind::Contiguous, 1, 1};
 }
 
 static constexpr LayoutPattern ls(int64_t laneStride) {
-  return {LayoutPatternKind::LaneStride, laneStride, 0, 1};
+  return {LayoutPatternKind::LaneStride, laneStride, 1};
 }
 
-static constexpr LayoutPattern d(int64_t factor, int64_t blockElems = 0) {
-  return {LayoutPatternKind::Deinterleaved, factor, blockElems, 1};
+static constexpr LayoutPattern d(int64_t factor) {
+  return {LayoutPatternKind::Deinterleaved, factor, 1};
+}
+
+static constexpr LayoutPattern bd(int64_t factor) {
+  return {LayoutPatternKind::BlockDeinterleaved, factor, 1};
 }
 
 static constexpr LayoutPattern gs(int64_t slots, int64_t laneStride = 1) {
-  return {LayoutPatternKind::GroupSlots, slots, 0, laneStride};
+  return {LayoutPatternKind::GroupSlots, slots, laneStride};
 }
 
 static constexpr GroupMemoryPattern memAny() {
@@ -285,22 +284,22 @@ struct EnsureLayoutPattern {
 };
 
 static constexpr EnsureLayoutPattern kEnsureLayoutPatterns[] = {
-    {bits<16>(), N<256>(), c(), d(2, 1)},
-    {bits<32>(), N<128, 256>(), c(), d(2, 1)},
-    {bits<64>(), N<64, 128, 256>(), c(), d(2, 1)},
-    {bits<16>(), N<256>(), d(2, 1), c()},
-    {bits<32>(), N<128, 256>(), d(2, 1), c()},
-    {bits<64>(), N<64, 128, 256>(), d(2, 1), c()},
+    {bits<16>(), N<256>(), c(), d(2)},
+    {bits<32>(), N<128, 256>(), c(), d(2)},
+    {bits<64>(), N<64, 128, 256>(), c(), d(2)},
+    {bits<16>(), N<256>(), d(2), c()},
+    {bits<32>(), N<128, 256>(), d(2), c()},
+    {bits<64>(), N<64, 128, 256>(), d(2), c()},
 
-    {bits<32>(), N<256>(), c(), d(4, 1)},
-    {bits<64>(), N<128, 256>(), c(), d(4, 1)},
-    {bits<32>(), N<256>(), d(4, 1), c()},
-    {bits<64>(), N<128, 256>(), d(4, 1), c()},
+    {bits<32>(), N<256>(), c(), d(4)},
+    {bits<64>(), N<128, 256>(), c(), d(4)},
+    {bits<32>(), N<256>(), d(4), c()},
+    {bits<64>(), N<128, 256>(), d(4), c()},
 
-    {bits<32>(), N<256, 512>(), d(2, 1), d(4, 1)},
-    {bits<64>(), N<128, 256>(), d(2, 1), d(4, 1)},
-    {bits<32>(), N<256, 512>(), d(4, 1), d(2, 1)},
-    {bits<64>(), N<128, 256>(), d(4, 1), d(2, 1)},
+    {bits<32>(), N<256, 512>(), d(2), d(4)},
+    {bits<64>(), N<128, 256>(), d(2), d(4)},
+    {bits<32>(), N<256, 512>(), d(4), d(2)},
+    {bits<64>(), N<128, 256>(), d(4), d(2)},
 
     {bits<8>(), N<1, 2, 4, 8, 64, 128>(), c(), ls(2)},
     {bits<16>(), N<1, 2, 4, 8, 64>(), c(), ls(2)},
@@ -329,17 +328,17 @@ struct EnsureMaskLayoutPattern {
 };
 
 static constexpr EnsureMaskLayoutPattern kEnsureMaskLayoutPatterns[] = {
-    {mb16(), N<256>(), c(), d(2, 1)},
-    {mb32(), N<128, 256, 512>(), c(), d(2, 1)},
-    {mb32(), N<128>(), c(), d(2, 8)},
-    {mb16(), N<256>(), d(2, 1), c()},
-    {mb32(), N<128, 256, 512>(), d(2, 1), c()},
-    {mb32(), N<128>(), d(2, 8), c()},
+    {mb16(), N<256>(), c(), d(2)},
+    {mb32(), N<128, 256, 512>(), c(), d(2)},
+    {mb32(), N<128>(), c(), bd(2)},
+    {mb16(), N<256>(), d(2), c()},
+    {mb32(), N<128, 256, 512>(), d(2), c()},
+    {mb32(), N<128>(), bd(2), c()},
 
-    {mb32(), N<256>(), c(), d(4, 1)},
-    {mb32(), N<256>(), c(), d(4, 8)},
-    {mb32(), N<256>(), d(4, 1), c()},
-    {mb32(), N<256>(), d(4, 8), c()},
+    {mb32(), N<256>(), c(), d(4)},
+    {mb32(), N<256>(), c(), bd(4)},
+    {mb32(), N<256>(), d(4), c()},
+    {mb32(), N<256>(), bd(4), c()},
 
     {mb8(), N<1, 2, 4, 8, 64, 128>(), c(), ls(2)},
     {mb16(), N<1, 2, 4, 8, 64>(), c(), ls(2)},
@@ -382,13 +381,13 @@ static constexpr GroupReduceLayoutPattern kGroupReduceLayoutPatterns[] = {
     {gb(1, 4), ls(4), gs(8)},
     {gb(1, 2), ls(2), gs(8)},
     {gb(1), c(), gs(8)},
-    {gb(2), d(2, 1), gs(8)},
-    {gb(2), d(2, 8), gs(8)},
-    {gb(4), d(4, 1), gs(8)},
-    {gb(4), d(4, 8), gs(8)},
+    {gb(2), d(2), gs(8)},
+    {gb(2), bd(2), gs(8)},
+    {gb(4), d(4), gs(8)},
+    {gb(4), bd(4), gs(8)},
     {gbFull(), c(), gs(1)},
-    {gbFull(2), d(2, 1), gs(1)},
-    {gbFull(4), d(4, 1), gs(1)},
+    {gbFull(2), d(2), gs(1)},
+    {gbFull(4), d(4), gs(1)},
 };
 
 struct PreferredCastLayoutPattern {
@@ -528,14 +527,14 @@ static constexpr LegalMaskGranularityCastLayoutPattern
 };
 
 static constexpr InterleaveLayoutPattern kVdintlvLayoutPatterns[] = {
-    {chunk<2, 4>(), d(2, 1), d(2, 1), d(2, 1), c(), c()},
-    {chunk<4>(), d(4, 1), d(4, 1), d(4, 1), d(2, 1), d(2, 1)},
+    {chunk<2, 4>(), d(2), d(2), d(2), c(), c()},
+    {chunk<4>(), d(4), d(4), d(4), d(2), d(2)},
     {chunk<1>(), c(), c(), c(), c(), c()},
 };
 
 static constexpr InterleaveLayoutPattern kVintlvLayoutPatterns[] = {
-    {chunk<2, 4>(), c(), c(), c(), d(2, 1), d(2, 1)},
-    {chunk<4>(), d(2, 1), d(2, 1), d(2, 1), d(4, 1), d(4, 1)},
+    {chunk<2, 4>(), c(), c(), c(), d(2), d(2)},
+    {chunk<4>(), d(2), d(2), d(2), d(4), d(4)},
     {chunk<1>(), c(), c(), c(), c(), c()},
 };
 
@@ -588,8 +587,8 @@ static constexpr DenseMemoryLayoutPattern kDenseStoreLayoutPatterns[] = {
     {bits<16>(), ls(2), N<64>(), /*preferred=*/true},
     {bits<8, 16, 32>(), ls(2)},
     {bits<8>(), ls(4)},
-    {bits<8, 16, 32>(), d(2, 1)},
-    {bits<8, 16, 32>(), d(4, 1)},
+    {bits<8, 16, 32>(), d(2)},
+    {bits<8, 16, 32>(), d(4)},
 };
 
 struct DenseMaskedStoreLayoutPattern {
@@ -615,8 +614,8 @@ static constexpr DenseMaskedStoreLayoutPattern
         {bits<16>(), ls(2), ls(2), N<64>(), /*preferred=*/true},
         {bits<8, 16>(), ls(2), ls(2)},
         {bits<8>(), ls(4), ls(4)},
-        {bits<8, 16, 32>(), d(2, 1), d(2, 1)},
-        {bits<8, 16, 32>(), d(4, 1), d(4, 1)},
+        {bits<8, 16, 32>(), d(2), d(2)},
+        {bits<8, 16, 32>(), d(4), d(4)},
 };
 
 static constexpr DenseMaskedLoadLayoutPattern
@@ -638,8 +637,8 @@ static constexpr GroupLoadLayoutPattern kGroupLoadLayoutPatterns[] = {
     {bits<8, 16, 32>(), gb(2), memContiguous(), c()},
     {bits<8, 16, 32>(), gb(4), memContiguous(), c()},
     {bits<8, 16, 32>(), gbFull(), memAny(), c()},
-    {bits<32>(), gb(2), memBlockAligned(), d(2, 8)},
-    {bits<32>(), gb(4), memBlockAligned(), d(4, 8)},
+    {bits<32>(), gb(2), memBlockAligned(), bd(2)},
+    {bits<32>(), gb(4), memBlockAligned(), bd(4)},
 };
 
 struct GroupSlotMemoryLayoutPattern {
@@ -667,9 +666,9 @@ static constexpr GroupBroadcastLoadLayoutPattern
         {gb(1, 2), bits<8, 16, 32>(), memContiguous(), ls(2)},
         {gb(1), bits<8, 16, 32>(), memContiguous(), c()},
         {gb(2), bits<8, 16, 32>(), memContiguous(), c()},
-        {gb(2), bits<8, 16, 32>(), memContiguous(), d(2, 1)},
+        {gb(2), bits<8, 16, 32>(), memContiguous(), d(2)},
         {gb(4), bits<8, 16, 32>(), memContiguous(), c()},
-        {gb(4), bits<8, 16, 32>(), memContiguous(), d(4, 1)},
+        {gb(4), bits<8, 16, 32>(), memContiguous(), d(4)},
         {gbFull(), bits<8, 16, 32>(), memAny(), c()},
 };
 
@@ -687,9 +686,9 @@ static constexpr GroupBroadcastLoadDirectPattern
         {VMIGroupBroadcastLoadDirectKind::E2B, G<8>(), gb(1), bits<16, 32>(),
          memContiguous(), c()},
         {VMIGroupBroadcastLoadDirectKind::E2B, G<8>(), gb(2), bits<16, 32>(),
-         memContiguous(), d(2, 1)},
+         memContiguous(), d(2)},
         {VMIGroupBroadcastLoadDirectKind::E2B, G<8>(), gb(4), bits<16, 32>(),
-         memContiguous(), d(4, 1)},
+         memContiguous(), d(4)},
         {VMIGroupBroadcastLoadDirectKind::BRC, anyG(), gbFull(),
          bits<8, 16, 32>(), memAny(), c()},
 };
@@ -707,15 +706,15 @@ static constexpr GroupBroadcastLayoutPattern kGroupBroadcastLayoutPatterns[] = {
     {gb(1), gs(8, 2), c()},
     {gb(1), gs(8, 4), c()},
     {gb(2), gs(8), c()},
-    {gb(2), gs(8), d(2, 1)},
-    {gb(2), gs(8), d(2, 8)},
+    {gb(2), gs(8), d(2)},
+    {gb(2), gs(8), bd(2)},
     {gb(4), gs(8), c()},
-    {gb(4), gs(8), d(4, 1)},
-    {gb(4), gs(8), d(4, 8)},
+    {gb(4), gs(8), d(4)},
+    {gb(4), gs(8), bd(4)},
     {gbFull(), gs(8), c()},
     {gbFull(), gs(1), c()},
-    {gbFull(2), gs(1), d(2, 1)},
-    {gbFull(4), gs(1), d(4, 1)},
+    {gbFull(2), gs(1), d(2)},
+    {gbFull(4), gs(1), d(4)},
 };
 
 struct HistogramLayoutPattern {
@@ -941,8 +940,7 @@ materializeGroupReduceLayoutFact(MLIRContext *ctx,
   fact.sourceLayout = materializeLayoutPattern(ctx, pattern.sourceLayout);
   fact.maskLayout = fact.sourceLayout;
   fact.resultLayout =
-      materializeLayoutPattern(ctx, pattern.resultLayout,
-                               /*inheritedBlockElems=*/1, numGroups);
+      materializeLayoutPattern(ctx, pattern.resultLayout, numGroups);
   fact.groupSize = groupSize;
   fact.lanesPerPart = lanesPerPart;
   fact.vcgBlockElems = vcgBlockElems;
@@ -956,11 +954,9 @@ static VMIGroupBroadcastLayoutFact materializeGroupBroadcastLayoutFact(
   VMIGroupBroadcastLayoutFact fact;
   fact.blockClass = getGroupBlockClassFromPattern(pattern.block);
   fact.sourceLayout =
-      materializeLayoutPattern(ctx, pattern.sourceLayout,
-                               /*inheritedBlockElems=*/1, numGroups);
+      materializeLayoutPattern(ctx, pattern.sourceLayout, numGroups);
   fact.resultLayout =
-      materializeLayoutPattern(ctx, pattern.resultLayout,
-                               /*inheritedBlockElems=*/1, numGroups);
+      materializeLayoutPattern(ctx, pattern.resultLayout, numGroups);
   fact.groupSize = groupSize;
   fact.lanesPerPart = lanesPerPart;
   fact.vcgBlockElems = vcgBlockElems;
@@ -1308,8 +1304,7 @@ VMILayoutSupport::getGroupBroadcastLoadDirectFact(
                                                elementBits))
       continue;
     VMILayoutAttr resultLayout = materializeLayoutPattern(
-        resultType.getContext(), pattern.resultLayout, /*blockElems=*/1,
-        numGroups);
+        resultType.getContext(), pattern.resultLayout, numGroups);
     if (existing && existing != resultLayout)
       continue;
     return VMIGroupBroadcastLoadDirectFact{
@@ -1428,8 +1423,6 @@ VMILayoutSupport::getCastLayoutFactsForLayout(VMIVRegType sourceType,
   MLIRContext *ctx = sourceType.getContext();
   SmallVector<VMICastLayoutFact, 4> facts;
 
-  int64_t blockElems =
-      layout && layout.isDeinterleaved() ? layout.getBlockElems() : 1;
   int64_t numGroups =
       layout && layout.isGroupSlots() ? layout.getNumGroups() : 0;
   for (const LegalCastLayoutPattern &pattern : kLegalCastLayoutPatterns) {
@@ -1437,10 +1430,10 @@ VMILayoutSupport::getCastLayoutFactsForLayout(VMIVRegType sourceType,
         !matchesElementBitsPattern(pattern.resultBits, resultBits))
       continue;
 
-    VMILayoutAttr sourceLayout = materializeLayoutPattern(
-        ctx, pattern.sourceLayout, blockElems, numGroups);
-    VMILayoutAttr resultLayout = materializeLayoutPattern(
-        ctx, pattern.resultLayout, blockElems, numGroups);
+    VMILayoutAttr sourceLayout =
+        materializeLayoutPattern(ctx, pattern.sourceLayout, numGroups);
+    VMILayoutAttr resultLayout =
+        materializeLayoutPattern(ctx, pattern.resultLayout, numGroups);
     if (!sourceLayout || !resultLayout)
       continue;
 
@@ -1551,8 +1544,6 @@ VMILayoutSupport::getMaskGranularityCastLayoutFactsForLayout(
     return fail("requires supported source/result mask granularities");
 
   MLIRContext *ctx = sourceType.getContext();
-  int64_t blockElems =
-      layout && layout.isDeinterleaved() ? layout.getBlockElems() : 1;
   int64_t numGroups =
       layout && layout.isGroupSlots() ? layout.getNumGroups() : 0;
   SmallVector<VMIMaskGranularityCastLayoutFact, 4> facts;
@@ -1564,10 +1555,10 @@ VMILayoutSupport::getMaskGranularityCastLayoutFactsForLayout(
                                        resultType.getGranularity()))
       continue;
 
-    VMILayoutAttr sourceLayout = materializeLayoutPattern(
-        ctx, pattern.sourceLayout, blockElems, numGroups);
-    VMILayoutAttr resultLayout = materializeLayoutPattern(
-        ctx, pattern.resultLayout, blockElems, numGroups);
+    VMILayoutAttr sourceLayout =
+        materializeLayoutPattern(ctx, pattern.sourceLayout, numGroups);
+    VMILayoutAttr resultLayout =
+        materializeLayoutPattern(ctx, pattern.resultLayout, numGroups);
     if (!sourceLayout || !resultLayout)
       continue;
 

@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: not ptoas --emit-pto-ir %s 2>&1 | FileCheck %s
+// RUN: not pto-test-opt %s -split-input-file 2>&1 | FileCheck %s
 
 module {
   func.func @vmi_layout_factor_invalid(
@@ -16,3 +16,26 @@ module {
 }
 
 // CHECK: #pto.vmi.layout<deinterleaved = 3> expected factor to be 2 or 4
+
+// -----
+
+module {
+  func.func @vmi_block_layout_factor_invalid(
+      %arg0: !pto.vmi.vreg<128xf32, #pto.vmi.layout<block_deinterleaved = 3>>) {
+    return
+  }
+}
+
+// CHECK: #pto.vmi.layout<block_deinterleaved = 3> expected factor to be 2 or 4
+
+// -----
+
+module {
+  func.func @vmi_layout_block_elems_removed(
+      %arg0: !pto.vmi.vreg<128xf32,
+          #pto.vmi.layout<deinterleaved = 2, block_elems = 8>>) {
+    return
+  }
+}
+
+// CHECK: expected 'lane_stride = <integer>'

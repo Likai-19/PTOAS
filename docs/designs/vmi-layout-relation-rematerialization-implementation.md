@@ -62,7 +62,7 @@ Semantics:
 1. source/result lane count must match.
 2. result element width must be an integer multiple of source element width.
 3. first implementation supports widenFactor 2 and 4.
-4. requestedResultLayout must be contiguous or deinterleaved(block_elems=1).
+4. requestedResultLayout must be contiguous or ordinary deinterleaved.
 5. requested result factor F must be divisible by widenFactor K.
 6. derived source factor is F / K.
 7. derived source factor 1 means contiguous.
@@ -89,10 +89,10 @@ relation-rematerialized local shapes:
 
 ```text
 source layout:
-  contiguous or deinterleaved(S, block_elems=1)
+  contiguous or deinterleaved(S)
 
 result layout:
-  deinterleaved(S * widenFactor, block_elems=1)
+  deinterleaved(S * widenFactor)
 ```
 
 Keep group_slots integer extension behavior unchanged.
@@ -101,7 +101,7 @@ Reject:
 
 ```text
 1. result layout that is not deinterleaved for dense ext.
-2. block_elems != 1 in this first implementation.
+2. block_deinterleaved in this first implementation.
 3. source/result arity that does not satisfy resultArity = factor * sourceArity.
 4. unsupported element width relation.
 ```
@@ -233,15 +233,15 @@ the requested layout.
 
 Existing load fold should use producer capability, not helper materialization
 capability. A load may directly produce a requested contiguous or
-deinterleaved=2/4 block_elems=1 result layout even when the helper conversion
+ordinary deinterleaved=2/4 result layout even when the helper conversion
 from the old load layout to the requested layout would not be a legal register
 materialization.
 
 Add fold coverage if missing for:
 
 ```text
-group_broadcast_load result layout requested as deinterleaved=2/block_elems=1
-group_slot_broadcast_load result layout requested as deinterleaved=2/block_elems=1
+group_broadcast_load result layout requested as deinterleaved=2
+group_slot_broadcast_load result layout requested as deinterleaved=2
 ```
 
 The fold pass must still be local:

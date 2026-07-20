@@ -184,9 +184,9 @@ producer natural layout:
 `group_broadcast` is a materialization op, so it may define or participate in an
 E2B-friendly natural layout when that layout is part of the declared layout
 contract.  That is still a layout-assignment decision, not a hidden
-`vmi-to-vpto` peephole.  Do not reuse `block_elems` as an ad-hoc broadcast split
-knob; `block_elems` belongs to the dense deinterleaved layout contract and has
-existing producer/consumer meanings.
+`vmi-to-vpto` peephole.  Do not reuse `block_deinterleaved` as an ad-hoc
+broadcast split knob; it specifically describes fixed-32B block distribution
+and has existing producer/consumer meanings.
 
 Baseline layout assignment may still choose conservative contiguous layouts even
 when a target-specific fused implementation exists.
@@ -214,7 +214,7 @@ logical 1 -> 32:
   s0 x32
 
 layout:
-  deinterleaved = 2, block_elems = 1
+  deinterleaved=2
 
 physical part 0:
   s0 x16
@@ -227,8 +227,8 @@ The two physical parts can share one E2B materialization or use two identical
 E2B materializations.  This is a general layout choice for the broadcast result,
 not a quant-specific graph rewrite.
 
-For a uniform `1 -> 32` or per-group `x32` broadcast, `deinterleaved = 2,
-block_elems = 1` yields 16 lanes of the same group per physical part and is
+For a uniform `1 -> 32` or per-group `x32` broadcast, `deinterleaved = 2`
+yields 16 lanes of the same group per physical part and is
 closer to an even/odd `DINTLV_B16` data layout.
 
 For the MX quant scale:
@@ -238,7 +238,7 @@ logical 8 -> 256:
   s0 x32, s1 x32, ..., s7 x32
 
 layout:
-  deinterleaved = 2, block_elems = 1
+  deinterleaved=2
 
 physical part 0:
   s0 x16, s1 x16, ..., s7 x16
@@ -248,8 +248,8 @@ physical part 1:
 ```
 
 Each physical part is directly `E2B_B16`-compatible.
-The implementation should run the E2B compatibility query over the assigned lane
-mapping.  It should not infer a new meaning for `block_elems`.
+The implementation should run the E2B compatibility query over the assigned
+lane mapping. It should not infer a new meaning for `block_deinterleaved`.
 
 ### 5.3 Target-Specific Layout Optimization
 
@@ -511,7 +511,7 @@ physical use B: s0 x16
 This split can use the existing DINTLV-like element-parity layout:
 
 ```text
-#pto.vmi.layout<deinterleaved = 2, block_elems = 1>
+#pto.vmi.layout<deinterleaved=2>
 ```
 
 For logical lanes `0..31`, this maps:
@@ -897,7 +897,7 @@ For each E2B packet:
    group_broadcast_load packet plan.
 ```
 
-For `1 -> 32` under `deinterleaved = 2, block_elems = 1`:
+For `1 -> 32` under `deinterleaved=2`:
 
 ```text
 logical group:
@@ -938,7 +938,7 @@ level 1: E2B for already-compatible layouts
 
 level 2: choose E2B-compatible layouts
   an optional layout optimization changes/rematerializes layouts before
-  recognition, for example selecting deinterleaved=2/block_elems=1 for a
+  recognition, for example selecting deinterleaved=2 for a
   broadcast use when all consumers can accept that layout.
 ```
 
@@ -963,18 +963,18 @@ Add focused tests in phases:
 ```text
 positive:
   bf16 group_slot_load stride=1 + group_broadcast 8->256 assigned to
-  deinterleaved=2/block_elems=1 lowers scale chunks with E2B_B16.
+  deinterleaved=2 lowers scale chunks with E2B_B16.
 
 positive:
   f16 1->16 or packed 8*(1->16) lowers to E2B only when source memory safety is
   proven by full packet or supported partial semantics.
 
 positive:
-  1->32 assigned to deinterleaved=2/block_elems=1 maps two physical uses to one
+  1->32 assigned to deinterleaved=2 maps two physical uses to one
   E2B packet or to two explicit duplicate packets.
 
 positive:
-  f32 1->8 lowers to E2B_B32, and f32 1->16 under deinterleaved=2/block_elems=1
+  f32 1->8 lowers to E2B_B32, and f32 1->16 under deinterleaved=2
   maps two physical uses to one E2B_B32 packet.
 
 negative:

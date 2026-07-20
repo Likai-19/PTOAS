@@ -35,7 +35,7 @@ module {
 }
 
 // CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.truncf operand #0 has type
-// CHECK-SAME: #pto.vmi.layout<deinterleaved = 2, block_elems = 8>
+// CHECK-SAME: #pto.vmi.layout<block_deinterleaved = 2>
 // CHECK-SAME: requires
 // CHECK-SAME: #pto.vmi.layout<deinterleaved = 2>
 // CHECK-SAME: pto.vmi.ensure_layout cannot materialize this conversion

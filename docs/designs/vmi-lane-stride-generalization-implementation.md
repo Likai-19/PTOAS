@@ -692,8 +692,8 @@ elementwise sink, owned by vmi-layout-sink-materialization:
 
 ### 2.1 Extend `VMILayoutAttr`
 
-Current storage reuses `blockElems` as group-slot `lane_stride`.  Generalization
-should first split lane stride from block elems:
+The storage keeps a legacy `blockElems` field internally, but public layout
+semantics split lane stride and block distribution into separate fields/kinds:
 
 ```c++
 kind
@@ -714,9 +714,16 @@ contiguous:
 
 deinterleaved:
   factor = F
-  blockElems = B
+  blockElems = 1
   slots = 0
   laneStride >= 1
+
+block_deinterleaved:
+  factor = F
+  blockElems = 1 as an internal storage invariant
+  effective block width = 32B / sizeof(carrier element)
+  slots = 0
+  laneStride = 1
 
 num_groups:
   factor = G
@@ -742,12 +749,12 @@ int64_t getLaneStride() const;
 VMILayoutAttr withLaneStride(int64_t stride) const;
 ```
 
-Keep old constructor defaults source-compatible where possible:
+Constructor surface:
 
 ```c++
 getContiguous(ctx)
-getDeinterleaved(ctx, factor, blockElems = 1,
-                 laneStride = 1)
+getDeinterleaved(ctx, factor, laneStride = 1)
+getBlockDeinterleaved(ctx, factor)
 getGroupSlots(ctx, numGroups, slots = 0, laneStride = 1)
 ```
 
@@ -760,8 +767,8 @@ Accepted dense spellings:
 #pto.vmi.layout<contiguous, lane_stride = 2>
 
 #pto.vmi.layout<deinterleaved = 2>
-#pto.vmi.layout<deinterleaved = 2, block_elems = 8>
-#pto.vmi.layout<deinterleaved = 2, block_elems = 8, lane_stride = 2>
+#pto.vmi.layout<deinterleaved = 2, lane_stride = 2>
+#pto.vmi.layout<block_deinterleaved = 2>
 ```
 
 Existing group-slot spellings remain valid:
@@ -792,8 +799,14 @@ contiguous:
 
 deinterleaved:
   factor in supported dense factors
-  blockElems > 0
+  blockElems == 1
   slots == 0
+
+block_deinterleaved:
+  factor in supported dense factors
+  blockElems == 1 as an internal storage invariant
+  slots == 0
+  laneStride == 1
 
 num_groups:
   factor > 0
@@ -861,8 +874,9 @@ Add a dense lane-map helper:
 
 ```c++
 struct DenseLaneMap {
+  bool blockDeinterleaved;
   int64_t deinterleaveFactor;
-  int64_t blockElems;
+  int64_t blockElems; // 1, or a 32B width derived from the carrier type.
   int64_t laneStride;
 };
 
@@ -1461,7 +1475,7 @@ element storage width
 logical group size derived from num_groups
 assigned result layout:
   contiguous for the direct packet size
-  or deinterleaved=2, block_elems=1 for the split packet size
+  or deinterleaved=2 for the split packet size
 ```
 
 Then it may choose an E2B packet:
@@ -1501,7 +1515,7 @@ lib/PTO/Transforms/VMILayoutSupport.cpp
        source_group_stride is constant 1
        num_groups is a multiple of 8
        group size matches direct or split E2B packet size
-       result layout is contiguous or deinterleaved=2/block_elems=1
+       result layout is contiguous or deinterleaved=2
        result has full physical chunks
 
 2. Keep VMIGroupBroadcastLoadSupportKind strategy-specific:
@@ -1589,7 +1603,7 @@ Parser/verifier:
 
 ```text
 parse/print contiguous lane_stride
-parse/print deinterleaved + block_elems + lane_stride
+parse/print deinterleaved + lane_stride and block_deinterleaved
 ```
 
 Physicalization:

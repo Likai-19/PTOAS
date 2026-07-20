@@ -116,7 +116,7 @@ layout conflict:
   one scalar broadcast materialized for dense and grouped users, with optional rematerialization
   one non-rematerializable value materialized with use-site ensure_layout
   one scalar group-slot source expressed as explicit slots=8 and slots=1 producers
-  S=16 block_elems=1/8 layout selection
+  S=16 element-deinterleaved/block-deinterleaved layout selection
   dense consumer of group_slots diagnostic
   packed group-slot width-changing cast diagnostic
   S=64 slots=1 group-slot width-changing cast
@@ -161,7 +161,7 @@ design so far:
 
 ```text
 physical dense layout:
-  contiguous, deinterleaved=2/4, block_elems=1/8
+  contiguous, deinterleaved=2/4, block_deinterleaved=2/4
 
 group-slot result layout:
   group_slots(G, slots=8) for packed VCG results
@@ -255,39 +255,45 @@ value-indexed accumulation boundary:
 
 ```text
 #pto.vmi.layout<contiguous>
-#pto.vmi.layout<deinterleaved = F, block_elems = B>
+#pto.vmi.layout<deinterleaved = F>
+#pto.vmi.layout<block_deinterleaved = F>
 ```
 
-`block_elems` defaults to `1`:
+Dense layouts preserve one semantic value for every logical lane.  The two
+split layouts are distinct kinds:
 
 ```text
-#pto.vmi.layout<deinterleaved = 2>
-  == #pto.vmi.layout<deinterleaved = 2, block_elems = 1>
+deinterleaved=F:
+  part p        = i % F
+  physical lane = i / F
+
+block_deinterleaved=F:
+  B = 32B / sizeof(element)
+  block q         = i / B
+  in-block lane r = i % B
+  part p           = q % F
+  part block t      = q / F
+  physical lane     = t * B + r
 ```
 
-Dense layouts preserve one semantic value for every logical lane.
-
-Lane map for `deinterleaved = F, block_elems = B`:
+The 32B block width is derived from the carrier type rather than stored in the
+attribute:
 
 ```text
-logical lane i
-block q          = i / B
-in-block lane r  = i % B
-part p           = q % F
-part block t     = q / F
-
-physical part p, physical lane t * B + r
+f32/b32 -> B=8
+f16/b16 -> B=16
+f8/b8   -> B=32
 ```
 
 Important consequence:
 
 ```text
-deinterleaved=2, block_elems=1
-deinterleaved=2, block_elems=8
+deinterleaved=2
+block_deinterleaved=2
 ```
 
-are different layouts.  They cannot be treated as compatible because `F` is the
-same.
+are different layouts.  They cannot be treated as compatible merely because
+`F` is the same.
 
 See `vmi-lane-stride-generalization-design.md` for the planned extension that
 allows dense layouts to carry `lane_stride` as an additional lane-map field.
@@ -359,7 +365,7 @@ It must not:
 1. walk to defining op to infer layout
 2. inspect all users to choose a lowering path
 3. infer memory legality from a later mask
-4. decide S=16 block_elems=1 vs block_elems=8 locally
+4. decide S=16 deinterleaved vs block_deinterleaved locally
 5. decide whether group_broadcast should be materialized for one or many users
 6. specialize function signatures during vmi-to-vpto
 ```
@@ -541,18 +547,18 @@ private decision to `vmi-to-vpto`.
 ```text
 f16 -> f32:
   source contiguous f16
-  result deinterleaved=2, block_elems=1
+  result deinterleaved=2
 
 f8 -> f32:
   source contiguous f8
-  result deinterleaved=4, block_elems=1
+  result deinterleaved=4
 
 f32 -> f16:
-  source deinterleaved=2, block_elems=1
+  source deinterleaved=2
   result contiguous f16
 
 f32 -> f8:
-  source deinterleaved=4, block_elems=1
+  source deinterleaved=4
   result contiguous f8
 
 elementwise dense:
@@ -657,11 +663,11 @@ dense store:
   store lowering such as vstsx2.
 
 truncf f32 -> f16:
-  requests source deinterleaved=2, block_elems=1
+  requests source deinterleaved=2
   requests result contiguous f16
 
 truncf f32 -> f8:
-  requests source deinterleaved=4, block_elems=1
+  requests source deinterleaved=4
   requests result contiguous f8
 
 group_reduce_add{f|i}:
@@ -703,7 +709,7 @@ group_slot_load:
   requests result group_slots(num_groups, slots=1) for row-local aligned slots
 
 group_load:
-  requests result deinterleaved=2/4, block_elems=8 for S=16/S=32 block
+  requests result block_deinterleaved=2/4 for S=16/S=32 block
   fragments, or contiguous for row-local full chunks
 
 masked_load:
@@ -848,8 +854,8 @@ Canonical baseline constraints:
 
 ```text
 S=16 group_reduce:
-  request deinterleaved=2; baseline uses block_elems=1 unless the producer
-  result already carries block_elems=8 as an explicit layout
+  request deinterleaved=2 unless the producer result already carries
+  block_deinterleaved=2 as an explicit layout
 
 one dense value feeding S=16 and S=32 group_reduce:
   keep the value's assigned layout and insert ensure_layout at both use sites
@@ -953,7 +959,7 @@ The pattern must not:
 ```text
 1. inspect all users to decide result layout
 2. inspect defining ops to decide source layout
-3. choose between S=16 block_elems=1 and block_elems=8
+3. choose between S=16 deinterleaved and block_deinterleaved
 4. decide whether a load is full_footprint_readable
 5. decide function signature specialization
 ```

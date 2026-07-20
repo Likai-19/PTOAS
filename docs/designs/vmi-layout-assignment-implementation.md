@@ -58,7 +58,7 @@ vmi-layout-fold:
   lowering
   current implementation: pto.vmi.store and the value operand of
   pto.vmi.masked_store when the existing mask arity matches, fed by
-  ensure_layout from deinterleaved=2/4, block_elems=1 to contiguous.  factor=2
+  ensure_layout from deinterleaved=2/4 to contiguous.  factor=2
   uses the store's vstsx2 INTLV lowering; factor=4 is still store-local, but it
   materializes through physical interleave before vsts.
 
@@ -201,7 +201,8 @@ Represent layout as a closed attribute family:
 
 ```text
 #pto.vmi.layout<contiguous>
-#pto.vmi.layout<deinterleaved = F, block_elems = B>
+#pto.vmi.layout<deinterleaved = F>
+#pto.vmi.layout<block_deinterleaved = F>
 #pto.vmi.layout<num_groups = G, slots = K>
 #pto.vmi.layout<num_groups = G, slots = K, lane_stride = LS>
 ```
@@ -212,13 +213,13 @@ C++ form:
 enum class VMILayoutKind {
   Contiguous,
   Deinterleaved,
+  BlockDeinterleaved,
   GroupSlots,
 };
 
 struct VMILayoutKey {
   VMILayoutKind kind;
   int64_t deinterleaveFactor = 1;
-  int64_t blockElems = 1;
   int64_t numGroups = 0;
   int64_t slots = 0;
   int64_t laneStride = 1;
@@ -233,8 +234,12 @@ contiguous:
 
 deinterleaved:
   F > 1
-  B > 0
-  direct full-chunk lowerings require N % (F * B) == 0
+  direct full-chunk lowerings require N % F == 0
+
+block_deinterleaved:
+  F > 1
+  block size is fixed at 32B; element count is derived from the carrier type
+  direct full-chunk lowerings require N % (F * blockElems(type)) == 0
 
 group_slots:
   G > 0
@@ -567,9 +572,10 @@ group_slot_load:
   stride selects slots=1 first, then the support query rejects dynamic or
   unaligned row-local lowering when the target cannot materialize it.
 
-block8 group_load:
-  assigned result layout is deinterleaved=2/4 with block_elems=8 only when the
-  op carries the required constant stride and memory-safety proof.
+block group_load:
+  assigned result layout is block_deinterleaved=2/4 only when the op carries
+  the required constant stride and memory-safety proof.  Its block is always
+  32B, with the element count derived from the result type.
 
 group_store:
   consumes group_slots(G,K).  Explicit output stride attrs/operands decide
@@ -669,15 +675,15 @@ Examples:
 
 ```text
 truncf f32->f16:
-  source request deinterleaved=2, block_elems=1
+  source request deinterleaved=2
   result contiguous
 
 group_reduce S=16:
-  source request deinterleaved=2, block_elems=1
+  source request deinterleaved=2
   result group_slots(G, slots=8)
 
 group_reduce S=32:
-  source request deinterleaved=4, block_elems=1
+  source request deinterleaved=4
   result group_slots(G, slots=8)
 
 group_reduce S=64:
@@ -754,8 +760,8 @@ buildStoreRequests:
 buildCastRequests:
   extf f16->f32 -> source contiguous, result deinterleaved=2
   extf f8->f32  -> source contiguous, result deinterleaved=4
-  truncf f32->f16 -> source deinterleaved=2/block_elems=1, result contiguous
-  truncf f32->f8  -> source deinterleaved=4/block_elems=1, result contiguous
+  truncf f32->f16 -> source deinterleaved=2, result contiguous
+  truncf f32->f8  -> source deinterleaved=4, result contiguous
   group_slots slots=1 f32->f16 -> explicit slot-preserving transform
   group_slots slots=8 width-changing cast -> diagnostic unless a packed
   transform is explicitly represented
@@ -764,16 +770,17 @@ buildGroupReduceRequests:
   derive E = sizeof(accumulator type), VLaneElems = 32B / E,
   L = 256B / E, and S = logical_lanes / num_groups
   S=VLaneElems -> contiguous source, group_slots(G,8) result
-  S=2*VLaneElems -> deinterleaved=2/block_elems=1 source,
+  S=2*VLaneElems -> deinterleaved=2 source,
                     group_slots(G,8) result
-  S=4*VLaneElems -> deinterleaved=4/block_elems=1 source,
+  S=4*VLaneElems -> deinterleaved=4 source,
                     group_slots(G,8) result
   S>=L && S%L==0 -> contiguous source, group_slots(G,1) result
   8-bit storage must be cast to an accumulator type before this request builder
   other S -> diagnostic unless an explicit fallback op/helper is enabled
 
 buildGroupMemoryRequests:
-  group_load S=16/S=32 with aligned constant stride -> natural block_elems=8
+  group_load S=16/S=32 with aligned constant stride -> natural
+  block_deinterleaved=2/4
   group_load row-local full chunks -> natural contiguous
   group_slot_load unit stride -> group_slots(G,8)
   group_slot_load aligned row-local stride -> group_slots(G,1)
@@ -992,7 +999,7 @@ case family                     builder / owner             assignment artifact
 3.6 32-bit S=32 reduce          buildGroupReduceRequests    four_vlane dintlv4/block8 layout
 3.7 32-bit S=64 reduce          buildGroupReduceRequests    full_chunk row_local lowering
 3.11.1 S=64 active-row tail     buildMaskRequests           active-row store/reduce masks
-3.19.1 S=16 block_elems choice  buildGroupReduceRequests    explicit block_elems layout
+3.19.1 S=16 split-kind choice   buildGroupReduceRequests    explicit dense layout kind
 3.38 multi-tile S=32 reduce     buildGroupReduceRequests    multiple group_slots chunks
 3.26 grouped tail               buildMaskRequests           split grouped masks
 3.44, 3.45 grouped S=32 masks   buildMaskRequests           explicit deinterleaved mask values
@@ -1020,11 +1027,11 @@ vmi-to-vpto contract:
 
 ```text
 case family                     builder / owner             assignment artifact
-3.15.1 S=16 row stride 16       buildGroupMemoryRequests    block_elems=8 group_load layout
-3.15.2 S=16 row stride > 16     buildGroupMemoryRequests    strided block_elems=8 plan
+3.15.1 S=16 row stride 16       buildGroupMemoryRequests    block_deinterleaved group_load
+3.15.2 S=16 row stride > 16     buildGroupMemoryRequests    strided block layout plan
 3.16.1 group_slot_load slots=8  buildGroupMemoryRequests    unit-stride packed slots plan
 3.16.2 group_slot_load slots=1  buildGroupMemoryRequests    row-local aligned slots plan
-3.27 strided group_load         buildGroupMemoryRequests    positive block_elems=8 plan
+3.27 strided group_load         buildGroupMemoryRequests    block_deinterleaved plan
 3.28 slots=1 non-unit load      buildGroupMemoryRequests    row-local group_slot_load layout
 3.37 slots=1 strided store      buildStoreRequests          group_store stride/alignment proof
 3.39 strided load fanout        conflict resolver           preserving layout or materialization
@@ -1082,7 +1089,7 @@ diagnostic family               builder / owner             required failure
 3.15.3 compact S=12            buildGroupMemoryRequests    no compact gather plan
 3.16.1 slots=8 non-unit load    buildGroupMemoryRequests    no packed strided slot load path
 3.16.2 slots=1 bad stride       buildGroupMemoryRequests    no dynamic/unaligned row-local plan
-3.19.2 invalid block_elems use  conflict resolver           no preserving materialization
+3.19.2 incompatible split kind  conflict resolver           no preserving materialization
 3.25.2 public/external ABI      buildFunctionBoundary       no stable public VMI ABI
 3.27 unaligned group_load       buildGroupMemoryRequests    no gather/block fallback path
 3.30 masked_load unsafe tail    buildMaskRequests           no padding/gather fallback
@@ -1171,27 +1178,27 @@ load, lowering=dense_load_norm:
   covers dense store users and full-chunk row-local reduce input
 
 load, lowering=load_dintlv2:
-  result layout deinterleaved=2, block_elems=1
+  result layout deinterleaved=2
   emits vldsx2 DINTLV_B32 or normal load + vdintlv materialization
   covers f32->f16, S=16 parity reduce, f16->f32 widened values
 
 load, lowering=load_dintlv4:
-  result layout deinterleaved=4, block_elems=1
+  result layout deinterleaved=4
   emits two vldsx2 DINTLV_B32 plus vdintlv
   covers f32->f8, S=32 dintlv4 reduce
 
 group_load, lowering=s16_group_load_block8_unit_stride:
-  result layout deinterleaved=2, block_elems=8
+  result layout block_deinterleaved=2
   emits vldsx2/BDINTLV for 8 rows of 16xf32
   covers compact logical S=16 when source_group_stride == 16
 
 group_load, lowering=s16_group_load_block8_stride:
-  result layout deinterleaved=2, block_elems=8
+  result layout block_deinterleaved=2
   emits two vsldb strided 32B block loads
   requires source_group_stride % 8 == 0
 
 group_load, lowering=s32_group_load_block8_stride:
-  result layout deinterleaved=4, block_elems=8
+  result layout block_deinterleaved=4
   emits four vsldb strided 32B block loads
   requires source_group_stride % 8 == 0
 
@@ -1206,22 +1213,22 @@ group_reduce_add{f|i}, lowering=one_vlane_reduce_contiguous:
   emits one vcgadd
 
 group_reduce_add{f|i}, lowering=two_vlane_reduce_deinterleaved:
-  consumes deinterleaved=2, block_elems=1
+  consumes deinterleaved=2
   produces group_slots(G, slots=8)
   emits two vcgadd operations and one vadd
 
 group_reduce_add{f|i}, lowering=two_vlane_reduce_block8:
-  consumes deinterleaved=2, block_elems=8
+  consumes block_deinterleaved=2
   produces group_slots(G, slots=8)
   emits two vcgadd operations and one vadd
 
 group_reduce_add{f|i}, lowering=four_vlane_reduce_dintlv4:
-  consumes deinterleaved=4, block_elems=1
+  consumes deinterleaved=4
   produces group_slots(G, slots=8)
   emits four vcgadd operations and a vadd tree
 
 group_reduce_add{f|i}, lowering=four_vlane_reduce_block8_stride:
-  consumes deinterleaved=4, block_elems=8
+  consumes block_deinterleaved=4
   produces group_slots(G, slots=8)
   emits four vcgadd operations and a vadd tree
 
@@ -1287,11 +1294,11 @@ group_reduce_addf:
   explicit slots=8 VCGADD lowering is selected from contiguous source/mask
   layout, slots=8 result layout, num_groups, and reassoc.
   S=16 block8 assignment emits source/mask
-  #pto.vmi.layout<deinterleaved = 2, block_elems = 8>, result
+  #pto.vmi.layout<block_deinterleaved=2>, result
   #pto.vmi.layout<num_groups = G, slots = 8>; vmi-to-vpto lowers through two
   VCGADDs plus a PAT_VL8 VADD per packed result block.
   S=32 block8 assignment emits source/mask
-  #pto.vmi.layout<deinterleaved = 4, block_elems = 8>, result
+  #pto.vmi.layout<block_deinterleaved=4>, result
   #pto.vmi.layout<num_groups = G, slots = 8>; vmi-to-vpto lowers through four
   VCGADDs plus a PAT_VL8 VADD tree per packed result block.
   Full-chunk row-local assignment, including S=64 and S=256 f32 cases, uses
@@ -1308,9 +1315,9 @@ group_reduce_addf:
 group_broadcast:
   explicit slots=8/1 source layouts select
   packed or row-local VSELR lowerings locally. Deinterleaved block-fragment
-  results use the result layout block_elems as the local vselr selection group,
-  so
-  `deinterleaved = 4, block_elems = 8` broadcasts one group slot across each
+  results derive the 32B block width from the result type as the local vselr
+  selection group, so
+  `block_deinterleaved=4` broadcasts one group slot across each
   32B row fragment. VSELR index vectors are materialized per physical result
   chunk.  For small-group results, layout assignment has already fixed the
   result layout, and vmi-to-vpto computes:
@@ -1323,7 +1330,7 @@ group_broadcast:
 group_load:
   contiguous full-chunk path is selected from a contiguous result layout.
   S=16/S=32 block-aligned strided loads are selected from
-  #pto.vmi.layout<deinterleaved = 2/4, block_elems = 8>, and lower to one
+  #pto.vmi.layout<block_deinterleaved=2/4>, and lower to one
   vsldb per 32B row fragment and physical chunk.  The explicit block8 support
   is checked by pto-validate-vmi-layout-ir before vmi-to-vpto.
   The dedicated S=16 unit-stride vldsx2/BDINTLV lowering remains a local
@@ -1407,11 +1414,11 @@ Examples:
 
 ```text
 group_reduce_add{f|i}, lowering=two_vlane_reduce_deinterleaved:
-  consume deinterleaved=2, block_elems=1
+  consume deinterleaved=2
   emit two VCGADDs and one VADD
 
 group_reduce_add{f|i}, lowering=two_vlane_reduce_block8:
-  consume deinterleaved=2, block_elems=8
+  consume block_deinterleaved=2
   emit two VCGADDs and one VADD
 
 group_reduce_add{f|i}, lowering=four_vlane_reduce_dintlv4:
@@ -1526,8 +1533,8 @@ Example:
 ```text
 VMI-LAYOUT-CONTRACT:
   pto.vmi.truncf requires
-  #pto.vmi.layout<deinterleaved = 2, block_elems = 1>, but the source value is
-  fixed to #pto.vmi.layout<deinterleaved = 2, block_elems = 8> by the selected
+  #pto.vmi.layout<deinterleaved=2>, but the source value is
+  fixed to #pto.vmi.layout<block_deinterleaved=2> by the selected
   strided group_load layout. Register a rematerialization or preserving
   materialization path, or avoid consuming this block-loaded value with truncf.
 ```
@@ -2160,7 +2167,7 @@ Diagnostic-only cases:
 3.16.1 group_slot_load slots=8 non-unit stride
 3.16.2 group_slot_load slots=1 dynamic or unaligned stride
 3.27 S=32 source_group_stride not divisible by 8 f32 elements
-3.19.2 block_elems=8 value consumed by truncf without materialization path
+3.19.2 block_deinterleaved value consumed by truncf without materialization path
 3.25.2 public/external VMI boundary
 3.30 unsafe masked_load tail without stable masked/gather fallback
 ```
@@ -2250,7 +2257,7 @@ group_store
 ```text
 3.8 cast commute through group_broadcast
 3.18 dense/group-reduce multi-consumer
-3.19 block_elems layout selection
+3.19 deinterleaved versus block_deinterleaved selection
 3.23 group_broadcast multi-consumer
 3.32 f32 feeding f8 store and S=32 reduce
 3.33 S=16/S=32 reduce multi-consumer rematerialization

@@ -293,8 +293,7 @@ static bool tryRematerializeTruncIThroughSourceEnsure(VMITruncIOp trunc) {
   if (!originalSourceType || !hasConcreteLayout(originalSourceType))
     return false;
   VMILayoutAttr originalSourceLayout = originalSourceType.getLayoutAttr();
-  if (!originalSourceLayout.isDeinterleaved() ||
-      originalSourceLayout.getBlockElems() != 1)
+  if (!originalSourceLayout.isDeinterleaved())
     return false;
 
   VMILayoutSupport supports;
