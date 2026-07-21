@@ -55,9 +55,9 @@
   ```mlir
   // fp32 add with deinterleaved layout
   %sum = pto.vmi.vadd %a, %b
-      : !pto.vmi.vreg<128×f32, #pto.vmi.layout<deinterleaved = 2>>,
-        !pto.vmi.vreg<128×f32, #pto.vmi.layout<deinterleaved = 2>>
-      -> !pto.vmi.vreg<128×f32, #pto.vmi.layout<deinterleaved = 2>>
+      : !pto.vmi.vreg<128×f32>,
+        !pto.vmi.vreg<128×f32>
+      -> !pto.vmi.vreg<128×f32>
   // → pto.as: 2 × pto.vadd (EVEN/ODD), each with create_mask all-active mask
 
   // Masked add with merge mode
@@ -197,15 +197,6 @@
 
 ## 3.3 Bitwise Ops
 
-> **Mask-operand support (planned):** `vand` / `vor` / `vxor` / `vnot` will be
-> extended to accept **mask** operands in addition to vector registers. When
-> the operands are masks, the op performs a per-lane **predicate boolean**
-> operation (AND / OR / XOR / NOT) on the mask lanes and produces a mask
-> result, rather than an elementwise data bitwise op on a vreg. This reuses the
-> same op names for both vreg-bitwise and mask-boolean forms; the operand type
-> selects the mode. There is no separate predicate-logic op (e.g. `pand`/
-> `por`/`pnot`); mask boolean logic is expressed through these ops.
-
 ### `pto.vmi.vand` / `pto.vmi.vor` / `pto.vmi.vxor`
 
 - **semantics:** Elementwise bitwise AND / OR / XOR. Operands and result are
@@ -258,16 +249,13 @@
 
 ### `pto.vmi.vshl` / `pto.vmi.vshr`
 
-- **semantics:** Elementwise left shift (`vshl`) or signedness-aware right
-  shift (`vshr`). The shift count is per-lane from `rhs`. `vshr` performs a
-  logical right shift for explicit unsigned element types and an arithmetic
-  right shift for signed or signless element types.
+- **semantics:** Elementwise left shift (`vshl`) or unsigned right shift (`vshr`). The shift count is per-lane from `rhs`.
 
   ```c
   for (int i = 0; i < L; i++)
       dst[i] = mask[i] ? (lhs[i] << rhs[i]) : (pmode_merge ? dst_old[i] : 0);  // vshl
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? (lhs[i] >> rhs[i]) : (pmode_merge ? dst_old[i] : 0);  // vshr (type-directed)
+      dst[i] = mask[i] ? (lhs[i] >> rhs[i]) : (pmode_merge ? dst_old[i] : 0);  // vshr (unsigned)
   ```
 
 - **syntax:**
@@ -387,12 +375,13 @@ scalar type must match the vector element type.
 
   | Attribute | Values | Default | Description |
   |---|---|---|---|
-  | `cmp` | `eq`, `ne`, `lt`, `le`, `gt`, `ge` (unordered fp+int) | *(required)* | Comparison mode |
-  | | `oeq`, `one`, `olt`, `ole`, `ogt`, `oge` (ordered fp) | | FP ordered forms |
-  | | `slt`, `sle`, `sgt`, `sge` (signed int) | | Signed integer forms |
+  | `cmp` | `eq`, `ne`, `lt`, `le`, `gt`, `ge` | *(required)* | Comparison mode (fp unordered / integer; integer signedness comes from the element type: `iN` vs `uiN`) |
+  | | `oeq`, `one`, `olt`, `ole`, `ogt`, `oge` | | FP ordered forms |
   | `pmode` | `"zero"`, `"merge"` | `"zero"` | Inactive-lane behavior |
 
-- **datatypes:** `i8`–`i32`, `f16`, `bf16`, `f32`
+- **datatypes:** `i8`/`si8`/`ui8` – `i32`/`si32`/`ui32`, `f16`, `bf16`, `f32`.
+  Integer signedness is taken from the element type; signless `iN` is treated
+  as signed (equivalent to `siN`).
 - **lowering to `pto.mi`:**
   ```
   K × pto.vcmp {cmp_mode}
@@ -403,16 +392,24 @@ scalar type must match the vector element type.
   ```mlir
   // f32 less-than compare over deinterleaved layout
   %lt = pto.vmi.vcmp %a, %b, %seed {cmp = "lt"}
-      : !pto.vmi.vreg<128×f32, #pto.vmi.layout<deinterleaved = 2>>,
-        !pto.vmi.vreg<128×f32, #pto.vmi.layout<deinterleaved = 2>>,
-        !pto.vmi.mask<128×b32, #pto.vmi.layout<deinterleaved = 2>>
-      -> !pto.vmi.mask<128×b32, #pto.vmi.layout<deinterleaved = 2>>
+      : !pto.vmi.vreg<128×f32>,
+        !pto.vmi.vreg<128×f32>,
+        !pto.vmi.mask<128×b32>
+      -> !pto.vmi.mask<128×b32>
+  // → pto.as: 2 × pto.vcmp "lt" (EVEN/ODD), each with per-reg seed mask
 
-  // i32 signed greater-than-or-equal over deinterleaved layout
-  %ge = pto.vmi.vcmp %a, %b, %seed {cmp = "sge"}
+  // i32 signed greater-than-or-equal (signedness carried by the `i32` element type)
+  %ge = pto.vmi.vcmp %a, %b, %seed {cmp = "ge"}
       : !pto.vmi.vreg<128×i32>, !pto.vmi.vreg<128×i32>, !pto.vmi.mask<128×b32>
       -> !pto.vmi.mask<128×b32>
-
+  // si32 signed greater-than-or-equal (signedness carried by the `si32` element type)
+  %ge = pto.vmi.vcmp %a, %b, %seed {cmp = "ge"}
+      : !pto.vmi.vreg<128×si32>, !pto.vmi.vreg<128×si32>, !pto.vmi.mask<128×b32>
+      -> !pto.vmi.mask<128×b32>
+  // ui32 unsigned greater-than-or-equal (same `cmp = "ge"`; signedness from `ui32`)
+  %uge = pto.vmi.vcmp %ua, %ub, %seed {cmp = "ge"}
+      : !pto.vmi.vreg<128×ui32>, !pto.vmi.vreg<128×ui32>, !pto.vmi.mask<128×b32>
+      -> !pto.vmi.mask<128×b32>
   // bf16 contiguous equality compare (K=1)
   %eq = pto.vmi.vcmp %a, %b, %seed {cmp = "eq"}
       : !pto.vmi.vreg<128×bf16>, !pto.vmi.vreg<128×bf16>, !pto.vmi.mask<128×b16>
@@ -447,7 +444,10 @@ scalar type must match the vector element type.
   | `result` | `!pto.vmi.mask<L>` | Predicate mask |
 
 - **attributes:** Same `cmp` / `pmode` as `vcmp`.
-- **datatypes:** `i8`–`i32`, `f16`, `bf16`, `f32`
+- **datatypes:** `i8`/`si8`/`ui8` – `i32`/`si32`/`ui32`, `f16`, `bf16`, `f32`.
+  Integer signedness is taken from the element type; signless `iN` is treated
+  as signed (equivalent to `siN`). The scalar operand's element type must
+  match the vector's, so signedness is consistent on both operands.
 - **lowering to `pto.mi`:**
   ```
   K × pto.vcmps {cmp_mode}
@@ -534,7 +534,7 @@ scalar type must match the vector element type.
   | `result` | `!pto.vmi.vreg<L×T>` | Permuted result |
 
 - **datatypes:** `i8`–`i32`, `f16`, `bf16`, `f32`
-- **lowering to `pto.mi`:**
+- **lowering to `pto.mi:**
   ```
   K × pto.vselr (+ index reg setup)
   ```

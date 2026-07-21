@@ -1,4 +1,4 @@
-# 8. Predicate Ops
+# 8. Predicate Generation Ops
 
 > **Category:** gen (mask producers — take no input mask).
 > **Mask in:** none (they generate masks).
@@ -109,7 +109,6 @@
       : index -> !pto.vmi.mask<256×b32>
   ```
 
----
 
 > **Mask Boolean Ops (`vand` / `vor` / `vxor` / `vnot` on masks):**
 >
