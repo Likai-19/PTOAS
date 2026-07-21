@@ -2529,6 +2529,37 @@ def vmi_wrapper_dispatch_probe():
 
 
 @pto.jit(target="a5", backend="vpto", mode="explicit")
+def vmi_vhist_signless_source_probe():
+    # acc/result stay ui16 (DSL-enforced); source is signless i8 to exercise
+    # the VMI verifier's "signless == unsigned" relaxation for vdhist/vchist.
+    hist_acc_tile = pto.alloc_tile(shape=[1, 256], dtype=pto.ui16)
+    hist_src_tile = pto.alloc_tile(shape=[1, 256], dtype=pto.i8)
+    hist_acc_ptr = hist_acc_tile.as_ptr()
+    hist_src_ptr = hist_src_tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+    hist_acc = pto.vmi.vload(hist_acc_ptr, offset, size=256)
+    hist_src = pto.vmi.vload(hist_src_ptr, offset, size=256)
+    hist_mask = pto.vmi.create_mask(pto.const(256, dtype=pto.index), size=256)
+    _ = pto.vmi.vdhist(hist_acc, hist_src, hist_mask)
+    _ = pto.vmi.vchist(hist_acc, hist_src, hist_mask)
+
+
+@pto.jit(target="a5", backend="vpto", mode="explicit")
+def vmi_vhist_bad_acc_probe():
+    # acc is signless i16 - must be rejected by the PTODSL surface with a
+    # TypeError before the MLIR verifier runs.
+    hist_acc_tile = pto.alloc_tile(shape=[1, 256], dtype=pto.i16)
+    hist_src_tile = pto.alloc_tile(shape=[1, 256], dtype=pto.ui8)
+    hist_acc_ptr = hist_acc_tile.as_ptr()
+    hist_src_ptr = hist_src_tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+    hist_acc = pto.vmi.vload(hist_acc_ptr, offset, size=256)
+    hist_src = pto.vmi.vload(hist_src_ptr, offset, size=256)
+    hist_mask = pto.vmi.create_mask(pto.const(256, dtype=pto.index), size=256)
+    _ = pto.vmi.vdhist(hist_acc, hist_src, hist_mask)
+
+
+@pto.jit(target="a5", backend="vpto", mode="explicit")
 def vmi_missing_binding_probe():
     src_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
     src_ptr = src_tile.as_ptr()
@@ -5930,6 +5961,33 @@ def main() -> None:
     expect_parse_roundtrip_and_verify(vsstb_post_update_surface_text, "vsstb post-update surface specialization")
     vmi_wrapper_dispatch_text = vmi_wrapper_dispatch_probe.compile().mlir_text()
     expect_parse_roundtrip_and_verify(vmi_wrapper_dispatch_text, "public VMI wrapper dispatch specialization")
+    vmi_vhist_signless_source_text = vmi_vhist_signless_source_probe.compile().mlir_text()
+    expect_parse_roundtrip_and_verify(
+        vmi_vhist_signless_source_text,
+        "public VMI vdhist/vchist signless-source specialization",
+    )
+    expect(
+        "pto.vmi.vdhist" in vmi_vhist_signless_source_text
+        and "pto.vmi.vchist" in vmi_vhist_signless_source_text,
+        "signless-source vdhist/vchist probe should still emit both histogram ops",
+    )
+    expect(
+        "!pto.vmi.vreg<256xi8" in vmi_vhist_signless_source_text,
+        "vdhist/vchist probe with dtype=pto.i8 source should surface signless i8 lanes in IR",
+    )
+    expect(
+        "!pto.vmi.vreg<256xui16" in vmi_vhist_signless_source_text,
+        "vdhist/vchist acc/result must remain ui16 in emitted IR",
+    )
+    vmi_vhist_bad_acc_error = expect_raises(
+        TypeError,
+        vmi_vhist_bad_acc_probe.compile,
+        "requires acc/result element type to be ui16",
+    )
+    expect(
+        "pto.vmi.vdhist(...)" in str(vmi_vhist_bad_acc_error),
+        "vdhist bad-acc rejection should carry the pto.vmi.vdhist call-site context",
+    )
     vmi_unpack_vload_text = vmi_unpack_vload_probe.compile().mlir_text()
     expect_parse_roundtrip_and_verify(vmi_unpack_vload_text, "public VMI unpack vload specialization")
     vmi_brc_vload_text = vmi_brc_vload_probe.compile().mlir_text()
