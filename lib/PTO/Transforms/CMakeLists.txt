@@ -42,6 +42,7 @@ add_mlir_dialect_library(PTOTransforms
   VMILegalizeArithSelect.cpp
   VMIMaskGranularityAssignment.cpp
   VMILowerUnifiedToLegacy.cpp
+  VMINormalizeSignlessIntToUnsigned.cpp
   VMILayoutAssignment.cpp
   VMILayoutFold.cpp
   VMILayoutPropagation.cpp

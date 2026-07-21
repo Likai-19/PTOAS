@@ -1,0 +1,60 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -pto-vmi-normalize-signless-int-to-unsigned -split-input-file | FileCheck %s
+
+// Case 1: all unsigned types — pass does nothing
+func.func @vchist_all_unsigned(
+    %acc: !pto.vmi.vreg<256xui16>,
+    %source: !pto.vmi.vreg<256xui8>,
+    %mask: !pto.vmi.mask<256xb8>) -> !pto.vmi.vreg<256xui16> {
+  %hist = pto.vmi.vchist %acc, %source, %mask
+      : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<256xui8>, !pto.vmi.mask<256xb8>
+      -> !pto.vmi.vreg<256xui16>
+  return %hist : !pto.vmi.vreg<256xui16>
+}
+
+// CHECK-LABEL: func.func @vchist_all_unsigned(
+// CHECK: pto.vmi.vchist
+// CHECK-NOT: pto.vmi.bitcast
+
+// -----
+
+// Case 2: signless source, unsigned acc/result — bitcast on source only
+func.func @vchist_signless_source(
+    %acc: !pto.vmi.vreg<256xui16>,
+    %source: !pto.vmi.vreg<256xi8>,
+    %mask: !pto.vmi.mask<256xb8>) -> !pto.vmi.vreg<256xui16> {
+  %hist = pto.vmi.vchist %acc, %source, %mask
+      : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<256xi8>, !pto.vmi.mask<256xb8>
+      -> !pto.vmi.vreg<256xui16>
+  return %hist : !pto.vmi.vreg<256xui16>
+}
+
+// CHECK-LABEL: func.func @vchist_signless_source(
+// CHECK: %[[SRC_NORM:.*]] = pto.vmi.bitcast %{{.*}} : !pto.vmi.vreg<256xi8> -> !pto.vmi.vreg<256xui8>
+// CHECK: pto.vmi.vchist %{{.*}}, %[[SRC_NORM]], %{{.*}} : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<256xui8>, !pto.vmi.mask<256xb8> -> !pto.vmi.vreg<256xui16>
+// CHECK-NOT: pto.vmi.bitcast
+
+// -----
+
+// Case 3: signless acc, unsigned result — bitcast on acc operand only
+func.func @vchist_signless_acc(
+    %acc: !pto.vmi.vreg<256xi16>,
+    %source: !pto.vmi.vreg<256xui8>,
+    %mask: !pto.vmi.mask<256xb8>) -> !pto.vmi.vreg<256xui16> {
+  %hist = pto.vmi.vchist %acc, %source, %mask
+      : !pto.vmi.vreg<256xi16>, !pto.vmi.vreg<256xui8>, !pto.vmi.mask<256xb8>
+      -> !pto.vmi.vreg<256xui16>
+  return %hist : !pto.vmi.vreg<256xui16>
+}
+
+// CHECK-LABEL: func.func @vchist_signless_acc(
+// CHECK: %[[ACC_NORM:.*]] = pto.vmi.bitcast %{{.*}} : !pto.vmi.vreg<256xi16> -> !pto.vmi.vreg<256xui16>
+// CHECK: pto.vmi.vchist %[[ACC_NORM]], %{{.*}}, %{{.*}} : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<256xui8>, !pto.vmi.mask<256xb8> -> !pto.vmi.vreg<256xui16>
+// CHECK-NOT: pto.vmi.bitcast
