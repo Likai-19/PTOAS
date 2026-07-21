@@ -1638,9 +1638,16 @@ template <typename OpTy> static LogicalResult verifyVMIHistogramOp(OpTy op) {
     return op.emitOpError("requires acc type to be "
                           "!pto.vmi.vreg<128x{ui16|i16}> (Bin_N0-only) or "
                           "!pto.vmi.vreg<256x{ui16|i16}>");
-  if (resultType != accType)
-    return op.emitOpError("requires result type to match acc type "
-                          "(both must be ui16 or both must be i16)");
+  if (resultType.getElementCount() != bins)
+    return op.emitOpError("requires result element count to match acc "
+                          "(bins must be identical)");
+  if (resultType.getLayoutAttr() != accType.getLayoutAttr())
+    return op.emitOpError("requires result layout attribute to match acc");
+  auto resultElemType = dyn_cast<IntegerType>(resultType.getElementType());
+  if (!resultElemType || resultElemType.getWidth() != 16 ||
+      !matchesVMIIntSemantics(resultElemType, VMIIntSignSemantics::Unsigned))
+    return op.emitOpError("requires result element type to be ui16 or i16 "
+                          "(interpreted as unsigned)");
   if (!sourceElemType || sourceElemType.getWidth() != 8 ||
       !matchesVMIIntSemantics(sourceElemType, VMIIntSignSemantics::Unsigned))
     return op.emitOpError("requires source type to be "
