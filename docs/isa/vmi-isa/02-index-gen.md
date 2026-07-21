@@ -9,7 +9,7 @@
 
 ## `pto.vmi.vci`
 
-- **semantics:** Generate a per-lane index/counter vector from a single scalar base such as `[base, base±1, base±2, ...]`, lane `i` gets `base + i` (ASC) or `base - i` (DESC). It is the index source for `vgather`/`vscatter` offsets.
+- **semantics:** Generate a per-lane index/counter vector from a single scalar base such as `[base, base±1, base±2, ...]`,  lane `i` gets `base + i` (ASC) or `base - i` (DESC). It is the index source for `vgather`/`vscatter` offsets.
 
   ```c
   for (int i = 0; i < L; i++)
@@ -53,6 +53,10 @@
   %idx = pto.vmi.vci %c0 {order = "ASC"} : i32 -> !pto.vmi.vreg<64×i32>
   // Descending f32 ramp
   %ramp = pto.vmi.vci %c10 {order = "DESC"} : f32 -> !pto.vmi.vreg<64×f32>
+  ```
+
+- **example:**
+  ```mlir
   %idx = pto.vmi.vci %base {order = "ASC"} : i32 -> !pto.vmi.vreg<64×i32>
   // → pto.as: pto.vci {order="ASC"}, one op per physical chunk
   ```
