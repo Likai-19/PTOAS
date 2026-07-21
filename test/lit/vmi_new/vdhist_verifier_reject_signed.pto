@@ -1,0 +1,39 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not pto-test-opt %s -split-input-file 2>&1 | FileCheck %s
+
+module {
+  func.func @vdhist_reject_si16_acc(
+      %acc: !pto.vmi.vreg<256xsi16>,
+      %source: !pto.vmi.vreg<256xui8>,
+      %mask: !pto.vmi.mask<256xb8>) {
+    %hist = pto.vmi.vdhist %acc, %source, %mask
+        : !pto.vmi.vreg<256xsi16>, !pto.vmi.vreg<256xui8>, !pto.vmi.mask<256xb8>
+        -> !pto.vmi.vreg<256xsi16>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.vdhist' op requires acc type to be !pto.vmi.vreg<128x{ui16|i16}> (Bin_N0-only) or !pto.vmi.vreg<256x{ui16|i16}>
+
+// -----
+
+module {
+  func.func @vchist_reject_si8_source(
+      %acc: !pto.vmi.vreg<256xui16>,
+      %source: !pto.vmi.vreg<256xsi8>,
+      %mask: !pto.vmi.mask<256xb8>) {
+    %hist = pto.vmi.vchist %acc, %source, %mask
+        : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<256xsi8>, !pto.vmi.mask<256xb8>
+        -> !pto.vmi.vreg<256xui16>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.vchist' op requires source type to be !pto.vmi.vreg<Nx{ui8|i8}> (interpreted as unsigned)

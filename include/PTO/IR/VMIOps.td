@@ -519,10 +519,10 @@ class VMIHistogramOp<string mnemonic, string summaryText>
 }
 
 def VMIVdhistOp : VMIHistogramOp<"vdhist",
-  "VMI distribution histogram (dhistv2) over unsigned 8-bit source lanes">;
+  "VMI distribution histogram (dhistv2) over unsigned or signless 8-bit source lanes (interpreted as unsigned)">;
 
 def VMIVchistOp : VMIHistogramOp<"vchist",
-  "VMI cumulative histogram (chistv2 half-axis) over unsigned 8-bit source lanes">;
+  "VMI cumulative histogram (chistv2 half-axis) over unsigned or signless 8-bit source lanes (interpreted as unsigned)">;
 
 def VMIExtFOp : VMI_Op<"extf", [Pure]> {
   let summary = "VMI floating-point elementwise extension";
