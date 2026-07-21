@@ -261,7 +261,20 @@ def _derive_vmull_result_types(a, b, *, context: str):
 
 
 def _derive_hist_result_type(acc, *, context: str):
-    return _as_vmi_vreg_type(_type_of(acc), context=context)
+    acc_type = _as_vmi_vreg_type(_type_of(acc), context=context)
+    element_type = acc_type.element_type
+    if not IntegerType.isinstance(element_type):
+        raise TypeError(
+            f"{context} requires acc/result element type to be ui16, "
+            f"got {element_type}"
+        )
+    int_type = IntegerType(element_type)
+    if int_type.width != 16 or not int_type.is_unsigned:
+        raise TypeError(
+            f"{context} requires acc/result element type to be ui16, "
+            f"got {element_type}"
+        )
+    return acc_type
 
 
 def _derive_vgather_result_type(source, offsets, *, context: str):
