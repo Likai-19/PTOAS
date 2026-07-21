@@ -12153,8 +12153,8 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
         return WalkResult::advance();
       hist.emitError()
           << kVMIDiagUnsupportedPrefix
-          << "pto.vmi.vdhist requires contiguous Nxui8 source, contiguous b8 "
-             "mask, and contiguous 256xui16 acc/result ("
+          << "pto.vmi.vdhist requires contiguous Nx{ui8|i8} source, contiguous b8 "
+             "mask, and contiguous 256x{ui16|i16} acc/result ("
           << reason << ")";
       return WalkResult::interrupt();
     }
@@ -12164,8 +12164,8 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
         return WalkResult::advance();
       hist.emitError()
           << kVMIDiagUnsupportedPrefix
-          << "pto.vmi.vchist requires contiguous Nxui8 source, contiguous b8 "
-             "mask, and contiguous 256xui16 acc/result ("
+          << "pto.vmi.vchist requires contiguous Nx{ui8|i8} source, contiguous b8 "
+             "mask, and contiguous 256x{ui16|i16} acc/result ("
           << reason << ")";
       return WalkResult::interrupt();
     }

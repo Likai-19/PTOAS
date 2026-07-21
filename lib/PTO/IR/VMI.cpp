@@ -101,6 +101,38 @@ static bool isVMIUnsignedIntegerType(Type type) {
   return integerType && integerType.isUnsigned();
 }
 
+// ---------------------------------------------------------------------------
+// VMI integer element type sign-semantics helper
+//
+// CONVENTION: VMI op verifiers that need "unsigned semantics" or "signed
+// semantics" on an integer element type MUST route the sign check through
+// matchesVMIIntSemantics(...) instead of calling IntegerType::isUnsigned()
+// / isSigned() directly.
+//
+// Signless integers are treated as equivalent to UNSIGNED only. They are
+// NOT accepted for signed semantics: signed hardware ops require an
+// explicitly signed integer type, to avoid silent sign-extension bugs when
+// a producer happens to emit a signless value.
+//
+// Width / kind / IntegerType-cast checks stay inline at each callsite;
+// only the sign-semantics decision is centralized here.
+// ---------------------------------------------------------------------------
+
+enum class VMIIntSignSemantics { Unsigned, Signed, Any };
+
+static bool matchesVMIIntSemantics(IntegerType intType,
+                                   VMIIntSignSemantics semantics) {
+  switch (semantics) {
+  case VMIIntSignSemantics::Unsigned:
+    return intType.isUnsigned() || intType.isSignless();
+  case VMIIntSignSemantics::Signed:
+    return intType.isSigned();
+  case VMIIntSignSemantics::Any:
+    return true;
+  }
+  llvm_unreachable("bad VMIIntSignSemantics");
+}
+
 static bool isVMIIotaElementType(Type type) {
   if (auto intType = dyn_cast<IntegerType>(type))
     return intType.getWidth() == 8 || intType.getWidth() == 16 ||
@@ -1600,17 +1632,19 @@ template <typename OpTy> static LogicalResult verifyVMIHistogramOp(OpTy op) {
   auto accElemType = dyn_cast<IntegerType>(accType.getElementType());
   auto sourceElemType = dyn_cast<IntegerType>(sourceType.getElementType());
   int64_t bins = accType.getElementCount();
-  if (!accElemType || !accElemType.isUnsigned() ||
-      accElemType.getWidth() != 16 || (bins != 128 && bins != 256))
+  if (!accElemType || accElemType.getWidth() != 16 ||
+      !matchesVMIIntSemantics(accElemType, VMIIntSignSemantics::Unsigned) ||
+      (bins != 128 && bins != 256))
     return op.emitOpError("requires acc type to be "
-                          "!pto.vmi.vreg<128xui16> (Bin_N0-only) or "
-                          "!pto.vmi.vreg<256xui16>");
+                          "!pto.vmi.vreg<128x{ui16|i16}> (Bin_N0-only) or "
+                          "!pto.vmi.vreg<256x{ui16|i16}>");
   if (resultType != accType)
-    return op.emitOpError("requires result type to match acc type");
-  if (!sourceElemType || !sourceElemType.isUnsigned() ||
-      sourceElemType.getWidth() != 8)
+    return op.emitOpError("requires result type to match acc type "
+                          "(both must be ui16 or both must be i16)");
+  if (!sourceElemType || sourceElemType.getWidth() != 8 ||
+      !matchesVMIIntSemantics(sourceElemType, VMIIntSignSemantics::Unsigned))
     return op.emitOpError("requires source type to be "
-                          "!pto.vmi.vreg<Nxui8>");
+                          "!pto.vmi.vreg<Nx{ui8|i8}> (interpreted as unsigned)");
   if (maskType.getElementCount() != sourceType.getElementCount())
     return op.emitOpError("requires mask logical lane count to match source");
 
