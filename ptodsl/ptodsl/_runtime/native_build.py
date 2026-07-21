@@ -39,11 +39,6 @@ def _run(cmd: list[str], *, cwd: Path | None = None) -> None:
         )
 
 
-def _mlir_requires_enable_vmi(mlir_path: Path) -> bool:
-    text = mlir_path.read_text(encoding="utf-8")
-    return "pto.vmi." in text or "!pto.vmi." in text
-
-
 def _run_ptoas(
     mlir_path: Path,
     kernel_object: Path,
@@ -64,8 +59,6 @@ def _run_ptoas(
         cmd.append(f"--pto-level={pto_level}")
     if insert_sync is True:
         cmd.append("--enable-insert-sync")
-    if _mlir_requires_enable_vmi(mlir_path):
-        cmd.append("--enable-vmi")
     cmd.extend([
         "--enable-tile-op-expand",
         str(mlir_path),

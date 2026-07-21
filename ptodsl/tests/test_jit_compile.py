@@ -4639,10 +4639,6 @@ def main() -> None:
         ptoas_cmds.clear()
         vmi_mlir_text = vmi_wrapper_dispatch_probe.compile().mlir_text()
         mlir_path.write_text(vmi_mlir_text, encoding="utf-8")
-        expect(
-            native_build_runtime._mlir_requires_enable_vmi(mlir_path),
-            "native build should detect PTODSL-generated VMI MLIR through the enable-vmi text probe",
-        )
         with mock.patch.object(native_build_runtime, "resolve_ptoas_binary", return_value=Path("/tmp/fake-ptoas")), mock.patch.object(
             native_build_runtime, "_run", side_effect=fake_run_ptoas_cmd
         ):
@@ -4654,10 +4650,6 @@ def main() -> None:
         expect(
             len(ptoas_cmds) == 1,
             "native build should issue exactly one ptoas command for PTODSL-generated VMI MLIR",
-        )
-        expect(
-            "--enable-vmi" in ptoas_cmds[0],
-            "native build should auto-enable the VMI semantic pipeline when PTODSL-generated MLIR contains VMI ops",
         )
     expect("valid=?" not in default_text, "default alloc_tile() should keep full static valid-shape when valid_shape= is omitted")
     auto_mode_violation = expect_raises(

@@ -119,9 +119,9 @@ lib/PTO/Transforms/CMakeLists.txt:
   add missing MLIR dialect libraries only when a new source actually includes them
 ```
 
-The VPTO backend runs the VMI semantic pipeline by default. Use
-`--enable-vmi=false` only as a temporary compatibility escape hatch. The
-pipeline is ordered around vecscope inference as follows:
+The VPTO backend always runs the VMI semantic pipeline. There is no separate
+enable or disable switch. The pipeline is ordered around vecscope inference as
+follows:
 
 ```text
 pto-validate-vmi-ir
@@ -143,11 +143,10 @@ VMI LICM
 canonicalize/CSE
 ```
 
-The default only applies when the effective backend is VPTO. Explicitly using
-`--enable-vmi` with another backend is rejected because the pipeline produces
-physical VPTO values and ops.
+The pipeline only applies when the effective backend is VPTO. EmitC does not
+run it because the pipeline produces physical VPTO values and ops.
 
-The default VPTO/VMI user-facing entry also rejects public functions whose
+The VPTO/VMI user-facing entry also rejects public functions whose
 signature contains `!pto.vmi.*`.
 Internal/private VMI-typed functions are materialized at explicit boundary
 helpers by baseline `vmi-layout-assignment` and physicalized by `vmi-to-vpto`.
@@ -159,14 +158,10 @@ CLI coverage:
 
 ```text
 vmi_ptoas_cli_pipeline.pto:
-  --pto-backend=vpto lowers the VMI pipeline by default
-  pto.backend = "vpto" also selects the default VMI path
-  explicit --pto-backend=emitc with --enable-vmi is rejected
+  --pto-backend=vpto always lowers the VMI pipeline
+  pto.backend = "vpto" also selects the always-on VMI path
   f16->f32 store lowers through the fold-consumers path, proving the driver
   uses the optimized pipeline rather than only the hard skeleton
-
-vmi_ptoas_backend_required_invalid.pto:
-  default emitc backend with --enable-vmi and no pto.backend = "vpto" is rejected
 
 vmi_ptoas_public_abi_invalid.pto / vmi_ptoas_public_result_abi_invalid.pto:
   public VMI argument/result signatures are rejected before layout assignment

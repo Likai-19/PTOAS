@@ -6,9 +6,8 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --enable-vmi --emit-vpto %s -o - | FileCheck %s
-// RUN: ptoas --pto-arch=a5 --enable-vmi --emit-vpto %s -o - | FileCheck %s --check-prefix=ATTR
-// RUN: not ptoas --pto-backend=emitc --enable-vmi %s -o - 2>&1 | FileCheck %s --check-prefix=EMITC
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s -o - | FileCheck %s
+// RUN: ptoas --pto-arch=a5 --emit-vpto %s -o - | FileCheck %s --check-prefix=ATTR
 
 module attributes {pto.target_arch = "a5"} {
   module attributes {pto.backend = "vpto", pto.kernel_kind = #pto.kernel_kind<vector>} {
@@ -63,5 +62,3 @@ module attributes {pto.target_arch = "a5"} {
 // ATTR-NOT: pto.vmi.
 // ATTR-NOT: !pto.vmi.
 // ATTR-NOT: unrealized_conversion_cast
-
-// EMITC: Error: --enable-vmi requires --pto-backend=vpto or pto.backend = "vpto".

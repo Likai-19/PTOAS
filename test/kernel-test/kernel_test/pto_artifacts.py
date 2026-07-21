@@ -47,7 +47,6 @@ def lower_vmi_to_mi(vmi_path: Path, mi_path: Path) -> str:
             str(resolve_ptoas_bin()),
             "--pto-arch=a5",
             "--pto-backend=vpto",
-            "--enable-vmi",
             "--pto-level=level3",
             "--emit-vpto",
             "-o",

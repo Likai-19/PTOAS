@@ -1,1 +1,1 @@
---pto-arch a5 --pto-backend=vpto --enable-vmi
+--pto-arch a5 --pto-backend=vpto
