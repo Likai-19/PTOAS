@@ -85,11 +85,11 @@ def kernel(x: pto.ptr(pto.f8e5m2, "ub"), y_addr: pto.i64, *, OUT_DTYPE: pto.cons
    - First run or provide a compile helper that calls
      `kernel.compile(...).mlir_text()`.
    - Then pass the emitted MLIR to PTOAS with the VMI path:
-     `ptoas --pto-arch=a5 --pto-backend=vpto --enable-vmi <mlir_or_pto> -o /dev/null`.
+     `ptoas --pto-arch=a5 --pto-backend=vpto <mlir_or_pto> -o /dev/null`.
    - When the goal is to inspect lowered VMI output locally and no CANN/toolchain
      environment is needed, prefer the bundled helper script:
      `scripts/compile_vmi_to_vpto.sh <input.vmi.pto> [output.mi.pto]`.
-     It wraps `ptoas --pto-backend=vpto --enable-vmi --emit-vpto` and is the
+     It wraps `ptoas --pto-backend=vpto --emit-vpto` and is the
      default path for generating reviewable lowered artifacts from emitted
      `vmi.pto` files.
    - Fix PTODSL trace errors before PTOAS errors. Fix semantic mismatches before
@@ -223,7 +223,7 @@ Before finishing a rewrite, verify:
 - Tail masks and lane counts match the processed element count.
 - `kernel.compile(...).mlir_text()` succeeds or the remaining trace error is
   reported with the exact failing construct.
-- PTOAS validation uses `--pto-backend=vpto --enable-vmi`; do not diagnose VMI
-  legality from a plain non-VMI invocation.
+- PTOAS validation uses `--pto-backend=vpto`; do not diagnose VMI legality from
+  an EmitC invocation.
 
 Numeric NPU or simulator validation is optional unless the user requests it.

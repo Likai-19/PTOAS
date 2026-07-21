@@ -1818,8 +1818,8 @@ lit:
 
 runtime SIM:
   test/vpto/cases/vmi_new/group-reduce-s32-tail-full-tile-store
-  This case has `ptoas.flags` with `--enable-vmi`, because the partial pointer
-  load must run through layout assignment before VPTO/LLVM emission.
+  The VPTO backend always runs layout assignment before VPTO/LLVM emission for
+  the partial pointer load.
 ```
 
 Current checked-in coverage for 3.44 masked_load grouped tail feeding S=32

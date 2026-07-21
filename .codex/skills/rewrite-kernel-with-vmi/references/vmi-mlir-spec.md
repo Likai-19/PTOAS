@@ -107,18 +107,18 @@ constraints require it.
 For MLIR emitted by PTODSL, validate through the VMI backend path:
 
 ```bash
-ptoas --pto-arch=a5 --pto-backend=vpto --enable-vmi <input.mlir> -o /dev/null
+ptoas --pto-arch=a5 --pto-backend=vpto <input.mlir> -o /dev/null
 ```
 
 Optional debugging forms:
 
 ```bash
-ptoas --pto-arch=a5 --pto-backend=vpto --enable-vmi --emit-vpto <input.mlir> -o -
-ptoas --pto-arch=a5 --pto-backend=vpto --enable-vmi --emit-pto-ir <input.mlir> -o -
+ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto <input.mlir> -o -
+ptoas --pto-arch=a5 --pto-backend=vpto --emit-pto-ir <input.mlir> -o -
 ```
 
-Do not diagnose VMI legality from a non-VMI invocation. `--enable-vmi` requires
-`--pto-backend=vpto` unless the input module already declares the VPTO backend.
+Do not diagnose VMI legality from an EmitC invocation. The VMI semantic
+pipeline always runs when the effective backend is VPTO.
 
 ## Debugging Priorities
 
