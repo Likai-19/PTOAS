@@ -181,7 +181,8 @@ static bool isSameLayoutOp(Operation *op) {
 }
 
 static bool isCastOp(Operation *op) {
-  return isa<VMIExtFOp, VMIExtSIOp, VMIExtUIOp, VMITruncFOp, VMITruncIOp>(op);
+  return isa<VMIExtFOp, VMIExtSIOp, VMIExtUIOp, VMITruncFOp, VMITruncIOp,
+               VMIFPToSIOp, VMIFPToUIOp, VMISIToFPOp>(op);
 }
 
 class VMISameLayoutTransfer final : public VMILayoutTransfer {
@@ -848,6 +849,28 @@ const VMILayoutTransfer *getTransfer(Operation *op) {
     return &gatherTransfer;
   if (isa<VMIBitcastOp>(op))
     return &bitcastTransfer;
+  if (isa<VMIFPToSIOp, VMIFPToUIOp, VMISIToFPOp>(op)) {
+    // Same-width fp<->int: same-layout.  Widen/narrow: cast.
+    auto srcType = dyn_cast<VMIVRegType>(op->getOperand(0).getType());
+    auto dstType = dyn_cast<VMIVRegType>(op->getResult(0).getType());
+    if (srcType && dstType) {
+      auto srcElem = srcType.getElementType();
+      auto dstElem = dstType.getElementType();
+      unsigned srcBits = 0;
+      unsigned dstBits = 0;
+      if (auto ft = dyn_cast<FloatType>(srcElem))
+        srcBits = ft.getWidth();
+      else if (auto it = dyn_cast<IntegerType>(srcElem))
+        srcBits = it.getWidth();
+      if (auto ft = dyn_cast<FloatType>(dstElem))
+        dstBits = ft.getWidth();
+      else if (auto it = dyn_cast<IntegerType>(dstElem))
+        dstBits = it.getWidth();
+      if (srcBits > 0 && srcBits == dstBits)
+        return &sameLayoutTransfer;
+    }
+    return &castTransfer;
+  }
   if (isSameLayoutOp(op))
     return &sameLayoutTransfer;
   if (isa<VMIEnsureMaskGranularityOp>(op))

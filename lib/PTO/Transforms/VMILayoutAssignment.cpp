@@ -727,12 +727,44 @@ struct LayoutSolver {
         return WalkResult::advance();
       }
       if (auto fptosi = dyn_cast<VMIFPToSIOp>(op)) {
-        if (failed(unite(fptosi.getSource(), fptosi.getResult(), op)))
+        auto sourceType = cast<VMIVRegType>(fptosi.getSource().getType());
+        auto resultType = cast<VMIVRegType>(fptosi.getResult().getType());
+        VMILayoutSupport supports;
+        FailureOr<VMICastLayoutFact> fact =
+            supports.getPreferredCastLayoutFact(sourceType, resultType);
+        VMILayoutAttr resultLayout = getContiguousLayout();
+        if (succeeded(fact))
+          resultLayout = fact->resultLayout;
+        if (failed(setPreferredLayout(fptosi.getResult(), resultLayout,
+                                      op, DataLayoutSeedPhase::Cast)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto fptoui = dyn_cast<VMIFPToUIOp>(op)) {
+        auto sourceType = cast<VMIVRegType>(fptoui.getSource().getType());
+        auto resultType = cast<VMIVRegType>(fptoui.getResult().getType());
+        VMILayoutSupport supports;
+        FailureOr<VMICastLayoutFact> fact =
+            supports.getPreferredCastLayoutFact(sourceType, resultType);
+        VMILayoutAttr resultLayout = getContiguousLayout();
+        if (succeeded(fact))
+          resultLayout = fact->resultLayout;
+        if (failed(setPreferredLayout(fptoui.getResult(), resultLayout,
+                                      op, DataLayoutSeedPhase::Cast)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto sitofp = dyn_cast<VMISIToFPOp>(op)) {
-        if (failed(unite(sitofp.getSource(), sitofp.getResult(), op)))
+        auto sourceType = cast<VMIVRegType>(sitofp.getSource().getType());
+        auto resultType = cast<VMIVRegType>(sitofp.getResult().getType());
+        VMILayoutSupport supports;
+        FailureOr<VMICastLayoutFact> fact =
+            supports.getPreferredCastLayoutFact(sourceType, resultType);
+        VMILayoutAttr resultLayout = getContiguousLayout();
+        if (succeeded(fact))
+          resultLayout = fact->resultLayout;
+        if (failed(setPreferredLayout(sitofp.getResult(), resultLayout,
+                                      op, DataLayoutSeedPhase::Cast)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }

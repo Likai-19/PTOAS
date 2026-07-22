@@ -33,7 +33,7 @@ module {
 
 module {
   func.func @missing_saturate(%x: !pto.vmi.vreg<64xf32>) {
-    // expected-error@+1 {{'saturate' attribute is required for fp-narrow / int-narrow / fp-to-si conversions}}
+    // expected-error@+1 {{'saturate' attribute is required for fp-narrow / int-narrow conversions}}
     %r = pto.vmi.vcvt %x : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xf16>
     return
   }
@@ -43,7 +43,7 @@ module {
 
 module {
   func.func @saturate_wrong_direction(%x: !pto.vmi.vreg<64xsi16>) {
-    // expected-error@+1 {{'saturate' attribute is only valid for fp-narrow / int-narrow / fp-to-si conversions}}
+    // expected-error@+1 {{'saturate' attribute is only valid for fp-narrow / int-narrow conversions}}
     %r = pto.vmi.vcvt %x {saturate = "SAT"} : !pto.vmi.vreg<64xsi16> -> !pto.vmi.vreg<64xf32>
     return
   }

@@ -490,6 +490,9 @@ static constexpr HighPriorityCastLayoutPattern
 };
 
 static constexpr LegalCastLayoutPattern kLegalCastLayoutPatterns[] = {
+    // Same-width fp-to-fp (bf16 -> f16): dense contiguous 1:1.
+    {bits<16>(), bits<16>(), c(), c()},
+
     // 2x widening.
     {bits<8>(), bits<16>(), c(), d(2)},
     {bits<8>(), bits<16>(), ls(2), c()},
@@ -533,6 +536,9 @@ static constexpr LegalCastLayoutPattern kLegalCastLayoutPatterns[] = {
 
 static constexpr LegalMaskGranularityCastLayoutPattern
     kLegalMaskGranularityCastLayoutPatterns[] = {
+        // Same-width fp-to-fp (bf16 -> f16): dense contiguous 1:1.
+        {mb16(), mb16(), c(), c()},
+
         // 2x widening.
         {mb8(), mb16(), c(), d(2)},
         {mb8(), mb16(), ls(2), c()},

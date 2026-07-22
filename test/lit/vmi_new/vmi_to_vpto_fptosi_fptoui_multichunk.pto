@@ -1,0 +1,71 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto | FileCheck %s
+
+// Multichunk coverage for the pairs that previously had none (review 5.5):
+//   * f32->s16 narrow FpToSi multichunk (256-element source, 2 chunk pairs)
+//   * f16->s8  narrow FpToSi multichunk (256-element source)
+//   * f16->u8  narrow FpToUi multichunk (256-element source)
+// Each narrow chunk pair lowers to EvenOdd pto.vcvt merged with pto.vor.
+
+module {
+  // f32->s16 narrow multichunk: 256xf32 (deinterleaved=2 -> 4 parts) -> 2x 128xsi16
+  func.func @f32_to_s16_multichunk(
+      %input: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>)
+      -> (!pto.vreg<128xsi16>, !pto.vreg<128xsi16>) {
+    %narrow = pto.vmi.vcvt %input {saturate = "SAT"}
+        : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<256xsi16, #pto.vmi.layout<contiguous>>
+    %p0, %p1 = "pto.vmi.unpack"(%narrow)
+        : (!pto.vmi.vreg<256xsi16, #pto.vmi.layout<contiguous>>)
+        -> (!pto.vreg<128xsi16>, !pto.vreg<128xsi16>)
+    return %p0, %p1 : !pto.vreg<128xsi16>, !pto.vreg<128xsi16>
+  }
+
+  // f16->s8 narrow multichunk: 256xf16 (deinterleaved=2 -> 2 parts) -> 1x 256xsi8
+  func.func @f16_to_s8_multichunk(
+      %input: !pto.vmi.vreg<256xf16, #pto.vmi.layout<deinterleaved = 2>>)
+      -> !pto.vreg<256xsi8> {
+    %narrow = pto.vmi.vcvt %input {saturate = "SAT"}
+        : !pto.vmi.vreg<256xf16, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<256xsi8, #pto.vmi.layout<contiguous>>
+    %p = "pto.vmi.unpack"(%narrow)
+        : (!pto.vmi.vreg<256xsi8, #pto.vmi.layout<contiguous>>)
+        -> !pto.vreg<256xsi8>
+    return %p : !pto.vreg<256xsi8>
+  }
+
+  // f16->u8 narrow FpToUi multichunk: 256xf16 (deinterleaved=2) -> 1x 256xui8
+  func.func @f16_to_u8_multichunk(
+      %input: !pto.vmi.vreg<256xf16, #pto.vmi.layout<deinterleaved = 2>>)
+      -> !pto.vreg<256xui8> {
+    %narrow = pto.vmi.vcvt %input {saturate = "SAT"}
+        : !pto.vmi.vreg<256xf16, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<256xui8, #pto.vmi.layout<contiguous>>
+    %p = "pto.vmi.unpack"(%narrow)
+        : (!pto.vmi.vreg<256xui8, #pto.vmi.layout<contiguous>>)
+        -> !pto.vreg<256xui8>
+    return %p : !pto.vreg<256xui8>
+  }
+}
+
+// CHECK-LABEL: func.func @f32_to_s16_multichunk(
+// CHECK-DAG: pto.vcvt {{.*}} {part = "EVEN", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<128xsi16>
+// CHECK-DAG: pto.vcvt {{.*}} {part = "ODD", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<128xsi16>
+// CHECK: pto.vor
+
+// CHECK-LABEL: func.func @f16_to_s8_multichunk(
+// CHECK-DAG: pto.vcvt {{.*}} {part = "EVEN", rnd = "R", sat = "SAT"} : !pto.vreg<128xf16>, !pto.mask<b16> -> !pto.vreg<256xsi8>
+// CHECK-DAG: pto.vcvt {{.*}} {part = "ODD", rnd = "R", sat = "SAT"} : !pto.vreg<128xf16>, !pto.mask<b16> -> !pto.vreg<256xsi8>
+// CHECK: pto.vor
+
+// CHECK-LABEL: func.func @f16_to_u8_multichunk(
+// CHECK-DAG: pto.vcvt {{.*}} {part = "EVEN", rnd = "R", sat = "SAT"} : !pto.vreg<128xf16>, !pto.mask<b16> -> !pto.vreg<256xui8>
+// CHECK-DAG: pto.vcvt {{.*}} {part = "ODD", rnd = "R", sat = "SAT"} : !pto.vreg<128xf16>, !pto.mask<b16> -> !pto.vreg<256xui8>
+// CHECK: pto.vor

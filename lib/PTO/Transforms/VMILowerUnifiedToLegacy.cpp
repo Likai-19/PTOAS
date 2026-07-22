@@ -230,8 +230,8 @@ static unsigned getVMIElementBitWidth(Type type) {
 
 /// Inspect the source and result element types of a vcvt and classify the
 /// conversion direction.  Returns one of:
-///   "widen_fp", "narrow_fp", "fptosi", "sitofp",
-///   "widen_int", "narrow_int"
+///   "widen_fp", "narrow_fp", "fptosi", "fptoui",
+///   "sitofp", "widen_int", "narrow_int"
 static StringRef classifyCvtDirection(Type srcElem, Type dstElem) {
   bool srcFp = isFloatType(srcElem);
   bool dstFp = isFloatType(dstElem);
@@ -240,8 +240,11 @@ static StringRef classifyCvtDirection(Type srcElem, Type dstElem) {
 
   if (srcFp && dstFp)
     return dstBits > srcBits ? "widen_fp" : "narrow_fp";
-  if (srcFp && !dstFp)
+  if (srcFp && !dstFp) {
+    if (auto intTy = dyn_cast<IntegerType>(dstElem))
+      return intTy.isUnsigned() ? "fptoui" : "fptosi";
     return "fptosi";
+  }
   if (!srcFp && dstFp)
     return "sitofp";
   // int → int
@@ -436,6 +439,10 @@ static LogicalResult lowerVCvt(VMICvtOp op, OpBuilder &builder) {
   } else if (direction == "fptosi") {
     result =
         builder.create<VMIFPToSIOp>(loc, resultType, source, saturateAttr)
+            .getResult();
+  } else if (direction == "fptoui") {
+    result =
+        builder.create<VMIFPToUIOp>(loc, resultType, source, saturateAttr)
             .getResult();
   } else if (direction == "sitofp") {
     result =

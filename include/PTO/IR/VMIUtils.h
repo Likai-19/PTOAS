@@ -53,6 +53,54 @@ FailureOr<int64_t> mapPhysicalLaneToLogical(Type type, int64_t part,
 FailureOr<bool> isPaddingLane(Type type, int64_t part, int64_t chunk,
                               int64_t lane);
 
+// ---------------------------------------------------------------------------
+// VMI FpToSi hardware contract (mirrored from VPTO lookupVcvtContract).
+// Used by VMI verifiers and VMIToVPTO lowering to agree on requiresSat /
+// requiresPart without duplicating the logic.
+// ---------------------------------------------------------------------------
+
+struct VMIFpToSiContract {
+  bool requiresSat;
+  bool requiresPart;
+};
+
+/// Returns the FpToSi contract for the given src→dst element type pair,
+/// or nullopt if this float→signed-int path is not supported by the hardware.
+std::optional<VMIFpToSiContract>
+lookupVMIFpToSiContract(Type srcElem, Type dstElem);
+
+// ---------------------------------------------------------------------------
+// VMI FpToUi hardware contract (mirrors VPTO lookupVcvtContract).
+// Symmetric to FpToSi but for float→unsigned-int paths.
+// ---------------------------------------------------------------------------
+
+struct VMIFpToUiContract {
+  bool requiresSat;
+  bool requiresPart;
+};
+
+/// Returns the FpToUi contract for the given src→dst element type pair,
+/// or nullopt if this float→unsigned-int path is not supported by the hardware.
+std::optional<VMIFpToUiContract>
+lookupVMIFpToUIContract(Type srcElem, Type dstElem);
+
+// ---------------------------------------------------------------------------
+// VMI FpToFp hardware contract (VMI-owned; may diverge from VPTO).
+// Only same-width fp->fp needs a pair whitelist here; widen/narrow fp->fp
+// reuse the extf/truncf layout framework and do not consult this table.
+// ---------------------------------------------------------------------------
+
+struct VMIFpToFpContract {
+  bool requiresRnd;
+  bool requiresSat;
+  bool requiresPart;
+};
+
+/// Returns the FpToFp contract for the given src->dst element type pair,
+/// or nullopt if this fp-to-fp path is not supported by the VMI contract.
+std::optional<VMIFpToFpContract>
+lookupVMIFpToFpContract(Type srcElem, Type dstElem);
+
 } // namespace mlir::pto
 
 #endif // PTO_IR_VMIUTILS_H

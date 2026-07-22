@@ -1,0 +1,36 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto | FileCheck %s
+
+// Same-width fp->fp conversion (bf16 -> f16) opened up by commit 22121924
+// ("add fp16 -> u8"): VMITruncFOp::verify was relaxed from src > dst to
+// src >= dst, gated by lookupVMIFpToFpContract. BF16->F16 is a live VMI
+// fp-to-fp contract pair (lookupVMIFpToFpContract: requiresRnd=true,
+// requiresSat=true, requiresPart=false) and is documented in
+// docs/isa/micro-isa/09-conversion-ops.md. This regression test covers the
+// VMI-level same-width path: the lowered pto.vcvt must carry rnd="R" +
+// sat="SAT" and NO part.
+
+module {
+  func.func @bf16_to_f16_same_width(
+      %input: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>)
+      -> !pto.vreg<128xf16> {
+    %cvt = pto.vmi.vcvt %input {saturate = "SAT"}
+        : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
+    %r = "pto.vmi.unpack"(%cvt)
+        : (!pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>)
+        -> !pto.vreg<128xf16>
+    return %r : !pto.vreg<128xf16>
+  }
+}
+
+// CHECK-LABEL: func.func @bf16_to_f16_same_width(
+// CHECK: pto.vcvt {{.*}} {rnd = "R", sat = "SAT"} : !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<128xf16>
+// CHECK-NOT: part

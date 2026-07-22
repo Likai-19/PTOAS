@@ -1,0 +1,58 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s | FileCheck %s
+
+// Verify that 5 new FpToSi paths construct without verifier errors.
+
+module {
+  // f16->s32: requiresSat=false, no sat attr needed
+  func.func @f16_to_s32(%s: !pto.vmi.vreg<64xf16>) -> !pto.vmi.vreg<64xsi32> {
+    %r = pto.vmi.vcvt %s : !pto.vmi.vreg<64xf16> -> !pto.vmi.vreg<64xsi32>
+    return %r : !pto.vmi.vreg<64xsi32>
+  }
+  // f32->s16: requiresSat=true, SAT
+  func.func @f32_to_s16_sat(%s: !pto.vmi.vreg<64xf32>) -> !pto.vmi.vreg<64xsi16> {
+    %r = pto.vmi.vcvt %s {saturate = "SAT"} : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xsi16>
+    return %r : !pto.vmi.vreg<64xsi16>
+  }
+  // f32->s16: requiresSat=true, NOSAT
+  func.func @f32_to_s16_nosat(%s: !pto.vmi.vreg<64xf32>) -> !pto.vmi.vreg<64xsi16> {
+    %r = pto.vmi.vcvt %s {saturate = "NOSAT"} : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xsi16>
+    return %r : !pto.vmi.vreg<64xsi16>
+  }
+  // f16->s16: requiresSat=true, SAT
+  func.func @f16_to_s16_sat(%s: !pto.vmi.vreg<64xf16>) -> !pto.vmi.vreg<64xsi16> {
+    %r = pto.vmi.vcvt %s {saturate = "SAT"} : !pto.vmi.vreg<64xf16> -> !pto.vmi.vreg<64xsi16>
+    return %r : !pto.vmi.vreg<64xsi16>
+  }
+  // f16->s8: requiresSat=true, SAT
+  func.func @f16_to_s8_sat(%s: !pto.vmi.vreg<64xf16>) -> !pto.vmi.vreg<64xsi8> {
+    %r = pto.vmi.vcvt %s {saturate = "SAT"} : !pto.vmi.vreg<64xf16> -> !pto.vmi.vreg<64xsi8>
+    return %r : !pto.vmi.vreg<64xsi8>
+  }
+  // bf16->s32: requiresSat=true, SAT
+  func.func @bf16_to_s32_sat(%s: !pto.vmi.vreg<64xbf16>) -> !pto.vmi.vreg<64xsi32> {
+    %r = pto.vmi.vcvt %s {saturate = "SAT"} : !pto.vmi.vreg<64xbf16> -> !pto.vmi.vreg<64xsi32>
+    return %r : !pto.vmi.vreg<64xsi32>
+  }
+}
+
+// CHECK-LABEL: func.func @f16_to_s32
+// CHECK: pto.vmi.vcvt
+// CHECK-NOT: saturate
+// CHECK-LABEL: func.func @f32_to_s16_sat
+// CHECK: pto.vmi.vcvt {{.*}}{saturate = "SAT"}
+// CHECK-LABEL: func.func @f32_to_s16_nosat
+// CHECK: pto.vmi.vcvt {{.*}}{saturate = "NOSAT"}
+// CHECK-LABEL: func.func @f16_to_s16_sat
+// CHECK: pto.vmi.vcvt {{.*}}{saturate = "SAT"}
+// CHECK-LABEL: func.func @f16_to_s8_sat
+// CHECK: pto.vmi.vcvt {{.*}}{saturate = "SAT"}
+// CHECK-LABEL: func.func @bf16_to_s32_sat
+// CHECK: pto.vmi.vcvt {{.*}}{saturate = "SAT"}
