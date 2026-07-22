@@ -1,0 +1,35 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto | FileCheck %s
+
+// Multichunk FpToSi widen: 256-element f16 source -> 2 chunks, 4 results.
+
+module {
+  // f16->s32 widen multichunk: 2 source chunks -> 4 result chunks (EVEN/ODD × 2)
+  func.func @f16_to_s32_multichunk(
+      %input: !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>)
+      -> (!pto.vreg<64xsi32>, !pto.vreg<64xsi32>,
+          !pto.vreg<64xsi32>, !pto.vreg<64xsi32>) {
+    %wide = pto.vmi.vcvt %input
+        : !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<256xsi32, #pto.vmi.layout<deinterleaved = 2>>
+    %p0, %p1, %p2, %p3 = "pto.vmi.unpack"(%wide)
+        : (!pto.vmi.vreg<256xsi32, #pto.vmi.layout<deinterleaved = 2>>)
+        -> (!pto.vreg<64xsi32>, !pto.vreg<64xsi32>,
+            !pto.vreg<64xsi32>, !pto.vreg<64xsi32>)
+    return %p0, %p1, %p2, %p3
+        : !pto.vreg<64xsi32>, !pto.vreg<64xsi32>,
+          !pto.vreg<64xsi32>, !pto.vreg<64xsi32>
+  }
+}
+
+// CHECK-LABEL: func.func @f16_to_s32_multichunk(
+// CHECK-DAG: pto.vcvt {{.*}} {part = "EVEN", rnd = "R"} : !pto.vreg<128xf16>, !pto.mask<b16> -> !pto.vreg<64xsi32>
+// CHECK-DAG: pto.vcvt {{.*}} {part = "ODD", rnd = "R"} : !pto.vreg<128xf16>, !pto.mask<b16> -> !pto.vreg<64xsi32>
+// CHECK-NOT: sat

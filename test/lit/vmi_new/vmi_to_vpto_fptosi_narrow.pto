@@ -1,0 +1,47 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto | FileCheck %s
+
+// Narrow FpToSi paths: f32->s16, f16->s8 (both EvenOdd, sat).
+
+module {
+  // f32->s16 narrow: EvenOdd parts, rnd="R", sat="SAT"
+  func.func @f32_to_s16(
+      %input: !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>)
+      -> !pto.vreg<128xsi16> {
+    %narrow = pto.vmi.vcvt %input {saturate = "SAT"}
+        : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<128xsi16, #pto.vmi.layout<contiguous>>
+    %r = "pto.vmi.unpack"(%narrow)
+        : (!pto.vmi.vreg<128xsi16, #pto.vmi.layout<contiguous>>)
+        -> !pto.vreg<128xsi16>
+    return %r : !pto.vreg<128xsi16>
+  }
+
+  // f16->s8 narrow: EvenOdd parts, rnd="R", sat="SAT"
+  func.func @f16_to_s8(
+      %input: !pto.vmi.vreg<128xf16, #pto.vmi.layout<deinterleaved = 2>>)
+      -> !pto.vreg<256xsi8> {
+    %narrow = pto.vmi.vcvt %input {saturate = "SAT"}
+        : !pto.vmi.vreg<128xf16, #pto.vmi.layout<deinterleaved = 2>>
+        -> !pto.vmi.vreg<128xsi8, #pto.vmi.layout<contiguous>>
+    %r = "pto.vmi.unpack"(%narrow)
+        : (!pto.vmi.vreg<128xsi8, #pto.vmi.layout<contiguous>>)
+        -> !pto.vreg<256xsi8>
+    return %r : !pto.vreg<256xsi8>
+  }
+}
+
+// CHECK-LABEL: func.func @f32_to_s16(
+// CHECK: pto.vcvt {{.*}} {part = "EVEN", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<128xsi16>
+// CHECK: pto.vcvt {{.*}} {part = "ODD", rnd = "R", sat = "SAT"} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<128xsi16>
+
+// CHECK-LABEL: func.func @f16_to_s8(
+// CHECK: pto.vcvt {{.*}} {part = "EVEN", rnd = "R", sat = "SAT"} : !pto.vreg<128xf16>, !pto.mask<b16> -> !pto.vreg<256xsi8>
+// CHECK: pto.vcvt {{.*}} {part = "ODD", rnd = "R", sat = "SAT"} : !pto.vreg<128xf16>, !pto.mask<b16> -> !pto.vreg<256xsi8>

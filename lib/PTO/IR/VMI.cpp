@@ -621,6 +621,50 @@ static int64_t getDenseLogicalLanesInPart(int64_t elementCount, int64_t factor,
 
 } // namespace
 
+// ---------------------------------------------------------------------------
+// FpToSi hardware contract (mirrors VPTO lookupVcvtContract fp→int rows)
+// ---------------------------------------------------------------------------
+
+namespace mlir::pto {
+
+std::optional<VMIFpToSiContract>
+lookupVMIFpToSiContract(Type srcElem, Type dstElem) {
+  // Must be float → signed/signless integer.
+  if (!isVMIFloatLikeType(srcElem))
+    return std::nullopt;
+  auto dstInt = dyn_cast<IntegerType>(dstElem);
+  if (!dstInt || dstInt.isUnsigned())
+    return std::nullopt;
+
+  bool srcF32 = srcElem.isF32();
+  bool srcF16 = srcElem.isF16();
+  bool srcBF16 = srcElem.isBF16();
+  unsigned dstBits = dstInt.getWidth();
+
+  // f32 → s32: same width, rnd, sat, no part
+  if (srcF32 && dstBits == 32)
+    return VMIFpToSiContract{/*requiresSat=*/true, /*requiresPart=*/false};
+  // f32 → s16: narrow 2×, rnd, sat, part (EvenOdd)
+  if (srcF32 && dstBits == 16)
+    return VMIFpToSiContract{/*requiresSat=*/true, /*requiresPart=*/true};
+  // f16 → s32: widen 2×, rnd, NO sat, part (EvenOdd)
+  if (srcF16 && dstBits == 32)
+    return VMIFpToSiContract{/*requiresSat=*/false, /*requiresPart=*/true};
+  // f16 → s16: same width, rnd, sat, no part
+  if (srcF16 && dstBits == 16)
+    return VMIFpToSiContract{/*requiresSat=*/true, /*requiresPart=*/false};
+  // f16 → s8: narrow 2×, rnd, sat, part (EvenOdd)
+  if (srcF16 && dstBits == 8)
+    return VMIFpToSiContract{/*requiresSat=*/true, /*requiresPart=*/true};
+  // bf16 → s32: widen 2×, rnd, sat, part (EvenOdd)
+  if (srcBF16 && dstBits == 32)
+    return VMIFpToSiContract{/*requiresSat=*/true, /*requiresPart=*/true};
+
+  return std::nullopt;
+}
+
+} // namespace mlir::pto
+
 VMILayoutAttr VMILayoutAttr::getContiguous(MLIRContext *context,
                                            int64_t laneStride) {
   return VMILayoutAttr::get(context, "contiguous", 1, 1, 0, laneStride);
@@ -1745,14 +1789,24 @@ LogicalResult VMIFPToSIOp::verify() {
   if (!isVMISignedOrSignlessIntegerType(resultType.getElementType()))
     return emitOpError("requires signed or signless integer result element "
                        "type");
-  if (getVMIElementBitWidth(resultType.getElementType()) != 32)
-    return emitOpError("requires 32-bit integer result element type");
-  auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
-  if (!satAttr)
-    return emitOpError("'saturate' attribute is required (SAT or NOSAT)");
-  StringRef satVal = satAttr.getValue();
-  if (satVal != "SAT" && satVal != "NOSAT")
-    return emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
+  auto contract =
+      lookupVMIFpToSiContract(sourceType.getElementType(),
+                              resultType.getElementType());
+  if (!contract)
+    return emitOpError("unsupported fp-to-si conversion element type pair");
+  if (contract->requiresSat) {
+    auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
+    if (!satAttr)
+      return emitOpError("'saturate' attribute is required for this fp-to-si "
+                         "conversion (SAT or NOSAT)");
+    StringRef satVal = satAttr.getValue();
+    if (satVal != "SAT" && satVal != "NOSAT")
+      return emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
+  } else {
+    if ((*this)->getAttrOfType<StringAttr>("saturate"))
+      return emitOpError("'saturate' attribute is not valid for this fp-to-si "
+                         "conversion (no overflow possible)");
+  }
   return success();
 }
 
@@ -3458,33 +3512,50 @@ LogicalResult VMICvtOp::verify() {
 
   // --- saturate ---
   auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
-  bool needSat = (dir == CvtDirection::FpNarrow ||
-                  dir == CvtDirection::IntNarrow ||
-                  dir == CvtDirection::FpToSi);
-  if (needSat) {
-    if (!satAttr)
-      return emitOpError("'saturate' attribute is required for fp-narrow / "
-                         "int-narrow / fp-to-si conversions; write 'SAT' or "
-                         "'NOSAT'");
-    StringRef satVal = satAttr.getValue();
-    if (satVal != "SAT" && satVal != "NOSAT")
-      return emitOpError("saturate must be 'SAT' or 'NOSAT'");
-    // si32 -> si8 IntNarrow has no native hardware form.  Lowering aliases
-    // it through ui32 -> ui8 (bit-pattern equal ONLY under NOSAT).  Reject
-    // SAT here because ui32 -> ui8 SAT clamps to [0, 255], which does NOT
-    // match the expected si32 -> si8 SAT clamp to [-128, 127].
-    if (dir == CvtDirection::IntNarrow && satVal == "SAT" &&
-        srcBits == 32 && dstBits == 8 &&
-        isa<IntegerType>(srcElem) &&
-        cast<IntegerType>(srcElem).isSigned() &&
-        isa<IntegerType>(dstElem) &&
-        cast<IntegerType>(dstElem).isSigned())
-      return emitOpError("si32 -> si8 int-narrow does not support "
-                         "saturate=\"SAT\" (no native hardware form; "
-                         "only saturate=\"NOSAT\" is allowed)");
-  } else if (satAttr) {
-    return emitOpError("'saturate' attribute is only valid for fp-narrow / "
-                       "int-narrow / fp-to-si conversions");
+  if (dir == CvtDirection::FpToSi) {
+    auto contract = lookupVMIFpToSiContract(srcElem, dstElem);
+    if (!contract)
+      return emitOpError("unsupported fp-to-si conversion element type pair");
+    if (contract->requiresSat) {
+      if (!satAttr)
+        return emitOpError("'saturate' attribute is required for this "
+                           "fp-to-si conversion; write 'SAT' or 'NOSAT'");
+      StringRef satVal = satAttr.getValue();
+      if (satVal != "SAT" && satVal != "NOSAT")
+        return emitOpError("saturate must be 'SAT' or 'NOSAT'");
+    } else {
+      if (satAttr)
+        return emitOpError("'saturate' attribute is not valid for this "
+                           "fp-to-si conversion (no overflow possible)");
+    }
+  } else {
+    bool needSat = (dir == CvtDirection::FpNarrow ||
+                    dir == CvtDirection::IntNarrow);
+    if (needSat) {
+      if (!satAttr)
+        return emitOpError("'saturate' attribute is required for fp-narrow / "
+                           "int-narrow conversions; write 'SAT' or "
+                           "'NOSAT'");
+      StringRef satVal = satAttr.getValue();
+      if (satVal != "SAT" && satVal != "NOSAT")
+        return emitOpError("saturate must be 'SAT' or 'NOSAT'");
+      // si32 -> si8 IntNarrow has no native hardware form.  Lowering aliases
+      // it through ui32 -> ui8 (bit-pattern equal ONLY under NOSAT).  Reject
+      // SAT here because ui32 -> ui8 SAT clamps to [0, 255], which does NOT
+      // match the expected si32 -> si8 SAT clamp to [-128, 127].
+      if (dir == CvtDirection::IntNarrow && satVal == "SAT" &&
+          srcBits == 32 && dstBits == 8 &&
+          isa<IntegerType>(srcElem) &&
+          cast<IntegerType>(srcElem).isSigned() &&
+          isa<IntegerType>(dstElem) &&
+          cast<IntegerType>(dstElem).isSigned())
+        return emitOpError("si32 -> si8 int-narrow does not support "
+                           "saturate=\"SAT\" (no native hardware form; "
+                           "only saturate=\"NOSAT\" is allowed)");
+    } else if (satAttr) {
+      return emitOpError("'saturate' attribute is only valid for fp-narrow / "
+                         "int-narrow conversions");
+    }
   }
 
   // --- sign ---

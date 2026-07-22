@@ -49,6 +49,22 @@ FailureOr<int64_t> mapPhysicalLaneToLogical(Type type, int64_t part,
 FailureOr<bool> isPaddingLane(Type type, int64_t part, int64_t chunk,
                               int64_t lane);
 
+// ---------------------------------------------------------------------------
+// VMI FpToSi hardware contract (mirrored from VPTO lookupVcvtContract).
+// Used by VMI verifiers and VMIToVPTO lowering to agree on requiresSat /
+// requiresPart without duplicating the logic.
+// ---------------------------------------------------------------------------
+
+struct VMIFpToSiContract {
+  bool requiresSat;
+  bool requiresPart;
+};
+
+/// Returns the FpToSi contract for the given src→dst element type pair,
+/// or nullopt if this float→signed-int path is not supported by the hardware.
+std::optional<VMIFpToSiContract>
+lookupVMIFpToSiContract(Type srcElem, Type dstElem);
+
 } // namespace mlir::pto
 
 #endif // PTO_IR_VMIUTILS_H

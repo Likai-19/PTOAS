@@ -11114,44 +11114,208 @@ struct OneToNVMIFPToSIOpPattern : OpConversionPattern<VMIFPToSIOp> {
   LogicalResult
   matchAndRewrite(VMIFPToSIOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto sourceVMIType = cast<VMIVRegType>(op.getSource().getType());
+    auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
     ValueRange sourceParts = adaptor.getSource();
     FailureOr<SmallVector<Type>> maybe_resultTypes =
         getConvertedResultTypes(op, 0, *this->getTypeConverter());
     if (failed(maybe_resultTypes))
       return failure();
     SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
-    if (sourceParts.size() != resultTypes.size())
+
+    Type srcElem = sourceVMIType.getElementType();
+    Type dstElem = resultVMIType.getElementType();
+    auto contract = lookupVMIFpToSiContract(srcElem, dstElem);
+    if (!contract)
       return rewriter.notifyMatchFailure(
-          op, "fptosi physical source/result arity mismatch");
+          op, "unsupported fp-to-si conversion element type pair");
 
-    SmallVector<Value> results;
-    results.reserve(resultTypes.size());
-    StringAttr rnd = rewriter.getStringAttr("R");
-    StringAttr sat = op->getAttrOfType<StringAttr>("saturate");
-    for (auto [sourcePart, resultType] :
-         llvm::zip_equal(sourceParts, resultTypes)) {
-      auto sourceType = dyn_cast<VRegType>(sourcePart.getType());
-      auto resultVRegType = dyn_cast<VRegType>(resultType);
-      if (!sourceType || !sourceType.getElementType().isF32() ||
-          !resultVRegType ||
-          !isa<IntegerType>(resultVRegType.getElementType()) ||
-          pto::getPTOStorageElemBitWidth(resultVRegType.getElementType()) != 32)
+    // Validate source physical part types.
+    if (sourceParts.empty())
+      return rewriter.notifyMatchFailure(
+          op, "fptosi requires at least one physical source chunk");
+    auto sourceType0 = dyn_cast<VRegType>(sourceParts.front().getType());
+    if (!sourceType0)
+      return rewriter.notifyMatchFailure(
+          op, "expected physical fptosi source type");
+    for (Value sourcePart : sourceParts) {
+      auto currentSourceType = dyn_cast<VRegType>(sourcePart.getType());
+      if (!currentSourceType || currentSourceType != sourceType0)
         return rewriter.notifyMatchFailure(
-            op, "fptosi requires physical f32 source and 32-bit integer "
-                "result chunks");
-
-      FailureOr<Value> mask =
-          createAllTrueMaskForVReg(op.getLoc(), sourceType, rewriter);
-      if (failed(mask))
-        return rewriter.notifyMatchFailure(op, "failed to build fptosi mask");
-      results.push_back(rewriter
-                            .create<VcvtOp>(op.getLoc(), resultVRegType,
-                                            sourcePart, *mask, rnd, sat,
-                                            /*part=*/nullptr)
-                            .getResult());
+            op, "fptosi source physical parts must have matching type");
     }
 
-    replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
+    // Validate result physical part types.
+    if (resultTypes.empty())
+      return rewriter.notifyMatchFailure(
+          op, "fptosi requires at least one physical result chunk");
+    SmallVector<VRegType> resultVRegTypes;
+    resultVRegTypes.reserve(resultTypes.size());
+    for (Type physicalResultType : resultTypes) {
+      auto resultType = dyn_cast<VRegType>(physicalResultType);
+      if (!resultType)
+        return rewriter.notifyMatchFailure(
+            op, "unsupported physical fptosi result type");
+      resultVRegTypes.push_back(resultType);
+    }
+
+    StringAttr rnd = rewriter.getStringAttr("R");
+    StringAttr sat =
+        contract->requiresSat
+            ? op->getAttrOfType<StringAttr>("saturate")
+            : nullptr;
+
+    if (!contract->requiresPart) {
+      // Same-width (f32→s32, f16→s16): 1:1 mapping, no part.
+      if (sourceParts.size() != resultTypes.size())
+        return rewriter.notifyMatchFailure(
+            op, "same-width fptosi requires matching physical arity");
+
+      SmallVector<Value> results;
+      results.reserve(resultTypes.size());
+      for (auto [sourcePart, resultType] :
+           llvm::zip_equal(sourceParts, resultVRegTypes)) {
+        FailureOr<Value> mask =
+            createAllTrueMaskForVReg(op.getLoc(),
+                                     cast<VRegType>(sourcePart.getType()),
+                                     rewriter);
+        if (failed(mask))
+          return rewriter.notifyMatchFailure(
+              op, "failed to build fptosi mask");
+        results.push_back(
+            rewriter
+                .create<VcvtOp>(op.getLoc(), resultType, sourcePart, *mask,
+                                rnd, sat, /*part=*/nullptr)
+                .getResult());
+      }
+      replaceOpWithFlatConvertedValues(rewriter, op, results,
+                                       *this->getTypeConverter());
+      return success();
+    }
+
+    // requiresPart: widen (f16→s32, bf16→s32) or narrow (f32→s16, f16→s8).
+    unsigned srcBits = pto::getPTOStorageElemBitWidth(srcElem);
+    unsigned dstBits = pto::getPTOStorageElemBitWidth(dstElem);
+
+    if (dstBits > srcBits) {
+      // Widen: dense 1:1 (single part) or 2× EvenOdd.
+      VMILayoutAttr srcLayout = sourceVMIType.getLayoutAttr();
+      VMILayoutAttr dstLayout = resultVMIType.getLayoutAttr();
+      if (srcLayout && dstLayout && srcLayout.isContiguous() &&
+          dstLayout.isContiguous() && dstLayout.getLaneStride() == 1 &&
+          ((srcBits == 16 && srcLayout.getLaneStride() == 2) ||
+           (srcBits == 8 && srcLayout.getLaneStride() == 4)) &&
+          resultTypes.size() == sourceParts.size()) {
+        // Dense 1:1: each source chunk → 1 result chunk (single part).
+        StringRef part = srcBits == 16 ? StringRef("EVEN") : StringRef("P0");
+        FailureOr<Value> mask =
+            createAllTrueMaskForVReg(op.getLoc(), sourceType0, rewriter);
+        if (failed(mask))
+          return rewriter.notifyMatchFailure(
+              op, "failed to build fptosi widen 1:1 mask");
+        SmallVector<Value> results;
+        results.reserve(resultTypes.size());
+        for (auto [sourcePart, resultType] :
+             llvm::zip_equal(sourceParts, resultVRegTypes)) {
+          results.push_back(
+              rewriter
+                  .create<VcvtOp>(op.getLoc(), resultType, sourcePart, *mask,
+                                  rnd, sat,
+                                  rewriter.getStringAttr(part))
+                  .getResult());
+        }
+        replaceOpWithFlatConvertedValues(rewriter, op, results,
+                                         *this->getTypeConverter());
+        return success();
+      }
+
+      // Standard 2× EvenOdd: 1 source chunk → 2 result chunks.
+      if (resultTypes.size() != 2 * sourceParts.size())
+        return rewriter.notifyMatchFailure(
+            op, "widen fptosi requires result arity = 2 × source arity");
+
+      static constexpr StringRef kEvenOddParts[] = {"EVEN", "ODD"};
+      SmallVector<Value> results;
+      results.reserve(resultTypes.size());
+      for (int64_t partIndex = 0; partIndex < 2; ++partIndex) {
+        for (auto [chunkIndex, sourcePart] : llvm::enumerate(sourceParts)) {
+          VRegType resultType =
+              resultVRegTypes[partIndex * sourceParts.size() + chunkIndex];
+          FailureOr<Value> mask =
+              createAllTrueMaskForVReg(op.getLoc(),
+                                       cast<VRegType>(sourcePart.getType()),
+                                       rewriter);
+          if (failed(mask))
+            return rewriter.notifyMatchFailure(
+                op, "failed to build fptosi mask");
+          results.push_back(
+              rewriter
+                  .create<VcvtOp>(op.getLoc(), resultType, sourcePart, *mask,
+                                  rnd, sat,
+                                  rewriter.getStringAttr(
+                                      kEvenOddParts[partIndex]))
+                  .getResult());
+        }
+      }
+      replaceOpWithFlatConvertedValues(rewriter, op, results,
+                                       *this->getTypeConverter());
+      return success();
+    }
+
+    // Narrow: sourceFactor source chunks merge into 1 result chunk.
+    int64_t factor = srcBits / dstBits; // 2 for 32→16 or 16→8
+    VMILayoutAttr resultLayout = resultVMIType.getLayoutAttr();
+    int64_t resultLaneStride = resultLayout && resultLayout.isContiguous()
+                                   ? resultLayout.getLaneStride()
+                                   : 1;
+    if (resultLaneStride <= 0 || factor % resultLaneStride != 0)
+      return rewriter.notifyMatchFailure(
+          op, "narrow fptosi: unsupported result lane stride");
+    int64_t sourceFactor = factor / resultLaneStride;
+    if (sourceParts.size() != sourceFactor * resultTypes.size())
+      return rewriter.notifyMatchFailure(
+          op, "narrow fptosi: source arity != sourceFactor × result arity");
+
+    FailureOr<Value> sourceMask =
+        createAllTrueMaskForVReg(op.getLoc(), sourceType0, rewriter);
+    if (failed(sourceMask))
+      return rewriter.notifyMatchFailure(
+          op, "failed to build truncf source mask");
+
+    static constexpr StringRef kEvenOddParts[] = {"EVEN", "ODD"};
+    SmallVector<Value> results;
+    results.reserve(resultTypes.size());
+    for (auto [chunkIndex, resultType] : llvm::enumerate(resultVRegTypes)) {
+      FailureOr<Value> resultMask =
+          createAllTrueMaskForVReg(op.getLoc(), resultType, rewriter);
+      if (failed(resultMask))
+        return rewriter.notifyMatchFailure(
+            op, "failed to build narrow fptosi result mask");
+
+      SmallVector<Value> partials;
+      partials.reserve(sourceFactor);
+      for (int64_t partIndex = 0; partIndex < sourceFactor; ++partIndex) {
+        Value sourcePart =
+            sourceParts[partIndex * resultTypes.size() + chunkIndex];
+        partials.push_back(
+            rewriter
+                .create<VcvtOp>(
+                    op.getLoc(), resultType, sourcePart, *sourceMask, rnd, sat,
+                    rewriter.getStringAttr(kEvenOddParts[partIndex]))
+                .getResult());
+      }
+
+      Value merged = partials.front();
+      for (Value partial : llvm::drop_begin(partials))
+        merged = rewriter
+                     .create<VorOp>(op.getLoc(), resultType, merged, partial,
+                                    *resultMask)
+                     .getResult();
+      results.push_back(merged);
+    }
+
+    replaceOpWithFlatConvertedValues(rewriter, op, results,
+                                     *this->getTypeConverter());
     return success();
   }
 };
@@ -11827,18 +11991,35 @@ LogicalResult checkSupportedFPToSIShape(VMIFPToSIOp op,
   VMILayoutAttr resultLayout = resultType.getLayoutAttr();
   if (!sourceLayout || !resultLayout)
     return fail("requires assigned source/result layouts");
-  if (sourceLayout != resultLayout)
-    return fail("requires source/result layouts to match");
-  if (!sourceType.getElementType().isF32())
-    return fail("requires f32 source element type");
-  if (!isa<IntegerType>(resultType.getElementType()) ||
-      pto::getPTOStorageElemBitWidth(resultType.getElementType()) != 32)
-    return fail("requires 32-bit integer result element type");
-  FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
-  FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
-  if (failed(sourceArity) || failed(resultArity) ||
-      *sourceArity != *resultArity)
-    return fail("requires matching computable physical arity");
+
+  Type srcElem = sourceType.getElementType();
+  Type dstElem = resultType.getElementType();
+  auto contract = lookupVMIFpToSiContract(srcElem, dstElem);
+  if (!contract)
+    return fail("unsupported fp-to-si conversion element type pair");
+
+  unsigned srcBits = pto::getPTOStorageElemBitWidth(srcElem);
+  unsigned dstBits = pto::getPTOStorageElemBitWidth(dstElem);
+
+  if (srcBits == dstBits) {
+    // Same-width (f32→s32, f16→s16): layout equality + arity equality.
+    if (sourceLayout != resultLayout)
+      return fail("same-width fp-to-si requires matching layouts");
+    FailureOr<int64_t> sourceArity = getVMIPhysicalArity(sourceType);
+    FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
+    if (failed(sourceArity) || failed(resultArity) ||
+        *sourceArity != *resultArity)
+      return fail("same-width fp-to-si requires matching physical arity");
+  } else {
+    // Widen or narrow: use the cast-layout framework (same as extf/truncf).
+    VMILayoutSupport layoutSupport;
+    FailureOr<VMICastLayoutFact> fact =
+        layoutSupport.getCastLayoutFactForLayouts(
+            sourceType, resultType, sourceLayout, resultLayout, reason);
+    if (failed(fact))
+      return failure();
+  }
+
   return success();
 }
 
