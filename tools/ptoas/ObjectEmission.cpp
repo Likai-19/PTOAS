@@ -35,12 +35,32 @@ namespace {
 
 using llvm::StringRef;
 
+enum class BishengVFAutoSyncMode {
+  Unspecified,
+  Off,
+  Fused,
+  Global,
+};
+
 static llvm::cl::opt<bool> enableBishengVecMISched(
     "enable-bisheng-vec-misched",
     llvm::cl::desc("Use Bisheng's default vector MI scheduler behavior for "
                    "VPTO device compilation instead of explicitly disabling "
                    "the scheduler"),
     llvm::cl::init(false));
+
+static llvm::cl::opt<BishengVFAutoSyncMode> bishengVFAutoSyncMode(
+    "bisheng-vf-auto-sync",
+    llvm::cl::desc("Explicit Bisheng VF auto-sync mode for VPTO device "
+                   "compilation; omit to use the toolchain default"),
+    llvm::cl::value_desc("off|fused|global"),
+    llvm::cl::values(clEnumValN(BishengVFAutoSyncMode::Off, "off",
+                                "Disable Bisheng VF auto-sync"),
+                     clEnumValN(BishengVFAutoSyncMode::Fused, "fused",
+                                "Use Bisheng fused VF auto-sync"),
+                     clEnumValN(BishengVFAutoSyncMode::Global, "global",
+                                "Use Bisheng global VF auto-sync")),
+    llvm::cl::init(BishengVFAutoSyncMode::Unspecified));
 
 static bool runCommandWithStderr(llvm::StringRef program,
                                  llvm::ArrayRef<std::string> ownedArgs,
@@ -453,11 +473,26 @@ static bool compileDeviceLLVMToObject(llvm::StringRef llPath,
       "--cce-long-scbz=true",
       "-mllvm",
       "-cce-dyn-kernel-stack-size=true",
-      "-mllvm",
-      "-cce-vf-auto-sync=global",
   };
-  // Opting in deliberately omits this argument instead of passing `=1`, so
-  // Bisheng retains the default behavior of the selected toolchain version.
+  switch (bishengVFAutoSyncMode) {
+  case BishengVFAutoSyncMode::Unspecified:
+    break;
+  case BishengVFAutoSyncMode::Off:
+    args.push_back("-mllvm");
+    args.push_back("-cce-vf-auto-sync=off");
+    break;
+  case BishengVFAutoSyncMode::Fused:
+    args.push_back("-mllvm");
+    args.push_back("-cce-vf-auto-sync=fused");
+    break;
+  case BishengVFAutoSyncMode::Global:
+    args.push_back("-mllvm");
+    args.push_back("-cce-vf-auto-sync=global");
+    break;
+  }
+  // Enabling vector MI scheduling deliberately omits this argument instead of
+  // passing `=1`, so Bisheng retains the default behavior of the selected
+  // toolchain version.
   if (!enableBishengVecMISched) {
     args.push_back("-mllvm");
     args.push_back("--cce-aicore-vec-misched=0");

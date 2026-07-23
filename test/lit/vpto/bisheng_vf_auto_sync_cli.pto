@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// the CANN Open Software License Agreement Version 2.0.
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --help | FileCheck %s --check-prefix=HELP
+// RUN: ptoas --bisheng-vf-auto-sync=off --help > /dev/null
+// RUN: ptoas --bisheng-vf-auto-sync=fused --help > /dev/null
+// RUN: ptoas --bisheng-vf-auto-sync=global --help > /dev/null
+// RUN: not ptoas --bisheng-vf-auto-sync=invalid %s -o %t 2>&1 | FileCheck %s --check-prefix=INVALID
+
+// HELP: --bisheng-vf-auto-sync=<value>
+// HELP-SAME: Explicit Bisheng VF auto-sync mode for VPTO device compilation; omit to use the toolchain default
+// INVALID: for the --bisheng-vf-auto-sync option: Cannot find option named 'invalid'!
+
+module {
+}
