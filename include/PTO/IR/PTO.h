@@ -245,6 +245,11 @@ func::FuncOp lookupPeerFuncAcrossContainer(Operation *op,
 /// Find one reserve_buffer by logical name inside a function.
 ReserveBufferOp findReserveBufferByName(func::FuncOp funcOp, StringRef name);
 
+/// Check whether a source/destination element type pair is supported by the
+/// VPTO vcvt contract (lookupVcvtContract).  Used by VMI verifiers and the
+/// unified→legacy bridge to enforce strict 1:1 alignment.
+bool isVPTOVcvtPairSupported(Type srcElem, Type dstElem);
+
 } // namespace pto
 } // namespace mlir
 

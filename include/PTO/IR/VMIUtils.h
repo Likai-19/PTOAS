@@ -65,6 +65,21 @@ struct VMIFpToSiContract {
 std::optional<VMIFpToSiContract>
 lookupVMIFpToSiContract(Type srcElem, Type dstElem);
 
+// ---------------------------------------------------------------------------
+// VMI FpToUi hardware contract (mirrors VPTO lookupVcvtContract).
+// Symmetric to FpToSi but for float→unsigned-int paths.
+// ---------------------------------------------------------------------------
+
+struct VMIFpToUiContract {
+  bool requiresSat;
+  bool requiresPart;
+};
+
+/// Returns the FpToUi contract for the given src→dst element type pair,
+/// or nullopt if this float→unsigned-int path is not supported by the hardware.
+std::optional<VMIFpToUiContract>
+lookupVMIFpToUIContract(Type srcElem, Type dstElem);
+
 } // namespace mlir::pto
 
 #endif // PTO_IR_VMIUTILS_H

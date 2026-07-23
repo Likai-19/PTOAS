@@ -551,6 +551,15 @@ def VMIFPToSIOp : VMI_Op<"fptosi", [Pure]> {
   let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
 }
 
+def VMIFPToUIOp : VMI_Op<"fptoui", [Pure]> {
+  let summary = "VMI floating-point to unsigned integer elementwise conversion";
+  let arguments = (ins VMI_VRegTypeConstraint:$source,
+                   OptionalAttr<StrAttr>:$saturate);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
+}
+
 def VMISIToFPOp : VMI_Op<"sitofp", [Pure]> {
   let summary = "VMI signed integer to floating-point elementwise conversion";
   let arguments = (ins VMI_VRegTypeConstraint:$source);

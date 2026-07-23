@@ -1,0 +1,61 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// case: vmi_new/fptoui-f16-to-u8-sat
+// family: conversion
+// target_ops: pto.vmi.fptoui
+// scenarios: f16-to-u8, sat, narrow-2x-evenodd
+//
+// Purpose: end-to-end validation of the fptoui path (f16 → u8 with SAT).
+// This is the only fp→unsigned-int path supported by the VPTO vcvt contract.
+// SAT semantics (V300 policy): negatives clamp to 0, overflow clamps to 255,
+// NaN → 0.
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @vmi_fptoui_f16_to_u8_sat_kernel(
+      %src_gm: !pto.ptr<f16, gm>,
+      %dst_gm: !pto.ptr<ui8, gm>) attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    %c0_i64 = arith.constant 0 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %c512_i64 = arith.constant 512 : i64
+    %c1024_i64 = arith.constant 1024 : i64
+
+    %ub_src = pto.castptr %c0_i64 : i64 -> !pto.ptr<f16, ub>
+    %ub_dst = pto.castptr %c1024_i64 : i64 -> !pto.ptr<ui8, ub>
+
+    // GM -> UB: 256 f16 lanes = 512 bytes.
+    pto.mte_gm_ub %src_gm, %ub_src, %c0_i64, %c512_i64
+      nburst(%c1_i64, %c512_i64, %c512_i64)
+      : !pto.ptr<f16, gm>, !pto.ptr<f16, ub>, i64, i64, i64, i64, i64
+
+    pto.set_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+    pto.wait_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+
+    pto.vecscope {
+      %wide = pto.vmi.vload %ub_src[%c0] : !pto.ptr<f16, ub> -> !pto.vmi.vreg<256xf16>
+      // FpToUi: f16 -> u8 with SAT.  V300 SAT policy:
+      //   negatives → 0,  >255 → 255,  NaN → 0,  +inf → 255,  -inf → 0.
+      %narrow = pto.vmi.vcvt %wide {saturate = "SAT"}
+          : !pto.vmi.vreg<256xf16> -> !pto.vmi.vreg<256xui8>
+      pto.vmi.vstore %narrow, %ub_dst[%c0]
+          : !pto.vmi.vreg<256xui8>, !pto.ptr<ui8, ub>
+    }
+
+    pto.set_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+    pto.wait_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+
+    // UB -> GM: 256 u8 lanes = 256 bytes.
+    pto.mte_ub_gm %ub_dst, %dst_gm, %c256_i64
+      nburst(%c1_i64, %c256_i64, %c256_i64)
+      : !pto.ptr<ui8, ub>, !pto.ptr<ui8, gm>, i64, i64, i64, i64
+    pto.barrier #pto.pipe<PIPE_ALL>
+    return
+  }
+}

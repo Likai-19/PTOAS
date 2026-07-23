@@ -1692,6 +1692,20 @@ static std::optional<VcvtContract> lookupVcvtContract(VcvtElemKind src,
 
 } // namespace
 
+namespace mlir {
+namespace pto {
+
+bool isVPTOVcvtPairSupported(Type srcElem, Type dstElem) {
+  auto srcKind = classifyVcvtElemType(srcElem);
+  auto dstKind = classifyVcvtElemType(dstElem);
+  if (srcKind == VcvtElemKind::Invalid || dstKind == VcvtElemKind::Invalid)
+    return false;
+  return lookupVcvtContract(srcKind, dstKind).has_value();
+}
+
+} // namespace pto
+} // namespace mlir
+
 static std::optional<unsigned> getDistElementWidth(Type type) {
   if (auto intType = dyn_cast<IntegerType>(type))
     return intType.getWidth();

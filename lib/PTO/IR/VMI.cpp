@@ -663,6 +663,29 @@ lookupVMIFpToSiContract(Type srcElem, Type dstElem) {
   return std::nullopt;
 }
 
+// ---------------------------------------------------------------------------
+// FpToUi hardware contract (mirrors VPTO lookupVcvtContract fp→uint rows)
+// ---------------------------------------------------------------------------
+
+std::optional<VMIFpToUiContract>
+lookupVMIFpToUIContract(Type srcElem, Type dstElem) {
+  // Must be float → unsigned integer.
+  if (!isVMIFloatLikeType(srcElem))
+    return std::nullopt;
+  auto dstInt = dyn_cast<IntegerType>(dstElem);
+  if (!dstInt || !dstInt.isUnsigned())
+    return std::nullopt;
+
+  bool srcF16 = srcElem.isF16();
+  unsigned dstBits = dstInt.getWidth();
+
+  // f16 → u8: narrow 2×, rnd, sat, part (EvenOdd)
+  if (srcF16 && dstBits == 8)
+    return VMIFpToUiContract{/*requiresSat=*/true, /*requiresPart=*/true};
+
+  return std::nullopt;
+}
+
 } // namespace mlir::pto
 
 VMILayoutAttr VMILayoutAttr::getContiguous(MLIRContext *context,
@@ -1759,10 +1782,21 @@ LogicalResult VMITruncFOp::verify() {
       !isVMIFloatLikeType(resultType.getElementType()))
     return emitOpError(
         "requires floating-point-like source and result element types");
-  if (getVMIElementBitWidth(sourceType.getElementType()) <=
-      getVMIElementBitWidth(resultType.getElementType()))
+  unsigned srcBits = getVMIElementBitWidth(sourceType.getElementType());
+  unsigned dstBits = getVMIElementBitWidth(resultType.getElementType());
+  if (srcBits < dstBits)
     return emitOpError(
-        "requires result element type to be narrower than source element type");
+        "requires result element type to be narrower than or same-width "
+        "as source element type");
+  if (srcBits == dstBits) {
+    // Same-width fp→fp (e.g. bf16→f16): only allowed for supported VPTO
+    // vcvt contract pairs.
+    if (!isVPTOVcvtPairSupported(sourceType.getElementType(),
+                                 resultType.getElementType()))
+      return emitOpError("same-width fp-to-fp conversion is not supported "
+                         "for this type pair; only VPTO vcvt contract "
+                         "pairs are allowed");
+  }
   if (auto roundingAttr = (*this)->getAttrOfType<StringAttr>("rounding")) {
     StringRef rounding = roundingAttr.getValue();
     if (rounding != "R" && rounding != "A" && rounding != "H" &&
@@ -1805,6 +1839,37 @@ LogicalResult VMIFPToSIOp::verify() {
   } else {
     if ((*this)->getAttrOfType<StringAttr>("saturate"))
       return emitOpError("'saturate' attribute is not valid for this fp-to-si "
+                         "conversion (no overflow possible)");
+  }
+  return success();
+}
+
+LogicalResult VMIFPToUIOp::verify() {
+  auto sourceType = cast<VMIVRegType>(getSource().getType());
+  auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (sourceType.getElementCount() != resultType.getElementCount())
+    return emitOpError(
+        "requires source and result logical lane counts to match");
+  if (!isVMIFloatLikeType(sourceType.getElementType()))
+    return emitOpError("requires floating-point-like source element type");
+  if (!isVMIUnsignedIntegerType(resultType.getElementType()))
+    return emitOpError("requires unsigned integer result element type");
+  auto contract =
+      lookupVMIFpToUIContract(sourceType.getElementType(),
+                              resultType.getElementType());
+  if (!contract)
+    return emitOpError("unsupported fp-to-ui conversion element type pair");
+  if (contract->requiresSat) {
+    auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
+    if (!satAttr)
+      return emitOpError("'saturate' attribute is required for this fp-to-ui "
+                         "conversion (SAT or NOSAT)");
+    StringRef satVal = satAttr.getValue();
+    if (satVal != "SAT" && satVal != "NOSAT")
+      return emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
+  } else {
+    if ((*this)->getAttrOfType<StringAttr>("saturate"))
+      return emitOpError("'saturate' attribute is not valid for this fp-to-ui "
                          "conversion (no overflow possible)");
   }
   return success();
@@ -2432,7 +2497,7 @@ LogicalResult VMIPackOp::verify() {
 }
 
 
-enum class CvtDirection { FpWiden, FpNarrow, FpToSi, SiToFp, IntWiden, IntNarrow };
+enum class CvtDirection { FpWiden, FpNarrow, FpToSi, FpToUi, SiToFp, IntWiden, IntNarrow };
 
 // Shared helper: validates mask-data alignment and pmode value.
 // Applicable to all VMI elementwise ops that carry mask + pmode.
@@ -3468,15 +3533,20 @@ LogicalResult VMICvtOp::verify() {
       dir = CvtDirection::FpWiden;
     else if (dstBits < srcBits)
       dir = CvtDirection::FpNarrow;
-    else
-      return emitOpError(
-          "fp-to-fp conversion must change element bit-width");
+    else {
+      // Same-width fp→fp (e.g. bf16 → f16): only allowed for VPTO contract
+      // pairs, routed through FpNarrow (1:1 TruncF).
+      if (!isVPTOVcvtPairSupported(srcElem, dstElem))
+        return emitOpError(
+            "same-width fp-to-fp conversion is not supported for this type "
+            "pair; see VPTO vcvt contract for supported pairs");
+      dir = CvtDirection::FpNarrow;
+    }
   } else if (srcFp && dstInt) {
-    if (!isVMISignedOrSignlessIntegerType(dstElem))
-      return emitOpError(
-          "fp-to-int conversion requires signed or signless integer result "
-          "element type");
-    dir = CvtDirection::FpToSi;
+    if (isVMIUnsignedIntegerType(dstElem))
+      dir = CvtDirection::FpToUi;
+    else
+      dir = CvtDirection::FpToSi;
   } else if (srcInt && dstFp) {
     if (!isVMISignedOrSignlessIntegerType(srcElem))
       return emitOpError(
@@ -3527,6 +3597,22 @@ LogicalResult VMICvtOp::verify() {
       if (satAttr)
         return emitOpError("'saturate' attribute is not valid for this "
                            "fp-to-si conversion (no overflow possible)");
+    }
+  } else if (dir == CvtDirection::FpToUi) {
+    auto contract = lookupVMIFpToUIContract(srcElem, dstElem);
+    if (!contract)
+      return emitOpError("unsupported fp-to-ui conversion element type pair");
+    if (contract->requiresSat) {
+      if (!satAttr)
+        return emitOpError("'saturate' attribute is required for this "
+                           "fp-to-ui conversion; write 'SAT' or 'NOSAT'");
+      StringRef satVal = satAttr.getValue();
+      if (satVal != "SAT" && satVal != "NOSAT")
+        return emitOpError("saturate must be 'SAT' or 'NOSAT'");
+    } else {
+      if (satAttr)
+        return emitOpError("'saturate' attribute is not valid for this "
+                           "fp-to-ui conversion (no overflow possible)");
     }
   } else {
     bool needSat = (dir == CvtDirection::FpNarrow ||

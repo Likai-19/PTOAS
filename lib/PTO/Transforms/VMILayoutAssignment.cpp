@@ -468,7 +468,7 @@ struct LayoutSolver {
     }
     if (auto castOp = value.getDefiningOp()) {
       if (isa<VMIExtFOp, VMIExtSIOp, VMIExtUIOp, VMITruncFOp, VMITruncIOp,
-               VMIFPToSIOp, VMISIToFPOp>(castOp) &&
+               VMIFPToSIOp, VMIFPToUIOp, VMISIToFPOp>(castOp) &&
           castOp->getNumOperands() == 1 && castOp->getNumResults() == 1) {
         auto sourceType =
             dyn_cast<VMIVRegType>(castOp->getOperand(0).getType());
@@ -730,6 +730,20 @@ struct LayoutSolver {
         if (succeeded(fact))
           resultLayout = fact->resultLayout;
         if (failed(setPreferredLayout(fptosi.getResult(), resultLayout,
+                                      op, DataLayoutSeedPhase::Cast)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto fptoui = dyn_cast<VMIFPToUIOp>(op)) {
+        auto sourceType = cast<VMIVRegType>(fptoui.getSource().getType());
+        auto resultType = cast<VMIVRegType>(fptoui.getResult().getType());
+        VMILayoutSupport supports;
+        FailureOr<VMICastLayoutFact> fact =
+            supports.getPreferredCastLayoutFact(sourceType, resultType);
+        VMILayoutAttr resultLayout = getContiguousLayout();
+        if (succeeded(fact))
+          resultLayout = fact->resultLayout;
+        if (failed(setPreferredLayout(fptoui.getResult(), resultLayout,
                                       op, DataLayoutSeedPhase::Cast)))
           return WalkResult::interrupt();
         return WalkResult::advance();

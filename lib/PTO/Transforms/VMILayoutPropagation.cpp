@@ -182,7 +182,7 @@ static bool isSameLayoutOp(Operation *op) {
 
 static bool isCastOp(Operation *op) {
   return isa<VMIExtFOp, VMIExtSIOp, VMIExtUIOp, VMITruncFOp, VMITruncIOp,
-               VMIFPToSIOp, VMISIToFPOp>(op);
+               VMIFPToSIOp, VMIFPToUIOp, VMISIToFPOp>(op);
 }
 
 class VMISameLayoutTransfer final : public VMILayoutTransfer {
@@ -776,7 +776,7 @@ const VMILayoutTransfer *getTransfer(Operation *op) {
     return &interleaveTransfer;
   if (isa<VMIGatherOp>(op))
     return &gatherTransfer;
-  if (isa<VMIFPToSIOp, VMISIToFPOp>(op)) {
+  if (isa<VMIFPToSIOp, VMIFPToUIOp, VMISIToFPOp>(op)) {
     // Same-width fp<->int: same-layout.  Widen/narrow: cast.
     auto srcType = dyn_cast<VMIVRegType>(op->getOperand(0).getType());
     auto dstType = dyn_cast<VMIVRegType>(op->getResult(0).getType());
