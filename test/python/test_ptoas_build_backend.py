@@ -116,7 +116,7 @@ class PtoasBuildBackendTests(unittest.TestCase):
             with zipfile.ZipFile(wheel_path) as zf:
                 entry_points = zf.read("ptoas-0.1.0.dist-info/entry_points.txt").decode("utf-8")
 
-        cmake_build.assert_called_once_with()
+        cmake_build.assert_called_once_with(skip_install=True)
 
         self.assertIn("ptoas=ptoas_wheel_bootstrap:main", entry_points)
         self.assertNotIn("ptoas._launcher", entry_points)
