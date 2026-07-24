@@ -2547,7 +2547,7 @@ static bool isSupportedVCmpPredicate(StringRef cmpMode) {
 
 static const std::set<StringRef> &validDistModes() {
   static const std::set<StringRef> modes = {"continuous", "unpack", "dintlv",
-                                            "brc"};
+                                            "brc", "pack"};
   return modes;
 }
 
@@ -3785,15 +3785,35 @@ LogicalResult VMIvStoreOp::verify() {
     return emitOpError("dist-mode \"")
            << *distMode << "\" is not valid for vstore";
 
+  bool isPack = distMode && *distMode == "pack";
+
   auto pmode = getPmode();
   if (pmode && !validPModes().count(*pmode))
     return emitOpError("invalid pmode: \"") << *pmode << "\"";
 
   auto valueType = cast<VMIVRegType>(getValues()[0].getType());
-  if (failed(verifyMemoryElementMatches(getOperation(),
+  // pack: value element type intentionally differs from destination
+  if (!isPack &&
+      failed(verifyMemoryElementMatches(getOperation(),
                                         getDestination().getType(), valueType,
                                         "destination")))
     return failure();
+
+  // pack: validate value-to-destination element bit-width ratio
+  if (isPack) {
+    Type destElemType = getMemoryElementType(getDestination().getType());
+    unsigned valueBits =
+        pto::getPTOStorageElemBitWidth(valueType.getElementType());
+    unsigned destBits = pto::getPTOStorageElemBitWidth(destElemType);
+    unsigned ratio = valueBits / destBits;
+    if (valueBits % destBits != 0 || (ratio != 1 && ratio != 2 && ratio != 4))
+      return emitOpError("pack requires value-to-destination element bit-width "
+                         "ratio of 1:1, 2:1, or 4:1, got ")
+             << valueBits << ":" << destBits;
+    if (ratio == 4 && !(valueBits == 32 && destBits == 8))
+      return emitOpError("4:1 pack only supports b32→b8 (PK4_B32), got ")
+             << valueBits << ":" << destBits;
+  }
 
   if (nValues == 2) {
     auto loType = cast<VMIVRegType>(getValues()[0].getType());
@@ -4155,6 +4175,22 @@ LogicalResult VMIvLoadOp::verify() {
         failed(verifyContiguousIfLayoutAssigned(getOperation(), resType,
                                                 "result")))
       return failure();
+  }
+
+  // unpack: validate source-to-result element bit-width ratio
+  if (isUnpack) {
+    auto resType = cast<VMIVRegType>(getResults()[0].getType());
+    Type srcElemType = getMemoryElementType(getSource().getType());
+    unsigned srcBits = pto::getPTOStorageElemBitWidth(srcElemType);
+    unsigned resBits = pto::getPTOStorageElemBitWidth(resType.getElementType());
+    unsigned ratio = resBits / srcBits;
+    if (resBits % srcBits != 0 || (ratio != 1 && ratio != 2 && ratio != 4))
+      return emitOpError("unpack requires result-to-source element bit-width "
+                         "ratio of 1:1, 2:1, or 4:1, got ")
+             << resBits << ":" << srcBits;
+    if (ratio == 4 && !(srcBits == 8 && resBits == 32))
+      return emitOpError("4:1 unpack only supports b8→b32 (UNPK4), got ")
+             << srcBits << "→" << resBits;
   }
 
   return success();

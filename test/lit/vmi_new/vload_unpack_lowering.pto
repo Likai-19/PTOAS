@@ -1,0 +1,55 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s -o - | FileCheck %s
+
+module attributes {pto.target_arch = "a5"} {
+  module attributes {pto.backend = "vpto", pto.kernel_kind = #pto.kernel_kind<vector>} {
+    // CHECK-LABEL: func.func @vload_unpack_ui16_to_ui32
+    // CHECK: pto.vlds {{.*}} {dist = "UNPK_B16"} : !pto.ptr<ui16, ub> -> !pto.vreg<128xui16>
+    // CHECK: pto.vcvt {{.*}} {part = "EVEN"} : !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<64xui32>
+    func.func @vload_unpack_ui16_to_ui32(
+        %src: !pto.ptr<ui16, ub>,
+        %dst: !pto.ptr<ui32, ub>,
+        %off: index) {
+      %r = pto.vmi.vload %src[%off] {dist_mode = "unpack"}
+          : !pto.ptr<ui16, ub> -> !pto.vmi.vreg<64xui32>
+      pto.vmi.vstore %r, %dst[%off]
+          : !pto.vmi.vreg<64xui32>, !pto.ptr<ui32, ub>
+      return
+    }
+
+    // CHECK-LABEL: func.func @vload_unpack_ui8_to_ui16
+    // CHECK: pto.vlds {{.*}} {dist = "UNPK_B8"} : !pto.ptr<ui8, ub> -> !pto.vreg<256xui8>
+    // CHECK: pto.vcvt {{.*}} {part = "EVEN"} : !pto.vreg<256xui8>, !pto.mask<b8> -> !pto.vreg<128xui16>
+    func.func @vload_unpack_ui8_to_ui16(
+        %src: !pto.ptr<ui8, ub>,
+        %dst: !pto.ptr<ui16, ub>,
+        %off: index) {
+      %r = pto.vmi.vload %src[%off] {dist_mode = "unpack"}
+          : !pto.ptr<ui8, ub> -> !pto.vmi.vreg<64xui16>
+      pto.vmi.vstore %r, %dst[%off]
+          : !pto.vmi.vreg<64xui16>, !pto.ptr<ui16, ub>
+      return
+    }
+
+    // CHECK-LABEL: func.func @vload_unpack_bf16_to_f32
+    // CHECK: pto.vlds {{.*}} {dist = "UNPK_B16"} : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+    // CHECK: pto.vcvt {{.*}} {part = "EVEN"} : !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<64xf32>
+    func.func @vload_unpack_bf16_to_f32(
+        %src: !pto.ptr<bf16, ub>,
+        %dst: !pto.ptr<f32, ub>,
+        %off: index) {
+      %r = pto.vmi.vload %src[%off] {dist_mode = "unpack"}
+          : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<64xf32>
+      pto.vmi.vstore %r, %dst[%off]
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      return
+    }
+  }
+}

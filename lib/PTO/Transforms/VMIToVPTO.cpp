@@ -3307,6 +3307,34 @@ std::optional<std::string> getDenseLaneStrideStoreDistToken(VMIVRegType type) {
   return getLaneStrideStoreDistToken(layout, type.getElementType());
 }
 
+//===----------------------------------------------------------------------===//
+// dist_mode pack helper: derive VPTO dist token from type ratio
+//===----------------------------------------------------------------------===//
+
+/// Derive pack dist token from value (vreg) and destination (memory) element
+/// types. Maps type ratio to VPTO dist token: 2:1 → PK_B{valBits},
+/// 4:1 → PK4_B32.
+std::optional<std::string> getPackDistTokenFromTypes(Type valElemType,
+                                                      Type dstElemType) {
+  unsigned valBits = pto::getPTOStorageElemBitWidth(valElemType);
+  unsigned dstBits = pto::getPTOStorageElemBitWidth(dstElemType);
+  if (valBits % dstBits != 0)
+    return std::nullopt;
+  unsigned ratio = valBits / dstBits;
+  if (ratio == 1) {
+    if (valBits == 8)
+      return std::string("PK4_B32");
+    if (valBits == 16 || valBits == 32 || valBits == 64)
+      return (Twine("PK_B") + Twine(valBits)).str();
+  }
+  if (ratio == 2 &&
+      (valBits == 16 || valBits == 32 || valBits == 64))
+    return (Twine("PK_B") + Twine(valBits)).str();
+  if (ratio == 4 && valBits == 32 && dstBits == 8)
+    return std::string("PK4_B32");
+  return std::nullopt;
+}
+
 std::optional<StringRef>
 getLaneStrideStoreMaskGranularity(VMILayoutAttr layout, Type elementType) {
   if (!layout || !layout.hasLaneStride())
@@ -11298,6 +11326,259 @@ struct OneToNSCFIndexSwitchOpPattern
   }
 };
 
+//===----------------------------------------------------------------------===//
+// Unified vload/vstore dist_mode patterns (pack / unpack)
+//===----------------------------------------------------------------------===//
+
+/// Lower unified vload {dist_mode="unpack"} to:
+///   1. same-type vlds with UNPK dist (ptr<T> → vreg<T>)
+///   2. vcvt EVEN to widen (vreg<T> → vreg<U>)
+/// UNPK_B{srcBits} places each source element in the low half of a carrier
+/// slot pair; vcvt EVEN extracts the even lanes and widens them.
+struct OneToNVMIUnifiedVLoadOpPattern : OpConversionPattern<VMIvLoadOp> {
+  using OpConversionPattern<VMIvLoadOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(VMIvLoadOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!op.getDistMode() || op.getDistMode() != "unpack")
+      return rewriter.notifyMatchFailure(
+          op, "unified vload pattern only handles dist_mode=\"unpack\"");
+
+    auto resultVMIType = cast<VMIVRegType>(op.getResults()[0].getType());
+    FailureOr<Value> source =
+        getSingleValue(op, adaptor.getSource(),
+                       "load source must convert to one value", rewriter);
+    FailureOr<Value> offset =
+        getSingleValue(op, adaptor.getOffset(),
+                       "load offset must convert to one value", rewriter);
+    if (failed(source) || failed(offset))
+      return failure();
+
+    // Get wide result types (e.g. 4 × vreg<64xui32>)
+    FailureOr<SmallVector<Type>> maybeWideTypes =
+        getConvertedResultTypes(op, 0, *this->getTypeConverter());
+    if (failed(maybeWideTypes))
+      return failure();
+    SmallVector<Type> wideTypes = std::move(*maybeWideTypes);
+
+    Type srcElemType = getMemoryElementType(op.getSource().getType());
+    if (!srcElemType)
+      return rewriter.notifyMatchFailure(
+          op, "cannot determine source element type");
+
+    Type resElemType = resultVMIType.getElementType();
+    unsigned srcBits = pto::getPTOStorageElemBitWidth(srcElemType);
+    unsigned resBits = pto::getPTOStorageElemBitWidth(resElemType);
+    unsigned ratio = resBits / srcBits;
+    if (ratio != 1 && ratio != 2 && ratio != 4)
+      return rewriter.notifyMatchFailure(
+          op, "unpack only supports ratio 1:1, 2:1, or 4:1 (b8→b32)");
+
+    // ratio == 1: same-type UNPK (e.g. ptr<ui16> → vreg<128xui16>).
+    // Single vlds with UNPK dist, no vcvt. VMI declares 2N/4N lanes.
+    if (ratio == 1) {
+      unsigned unpackRatio = (srcBits == 8) ? 4 : 2;
+      std::string dist = (srcBits == 8)
+                             ? "UNPK4"
+                             : (Twine("UNPK_B") + Twine(srcBits)).str();
+
+      SmallVector<Value> results;
+      results.reserve(wideTypes.size());
+      int64_t semanticOffset = 0;
+      for (Type wideType : wideTypes) {
+        auto wideVreg = cast<VRegType>(wideType);
+        Value chunkOffset =
+            createChunkOffset(op.getLoc(), *offset, semanticOffset, rewriter);
+        results.push_back(
+            rewriter
+                .create<VldsOp>(op.getLoc(), wideType,
+                                /*updated_base=*/Type{}, *source, chunkOffset,
+                                rewriter.getStringAttr(dist))
+                .getResult());
+        semanticOffset += wideVreg.getElementCount() /
+                          static_cast<int64_t>(unpackRatio);
+      }
+      replaceOpWithFlatConvertedValues(rewriter, op, results,
+                                       *this->getTypeConverter());
+      return success();
+    }
+
+    // ratio == 2 or 4: cross-type UNPK → vlds same-type + vcvt to widen.
+    // ratio==2: UNPK_B{bits} + vcvt EVEN
+    // ratio==4: UNPK4 + vcvt P0 (b8→b32, two-step widening in one vcvt)
+    std::string distStr = (ratio == 4)
+                              ? std::string("UNPK4")
+                              : (Twine("UNPK_B") + Twine(srcBits)).str();
+    StringRef vcvtPart = (ratio == 4) ? StringRef("P0") : StringRef("EVEN");
+
+    SmallVector<Type> narrowTypes;
+    narrowTypes.reserve(wideTypes.size());
+    for (Type wideType : wideTypes) {
+      auto wideVreg = cast<VRegType>(wideType);
+      narrowTypes.push_back(VRegType::get(
+          rewriter.getContext(),
+          wideVreg.getElementCount() * static_cast<int64_t>(ratio),
+          srcElemType));
+    }
+
+    SmallVector<Value> results;
+    results.reserve(wideTypes.size());
+    int64_t semanticOffset = 0;
+    for (auto [wideType, narrowType] :
+         llvm::zip_equal(wideTypes, narrowTypes)) {
+      auto narrowVreg = cast<VRegType>(narrowType);
+      auto wideVreg = cast<VRegType>(wideType);
+
+      Value chunkOffset =
+          createChunkOffset(op.getLoc(), *offset, semanticOffset, rewriter);
+      Value narrowVal =
+          rewriter
+              .create<VldsOp>(op.getLoc(), narrowType,
+                              /*updated_base=*/Type{}, *source, chunkOffset,
+                              rewriter.getStringAttr(distStr))
+              .getResult();
+      semanticOffset += wideVreg.getElementCount();
+
+      FailureOr<Value> mask =
+          createAllTrueMaskForVReg(op.getLoc(), narrowVreg, rewriter);
+      if (failed(mask))
+        return rewriter.notifyMatchFailure(
+            op, "unsupported narrow element type for unpack vcvt mask");
+
+      results.push_back(
+          rewriter
+              .create<VcvtOp>(op.getLoc(), wideType, narrowVal, *mask,
+                              /*rnd=*/nullptr, /*sat=*/nullptr,
+                              rewriter.getStringAttr(vcvtPart))
+              .getResult());
+    }
+    replaceOpWithFlatConvertedValues(rewriter, op, results,
+                                     *this->getTypeConverter());
+    return success();
+  }
+};
+
+/// Lower unified vstore {dist_mode="pack"} directly to VstsOp with a dist
+/// token derived from the vreg→Ptr element bit-width ratio.
+struct OneToNVMIUnifiedVStoreOpPattern : OpConversionPattern<VMIvStoreOp> {
+  using OpConversionPattern<VMIvStoreOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(VMIvStoreOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Only handle dist_mode="pack".
+    if (!op.getDistMode() || op.getDistMode() != "pack")
+      return rewriter.notifyMatchFailure(
+          op, "unified vstore pattern only handles dist_mode=\"pack\"");
+
+    auto valueVMIType = cast<VMIVRegType>(op.getValues()[0].getType());
+    FailureOr<Value> destination =
+        getSingleValue(op, adaptor.getDestination(),
+                       "store destination must convert to one value", rewriter);
+    FailureOr<Value> offset =
+        getSingleValue(op, adaptor.getOffset(),
+                       "store offset must convert to one value", rewriter);
+    if (failed(destination) || failed(offset))
+      return failure();
+
+    // values is Variadic; for pack we have exactly 1 value.
+    // Each value maps to 1..N converted VPTO vreg parts.
+    if (adaptor.getValues().empty())
+      return rewriter.notifyMatchFailure(op, "pack requires exactly 1 value");
+    ValueRange valueParts = adaptor.getValues()[0];
+
+    Type dstElemType = getMemoryElementType(op.getDestination().getType());
+    if (!dstElemType)
+      return rewriter.notifyMatchFailure(
+          op, "cannot determine destination element type");
+
+    Type valElemType = valueVMIType.getElementType();
+    std::optional<std::string> dist =
+        getPackDistTokenFromTypes(valElemType, dstElemType);
+    if (!dist)
+      return rewriter.notifyMatchFailure(
+          op, "unsupported pack element type ratio");
+
+    unsigned valBits = pto::getPTOStorageElemBitWidth(valElemType);
+    unsigned dstBits = pto::getPTOStorageElemBitWidth(dstElemType);
+    unsigned ratio = valBits / dstBits;
+
+    FailureOr<int64_t> lanesPerPart =
+        getDataLanesPerPart(valueVMIType.getElementType());
+    if (failed(lanesPerPart))
+      return rewriter.notifyMatchFailure(
+          op, "pack requires known physical lanes per part");
+
+    bool is1to1 = (ratio == 1);
+    bool is4to1 = (ratio == 4);
+
+    auto srcPtrType = cast<PtrType>(op.getDestination().getType());
+    Value matchedDest;
+    int64_t scaledLanesPerPart;
+    if (is1to1) {
+      // Same type: no ptr cast, no vbitcast. Single vsts{PK}.
+      matchedDest = *destination;
+      unsigned packRatio = (valBits == 8) ? 4 : 2;
+      scaledLanesPerPart = *lanesPerPart / static_cast<int64_t>(packRatio);
+    } else if (is4to1) {
+      matchedDest = *destination;
+      scaledLanesPerPart = *lanesPerPart;
+    } else {
+      auto vregPtrType = PtrType::get(rewriter.getContext(), valElemType,
+                                       srcPtrType.getMemorySpace());
+      matchedDest =
+          rewriter.create<CastPtrOp>(op.getLoc(), vregPtrType, *destination);
+      scaledLanesPerPart = *lanesPerPart / static_cast<int64_t>(ratio);
+    }
+
+    int64_t semanticOffset = 0;
+    for (auto [index, value] : llvm::enumerate(valueParts)) {
+      auto vregType = dyn_cast<VRegType>(value.getType());
+      if (!vregType)
+        return rewriter.notifyMatchFailure(op, "store value must be vreg");
+
+      // Value to store: for 4:1, bitcast to narrow element type.
+      Value storeValue = value;
+      if (is4to1) {
+        int64_t narrowLanes = vregType.getElementCount() *
+                              static_cast<int64_t>(ratio);
+        auto narrowVregType = VRegType::get(rewriter.getContext(), narrowLanes,
+                                             dstElemType);
+        storeValue = rewriter.create<VbitcastOp>(op.getLoc(), narrowVregType,
+                                                  value);
+      }
+
+      Value mask;
+      if (*dist == "PK_B16") {
+        auto maskType = MaskType::get(rewriter.getContext(), "b16");
+        mask = rewriter
+                   .create<PsetB16Op>(op.getLoc(), maskType,
+                                      rewriter.getStringAttr("PAT_ALL"))
+                   .getResult();
+      } else {
+        // PK_B32, PK_B64, PK4_B32: all b32 mask
+        auto maskType = MaskType::get(rewriter.getContext(), "b32");
+        mask = rewriter
+                   .create<PsetB32Op>(op.getLoc(), maskType,
+                                      rewriter.getStringAttr("PAT_ALL"))
+                   .getResult();
+      }
+
+      Value chunkOffset =
+          createChunkOffset(op.getLoc(), *offset, semanticOffset, rewriter);
+      rewriter.create<VstsOp>(op.getLoc(),
+                              /*updated_base=*/Type{}, storeValue, matchedDest,
+                              chunkOffset, rewriter.getStringAttr(*dist),
+                              mask);
+      semanticOffset += scaledLanesPerPart;
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 void populateVMIConversionPatterns(
     VMIToVPTOTypeConverter &typeConverter, RewritePatternSet &patterns) {
   populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(patterns, typeConverter);
@@ -11322,9 +11603,11 @@ void populateVMIConversionPatterns(
       OneToNVMIDeinterleaveLoadOpPattern, OneToNVMIGroupLoadOpPattern,
       OneToNVMIGroupSlotLoadOpPattern, OneToNVMIStrideLoadOpPattern,
       OneToNVMIMaskedLoadOpPattern, OneToNVMIGatherOpPattern,
-      OneToNVMIExpandLoadOpPattern, OneToNVMIStoreOpPattern,
+      OneToNVMIExpandLoadOpPattern, OneToNVMIUnifiedVLoadOpPattern,
+      OneToNVMIStoreOpPattern,
       OneToNVMIInterleaveStoreOpPattern, OneToNVMIGroupStoreOpPattern,
       OneToNVMIMaskedStoreOpPattern, OneToNVMIStrideStoreOpPattern,
+      OneToNVMIUnifiedVStoreOpPattern,
       OneToNVMIScatterOpPattern, OneToNVMIBinaryOpPattern<VMIAddFOp, VaddOp>,
       OneToNVMIBinaryOpPattern<VMIAddIOp, VaddOp>,
       OneToNVMIBinaryOpPattern<VMISubFOp, VsubOp>,

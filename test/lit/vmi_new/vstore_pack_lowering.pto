@@ -1,0 +1,62 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s -o - | FileCheck %s
+
+module attributes {pto.target_arch = "a5"} {
+  module attributes {pto.backend = "vpto", pto.kernel_kind = #pto.kernel_kind<vector>} {
+    // CHECK-LABEL: func.func @vstore_pack_ui32_to_ui16
+    // CHECK: pto.castptr {{.*}} !pto.ptr<ui32, ub>
+    // CHECK: pto.vsts {{.*}} {dist = "PK_B32"}
+    func.func @vstore_pack_ui32_to_ui16(
+        %v: !pto.vmi.vreg<64xui32>,
+        %dst: !pto.ptr<ui16, ub>,
+        %off: index) {
+      pto.vmi.vstore %v, %dst[%off] {dist_mode = "pack"}
+          : !pto.vmi.vreg<64xui32>, !pto.ptr<ui16, ub>
+      return
+    }
+
+    // CHECK-LABEL: func.func @vstore_pack_ui16_to_ui8
+    // CHECK: pto.castptr {{.*}} !pto.ptr<ui16, ub>
+    // CHECK: pto.vsts {{.*}} {dist = "PK_B16"}
+    func.func @vstore_pack_ui16_to_ui8(
+        %v: !pto.vmi.vreg<64xui16>,
+        %dst: !pto.ptr<ui8, ub>,
+        %off: index) {
+      pto.vmi.vstore %v, %dst[%off] {dist_mode = "pack"}
+          : !pto.vmi.vreg<64xui16>, !pto.ptr<ui8, ub>
+      return
+    }
+
+    // CHECK-LABEL: func.func @vstore_pack_ui32_to_ui8
+    // CHECK: pto.vbitcast {{.*}} !pto.vreg<64xui32> -> !pto.vreg<256xui8>
+    // CHECK: pto.vsts {{.*}} {dist = "PK4_B32"}
+    // CHECK-SAME: !pto.vreg<256xui8>, !pto.ptr<ui8, ub>
+    func.func @vstore_pack_ui32_to_ui8(
+        %v: !pto.vmi.vreg<64xui32>,
+        %dst: !pto.ptr<ui8, ub>,
+        %off: index) {
+      pto.vmi.vstore %v, %dst[%off] {dist_mode = "pack"}
+          : !pto.vmi.vreg<64xui32>, !pto.ptr<ui8, ub>
+      return
+    }
+
+    // CHECK-LABEL: func.func @vstore_pack_f32_to_f16
+    // CHECK: pto.castptr {{.*}} !pto.ptr<f32, ub>
+    // CHECK: pto.vsts {{.*}} {dist = "PK_B32"}
+    func.func @vstore_pack_f32_to_f16(
+        %v: !pto.vmi.vreg<64xf32>,
+        %dst: !pto.ptr<f16, ub>,
+        %off: index) {
+      pto.vmi.vstore %v, %dst[%off] {dist_mode = "pack"}
+          : !pto.vmi.vreg<64xf32>, !pto.ptr<f16, ub>
+      return
+    }
+  }
+}

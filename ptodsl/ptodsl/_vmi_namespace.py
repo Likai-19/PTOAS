@@ -370,12 +370,46 @@ def _resolve_vmi_unpack_result_type(source, size, to_dtype, *, context: str):
     result_type = _ensure_tensor_storage_dtype(to_dtype, context=context)
     source_bits = _type_bit_width(source_type, context=context)
     result_bits = _type_bit_width(result_type, context=context)
-    if source_bits * 2 != result_bits:
+    ratio = result_bits // source_bits
+    if source_bits != result_bits and source_bits * 2 != result_bits and source_bits * 4 != result_bits:
         raise TypeError(
-            f"{context} requires unpack to widen by exactly one step; got "
-            f"{source_type} -> {result_type}"
+            f"{context} requires unpack to widen by 2× or 4×; got "
+            f"{source_type} ({source_bits}b) -> {result_type} ({result_bits}b)"
+        )
+    if ratio == 4 and not (source_bits == 8 and result_bits == 32):
+        raise TypeError(
+            f"{context} 4:1 unpack only supports b8->b32 (UNPK4); got "
+            f"{source_type} ({source_bits}b) -> {result_type} ({result_bits}b)"
         )
     return _pto.VMIVRegType.get(size, result_type)
+
+
+def _resolve_vmi_pack_dest_type(values, *, to_dtype, context: str):
+    """Validate pack type ratio and return the original value type (unchanged).
+
+    Pack narrows the stored data: vreg<T> → Ptr<U> where sizeof(T) = 2× or 4× sizeof(U).
+    The VMI vreg type stays the same (T); only the lowering adds the dist token.
+    """
+    if to_dtype is None:
+        raise TypeError(f'{context} requires to_dtype when dist_mode="pack"')
+    if _is_sequence(values):
+        raise TypeError(f'{context} with dist_mode="pack" expects a single VMI vector')
+    value_type = _as_vmi_vreg_type(_type_of(values), context=context)
+    dest_type = _ensure_tensor_storage_dtype(to_dtype, context=context)
+    value_bits = _type_bit_width(value_type.element_type, context=context)
+    dest_bits = _type_bit_width(dest_type, context=context)
+    ratio = value_bits // dest_bits
+    if value_bits % dest_bits != 0 or (ratio != 1 and ratio != 2 and ratio != 4):
+        raise TypeError(
+            f"{context} requires pack to narrow by 2× or 4×; got "
+            f"{value_type.element_type} ({value_bits}b) -> {dest_type} ({dest_bits}b)"
+        )
+    if ratio == 4 and not (value_bits == 32 and dest_bits == 8):
+        raise TypeError(
+            f"{context} 4:1 pack only supports b32->b8 (PK4_B32); got "
+            f"{value_bits}b -> {dest_bits}b"
+        )
+    return value_type
 
 
 def _resolve_vmi_vload_result_types(source, size, *, dist_mode, to_dtype, context: str):
@@ -566,6 +600,7 @@ class _VMINamespace:
         offset,
         mask=None,
         *,
+        to_dtype=None,
         stride=None,
         block_stride=None,
         repeat_stride=None,
@@ -583,13 +618,16 @@ class _VMINamespace:
             block_stride=block_stride,
             repeat_stride=repeat_stride,
             allow_group_brc=False,
-            allowed_dist_modes={None, "continuous", "dintlv"},
+            allowed_dist_modes={None, "continuous", "dintlv", "pack"},
         )
         if group is not None and mask is not None:
             raise TypeError("pto.vmi.vstore(...) group mode does not take a mask operand")
         if dist_mode == "dintlv":
             if not _is_sequence(values) or len(values) != 2:
                 raise TypeError('pto.vmi.vstore(...) with dist_mode="dintlv" requires an (even, odd) pair')
+        elif dist_mode == "pack":
+            if to_dtype is not None:
+                _resolve_vmi_pack_dest_type(values, to_dtype=to_dtype, context="pto.vmi.vstore(...)")
         elif _is_sequence(values):
             raise TypeError("pto.vmi.vstore(...) expects a single VMI vector unless dist_mode=\"dintlv\"")
         return _generated("vstore")(

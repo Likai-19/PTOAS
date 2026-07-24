@@ -1339,6 +1339,7 @@ def VMIvLoadOp : VMI_Op<"vload",
     - "continuous" (default): contiguous stride-1 load  → 1 result
     - "dintlv":             deinterleaved dual load      → 2 results (%lo, %hi)
     - "unpack":             widening unpack load         → 1 result
+                            (UNPK_B{src_bits} for 1:2, UNPK4 for 1:4 b8→b32)
     - "brc":                broadcast load               → 1 result
 
     group mode (mutually exclusive with dist-mode):
@@ -1377,6 +1378,8 @@ def VMIvStoreOp : VMI_Op<"vstore",
     dist-mode controls the memory access pattern:
     - "continuous" (default): contiguous stride-1 store  → 1 value
     - "dintlv":             interleaved dual store        → 2 values (%lo, %hi)
+    - "pack":               narrowing pack store          → 1 value
+                            (PK_B{val_bits} for 2:1, PK4_B32 for 4:1 b32→b8)
 
     group mode (mutually exclusive with dist-mode):
     - {group = C}: grouped vector store with row stride
