@@ -449,6 +449,35 @@ void materializeVecScopeCarrierLoops(ModuleOp module) {
   }
 }
 
+void markLoopsWithVectorIterArgs(ModuleOp module) {
+  // Carrier loops created by materializeVecScopeCarrierLoops have no init
+  // args (scf::ForOp(loc, c0, c1, c1)), so any scf.for with a VPTO-typed
+  // iter arg is a user-authored loop. Insert an aivscope_dummy call before
+  // its scf.yield so attachAIVectorScopeMetadata marks that LLVM loop with
+  // llvm.loop.aivector_scope, letting the backend keep vector iter args in
+  // vector registers instead of spilling them through LLVM stack memrefs
+  // (the default StructuralTypeConversion behavior for large vector phis).
+  ensureAIVScopeDummyDecl(module);
+
+  SmallVector<scf::ForOp, 16> loops;
+  module.walk([&](scf::ForOp loop) {
+    for (Value initArg : loop.getInitArgs()) {
+      if (isa<pto::VRegType, pto::MaskType, pto::AlignType>(initArg.getType())) {
+        loops.push_back(loop);
+        break;
+      }
+    }
+  });
+
+  IRRewriter rewriter(module.getContext());
+  for (scf::ForOp loop : loops) {
+    Block *body = loop.getBody();
+    rewriter.setInsertionPoint(body->getTerminator());
+    rewriter.create<func::CallOp>(loop.getLoc(), kAIVScopeDummyCallee,
+                                  TypeRange{}, ValueRange{});
+  }
+}
+
 LogicalResult attachAIVectorScopeMetadata(llvm::Module &llvmModule,
                                           llvm::raw_ostream &diagOS) {
   llvm::Function *dummyCallee = llvmModule.getFunction(kAIVScopeDummyCallee);

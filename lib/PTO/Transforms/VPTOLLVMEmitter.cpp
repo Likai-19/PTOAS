@@ -50,6 +50,7 @@
 namespace mlir::pto {
 
 void materializeVecScopeCarrierLoops(ModuleOp module);
+void markLoopsWithVectorIterArgs(ModuleOp module);
 LogicalResult applyQueriedTargetAttrs(ModuleOp module,
                                       const VPTOEmissionOptions &options,
                                       llvm::raw_ostream &diagOS);
@@ -11695,6 +11696,7 @@ struct LowerVPTOOpsPass final
 
   void runOnOperation() override {
     materializeVecScopeCarrierLoops(getOperation());
+    markLoopsWithVectorIterArgs(getOperation());
     // Remove dead pto.alloc_tile ops before lowering. These can appear when
     // the original kernel's tile_buf intrinsics have already been folded away
     // by FoldTileBufIntrinsics, but a subsequent pass (e.g. AIC-scope cloning)
