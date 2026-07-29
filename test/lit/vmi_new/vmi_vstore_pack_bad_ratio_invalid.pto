@@ -8,23 +8,15 @@
 
 // RUN: pto-test-opt %s -split-input-file -verify-diagnostics
 
-func.func @vstore_pack_bad_ratio_ui32_to_ui32(
-    %v: !pto.vmi.vreg<64xui32>,
-    %dst: !pto.ptr<ui32, ub>,
-    %off: index) {
-  // expected-error@+1 {{pack requires value-to-destination element bit-width ratio of 2:1 or 4:1}}
-  pto.vmi.vstore %v, %dst[%off] {dist_mode = "pack"}
-      : !pto.vmi.vreg<64xui32>, !pto.ptr<ui32, ub>
-  return
-}
+// vstore pack: value bit-width must be >= destination bit-width.
+// Valid ratios (value:dest): 1:1, 2:1, 4:1.
+// Invalid: value narrower than dest (e.g. 1:2, 1:4).
 
-// -----
-
-func.func @vstore_pack_bad_ratio_ui8_to_ui32(
+func.func @vstore_pack_bad_ratio_reverse_8to32(
     %v: !pto.vmi.vreg<64xui8>,
     %dst: !pto.ptr<ui32, ub>,
     %off: index) {
-  // expected-error@+1 {{pack requires value-to-destination element bit-width ratio of 2:1 or 4:1}}
+  // expected-error@+1 {{pack requires value-to-destination element bit-width ratio of 1:1, 2:1, or 4:1}}
   pto.vmi.vstore %v, %dst[%off] {dist_mode = "pack"}
       : !pto.vmi.vreg<64xui8>, !pto.ptr<ui32, ub>
   return
@@ -32,12 +24,12 @@ func.func @vstore_pack_bad_ratio_ui8_to_ui32(
 
 // -----
 
-func.func @vstore_pack_bad_1to1_same_type(
-    %v: !pto.vmi.vreg<64xui32>,
+func.func @vstore_pack_bad_ratio_reverse_16to32(
+    %v: !pto.vmi.vreg<64xui16>,
     %dst: !pto.ptr<ui32, ub>,
     %off: index) {
-  // expected-error@+1 {{pack requires value-to-destination element bit-width ratio of 2:1 or 4:1}}
+  // expected-error@+1 {{pack requires value-to-destination element bit-width ratio of 1:1, 2:1, or 4:1}}
   pto.vmi.vstore %v, %dst[%off] {dist_mode = "pack"}
-      : !pto.vmi.vreg<64xui32>, !pto.ptr<ui32, ub>
+      : !pto.vmi.vreg<64xui16>, !pto.ptr<ui32, ub>
   return
 }

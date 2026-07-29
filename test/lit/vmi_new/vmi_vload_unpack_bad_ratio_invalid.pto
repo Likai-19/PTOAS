@@ -8,25 +8,28 @@
 
 // RUN: pto-test-opt %s -split-input-file -verify-diagnostics
 
-func.func @vload_unpack_bad_ratio_same_type(
-    %src: !pto.ptr<ui32, ub>,
-    %off: index)
-    -> !pto.vmi.vreg<64xui32> {
-  // expected-error@+1 {{unpack requires result-to-source element bit-width ratio of 2:1 or 4:1}}
-  %r = pto.vmi.vload %src[%off] {dist_mode = "unpack"}
-      : !pto.ptr<ui32, ub> -> !pto.vmi.vreg<64xui32>
-  return %r : !pto.vmi.vreg<64xui32>
-}
+// vload unpack: result bit-width must be >= source bit-width.
+// Valid ratios (result:source): 1:1, 2:1, 4:1.
+// Invalid: result narrower than source (e.g. 1:2, 1:4).
 
-// -----
-
-func.func @vload_unpack_bad_ratio_reverse(
+func.func @vload_unpack_bad_ratio_reverse_32to16(
     %src: !pto.ptr<ui32, ub>,
     %off: index)
     -> !pto.vmi.vreg<64xui16> {
-  // expected-error@+1 {{unpack requires result-to-source element bit-width ratio of 2:1 or 4:1}}
+  // expected-error@+1 {{unpack requires result-to-source element bit-width ratio of 1:1, 2:1, or 4:1}}
   %r = pto.vmi.vload %src[%off] {dist_mode = "unpack"}
       : !pto.ptr<ui32, ub> -> !pto.vmi.vreg<64xui16>
   return %r : !pto.vmi.vreg<64xui16>
 }
 
+// -----
+
+func.func @vload_unpack_bad_ratio_reverse_32to8(
+    %src: !pto.ptr<ui32, ub>,
+    %off: index)
+    -> !pto.vmi.vreg<64xui8> {
+  // expected-error@+1 {{unpack requires result-to-source element bit-width ratio of 1:1, 2:1, or 4:1}}
+  %r = pto.vmi.vload %src[%off] {dist_mode = "unpack"}
+      : !pto.ptr<ui32, ub> -> !pto.vmi.vreg<64xui8>
+  return %r : !pto.vmi.vreg<64xui8>
+}

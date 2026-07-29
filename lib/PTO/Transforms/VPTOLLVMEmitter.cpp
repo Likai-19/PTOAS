@@ -3737,7 +3737,7 @@ static FailureOr<StringRef> buildVstsCallee(MLIRContext *context, Type valueType
   std::string vec =
       getMemoryElementTypeFragment(getElementTypeFromVectorLike(valueType));
   auto lanes = getElementCountFromVectorLike(valueType);
-  if (vec.empty() || !lanes)
+if (vec.empty() || !lanes)
     return failure();
   return StringAttr::get(context, "llvm.hivm.vstsx1.v" + std::to_string(*lanes) +
                                       vec)

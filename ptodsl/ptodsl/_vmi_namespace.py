@@ -206,12 +206,28 @@ def _derive_vinterpret_cast_result_type(source, to_dtype, *, context: str):
     source_bits = _type_bit_width(source_elem_type, context=context)
     target_bits = _type_bit_width(target_elem_type, context=context)
     if source_bits != target_bits:
-        raise TypeError(
-            f"{context} requires source and target element widths to match; got "
-            f"{source_elem_type} -> {target_elem_type}"
-        )
+        # Allow cross-width reinterpret when total bit width matches,
+        # e.g. 128×bf16 (2048b) → 64×f32 (2048b) for the vintlv widening trick.
+        source_total = source_type.element_count * source_bits
+        if source_total % target_bits != 0:
+            raise TypeError(
+                f"{context} requires matching total bit width when element widths "
+                f"differ; got {source_elem_type} ({source_bits}b) ×"
+                f"{source_type.element_count} → {target_elem_type} ({target_bits}b)"
+            )
+        ratio = target_bits // source_bits
+        if ratio not in (2, 4):
+            raise TypeError(
+                f"{context} cross-width reinterpret only supports 2× or 4× "
+                f"widening; got {source_elem_type} ({source_bits}b) →"
+                f" {target_elem_type} ({target_bits}b, {ratio}×)"
+            )
+        target_count = source_total // target_bits
+    else:
+        target_count = source_type.element_count
+
     return _pto.VMIVRegType.get(
-        source_type.element_count,
+        target_count,
         target_elem_type,
         layout=source_type.layout,
     )
