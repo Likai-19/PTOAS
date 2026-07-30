@@ -47,6 +47,8 @@ def _run_ptoas(
     insert_sync: bool | None = None,
     backend: str | None = None,
     pto_level: str | None = None,
+    enable_vpto_soft_postupdate: bool = False,
+    enable_bisheng_vec_misched: bool = False,
 ) -> None:
     ptoas = resolve_ptoas_binary()
     cmd = [
@@ -59,6 +61,10 @@ def _run_ptoas(
         cmd.append(f"--pto-level={pto_level}")
     if insert_sync is True:
         cmd.append("--enable-insert-sync")
+    if enable_vpto_soft_postupdate:
+        cmd.append("--enable-vpto-soft-postupdate")
+    if enable_bisheng_vec_misched:
+        cmd.append("--enable-bisheng-vec-misched=true")
     cmd.extend([
         "--enable-tile-op-expand",
         str(mlir_path),
@@ -92,6 +98,8 @@ def _compile_config_text(
     effective_insert_sync: bool,
     effective_pto_level: str | None,
     ptoas_overrides: dict,
+    enable_vpto_soft_postupdate: bool = False,
+    enable_bisheng_vec_misched: bool = False,
 ) -> str:
     return "\n".join(
         [
@@ -102,6 +110,8 @@ def _compile_config_text(
             f"pto_level={effective_pto_level}",
             f"backend={ptoas_overrides.get('backend')}",
             "enable_tile_op_expand=True",
+            f"enable_vpto_soft_postupdate={enable_vpto_soft_postupdate}",
+            f"enable_bisheng_vec_misched={enable_bisheng_vec_misched}",
         ]
     )
 
@@ -219,11 +229,21 @@ def build_native_library(
     )
     effective_pto_level = _effective_pto_level(mode=module_spec.mode)
     ptoas_overrides = _source_ptoas_overrides(module_spec)
+    _enable_postupdate = (
+        os.environ.get("PTODSL_ENABLE_VPTO_SOFT_POSTUPDATE", "").strip().lower()
+        in ("1", "true", "yes", "on")
+    )
+    _enable_vec_misched = (
+        os.environ.get("PTODSL_ENABLE_BISHENG_VEC_MISCHED", "").strip().lower()
+        in ("1", "true", "yes", "on")
+    )
     compile_config_text = _compile_config_text(
         module_spec=module_spec,
         effective_insert_sync=effective_insert_sync,
         effective_pto_level=effective_pto_level,
         ptoas_overrides=ptoas_overrides,
+        enable_vpto_soft_postupdate=_enable_postupdate,
+        enable_bisheng_vec_misched=_enable_vec_misched,
     )
     sim_mode = bool(os.environ.get("MSPROF_SIMULATOR_MODE"))
     link_config_text = "\n".join(runtime_library_flags(sim_mode=sim_mode))
@@ -247,6 +267,8 @@ def build_native_library(
         target_arch=module_spec.target_arch,
         insert_sync=effective_insert_sync,
         pto_level=effective_pto_level,
+        enable_vpto_soft_postupdate=_enable_postupdate,
+        enable_bisheng_vec_misched=_enable_vec_misched,
         **ptoas_overrides,
     )
 
