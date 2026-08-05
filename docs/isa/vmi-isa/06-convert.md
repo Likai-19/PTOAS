@@ -14,21 +14,27 @@
 
 - **semantics:** Unified elementwise type conversion. The conversion direction
   is derived from the source and destination element types; the verifier
-  dispatches to one of six kinds:
+  dispatches to one of seven kinds:
 
   1. **FpWiden** — `fp → fp`, `|dst| > |src|` (e.g. `f16 → f32`,
      `bf16 → f32`, `fp8_e4m3 → f16`).
 
   2. **FpNarrow** — `fp → fp`, `|dst| < |src|` (e.g. `f32 → f16`,
-     `f32 → bf16`, `f32 → fp8_e4m3`).
+     `f32 → bf16`, `f32 → fp8_e4m3`). Same-width `fp → fp`
+     (`|dst| == |src|`, e.g. `bf16 → f16`).
 
-  3. **FpToSi** — `fp → int` (e.g. `f32 → i32`, `f16 → i8`).
+  3. **FpToSi** — `fp → signed int`. Supported pairs follow the contract
+     table `lookupVMIFpToSiContract`: `f32→s32`, `f16→s16`, `f32→s16`,
+     `f16→s8`, `f16→s32` (nosat), `bf16→s32`.
 
-  4. **SiToFp** — `int → fp` (e.g. `i32 → f32`, `i8 → f16`).
+  4. **FpToUi** — `fp → unsigned int`. Supported pairs follow the contract
+     table `lookupVMIFpToUIContract`: currently `f16→u8`.
 
-  5. **IntWiden** — `int → int`, `|dst| > |src|`.
+  5. **SiToFp** — `int → fp` (e.g. `i32 → f32`, `i8 → f16`).
 
-  6. **IntNarrow** — `int → int`, `|dst| < |src|`.
+  6. **IntWiden** — `int → int`, `|dst| > |src|`.
+
+  7. **IntNarrow** — `int → int`, `|dst| < |src|`.
 
 - **syntax:**
   ```mlir
@@ -51,7 +57,7 @@
   | Attribute | Values | Valid for | Description |
   |---|---|---|---|
   | `rounding` | `"R"` (nearest-even), `"A"` (away-from-zero), `"H"` (half-up), `"Z"` (toward-zero) | fp narrowing | Rounding mode |
-  | `saturate` | `"SAT"`, `"NOSAT"` | **required** for fp-narrow / int-narrow / fp→si | `SAT` clamps to ±max of the destination type; `NOSAT` performs a direct bit truncation of the result representation. |
+  | `saturate` | `"SAT"`, `"NOSAT"` | required for fp-narrow / int-narrow; for fp→si / fp→ui the requirement follows the vcvt contract's `requiresSat` (e.g. `f16→s8` required, `f16→s32` **forbidden** — no overflow possible; same-width `bf16→f16` required) | `SAT` clamps to ±max of the destination type; `NOSAT` performs a direct bit truncation of the result representation. |
 
 - **datatypes:** Source and destination from `{f32, f16, bf16, fp8_e4m3, fp8_e5m2, i32, i16, i8, ui32, ui16, ui8}`
 - **lowering to `pto.mi`:**
@@ -62,6 +68,8 @@
   | 8↔32 (radix-4) | widen: `UNPK_B8` + `vintlv` + `vcvt P0` + `punpack`; narrow: `PK4_B32` store (or `vselr` gather) + `ppack` | `2–3` | `2–3` |
   | f32→fp8 quant | `1 cast` + `PK4_B32` | `K` | `1` |
   | f32→int8 quant | 3-stage cast + `PK4_B32` | `~3K` | `3` |
+  | fp↔fp same-width (`bf16→f16`) | `K × vcvt` (1:1, no part) | `K` | `1` |
+  | fp→si / fp→ui | per contract pair: same-width 1:1, widen EVEN/ODD, narrow EVEN/ODD+Vor | `K`–`~3K` | `2`–`3` |
   | int↔int (same width) | `K × vtrc` or `K × vcvt` | `K` | `1` |
 
 - **example:**
@@ -91,6 +99,15 @@
   // f32 → i32 fp-to-si (saturate required)
   %r = pto.vmi.vcvt %x {saturate = "SAT"}
       : !pto.vmi.vreg<64×f32> -> !pto.vmi.vreg<64×i32>
+
+  // bf16 → f16 same-width fp-to-fp (VPTO contract pair, routed via FpNarrow;
+  // saturate required)
+  %h = pto.vmi.vcvt %g {saturate = "SAT"}
+      : !pto.vmi.vreg<128×bf16> -> !pto.vmi.vreg<128×f16>
+
+  // f16 → u8 fp-to-ui (unsigned; contract pair, saturate required)
+  %u = pto.vmi.vcvt %x {saturate = "SAT"}
+      : !pto.vmi.vreg<128×f16> -> !pto.vmi.vreg<128×ui8>
   ```
 
 - **notes:**
