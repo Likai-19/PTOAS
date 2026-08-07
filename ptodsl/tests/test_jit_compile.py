@@ -2881,6 +2881,116 @@ def vmi_round_r_vcvt_probe():
 
 
 @pto.jit(target="a5", backend="vpto", mode="explicit")
+def vmi_bf16x2_to_f4x2_vcvt_probe():
+    src_tile = pto.alloc_tile(shape=[1, 256], dtype=pto.bf16)
+    src_ptr = src_tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+
+    wide = pto.vmi.vload(src_ptr, offset, size=256)
+    pair = pto.vmi.vinterpret_cast(wide, to_dtype=pto.vmi.bf16x2)
+    default_e1 = pto.vmi.vcvt(pair, pto.f4e1m2x2)
+    default_e2 = pto.vmi.vcvt(pair, pto.f4e2m1x2)
+    round_r = pto.vmi.vcvt(pair, pto.f4e1m2x2, rounding=pto.VcvtRoundMode.R)
+    round_a = pto.vmi.vcvt(pair, pto.f4e1m2x2, rounding=pto.VcvtRoundMode.A)
+    round_f = pto.vmi.vcvt(pair, pto.f4e1m2x2, rounding=pto.VcvtRoundMode.F)
+    round_z = pto.vmi.vcvt(pair, pto.f4e2m1x2, rounding=pto.VcvtRoundMode.Z)
+    round_c = pto.vmi.vcvt(pair, pto.f4e2m1x2, rounding=pto.VcvtRoundMode.C)
+
+    _ = (default_e1, default_e2, round_r, round_a, round_f, round_z, round_c)
+
+
+@pto.jit(target="a5", backend="vpto", mode="explicit")
+def vmi_bf16x2_to_f4x2_vstore_probe():
+    src_tile = pto.alloc_tile(shape=[1, 512], dtype=pto.bf16)
+    dst_e1_tile = pto.alloc_tile(shape=[1, 128], dtype=pto.f4e1m2x2)
+    dst_e2_tile = pto.alloc_tile(shape=[1, 128], dtype=pto.f4e2m1x2)
+    src_offset = pto.const(64, dtype=pto.index)
+    dst_offset = pto.const(16, dtype=pto.index)
+
+    wide = pto.vmi.vload(src_tile.as_ptr(), src_offset, size=128)
+    pair = pto.vmi.vinterpret_cast(wide, to_dtype=pto.vmi.bf16x2)
+    out_e1 = pto.vmi.vcvt(pair, pto.f4e1m2x2)
+    out_e2 = pto.vmi.vcvt(pair, pto.f4e2m1x2)
+
+    pto.vmi.vstore(out_e1, dst_e1_tile.as_ptr(), dst_offset)
+    pto.vmi.vstore(out_e2, dst_e2_tile.as_ptr(), dst_offset)
+
+
+@pto.jit(target="a5", backend="vpto", mode="explicit")
+def vmi_bf16x2_to_f4x2_invalid_rounding_probe():
+    src_tile = pto.alloc_tile(shape=[1, 256], dtype=pto.bf16)
+    src_ptr = src_tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+
+    wide = pto.vmi.vload(src_ptr, offset, size=256)
+    pair = pto.vmi.vinterpret_cast(wide, to_dtype=pto.vmi.bf16x2)
+    _ = pto.vmi.vcvt(pair, pto.f4e1m2x2, rounding=pto.VcvtRoundMode.H)
+
+
+@pto.jit(target="a5", backend="vpto", mode="explicit")
+def vmi_bf16x2_to_f4x2_sat_probe():
+    src_tile = pto.alloc_tile(shape=[1, 256], dtype=pto.bf16)
+    src_ptr = src_tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+
+    wide = pto.vmi.vload(src_ptr, offset, size=256)
+    pair = pto.vmi.vinterpret_cast(wide, to_dtype=pto.vmi.bf16x2)
+    _ = pto.vmi.vcvt(pair, pto.f4e1m2x2, saturate=pto.VcvtSatMode.SAT)
+
+
+@pto.jit(target="a5", backend="vpto", mode="explicit")
+def vmi_bf16x2_to_f4x2_nosat_probe():
+    src_tile = pto.alloc_tile(shape=[1, 256], dtype=pto.bf16)
+    src_ptr = src_tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+
+    wide = pto.vmi.vload(src_ptr, offset, size=256)
+    pair = pto.vmi.vinterpret_cast(wide, to_dtype=pto.vmi.bf16x2)
+    _ = pto.vmi.vcvt(pair, pto.f4e1m2x2, saturate=pto.VcvtSatMode.NOSAT)
+
+
+@pto.jit(target="a5", backend="vpto", mode="explicit")
+def vmi_bf16x2_unsupported_pair_probe():
+    src_tile = pto.alloc_tile(shape=[1, 256], dtype=pto.bf16)
+    src_ptr = src_tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+
+    wide = pto.vmi.vload(src_ptr, offset, size=256)
+    pair = pto.vmi.vinterpret_cast(wide, to_dtype=pto.vmi.bf16x2)
+    _ = pto.vmi.vcvt(pair, pto.f16)
+
+
+@pto.jit(target="a5", backend="vpto", mode="explicit")
+def vmi_f4x2_to_bf16x2_vcvt_probe():
+    src_tile = pto.alloc_tile(shape=[1, 128], dtype=pto.f4e1m2x2)
+    src_ptr = src_tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+
+    packed = pto.vmi.vload(src_ptr, offset, size=128)
+    _ = pto.vmi.vcvt(packed, pto.vmi.bf16x2)
+
+
+@pto.jit(target="a5", backend="vpto", mode="explicit")
+def vmi_f4x2_to_bf16x2_rounding_probe():
+    src_tile = pto.alloc_tile(shape=[1, 128], dtype=pto.f4e1m2x2)
+    src_ptr = src_tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+
+    packed = pto.vmi.vload(src_ptr, offset, size=128)
+    _ = pto.vmi.vcvt(packed, pto.vmi.bf16x2, rounding=pto.VcvtRoundMode.R)
+
+
+@pto.jit(target="a5", backend="vpto", mode="explicit")
+def vmi_f4x2_to_bf16x2_sat_probe():
+    src_tile = pto.alloc_tile(shape=[1, 128], dtype=pto.f4e1m2x2)
+    src_ptr = src_tile.as_ptr()
+    offset = pto.const(0, dtype=pto.index)
+
+    packed = pto.vmi.vload(src_ptr, offset, size=128)
+    _ = pto.vmi.vcvt(packed, pto.vmi.bf16x2, saturate=pto.VcvtSatMode.SAT)
+
+
+@pto.jit(target="a5", backend="vpto", mode="explicit")
 def vmi_unpack_vload_probe():
     src_tile = pto.alloc_tile(shape=[1, 128], dtype=pto.i8)
     src_ptr = src_tile.as_ptr()
@@ -4071,6 +4181,18 @@ def main() -> None:
         expect(
             str(pto.f8e8m0.resolve()) == "!pto.f8E8M0",
             "pto.f8e8m0 should resolve to the public E8M0 scale type",
+        )
+        expect(
+            str(pto.bf16x2.resolve()) == "vector<2xbf16>",
+            "pto.bf16x2 should remain the builtin two-lane bf16 vector type",
+        )
+        expect(
+            str(pto.vmi.bf16x2.resolve()) == "!pto.bf16x2",
+            "pto.vmi.bf16x2 should resolve to the VMI packed bf16 pair carrier",
+        )
+        expect(
+            hasattr(pto_types._pto, "BF16x2Type"),
+            "PTO Python dialect bindings should export BF16x2Type",
         )
         expect(
             "hif8" in str(pto.hif8.resolve()),
@@ -6592,6 +6714,119 @@ def main() -> None:
     expect(
         'rounding = "R"' in vmi_round_r_vcvt_text,
         "pto.vmi.vcvt should preserve the authored R rounding token for fp32->fp8",
+    )
+    vmi_bf16x2_to_f4x2_text = vmi_bf16x2_to_f4x2_vcvt_probe.compile().mlir_text()
+    expect_parse_roundtrip_and_verify(
+        vmi_bf16x2_to_f4x2_text,
+        "VMI bf16x2-to-f4x2 vcvt specialization",
+    )
+    expect(
+        "!pto.vmi.vreg<256xbf16>" in vmi_bf16x2_to_f4x2_text,
+        "VMI bf16x2 vcvt probe should load the source as 256 scalar bf16 lanes",
+    )
+    expect(
+        "!pto.vmi.vreg<128x!pto.bf16x2>" in vmi_bf16x2_to_f4x2_text,
+        "VMI vinterpret_cast should form 128 logical bf16x2 lanes",
+    )
+    expect(
+        "!pto.vmi.vreg<128x!pto.f4E1M2x2>" in vmi_bf16x2_to_f4x2_text
+        and "!pto.vmi.vreg<128x!pto.f4E2M1x2>" in vmi_bf16x2_to_f4x2_text,
+        "VMI bf16x2 vcvt should preserve both packed fp4 result element types",
+    )
+    expect(
+        vmi_bf16x2_to_f4x2_text.count('rounding = "R"') >= 2,
+        "omitted rounding for bf16x2-to-f4x2 should materialize deterministic R rounding",
+    )
+    for rounding in ("R", "A", "F", "Z", "C"):
+        expect(
+            f'rounding = "{rounding}"' in vmi_bf16x2_to_f4x2_text,
+            f"bf16x2-to-f4x2 should accept and preserve {rounding} rounding",
+        )
+    expect(
+        'saturate =' not in vmi_bf16x2_to_f4x2_text,
+        "bf16x2-to-f4x2 VMI vcvt must not emit a saturate attribute",
+    )
+    vmi_bf16x2_to_f4x2_vstore_text = vmi_bf16x2_to_f4x2_vstore_probe.compile().mlir_text()
+    expect_parse_roundtrip_and_verify(
+        vmi_bf16x2_to_f4x2_vstore_text,
+        "VMI bf16x2-to-f4x2 vcvt/vstore specialization",
+    )
+    expect(
+        vmi_bf16x2_to_f4x2_vstore_text.count("pto.vmi.vstore") == 2,
+        "bf16x2-to-f4x2 conversion results should be storable through VMI vstore",
+    )
+    expect(
+        "pto.vmi.vstore" in vmi_bf16x2_to_f4x2_vstore_text
+        and "f4E1M2x2" in vmi_bf16x2_to_f4x2_vstore_text
+        and "f4E2M1x2" in vmi_bf16x2_to_f4x2_vstore_text,
+        "VMI vstore should preserve both packed fp4 destination element types",
+    )
+    expect(
+        "!pto.bf16x2" in vmi_bf16x2_to_f4x2_vstore_text
+        and "!pto.f4E1M2x2" in vmi_bf16x2_to_f4x2_vstore_text
+        and "!pto.f4E2M1x2" in vmi_bf16x2_to_f4x2_vstore_text,
+        "size=128 should preserve the packed bf16x2 and fp4x2 element types",
+    )
+    expect(
+        vmi_bf16x2_to_f4x2_vstore_text.count('rounding = "R"') == 2,
+        "bf16x2-to-f4x2 vstore results should use explicit default R rounding",
+    )
+    expect(
+        "saturate =" not in vmi_bf16x2_to_f4x2_vstore_text,
+        "bf16x2-to-f4x2 vcvt/vstore must not emit a saturate attribute",
+    )
+    expect_raises(
+        ValueError,
+        vmi_bf16x2_to_f4x2_invalid_rounding_probe.compile,
+        "expected one of A, C, F, R, Z",
+    )
+    for invalid_probe in (
+        vmi_bf16x2_to_f4x2_sat_probe,
+        vmi_bf16x2_to_f4x2_nosat_probe,
+    ):
+        expect_raises(
+            ValueError,
+            invalid_probe.compile,
+            "does not support saturate for bf16x2",
+        )
+    for invalid_probe in (
+        vmi_bf16x2_unsupported_pair_probe,
+    ):
+        expect_raises(
+            TypeError,
+            invalid_probe.compile,
+            "supports bf16x2 only for bf16x2 <->",
+        )
+    vmi_f4x2_to_bf16x2_text = vmi_f4x2_to_bf16x2_vcvt_probe.compile().mlir_text()
+    expect_parse_roundtrip_and_verify(
+        vmi_f4x2_to_bf16x2_text,
+        "VMI f4x2-to-bf16x2 vcvt specialization",
+    )
+    expect(
+        "!pto.vmi.vreg<128x!pto.f4E1M2x2>" in vmi_f4x2_to_bf16x2_text,
+        "VMI f4x2 vcvt probe should load the source as 128 packed f4 lanes",
+    )
+    expect(
+        "!pto.vmi.vreg<128x!pto.bf16x2>" in vmi_f4x2_to_bf16x2_text,
+        "VMI f4x2-to-bf16x2 vcvt should widen to 128 logical bf16x2 lanes",
+    )
+    expect(
+        'rounding =' not in vmi_f4x2_to_bf16x2_text,
+        "f4x2-to-bf16x2 VMI vcvt must not emit a rounding attribute",
+    )
+    expect(
+        "saturate =" not in vmi_f4x2_to_bf16x2_text,
+        "f4x2-to-bf16x2 VMI vcvt must not emit a saturate attribute",
+    )
+    expect_raises(
+        ValueError,
+        vmi_f4x2_to_bf16x2_rounding_probe.compile,
+        "does not support rounding for",
+    )
+    expect_raises(
+        ValueError,
+        vmi_f4x2_to_bf16x2_sat_probe.compile,
+        "does not support saturate for",
     )
     unpack_missing_dtype_error = expect_raises(
         TypeError,

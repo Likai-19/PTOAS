@@ -59,6 +59,29 @@ static bool isVMIFloatLikeType(Type type) {
   return isa<FloatType>(type) || pto::isPTOLowPrecisionType(type);
 }
 
+static bool involvesBF16x2(Type sourceType, Type resultType) {
+  return pto::isPTOBF16x2Type(sourceType) ||
+         pto::isPTOBF16x2Type(resultType);
+}
+
+static bool isVMIPackedFloatCarrierType(Type type) {
+  return pto::isPTOHiFloat8x2Type(type) ||
+         pto::isPTOFloat4PackedType(type) ||
+         pto::isPTOBF16x2Type(type);
+}
+
+static bool involvesVMIPackedFloatCarrier(Type sourceType, Type resultType) {
+  return isVMIPackedFloatCarrierType(sourceType) ||
+         isVMIPackedFloatCarrierType(resultType);
+}
+
+static LogicalResult verifyBF16x2ComputeElementType(Operation *op, Type type) {
+  if (pto::isPTOBF16x2Type(type))
+    return op->emitOpError(
+        "does not support bf16x2 VMI element type; bf16x2 is conversion-only");
+  return success();
+}
+
 static bool isVMIIntegerLikeType(Type type) {
   return isa<IntegerType, IndexType>(type);
 }
@@ -169,16 +192,6 @@ static unsigned getVMIElementBitWidth(Type type) {
     return 64;
   }
   return pto::getPTOStorageElemBitWidth(type);
-}
-
-static std::optional<unsigned> getVMIIntegerOrFloatBitWidth(Type type) {
-  if (auto intType = dyn_cast<IntegerType>(type)) {
-    return intType.getWidth();
-  }
-  if (auto floatType = dyn_cast<FloatType>(type)) {
-    return floatType.getWidth();
-  }
-  return std::nullopt;
 }
 
 static int64_t divideCeilNonNegative(int64_t value, int64_t divisor) {
@@ -379,6 +392,10 @@ static LogicalResult verifyElementwiseVRegOp(Operation *op, VMIVRegType lhs,
 
 static LogicalResult verifyFloatUnaryVRegOp(Operation *op, VMIVRegType source,
                                             VMIVRegType result) {
+  if (failed(
+          verifyBF16x2ComputeElementType(op, source.getElementType()))) {
+    return failure();
+  }
   if (!isVMIFloatLikeType(source.getElementType())) {
     return op->emitOpError("requires floating-point-like VMI element type");
   }
@@ -389,6 +406,9 @@ static LogicalResult verifyFloatUnaryVRegOp(Operation *op, VMIVRegType source,
 static LogicalResult verifyFloatTernaryVRegOp(Operation *op, VMIVRegType lhs,
                                               VMIVRegType rhs, VMIVRegType acc,
                                               VMIVRegType result) {
+  if (failed(verifyBF16x2ComputeElementType(op, lhs.getElementType()))) {
+    return failure();
+  }
   if (!isVMIFloatLikeType(lhs.getElementType())) {
     return op->emitOpError("requires floating-point-like VMI element type");
   }
@@ -713,7 +733,9 @@ lookupVMIFpToUIContract(Type srcElem, Type dstElem) {
 
 // ---------------------------------------------------------------------------
 // FpToFp hardware contract (VMI-owned; may diverge from VPTO).
-// Only same-width fp->fp is enumerated here.
+// Enumerates same-width fp->fp whitelist entries plus the fp->fp narrow
+// paths whose sat/rounding semantics differ from the generic truncf default
+// (e.g. bf16x2->f4x2 narrows with NO saturation).
 // ---------------------------------------------------------------------------
 
 std::optional<VMIFpToFpContract>
@@ -723,13 +745,29 @@ lookupVMIFpToFpContract(Type srcElem, Type dstElem) {
   }
   unsigned srcBits = pto::getPTOStorageElemBitWidth(srcElem);
   unsigned dstBits = pto::getPTOStorageElemBitWidth(dstElem);
+  // bf16x2 -> f4x2 (32->8 narrow): Packed4, rnd, NO sat. Mirrors the VPTO
+  // bf16->f4 contract row (requiresSat=false) so the VMI verifier does not
+  // force a saturate attribute that the physical pto.vcvt would reject.
+  if (pto::isPTOBF16x2Type(srcElem) && pto::isPTOFloat4PackedType(dstElem))
+    return VMIFpToFpContract{/*requiresRnd=*/true, /*requiresSat=*/false,
+                            /*requiresPart=*/true,
+                            /*allowedRndModes=*/"RAFZC"};
+  // f4x2 -> bf16x2 (8->32 widen): Packed4, no rnd, no sat. Mirrors the VPTO
+  // f4->bf16 contract row (requiresSat=false, requiresRnd=false). Widen has
+  // no rounding/saturate semantics by construction; the contract exists so
+  // the involvesBF16x2 / packed-carrier gates in the VMI verifiers pass.
+  if (pto::isPTOFloat4PackedType(srcElem) && pto::isPTOBF16x2Type(dstElem))
+    return VMIFpToFpContract{/*requiresRnd=*/false, /*requiresSat=*/false,
+                            /*requiresPart=*/true,
+                            /*allowedRndModes=*/StringRef()};
   if (srcBits != dstBits) {
     return std::nullopt;
   }
   // bf16 -> f16: same-width, rnd, sat, no part.
   if (srcElem.isBF16() && dstElem.isF16())
     return VMIFpToFpContract{/*requiresRnd=*/true, /*requiresSat=*/true,
-                            /*requiresPart=*/false};
+                            /*requiresPart=*/false,
+                            /*allowedRndModes=*/StringRef()};
   return std::nullopt;
 }
 
@@ -976,14 +1014,6 @@ LogicalResult VMIVRegType::verify(function_ref<InFlightDiagnostic()> emitError,
                        << formatVMIVRegType(elementCount, elementType, layout)
                        << "' expected an 8-bit, 16-bit, or 32-bit logical "
                           "element type";
-  if (pto::isPTOFloat4PackedType(elementType))
-    return emitError()
-           << "'" << formatVMIVRegType(elementCount, elementType, layout)
-           << "' uses a packed FP4 physical pair type as a VMI logical "
-              "element type; packed FP4 input/output is not a supported VMI "
-              "surface because the logical FP4 lane count and physical packed "
-              "byte count are ambiguous";
-
   if (layout && !mlir::isa<VMILayoutAttr>(layout))
     return emitError() << "'"
                        << formatVMIVRegType(elementCount, elementType, layout)
@@ -1923,15 +1953,21 @@ LogicalResult VMIVchistOp::verify() { return verifyVMIHistogramOp(*this); }
 LogicalResult VMIExtFOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
+  Type sourceElementType = sourceType.getElementType();
+  Type resultElementType = resultType.getElementType();
   if (sourceType.getElementCount() != resultType.getElementCount())
     return emitOpError(
         "requires source and result logical lane counts to match");
-  if (!isVMIFloatLikeType(sourceType.getElementType()) ||
-      !isVMIFloatLikeType(resultType.getElementType()))
+  if (!isVMIFloatLikeType(sourceElementType) ||
+      !isVMIFloatLikeType(resultElementType))
     return emitOpError(
         "requires floating-point-like source and result element types");
-  if (getVMIElementBitWidth(sourceType.getElementType()) >=
-      getVMIElementBitWidth(resultType.getElementType()))
+  if (involvesBF16x2(sourceElementType, resultElementType) &&
+      !lookupVMIFpToFpContract(sourceElementType, resultElementType))
+    return emitOpError(
+        "unsupported bf16x2 fp-to-fp conversion element type pair");
+  if (getVMIElementBitWidth(sourceElementType) >=
+      getVMIElementBitWidth(resultElementType))
     return emitOpError(
         "requires result element type to be wider than source element type");
   return success();
@@ -1940,15 +1976,26 @@ LogicalResult VMIExtFOp::verify() {
 LogicalResult VMITruncFOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
+  Type sourceElementType = sourceType.getElementType();
+  Type resultElementType = resultType.getElementType();
+  auto fpContract =
+      lookupVMIFpToFpContract(sourceElementType, resultElementType);
   if (sourceType.getElementCount() != resultType.getElementCount())
     return emitOpError(
         "requires source and result logical lane counts to match");
-  if (!isVMIFloatLikeType(sourceType.getElementType()) ||
-      !isVMIFloatLikeType(resultType.getElementType()))
+  if (!isVMIFloatLikeType(sourceElementType) ||
+      !isVMIFloatLikeType(resultElementType))
     return emitOpError(
         "requires floating-point-like source and result element types");
-  unsigned srcBits = getVMIElementBitWidth(sourceType.getElementType());
-  unsigned dstBits = getVMIElementBitWidth(resultType.getElementType());
+  if (involvesBF16x2(sourceElementType, resultElementType) && !fpContract)
+    return emitOpError(
+        "unsupported bf16x2 fp-to-fp conversion element type pair");
+  if (involvesVMIPackedFloatCarrier(sourceElementType, resultElementType) &&
+      !fpContract)
+    return emitOpError(
+        "unsupported packed fp-to-fp conversion element type pair");
+  unsigned srcBits = getVMIElementBitWidth(sourceElementType);
+  unsigned dstBits = getVMIElementBitWidth(resultElementType);
   if (srcBits < dstBits)
     return emitOpError(
         "requires result element type to be narrower than or same-width "
@@ -1956,24 +2003,42 @@ LogicalResult VMITruncFOp::verify() {
   if (srcBits == dstBits) {
     // Same-width fp→fp (e.g. bf16→f16): only allowed for supported VMI
     // fp-to-fp contract pairs.
-    if (!lookupVMIFpToFpContract(sourceType.getElementType(),
-                                 resultType.getElementType()))
+    if (!fpContract)
       return emitOpError("same-width fp-to-fp conversion is not supported "
                          "for this type pair; see lookupVMIFpToFpContract");
   }
   if (auto roundingAttr = (*this)->getAttrOfType<StringAttr>("rounding")) {
     StringRef rounding = roundingAttr.getValue();
-    if (rounding != "R" && rounding != "A" && rounding != "H" &&
-        rounding != "Z")
+    if (rounding.size() != 1)
+      return emitOpError(
+          "rounding attr must be a single-character mode token");
+    StringRef allowedRndModes =
+        fpContract && !fpContract->allowedRndModes.empty()
+            ? fpContract->allowedRndModes
+            : StringRef("RAHZ");
+    if (!allowedRndModes.contains(rounding)) {
+      if (fpContract && !fpContract->allowedRndModes.empty())
+        return emitOpError("rounding attr is not valid for this fp-to-fp "
+                           "conversion type pair");
       return emitOpError("rounding attr must be R, A, H, or Z");
+    }
   }
   auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
-  if (!satAttr) {
-    return emitOpError("'saturate' attribute is required (SAT or NOSAT)");
-  }
-  StringRef satVal = satAttr.getValue();
-  if (satVal != "SAT" && satVal != "NOSAT") {
-    return emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
+  // Some fp->fp narrow paths (e.g. bf16x2 -> f4x2) do NOT saturate; consult
+  // the fp-to-fp contract when one exists instead of always requiring SAT.
+  if (!fpContract || fpContract->requiresSat) {
+    if (!satAttr) {
+      return emitOpError("'saturate' attribute is required (SAT or NOSAT)");
+    }
+    StringRef satVal = satAttr.getValue();
+    if (satVal != "SAT" && satVal != "NOSAT") {
+      return emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
+    }
+  } else {
+    if (satAttr) {
+      return emitOpError("'saturate' attribute is not valid for this fp-to-fp "
+                         "narrow conversion (no saturation)");
+    }
   }
   return success();
 }
@@ -2130,15 +2195,15 @@ LogicalResult VMITruncIOp::verify() {
 LogicalResult VMIBitcastOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
-  std::optional<unsigned> sourceBits =
-      getVMIIntegerOrFloatBitWidth(sourceType.getElementType());
-  std::optional<unsigned> resultBits =
-      getVMIIntegerOrFloatBitWidth(resultType.getElementType());
-  if (!sourceBits || !resultBits)
+  unsigned sourceBits =
+      pto::getPTOStorageElemBitWidth(sourceType.getElementType());
+  unsigned resultBits =
+      pto::getPTOStorageElemBitWidth(resultType.getElementType());
+  if (sourceBits == 0 || resultBits == 0)
     return emitOpError(
         "requires integer or floating-point source and result element types");
-  if (sourceType.getElementCount() * static_cast<int64_t>(*sourceBits) !=
-      resultType.getElementCount() * static_cast<int64_t>(*resultBits))
+  if (sourceType.getElementCount() * static_cast<int64_t>(sourceBits) !=
+      resultType.getElementCount() * static_cast<int64_t>(resultBits))
     return emitOpError(
         "requires source and result to carry the same total number of bits");
 
@@ -2736,6 +2801,8 @@ verifyVMIVectorScalarOp(Operation *op, VMIVRegType srcType,
                         VMIMaskType maskType,
                         std::optional<StringRef> pmode) {
   Type eltTy = srcType.getElementType();
+  if (failed(verifyBF16x2ComputeElementType(op, eltTy)))
+    return failure();
   if (!isVMIFloatLikeType(eltTy) && !isVMIIntegerLikeType(eltTy))
     return op->emitOpError(
         "requires floating-point-like or integer-like VMI element type");
@@ -3002,6 +3069,10 @@ LogicalResult VMIVaddOp::verify() {
   auto lhsType = cast<VMIVRegType>(getLhs().getType());
   auto rhsType = cast<VMIVRegType>(getRhs().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (failed(verifyBF16x2ComputeElementType(
+          getOperation(), lhsType.getElementType()))) {
+    return failure();
+  }
   if (failed(verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType))) {
     return failure();
   }
@@ -3015,6 +3086,10 @@ LogicalResult VMIVsubOp::verify() {
   auto lhsType = cast<VMIVRegType>(getLhs().getType());
   auto rhsType = cast<VMIVRegType>(getRhs().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (failed(verifyBF16x2ComputeElementType(
+          getOperation(), lhsType.getElementType()))) {
+    return failure();
+  }
   if (failed(verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType))) {
     return failure();
   }
@@ -3028,6 +3103,10 @@ LogicalResult VMIVmulOp::verify() {
   auto lhsType = cast<VMIVRegType>(getLhs().getType());
   auto rhsType = cast<VMIVRegType>(getRhs().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (failed(verifyBF16x2ComputeElementType(
+          getOperation(), lhsType.getElementType()))) {
+    return failure();
+  }
   if (failed(verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType))) {
     return failure();
   }
@@ -3041,6 +3120,10 @@ LogicalResult VMIVdivOp::verify() {
   auto lhsType = cast<VMIVRegType>(getLhs().getType());
   auto rhsType = cast<VMIVRegType>(getRhs().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (failed(verifyBF16x2ComputeElementType(
+          getOperation(), lhsType.getElementType()))) {
+    return failure();
+  }
   if (!isVMIFloatLikeType(lhsType.getElementType())) {
     return emitOpError("requires floating-point-like VMI element type");
   }
@@ -3058,6 +3141,8 @@ LogicalResult VMIVminOp::verify() {
   auto rhsType = cast<VMIVRegType>(getRhs().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
   Type elementType = lhsType.getElementType();
+  if (failed(verifyBF16x2ComputeElementType(getOperation(), elementType)))
+    return failure();
   if (!isVMIFloatLikeType(elementType) && !isVMIAnyI8I16I32Type(elementType))
     return emitOpError(
         "requires floating-point-like or i8, i16, or i32 VMI element type");
@@ -3075,6 +3160,8 @@ LogicalResult VMIVmaxOp::verify() {
   auto rhsType = cast<VMIVRegType>(getRhs().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
   Type elementType = lhsType.getElementType();
+  if (failed(verifyBF16x2ComputeElementType(getOperation(), elementType)))
+    return failure();
   if (!isVMIFloatLikeType(elementType) && !isVMIAnyI8I16I32Type(elementType))
     return emitOpError(
         "requires floating-point-like or i8, i16, or i32 VMI element type");
@@ -3104,6 +3191,8 @@ LogicalResult VMIVabsOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
 
   Type eltTy = sourceType.getElementType();
+  if (failed(verifyBF16x2ComputeElementType(getOperation(), eltTy)))
+    return failure();
   if (!isVMIFloatLikeType(eltTy) && !isVMIIntegerLikeType(eltTy))
     return emitOpError(
         "requires floating-point-like or integer-like VMI element type");
@@ -3350,6 +3439,9 @@ LogicalResult VMIvcaddOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   auto elemTy = sourceType.getElementType();
 
+  if (failed(verifyBF16x2ComputeElementType(getOperation(), elemTy)))
+    return failure();
+
   // Element type must be integer-like or float-like
   bool isFloat = isVMIFloatLikeType(elemTy);
   bool isInt = isVMIIntegerLikeType(elemTy);
@@ -3411,6 +3503,9 @@ LogicalResult VMIvcmaxOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   auto elemTy = sourceType.getElementType();
 
+  if (failed(verifyBF16x2ComputeElementType(getOperation(), elemTy)))
+    return failure();
+
   bool isFloat = isVMIFloatLikeType(elemTy);
   bool isInt = isVMIIntegerLikeType(elemTy);
   if (!isFloat && !isInt)
@@ -3462,6 +3557,9 @@ LogicalResult VMIvcminOp::verify() {
   auto maskType = cast<VMIMaskType>(getMask().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
   auto elemTy = sourceType.getElementType();
+
+  if (failed(verifyBF16x2ComputeElementType(getOperation(), elemTy)))
+    return failure();
 
   bool isFloat = isVMIFloatLikeType(elemTy);
   bool isInt = isVMIIntegerLikeType(elemTy);
@@ -3650,6 +3748,11 @@ LogicalResult VMIVexpdifOp::verify() {
   auto maskType = cast<VMIMaskType>(getMask().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
 
+  if (failed(verifyBF16x2ComputeElementType(
+          getOperation(), xType.getElementType()))) {
+    return failure();
+  }
+
   if (!isVMIFloatLikeType(xType.getElementType())) {
     return emitOpError("requires x element type to be f16 or f32");
   }
@@ -3687,6 +3790,10 @@ LogicalResult VMIVaxpyOp::verify() {
   auto maskType = cast<VMIMaskType>(getMask().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
 
+  if (failed(verifyBF16x2ComputeElementType(
+          getOperation(), xType.getElementType()))) {
+    return failure();
+  }
   if (!isVMIFloatLikeType(xType.getElementType())) {
     return emitOpError("requires vector element type to be f16 or f32");
   }
@@ -3717,6 +3824,10 @@ LogicalResult VMIVlreluOp::verify() {
   auto maskType = cast<VMIMaskType>(getMask().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
 
+  if (failed(verifyBF16x2ComputeElementType(
+          getOperation(), xType.getElementType()))) {
+    return failure();
+  }
   if (!isVMIFloatLikeType(xType.getElementType())) {
     return emitOpError("requires vector element type to be f16 or f32");
   }
@@ -3747,6 +3858,11 @@ LogicalResult VMIVpreluOp::verify() {
   auto alphaType = cast<VMIVRegType>(getAlpha().getType());
   auto maskType = cast<VMIMaskType>(getMask().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
+
+  if (failed(verifyBF16x2ComputeElementType(
+          getOperation(), xType.getElementType()))) {
+    return failure();
+  }
 
   if (!isVMIFloatLikeType(xType.getElementType())) {
     return emitOpError("requires vector element type to be f16 or f32");
@@ -3852,6 +3968,8 @@ LogicalResult VMIVmulaOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
 
   Type eltTy = accType.getElementType();
+  if (failed(verifyBF16x2ComputeElementType(getOperation(), eltTy)))
+    return failure();
   if (!isVMIFloatLikeType(eltTy) && !isVMIIntegerLikeType(eltTy))
     return emitOpError(
         "requires floating-point-like or integer-like VMI element type");
@@ -3887,6 +4005,17 @@ LogicalResult VMICvtOp::verify() {
       srcInt && isa<IntegerType>(srcElem) &&
       !cast<IntegerType>(srcElem).isUnsigned() &&
       !cast<IntegerType>(srcElem).isSigned();
+  auto fpContract =
+      srcFp && dstFp ? lookupVMIFpToFpContract(srcElem, dstElem)
+                     : std::nullopt;
+
+  if (involvesBF16x2(srcElem, dstElem) && !fpContract)
+    return emitOpError(
+        "unsupported conversion involving bf16x2 element type");
+  if (srcFp && dstFp &&
+      involvesVMIPackedFloatCarrier(srcElem, dstElem) && !fpContract)
+    return emitOpError(
+        "unsupported packed fp-to-fp conversion element type pair");
 
   // 2. Classify the conversion direction.
   CvtDirection dir;
@@ -3900,7 +4029,7 @@ LogicalResult VMICvtOp::verify() {
     else {
       // Same-width fp→fp (e.g. bf16 → f16): only allowed for VMI fp-to-fp
       // contract pairs, routed through FpNarrow (1:1 TruncF).
-      if (!lookupVMIFpToFpContract(srcElem, dstElem))
+      if (!fpContract)
         return emitOpError(
             "same-width fp-to-fp conversion is not supported for this type "
             "pair; see lookupVMIFpToFpContract");
@@ -3942,10 +4071,21 @@ LogicalResult VMICvtOp::verify() {
       return emitOpError("'rounding' attribute is only valid for "
                          "fp-narrowing conversions");
     StringRef rnd = roundingAttr.getValue();
-    if (rnd != "R" && rnd != "A" && rnd != "H" && rnd != "Z")
+    if (rnd.size() != 1)
+      return emitOpError(
+          "rounding must be a single-character mode token");
+    StringRef allowedRndModes =
+        fpContract && !fpContract->allowedRndModes.empty()
+            ? fpContract->allowedRndModes
+            : StringRef("RAHZ");
+    if (!allowedRndModes.contains(rnd)) {
+      if (fpContract && !fpContract->allowedRndModes.empty())
+        return emitOpError(
+            "rounding is not valid for this fp-to-fp conversion type pair");
       return emitOpError("rounding must be 'R' (nearest-even), "
                          "'A' (away-from-zero), 'H' (half-up), "
                          "or 'Z' (toward-zero)");
+    }
   }
 
   // --- saturate ---
@@ -3987,8 +4127,13 @@ LogicalResult VMICvtOp::verify() {
                            "fp-to-ui conversion (no overflow possible)");
     }
   } else {
-    bool needSat = (dir == CvtDirection::FpNarrow ||
-                    dir == CvtDirection::IntNarrow);
+    bool needSat = (dir == CvtDirection::IntNarrow);
+    // Fp-narrow: default to requiring a saturate attribute, but consult the
+    // fp-to-fp contract when one exists (e.g. bf16x2->f4x2 narrows with
+    // requiresSat=false and must NOT carry saturate).
+    if (dir == CvtDirection::FpNarrow) {
+      needSat = !fpContract || fpContract->requiresSat;
+    }
     if (needSat) {
       if (!satAttr)
         return emitOpError("'saturate' attribute is required for fp-narrow / "
@@ -4011,6 +4156,9 @@ LogicalResult VMICvtOp::verify() {
         return emitOpError("si32 -> si8 int-narrow does not support "
                            "saturate=\"SAT\" (no native hardware form; "
                            "only saturate=\"NOSAT\" is allowed)");
+    } else if (satAttr && dir == CvtDirection::FpNarrow) {
+      return emitOpError("'saturate' attribute is not valid for this fp-to-fp "
+                         "narrow conversion (no saturation)");
     } else if (satAttr) {
       return emitOpError("'saturate' attribute is only valid for fp-narrow / "
                          "int-narrow conversions");
@@ -4041,15 +4189,15 @@ LogicalResult VMICvtOp::verify() {
 LogicalResult VMIVinterpretCastOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
-  std::optional<unsigned> sourceBits =
-      getVMIIntegerOrFloatBitWidth(sourceType.getElementType());
-  std::optional<unsigned> resultBits =
-      getVMIIntegerOrFloatBitWidth(resultType.getElementType());
-  if (!sourceBits || !resultBits)
+  unsigned sourceBits =
+      pto::getPTOStorageElemBitWidth(sourceType.getElementType());
+  unsigned resultBits =
+      pto::getPTOStorageElemBitWidth(resultType.getElementType());
+  if (sourceBits == 0 || resultBits == 0)
     return emitOpError(
         "requires integer or floating-point source and result element types");
-  if (sourceType.getElementCount() * static_cast<int64_t>(*sourceBits) !=
-      resultType.getElementCount() * static_cast<int64_t>(*resultBits))
+  if (sourceType.getElementCount() * static_cast<int64_t>(sourceBits) !=
+      resultType.getElementCount() * static_cast<int64_t>(resultBits))
     return emitOpError(
         "requires source and result to carry the same total number of bits");
 
@@ -4484,6 +4632,8 @@ LogicalResult VMIVcmpOp::verify() {
 
   // Element type must be float-like OR integer-like (unified).
   Type eltTy = lhsType.getElementType();
+  if (failed(verifyBF16x2ComputeElementType(getOperation(), eltTy)))
+    return failure();
   if (!isVMIFloatLikeType(eltTy) && !isVMIIntegerLikeType(eltTy))
     return emitOpError("requires floating-point-like or integer-like VMI "
                        "element type for unified compare");
@@ -4528,6 +4678,8 @@ LogicalResult VMIVcmpsOp::verify() {
 
   // Element type must be float-like OR integer-like (unified).
   Type eltTy = srcType.getElementType();
+  if (failed(verifyBF16x2ComputeElementType(getOperation(), eltTy)))
+    return failure();
   if (!isVMIFloatLikeType(eltTy) && !isVMIIntegerLikeType(eltTy))
     return emitOpError("requires floating-point-like or integer-like VMI "
                        "element type for unified compare");

@@ -36,6 +36,8 @@ bool mlir::pto::isPTOF8E8M0Type(Type t) { return isa<F8E8M0Type>(t); }
 
 bool mlir::pto::isPTOHiFloat8x2Type(Type t) { return isa<HiF8x2Type>(t); }
 
+bool mlir::pto::isPTOBF16x2Type(Type t) { return isa<BF16x2Type>(t); }
+
 bool mlir::pto::isPTOFloat4PackedType(Type t) {
   return isa<F4E1M2x2Type, F4E2M1x2Type>(t);
 }
@@ -82,12 +84,18 @@ unsigned mlir::pto::getPTOPackedLdgStgTotalBits(Type t) {
 
 bool mlir::pto::isPTOLowPrecisionType(Type t) {
   return isPTOFloat8Type(t) || isPTOHiFloat8Type(t) || isPTOF8E8M0Type(t) ||
-         isPTOHiFloat8x2Type(t) || isPTOFloat4PackedType(t);
+         isPTOHiFloat8x2Type(t) || isPTOFloat4PackedType(t) ||
+         isPTOBF16x2Type(t);
 }
 
 unsigned mlir::pto::getPTOStorageElemBitWidth(Type t) {
   if (isPTOHiFloat8x2Type(t)) {
     return 16;
+  }
+  // bf16x2 is a 4-byte packed pair; special-case it before the generic
+  // low-precision branch (which would otherwise report 8 bits).
+  if (isPTOBF16x2Type(t)) {
+    return 32;
   }
   if (isPTOLowPrecisionType(t))
     return kBitsPerByte;

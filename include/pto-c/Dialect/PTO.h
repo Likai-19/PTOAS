@@ -50,6 +50,8 @@ bool mlirPTOTypeIsAF4E1M2x2Type(MlirType type);
 MlirType mlirPTOF4E1M2x2TypeGet(MlirContext ctx);
 bool mlirPTOTypeIsAF4E2M1x2Type(MlirType type);
 MlirType mlirPTOF4E2M1x2TypeGet(MlirContext ctx);
+bool mlirPTOTypeIsABF16x2Type(MlirType type);
+MlirType mlirPTOBF16x2TypeGet(MlirContext ctx);
 
 // ---- #pto.address_space<...> ----
 bool mlirPTOAttrIsAAddressSpaceAttr(MlirAttribute attr);

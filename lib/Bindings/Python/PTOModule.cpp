@@ -1170,6 +1170,17 @@ void mlir::pto::python::populatePTODialectBindings(pybind11::module_ &m) {
             py::arg("cls"), py::arg("context") = py::none());
 
     mlir_type_subclass(
+        m, "BF16x2Type",
+        [](MlirType type) -> bool { return mlirPTOTypeIsABF16x2Type(type); })
+        .def_classmethod(
+            "get",
+            [](py::object cls, MlirContext context) -> py::object {
+                MlirType t = mlirPTOBF16x2TypeGet(context);
+                return cls.attr("__call__")(t);
+            },
+            py::arg("cls"), py::arg("context") = py::none());
+
+    mlir_type_subclass(
         m, "F4E1M2x2Type",
         [](MlirType type) -> bool { return mlirPTOTypeIsAF4E1M2x2Type(type); })
         .def_classmethod(

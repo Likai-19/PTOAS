@@ -560,6 +560,25 @@ uint64_t mlir::pto::F4E2M1x2Type::getPreferredAlignment(
   return 1;
 }
 
+static llvm::TypeSize getFourByteTypeSize() {
+  return llvm::TypeSize::getFixed(32);
+}
+
+llvm::TypeSize mlir::pto::BF16x2Type::getTypeSizeInBits(
+    const DataLayout &, DataLayoutEntryListRef) const {
+  return getFourByteTypeSize();
+}
+
+uint64_t mlir::pto::BF16x2Type::getABIAlignment(
+    const DataLayout &, DataLayoutEntryListRef) const {
+  return 4;
+}
+
+uint64_t mlir::pto::BF16x2Type::getPreferredAlignment(
+    const DataLayout &, DataLayoutEntryListRef) const {
+  return 4;
+}
+
 static VerifierTargetArch getVerifierTargetArch(Operation *op) {
   auto module = op ? op->getParentOfType<ModuleOp>() : ModuleOp();
   if (isA5ModuleTarget(module))

@@ -6044,6 +6044,13 @@ static LogicalResult verifyBinaryVecOp(BinaryOp op,
       failed(verifyNonLowPrecisionVRegElementTypeLike(
           op.getOperation(), op.getLhs().getType(), "lhs type")))
     return failure();
+  if (allowLowPrecision) {
+    auto lhsType = cast<VRegType>(op.getLhs().getType());
+    if (pto::isPTOBF16x2Type(lhsType.getElementType()))
+      return op.emitOpError(
+          "does not support bf16x2 vector elements; low-precision bitwise "
+          "operations require an 8-bit payload type");
+  }
   if (op.getLhs().getType() != op.getRhs().getType() ||
       op.getLhs().getType() != op.getResult().getType())
     return op.emitOpError("requires matching register vector shapes");
@@ -6702,6 +6709,11 @@ LogicalResult VbitcastOp::verify() {
     if (auto floatType = dyn_cast<FloatType>(elementType))
       return type.getElementCount() *
              static_cast<int64_t>(floatType.getWidth());
+    // Packed PTO element types (f8/hif8/f4x2/bf16x2/...) have a known storage
+    // width even though they are not IntegerType/FloatType.
+    unsigned packedBits = pto::getPTOStorageElemBitWidth(elementType);
+    if (packedBits != 0)
+      return type.getElementCount() * static_cast<int64_t>(packedBits);
     return std::nullopt;
   };
 

@@ -96,6 +96,11 @@ static Type normalizePayloadTypeForLLVMLowering(Type type, Builder &builder) {
   if (pto::isPTOHiFloat8x2Type(type))
     return getLLVMCompatibleVectorType(
         {2}, LLVM::LLVMHiFloat8Type::get(builder.getContext()));
+  // bf16x2 is a 4-byte packed pair; lower it as an opaque i32 so vregs whose
+  // element type is bf16x2 get a valid LLVM type.
+  if (pto::isPTOBF16x2Type(type)) {
+    return builder.getI32Type();
+  }
   if (Type lowpType = getLowPrecisionLLVMType(type, builder.getContext())) {
     return lowpType;
   }
@@ -124,6 +129,10 @@ static Type normalizeGEPElementTypeForLLVMLowering(Type type,
                                                    Builder &builder) {
   if (pto::isPTOHiFloat8x2Type(type)) {
     return builder.getI16Type();
+  }
+  // bf16x2 is 4 bytes, not an 8-bit low-precision type.
+  if (pto::isPTOBF16x2Type(type)) {
+    return builder.getI32Type();
   }
   if (pto::isPTOLowPrecisionType(type)) {
     return builder.getI8Type();
@@ -188,6 +197,9 @@ static unsigned getNaturalByteAlignment(Type type) {
   }
   if (pto::isPTOHiFloat8x2Type(type)) {
     return 2;
+  }
+  if (pto::isPTOBF16x2Type(type)) {
+    return 4;
   }
   if (pto::isPTOLowPrecisionType(type)) {
     return 1;
@@ -669,6 +681,8 @@ static std::string getLowPrecisionElementFragment(Type type) {
     return "f4e1m2x2";
   if (isa<pto::F4E2M1x2Type>(type))
     return "f4e2m1x2";
+  if (pto::isPTOBF16x2Type(type))
+    return "bf16x2";
   if (pto::isPTOFloat8E4M3LikeType(type))
     return "f8e4m3";
   if (pto::isPTOFloat8E5M2LikeType(type))
@@ -1231,6 +1245,9 @@ static std::optional<unsigned> getDistElementWidth(Type type) {
     return 32;
   if (type.isF64())
     return 64;
+  // bf16x2 is a 32-bit packed pair; its dist width is 32 (i32/align4 ABI).
+  if (pto::isPTOBF16x2Type(type))
+    return 32;
   return std::nullopt;
 }
 
@@ -3658,6 +3675,16 @@ StringRef buildPredicatePairReorderCallee<pto::PintlvB32Op>(MLIRContext *context
 static FailureOr<StringRef> buildInterleaveCallee(MLIRContext *context,
                                                   Type resultType,
                                                   StringRef stem) {
+  // bf16x2 has no dedicated vintlv/vdintlv intrinsic. It is a 32-bit packed
+  // pair lowered to i32 at the LLVM ABI, and (de)interleave is a bit-level
+  // lane shuffle, so the <N x i32> intrinsic serves the <N x bf16x2> type.
+  if (pto::isPTOBF16x2Type(getElementTypeFromVectorLike(resultType))) {
+    auto lanes = getElementCountFromVectorLike(resultType);
+    if (lanes)
+      return StringAttr::get(context, "llvm.hivm." + stem.str() + ".v" +
+                                          std::to_string(*lanes) + "i32")
+          .getValue();
+  }
   std::string vec = getCANN900VectorTypeFragment(resultType);
   if (vec.empty())
     return failure();
@@ -8266,6 +8293,13 @@ public:
   LogicalResult
   matchAndRewrite(pto::VbitcastOp op, pto::VbitcastOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // A vbitcast whose result has no users is a dead noop (Pure). Erase it
+    // instead of emitting an LLVM bitcast the device compiler may not lower
+    // (e.g. bf16x2 <-> bf16 physical views).
+    if (op->use_empty()) {
+      rewriter.eraseOp(op);
+      return success();
+    }
     Type resultType =
         this->getTypeConverter()->convertType(op.getResult().getType());
     if (!resultType)

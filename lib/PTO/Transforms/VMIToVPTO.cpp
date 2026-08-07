@@ -157,6 +157,12 @@ bool hasVMIType(Operation *op) {
   return false;
 }
 
+bool isVMIPackedFloatCarrierType(Type type) {
+  return pto::isPTOHiFloat8x2Type(type) ||
+         pto::isPTOFloat4PackedType(type) ||
+         pto::isPTOBF16x2Type(type);
+}
+
 bool isVMIOp(Operation *op) {
   return op->getName().getStringRef().starts_with("pto.vmi.");
 }
@@ -11093,8 +11099,11 @@ struct OneToNVMIExtFOpPattern : OpConversionPattern<VMIExtFOp> {
     for (Type resultType : resultTypes) {
       auto resultVRegType = dyn_cast<VRegType>(resultType);
       if (!resultVRegType ||
-          (resultVRegTypes.empty() ? !resultVRegType.getElementType().isF32()
-                                   : resultVRegType != resultVRegTypes.front()))
+          (resultVRegTypes.empty()
+               ? !(resultVRegType.getElementType().isF32() ||
+                   pto::isPTOBF16x2Type(
+                       resultVRegType.getElementType()))
+               : resultVRegType != resultVRegTypes.front()))
         return rewriter.notifyMatchFailure(
             op, "unsupported physical extf result type");
       resultVRegTypes.push_back(resultVRegType);
@@ -11102,6 +11111,36 @@ struct OneToNVMIExtFOpPattern : OpConversionPattern<VMIExtFOp> {
 
     unsigned sourceBits =
         pto::getPTOStorageElemBitWidth(sourceType.getElementType());
+    // A packed bf16x2 physical result cannot be produced directly by
+    // pto.vcvt (classifyVcvtElemType has no BF16x2 branch); the widest native
+    // f4 conversion result element is bf16. Build the bf16 view type (2 bf16
+    // lanes per bf16x2 lane) and reinterpret each vcvt result with a
+    // physical-noop VbitcastOp, mirroring the source-side reinterpret in
+    // OneToNVMITruncFOpPattern (viewVcvtSource).
+    bool resultIsPackedBF16x2 =
+        pto::isPTOBF16x2Type(resultVRegTypes.front().getElementType());
+    VRegType vcvtResultVRegType = resultVRegTypes.front();
+    if (resultIsPackedBF16x2) {
+      vcvtResultVRegType =
+          VRegType::get(rewriter.getContext(),
+                        resultVRegTypes.front().getElementCount() * 2,
+                        BFloat16Type::get(rewriter.getContext()));
+    }
+    auto viewVcvtResult = [&](VRegType resultType, Value sourcePart,
+                              Value mask, StringAttr rnd, StringAttr sat,
+                              StringAttr part) -> Value {
+      VRegType vcvtType =
+          resultIsPackedBF16x2 ? vcvtResultVRegType : resultType;
+      Value vcvt = rewriter
+                       .create<VcvtOp>(op.getLoc(), vcvtType, sourcePart, mask,
+                                       rnd, sat, part)
+                       .getResult();
+      if (!resultIsPackedBF16x2)
+        return vcvt;
+      return rewriter.create<VbitcastOp>(op.getLoc(), resultType, vcvt)
+          .getResult();
+    };
+
     VMILayoutAttr sourceLayout = sourceVMIType.getLayoutAttr();
     VMILayoutAttr resultLayout = resultVMIType.getLayoutAttr();
     if (sourceLayout && resultLayout && sourceLayout.isContiguous() &&
@@ -11120,12 +11159,9 @@ struct OneToNVMIExtFOpPattern : OpConversionPattern<VMIExtFOp> {
       results.reserve(resultTypes.size());
       for (auto [sourcePart, resultType] :
            llvm::zip_equal(sourceParts, resultVRegTypes)) {
-        results.push_back(rewriter
-                              .create<VcvtOp>(op.getLoc(), resultType,
-                                              sourcePart, *mask,
-                                              /*rnd=*/nullptr, /*sat=*/nullptr,
-                                              rewriter.getStringAttr(part))
-                              .getResult());
+        results.push_back(viewVcvtResult(
+            resultType, sourcePart, *mask, /*rnd=*/nullptr, /*sat=*/nullptr,
+            rewriter.getStringAttr(part)));
       }
       replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
       return success();
@@ -11159,12 +11195,9 @@ struct OneToNVMIExtFOpPattern : OpConversionPattern<VMIExtFOp> {
       for (auto [chunkIndex, sourcePart] : llvm::enumerate(sourceParts)) {
         VRegType resultType =
             resultVRegTypes[partIndex * sourceParts.size() + chunkIndex];
-        results.push_back(
-            rewriter
-                .create<VcvtOp>(op.getLoc(), resultType, sourcePart, *mask,
-                                /*rnd=*/nullptr, /*sat=*/nullptr,
-                                rewriter.getStringAttr(parts[partIndex]))
-                .getResult());
+        results.push_back(viewVcvtResult(
+            resultType, sourcePart, *mask, /*rnd=*/nullptr, /*sat=*/nullptr,
+            rewriter.getStringAttr(parts[partIndex])));
       }
     }
 
@@ -11181,6 +11214,13 @@ struct OneToNVMITruncFOpPattern : OpConversionPattern<VMITruncFOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto sourceVMIType = cast<VMIVRegType>(op.getSource().getType());
     auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
+    Type sourceElementType = sourceVMIType.getElementType();
+    Type resultElementType = resultVMIType.getElementType();
+    if ((isVMIPackedFloatCarrierType(sourceElementType) ||
+         isVMIPackedFloatCarrierType(resultElementType)) &&
+        !lookupVMIFpToFpContract(sourceElementType, resultElementType))
+      return rewriter.notifyMatchFailure(
+          op, "unsupported packed fp-to-fp truncf conversion");
     ValueRange sourceParts = adaptor.getSource();
     FailureOr<SmallVector<Type>> maybe_resultTypes =
         getConvertedResultTypes(op, 0, *this->getTypeConverter());
@@ -11251,13 +11291,42 @@ struct OneToNVMITruncFOpPattern : OpConversionPattern<VMITruncFOp> {
     }
 
     auto sourceType0 = dyn_cast<VRegType>(sourceParts.front().getType());
-    if (!sourceType0 || !isa<FloatType>(sourceType0.getElementType())) {
+    if (!sourceType0) {
       return rewriter.notifyMatchFailure(op, "unsupported physical truncf source type");
     }
     unsigned sourceBits = pto::getPTOStorageElemBitWidth(sourceType0.getElementType());
     if (sourceBits != 32 && sourceBits != 16)
       return rewriter.notifyMatchFailure(
           op, "truncf source bit width must be 32 or 16");
+    // A packed bf16x2 physical source is consumed by pto.vcvt as raw bf16
+    // lanes (2 bf16 per bf16x2). Build the bf16 view type used for the source
+    // mask and for reinterpreting each source part before the VcvtOp. The
+    // logical lane count stays bf16x2-based; only the physical view widens.
+    bool sourceIsPackedBF16x2 =
+        pto::isPTOBF16x2Type(sourceType0.getElementType());
+    VRegType vcvtSourceVRegType = sourceType0;
+    if (sourceIsPackedBF16x2) {
+      vcvtSourceVRegType =
+          VRegType::get(rewriter.getContext(), sourceType0.getElementCount() * 2,
+                        BFloat16Type::get(rewriter.getContext()));
+    }
+    auto viewVcvtSource = [&](Value sourcePart) -> Value {
+      if (!sourceIsPackedBF16x2)
+        return sourcePart;
+      // If the source part is the physical noop pairing bitcast produced by
+      // VMIBitcastOp lowering (bf16 vreg -> bf16x2 vreg), reuse the original
+      // bf16 value directly instead of re-viewing it. This avoids emitting a
+      // redundant view vbitcast and leaves the pairing bitcast dead so the
+      // emitter can erase it.
+      if (auto vbc = sourcePart.getDefiningOp<VbitcastOp>()) {
+        if (auto srcVReg = dyn_cast<VRegType>(vbc.getInput().getType());
+            srcVReg && srcVReg.getElementType().isBF16())
+          return vbc.getInput();
+      }
+      return rewriter
+          .create<VbitcastOp>(op.getLoc(), vcvtSourceVRegType, sourcePart)
+          .getResult();
+    };
     // Group-slot layout for non-f32 sources is not supported yet.
     if (sourceLayout && sourceLayout.isGroupSlots())
       return rewriter.notifyMatchFailure(
@@ -11290,7 +11359,7 @@ struct OneToNVMITruncFOpPattern : OpConversionPattern<VMITruncFOp> {
         resultLayout.isContiguous() && resultLayout.getLaneStride() == 1 &&
         sourceParts.size() == resultTypes.size()) {
       FailureOr<Value> sourceMask =
-          createAllTrueMaskForVReg(op.getLoc(), sourceType0, rewriter);
+          createAllTrueMaskForVReg(op.getLoc(), vcvtSourceVRegType, rewriter);
       if (failed(sourceMask)) {
         return rewriter.notifyMatchFailure(op, "failed to build truncf masks");
       }
@@ -11329,7 +11398,7 @@ struct OneToNVMITruncFOpPattern : OpConversionPattern<VMITruncFOp> {
             op, "unsupported dense lane_stride truncf result layout");
 
       FailureOr<Value> sourceMask =
-          createAllTrueMaskForVReg(op.getLoc(), sourceType0, rewriter);
+          createAllTrueMaskForVReg(op.getLoc(), vcvtSourceVRegType, rewriter);
       if (failed(sourceMask)) {
         return rewriter.notifyMatchFailure(op, "failed to build truncf masks");
       }
@@ -11344,8 +11413,8 @@ struct OneToNVMITruncFOpPattern : OpConversionPattern<VMITruncFOp> {
            llvm::zip_equal(sourceParts, resultVRegTypes)) {
         results.push_back(rewriter
                               .create<VcvtOp>(op.getLoc(), resultType,
-                                              sourcePart, *sourceMask, rnd, sat,
-                                              partAttr)
+                                              viewVcvtSource(sourcePart),
+                                              *sourceMask, rnd, sat, partAttr)
                               .getResult());
       }
       replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
@@ -11381,7 +11450,7 @@ struct OneToNVMITruncFOpPattern : OpConversionPattern<VMITruncFOp> {
           op, "unsupported physical truncf source/result arity relation");
 
     FailureOr<Value> sourceMask =
-        createAllTrueMaskForVReg(op.getLoc(), sourceType0, rewriter);
+        createAllTrueMaskForVReg(op.getLoc(), vcvtSourceVRegType, rewriter);
     if (failed(sourceMask)) {
       return rewriter.notifyMatchFailure(op, "failed to build truncf masks");
     }
@@ -11405,8 +11474,9 @@ struct OneToNVMITruncFOpPattern : OpConversionPattern<VMITruncFOp> {
             sourceParts[partIndex * resultTypes.size() + chunkIndex];
         partials.push_back(
             rewriter
-                .create<VcvtOp>(op.getLoc(), resultType, sourcePart,
-                                *sourceMask, rnd, sat,
+                .create<VcvtOp>(op.getLoc(), resultType,
+                                viewVcvtSource(sourcePart), *sourceMask, rnd,
+                                sat,
                                 rewriter.getStringAttr(
                                     allParts[partIndex * resultLaneStride]))
                 .getResult());
