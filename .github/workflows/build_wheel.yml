@@ -25,8 +25,8 @@ permissions:
 
 env:
   LLVM_REPO: https://github.com/vpto-dev/llvm-project.git
-  LLVM_REF: feature-vpto-llvm21
-  LLVM_CACHE_FLAVOR: llvm21-vpto-release-hardening-v1
+  LLVM_REF: feature-vpto
+  LLVM_CACHE_FLAVOR: release-hardening-v1
 
 jobs:
   build_wheel:
@@ -143,9 +143,6 @@ jobs:
             -DLLVM_ENABLE_ASSERTIONS=OFF \
             -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
             -DPython3_EXECUTABLE=${PY_PATH}/bin/python \
-            -DPython_EXECUTABLE=${PY_PATH}/bin/python \
-            -Dpybind11_DIR="$(${PY_PATH}/bin/python -m pybind11 --cmakedir)" \
-            -Dnanobind_DIR="$(${PY_PATH}/bin/python -m nanobind --cmake_dir)" \
             -DCMAKE_BUILD_TYPE=Release \
             -DLLVM_TARGETS_TO_BUILD="host"
           ninja -C $LLVM_BUILD_DIR
@@ -162,9 +159,6 @@ jobs:
       - name: Build PTOAS
         run: |
           export PATH="${PY_PATH}/bin:$PATH"
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            export CMAKE_BUILD_PARALLEL_LEVEL=2
-          fi
           PTOAS_RELEASE_VERSION_OVERRIDE="${PTOAS_VERSION}" \
           pip install . --no-build-isolation
 

@@ -117,7 +117,6 @@ add_test(NAME ptobc_tscatter_maskpattern_v0_encode
   COMMAND ${CMAKE_COMMAND} -E env
     PTOBC_BIN=$<TARGET_FILE:ptobc>
     TESTDATA_DIR=${PTObc_TESTDATA_DIR}
-    PYTHON_EXECUTABLE=${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_LIST_DIR}/tscatter_maskpattern_v0_encode.sh
 )
 

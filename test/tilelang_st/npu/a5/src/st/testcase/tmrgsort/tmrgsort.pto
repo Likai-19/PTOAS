@@ -9,7 +9,7 @@
 // TileLang ST kernels for pto.tmrgsort Format1: single list internal block sorting.
 // Input is divided into 4 blocks, each block sorted, then merged.
 // Output: interleaved (sorted_value, original_index) pairs.
-// Compiled by ptoas --enable-insert-sync --enable-tile-op-expand
+// Compiled by ptoas --enable-insert-sync --enable-tile-op-expand --vpto-emit-hivm-llvm
 // to produce LLVM IR.
 
 module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {

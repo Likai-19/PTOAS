@@ -115,8 +115,7 @@ static std::optional<BLayout> getKnownBLayout(Type ty) {
   if (auto memRefTy = dyn_cast<MemRefType>(ty)) {
     SmallVector<int64_t> strides;
     int64_t offset = 0;
-    if (failed(mlir::pto::getPTOMemRefStridesAndOffset(memRefTy, strides,
-                                                       offset)) ||
+    if (failed(getStridesAndOffset(memRefTy, strides, offset)) ||
         strides.size() != 2) {
       return std::nullopt;
     }

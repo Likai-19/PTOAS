@@ -62,11 +62,11 @@ module {
 // CHECK-NEXT: pto.tsub ins(%{{.*}}, %{{.*}} : !pto.tile_buf<vec, 32x32xf32>, !pto.tile_buf<vec, 32x32xf32>) outs(%{{.*}} : !pto.tile_buf<vec, 32x32xf32>) {pto.fusion.group_id = 0 : i64, pto.fusion.order = 3 : i64, pto.last_use = array<i64: 1, 1, 0>}
 // CHECK-NEXT: pto.tsubs ins(%{{.*}}, %{{.*}} : !pto.tile_buf<vec, 32x32xf32>, f32) outs(%{{.*}} : !pto.tile_buf<vec, 32x32xf32>) {pto.fusion.group_id = 0 : i64, pto.fusion.order = 4 : i64, pto.last_use = array<i64: 1, 0>}
 
-// MARKER: call_opaque "PTOAS__LAST_USE__TEXPANDS__0"
-// MARKER: call_opaque "PTOAS__LAST_USE__TADDS__0__1"
-// MARKER: call_opaque "PTOAS__LAST_USE__TADD__0__1__0"
-// MARKER: call_opaque "PTOAS__LAST_USE__TSUB__0__1__1"
-// MARKER: call_opaque "PTOAS__LAST_USE__TSUBS__0__1"
+// MARKER: emitc.call_opaque "PTOAS__LAST_USE__TEXPANDS__0"
+// MARKER: emitc.call_opaque "PTOAS__LAST_USE__TADDS__0__1"
+// MARKER: emitc.call_opaque "PTOAS__LAST_USE__TADD__0__1__0"
+// MARKER: emitc.call_opaque "PTOAS__LAST_USE__TSUB__0__1__1"
+// MARKER: emitc.call_opaque "PTOAS__LAST_USE__TSUBS__0__1"
 // MARKER-NOT: pto::last_use
 
 // CPP-LABEL: AICORE void mark_last_use_slot_mask_level2(

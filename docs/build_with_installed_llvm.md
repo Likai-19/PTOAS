@@ -2,7 +2,7 @@
 
 本文档按 [README.md](../README.md) 第 3 章的逻辑整理，适用于：
 
-- LLVM/MLIR LLVM21 VPTO 分支 `vpto-dev/llvm-project:feature-vpto-llvm21` 已经构建并安装完成。
+- LLVM/MLIR `19.1.7` 已经构建并安装完成。
 - LLVM 安装路径固定为 `/opt/llvm`。
 - `/opt/llvm` 是共享目录，不希望 `ptoas` 的安装步骤写入其中。
 
@@ -42,12 +42,11 @@ mkdir -p "$WORKSPACE_DIR"
 - CMake >= 3.20
 - Ninja
 - Python 3.8+
-- `pybind11<3`
-- `nanobind`
+- `pybind11`
 - `numpy`
 
 ```bash
-pip3 install "pybind11<3" nanobind numpy
+pip3 install pybind11 numpy
 ```
 
 ## 跳过 3.2
@@ -63,10 +62,8 @@ README 第 3.2 节是 LLVM/MLIR 的下载和编译步骤。当前场景下 LLVM 
 输出为：
 
 ```text
-21.1.8
+19.1.7
 ```
-
-实际源码基线应来自 `https://github.com/vpto-dev/llvm-project.git` 的 `feature-vpto-llvm21` 分支。
 
 ## 3.3 第二步：构建 ptoas
 

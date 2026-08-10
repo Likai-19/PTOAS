@@ -32,7 +32,7 @@ int64_t EventIdSolver::getEventIdsNum(bool dontCalcEventIds) {
     calcEventIds();
   }
   assert(!needRecalculateEventIds);
-  llvm::DenseSet<int64_t> usedEventIds;
+  llvm::SmallDenseSet<int64_t> usedEventIds;
   for (auto &node : nodes) {
     auto &eventIds = node->getEventIds();
     assert(!eventIds.empty());
@@ -215,7 +215,7 @@ void EventIdSolver::addConflicts(
 
 llvm::SmallVector<int64_t>
 EventIdSolver::getAdjNodesUsedEventIds(EventIdNode *node) {
-  llvm::DenseSet<int64_t> usedEventIds;
+  llvm::SmallDenseSet<int64_t> usedEventIds;
   for (auto [otherNode, frq] : adjList[node]) {
     assert(frq > 0);
     auto &otherEventIds = otherNode->getEventIds();

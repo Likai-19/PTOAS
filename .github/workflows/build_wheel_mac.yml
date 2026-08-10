@@ -24,8 +24,8 @@ permissions:
 
 env:
   LLVM_REPO: https://github.com/vpto-dev/llvm-project.git
-  LLVM_REF: feature-vpto-llvm21
-  LLVM_CACHE_FLAVOR: llvm21-vpto-release-v1
+  LLVM_REF: feature-vpto
+  LLVM_CACHE_FLAVOR: release-v2
 
 jobs:
   build_wheel:
@@ -145,9 +145,6 @@ jobs:
             -DLLVM_ENABLE_ASSERTIONS=OFF \
             -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
             -DPython3_EXECUTABLE=$(which python) \
-            -DPython_EXECUTABLE=$(which python) \
-            -Dpybind11_DIR="$(python -m pybind11 --cmakedir)" \
-            -Dnanobind_DIR="$(python -m nanobind --cmake_dir)" \
             -DCMAKE_BUILD_TYPE=Release \
             -DLLVM_TARGETS_TO_BUILD="host"
           ninja -C $LLVM_BUILD_DIR

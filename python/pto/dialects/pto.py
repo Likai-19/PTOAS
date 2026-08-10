@@ -11,16 +11,10 @@ import importlib.util
 import functools
 import os
 from pathlib import Path
-from typing import Optional
 
 from mlir import ir as _ods_ir
 
 from . import _pto_ops_gen as _pto_ops_gen
-from ._ods_common import (
-    get_default_loc_context as _ods_get_default_loc_context,
-    get_op_result_or_value as _get_op_result_or_value,
-    get_op_results_or_values as _get_op_results_or_values,
-)
 
 
 def _candidate_pto_ext_dirs():
@@ -88,7 +82,7 @@ def _export_generated_symbols():
 
 
 def get_op_result_or_value(value):
-    return _get_op_result_or_value(value)
+    return getattr(_pto_ops_gen, "_get_op_result_or_value")(value)
 
 
 def _export_optional_cext_symbol(name):
@@ -183,6 +177,7 @@ VecStoreModeAttr = _pto_mod.VecStoreModeAttr
 
 
 _ptr_type_get_impl = PtrType.get
+_ods_get_default_loc_context = getattr(_pto_ops_gen, "_ods_get_default_loc_context")
 
 
 def _ptr_type_get_compat(cls, element_type, memory_space=None, context=None):
@@ -870,7 +865,7 @@ class PartitionViewOp(_GeneratedPartitionViewOp):
             sizes, *args = args
         if args:
             raise TypeError(f"too many positional arguments: {len(args)}")
-        source_value = _get_op_result_or_value(source)
+        source_value = _pto_ops_gen._get_op_result_or_value(source)
         source_type = source_value.type
         result = PartitionTensorViewType.get(source_type.rank, source_type.element_type)
         self._init_explicit(result, source_value, offsets, sizes, (), loc, ip)
@@ -887,9 +882,9 @@ class PartitionViewOp(_GeneratedPartitionViewOp):
         if args:
             raise TypeError(f"too many positional arguments: {len(args)}")
         operands = [
-            _get_op_result_or_value(source),
-            _get_op_results_or_values(offsets),
-            _get_op_results_or_values(sizes),
+            _pto_ops_gen._get_op_result_or_value(source),
+            _pto_ops_gen._get_op_results_or_values(offsets),
+            _pto_ops_gen._get_op_results_or_values(sizes),
         ]
         op = self.build_generic(
             attributes={},
@@ -934,12 +929,12 @@ class TScatterOp(_GeneratedTScatterOp):
 
         def _value_type(value):
             try:
-                return _get_op_result_or_value(value).type
+                return _pto_ops_gen._get_op_result_or_value(value).type
             except Exception:
                 return None
 
         def _matches_src_type(value):
-            src_value = _get_op_result_or_value(src)
+            src_value = _pto_ops_gen._get_op_result_or_value(src)
             value_type = _value_type(value)
             return value_type is not None and value_type == src_value.type
 
@@ -1156,9 +1151,9 @@ class _VKernelCompileError(Exception):
 
 @_dataclass
 class _VKValue:
-    name: Optional[str] = None
-    type: Optional[_VKernelType] = None
-    literal: Optional[object] = None
+    name: str | None = None
+    type: _VKernelType | None = None
+    literal: object | None = None
 
     def render_type(self):
         if self.type is None:

@@ -35,19 +35,7 @@ grep -F "pto.tscatter ins(" "${ROUNDTRIP}" >/dev/null
 grep -F "{maskPattern = #pto.mask_pattern<P0101>}" "${ROUNDTRIP}" >/dev/null
 grep -E "pto\\.tscatter ins\\(%[^,]+, %[^:]+ :" "${ROUNDTRIP}" >/dev/null
 
-PYTHON_EXECUTABLE=${PYTHON_EXECUTABLE:-}
-if [[ -z "${PYTHON_EXECUTABLE}" ]]; then
-  if command -v python3 >/dev/null 2>&1; then
-    PYTHON_EXECUTABLE=python3
-  elif command -v python >/dev/null 2>&1; then
-    PYTHON_EXECUTABLE=python
-  else
-    echo "error: neither PYTHON_EXECUTABLE nor python3/python is available" >&2
-    exit 2
-  fi
-fi
-
-"${PYTHON_EXECUTABLE}" - <<'PY' "${BC}"
+python - <<'PY' "${BC}"
 from pathlib import Path
 import sys
 

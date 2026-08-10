@@ -98,13 +98,13 @@ jobs:
     env:
       PTOAS_CLANG_MAJOR: "15"
       LLVM_REPO: https://github.com/vpto-dev/llvm-project.git
-      LLVM_REF: feature-vpto-llvm21
+      LLVM_REF: feature-vpto
       LLVM_BUILD_DIR: ${{ github.workspace }}/llvm-project/llvm/build-assert
       LLVM_DIR: ${{ github.workspace }}/llvm-project/llvm/build-assert
       PTO_BUILD_DIR: ${{ github.workspace }}/build-assert
       PTO_INSTALL_DIR: ${{ github.workspace }}/install-assert
       MLIR_PYTHONPATH: ${{ github.workspace }}/llvm-project/llvm/build-assert/tools/mlir/python_packages/mlir_core
-      LLVM_CACHE_FLAVOR: llvm21-assert-shared-mlirpy-hardening-v1
+      LLVM_CACHE_FLAVOR: assert-shared-mlirpy-hardening-v2
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -114,15 +114,6 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # GitHub-hosted runners may include Microsoft apt sources unrelated to
-          # PTOAS; these can intermittently return 403 and break apt-get update.
-          sudo rm -f \
-            /etc/apt/sources.list.d/azure-cli*.list \
-            /etc/apt/sources.list.d/azure-cli*.sources \
-            /etc/apt/sources.list.d/microsoft-prod*.list \
-            /etc/apt/sources.list.d/microsoft-prod*.sources \
-            /etc/apt/sources.list.d/packages-microsoft-prod*.list \
-            /etc/apt/sources.list.d/packages-microsoft-prod*.sources
           sudo apt-get update
           sudo apt-get install -y \
             cmake git ninja-build \
@@ -131,7 +122,7 @@ jobs:
             libedit-dev zlib1g-dev libxml2-dev libzstd-dev
           python3 -m pip install --upgrade pip
           # LLVM/MLIR Python bindings are not yet compatible with pybind11 3.x.
-          python3 -m pip install setuptools wheel 'pybind11<3' nanobind numpy
+          python3 -m pip install setuptools wheel 'pybind11<3' numpy
 
       - name: Define payload paths
         shell: bash
@@ -209,9 +200,6 @@ jobs:
             -DLLVM_ENABLE_ASSERTIONS=ON \
             -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
             -DPython3_EXECUTABLE=python3 \
-            -DPython_EXECUTABLE=python3 \
-            -Dpybind11_DIR="$(python3 -m pybind11 --cmakedir)" \
-            -Dnanobind_DIR="$(python3 -m nanobind --cmake_dir)" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER="${PTOAS_CMAKE_C_COMPILER}" \
             -DCMAKE_CXX_COMPILER="${PTOAS_CMAKE_CXX_COMPILER}" \

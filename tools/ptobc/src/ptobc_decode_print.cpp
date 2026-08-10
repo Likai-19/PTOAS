@@ -487,8 +487,7 @@ readKnownOperandIds(BuildCtx &bc, Reader &r, uint16_t opcode, uint8_t variant,
   case 0x04:
     return reorderLegacyIndexedTscatter(
         readValueIds(r, ((imms.optMask & 0x1) ? 1 : 0) +
-                            ((imms.optMask & 0x2) ? 1 : 0) +
-                            ((imms.optMask & 0x4) ? 1 : 0)));
+                            ((imms.optMask & 0x2) ? 1 : 0)));
   default:
     (void)bc;
     throw std::runtime_error("unknown operand_mode");

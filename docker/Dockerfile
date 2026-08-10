@@ -10,8 +10,7 @@ ARG ARCH
 
 # NOTE: change $PY_VER for different Python versions (3.8 - 3.14 available)
 ARG PY_VER=cp311-cp311
-ARG LLVM_REF=feature-vpto-llvm21
-ARG LLVM_REPO=https://github.com/vpto-dev/llvm-project.git
+ARG LLVM_TAG=llvmorg-19.1.7
 
 ## -- usually no need to change below --
 
@@ -20,7 +19,7 @@ ENV PATH="${PY_PATH}/bin:${PATH}"
 
 # dependency
 RUN dnf install -y ninja-build cmake git ccache gcc-c++ lld zip binutils patchelf chrpath && dnf clean all
-RUN pip install --no-cache-dir numpy 'pybind11<3' nanobind setuptools wheel auditwheel
+RUN pip install --no-cache-dir numpy pybind11 nanobind setuptools wheel auditwheel
 
 COPY cmake/LinuxHardeningCache.cmake /tmp/LinuxHardeningCache.cmake
 
@@ -35,7 +34,7 @@ ENV PTO_INSTALL_DIR=$PTO_SOURCE_DIR/install-release
 
 # build LLVM
 WORKDIR $WORKSPACE_DIR
-RUN git clone --depth 1 --branch ${LLVM_REF} ${LLVM_REPO} llvm-project
+RUN git clone --depth 1 --branch ${LLVM_TAG} https://github.com/llvm/llvm-project.git
 
 WORKDIR $LLVM_SOURCE_DIR
 RUN cmake -C /tmp/LinuxHardeningCache.cmake -G Ninja -S llvm -B $LLVM_BUILD_DIR \
@@ -44,9 +43,6 @@ RUN cmake -C /tmp/LinuxHardeningCache.cmake -G Ninja -S llvm -B $LLVM_BUILD_DIR 
     -DLLVM_ENABLE_ASSERTIONS=OFF \
     -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
     -DPython3_EXECUTABLE=${PY_PATH}/bin/python \
-    -DPython_EXECUTABLE=${PY_PATH}/bin/python \
-    -Dpybind11_DIR=$(${PY_PATH}/bin/python -m pybind11 --cmakedir) \
-    -Dnanobind_DIR=$(${PY_PATH}/bin/python -m nanobind --cmake_dir) \
     -DCMAKE_BUILD_TYPE=Release \
     -DLLVM_TARGETS_TO_BUILD="host"
 

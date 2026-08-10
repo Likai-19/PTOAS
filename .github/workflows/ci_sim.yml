@@ -98,7 +98,7 @@ jobs:
   vpto-sim-validation:
     needs: detect-vpto-sim-changes
     runs-on: [self-hosted, Linux, X64, label-1]
-    timeout-minutes: 300
+    timeout-minutes: 120
     concurrency:
       group: vpto-sim-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
@@ -108,7 +108,7 @@ jobs:
       }}
     env:
       LLVM_REPO: https://github.com/vpto-dev/llvm-project.git
-      LLVM_REF: feature-vpto-llvm21
+      LLVM_REF: feature-vpto
       PTO_INSTALL_DIR: ${{ github.workspace }}/install
       VPTO_SIM_WORKSPACE: ${{ github.workspace }}/.work/vpto-sim-ci
       TILELANG_DSL_WORKSPACE: ${{ github.workspace }}/.work/tilelang-dsl-ci
@@ -193,12 +193,11 @@ jobs:
           python3 -c "import numpy" >/dev/null 2>&1 || need_pip_install=1
           python3 -c "import setuptools, wheel" >/dev/null 2>&1 || need_pip_install=1
           python3 -m pybind11 --cmakedir >/dev/null 2>&1 || need_pip_install=1
-          python3 -m nanobind --cmake_dir >/dev/null 2>&1 || need_pip_install=1
           python3 -c "import ml_dtypes" >/dev/null 2>&1 || need_pip_install=1
 
           if [[ "${need_pip_install}" -eq 1 ]]; then
             python3 -m pip install --upgrade pip
-            python3 -m pip install setuptools wheel 'pybind11<3' nanobind numpy ml-dtypes
+            python3 -m pip install setuptools wheel 'pybind11<3' numpy ml-dtypes
           fi
 
       - name: Clean CI work dirs
@@ -252,9 +251,6 @@ jobs:
             -DLLVM_ENABLE_ASSERTIONS=ON \
             -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
             -DPython3_EXECUTABLE=python3 \
-            -DPython_EXECUTABLE=python3 \
-            -Dpybind11_DIR="$(python3 -m pybind11 --cmakedir)" \
-            -Dnanobind_DIR="$(python3 -m nanobind --cmake_dir)" \
             -DCMAKE_BUILD_TYPE=Release \
             -DLLVM_TARGETS_TO_BUILD="host"
 
@@ -316,7 +312,6 @@ jobs:
           ref: ${{ env.PYPTO_REF }}
           path: ${{ env.PYPTO_WORKSPACE }}
           fetch-depth: 1
-          submodules: recursive
           persist-credentials: false
 
       - name: Checkout PTO-ISA
@@ -385,29 +380,6 @@ jobs:
           # ci_sim only runs PyPTO simulator tests. Keep the runtime install from
           # auto-detecting onboard platforms from the runner's CANN environment.
           env -u ASCEND_HOME_PATH python3 -m pip install --no-build-isolation --no-deps "${PYPTO_WORKSPACE}/runtime"
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          from simpler_setup.environment import PROJECT_ROOT
-          from simpler_setup.kernel_compiler import KernelCompiler
-
-          required = PROJECT_ROOT / "src" / "common" / "task_interface" / "arg_direction.h"
-          if not required.is_file():
-              raise SystemExit(f"missing required simpler runtime header: {required}")
-
-          include_dirs = KernelCompiler(platform="a5sim").get_orchestration_include_dirs(
-              "tensormap_and_ringbuffer"
-          )
-          if str(required.parent) not in include_dirs:
-              raise SystemExit(
-                  "simpler orchestration include dirs do not contain "
-                  f"{required.parent}: {include_dirs}"
-              )
-
-          print(f"simpler PROJECT_ROOT={PROJECT_ROOT}")
-          print(f"simpler arg_direction.h={required}")
-          PY
 
       - name: Run PyPTO PTOAS end-to-end simulator smoke
         shell: bash

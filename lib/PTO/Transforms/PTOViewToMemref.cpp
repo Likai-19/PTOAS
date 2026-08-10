@@ -1456,8 +1456,7 @@ static LogicalResult lowerSubViewOps(func::FuncOp func, MLIRContext *ctx) {
 
     SmallVector<int64_t> srcStrides;
     int64_t srcOffset = ShapedType::kDynamic;
-    if (failed(mlir::pto::getPTOMemRefStridesAndOffset(srcMrTy, srcStrides,
-                                                       srcOffset)))
+    if (failed(getStridesAndOffset(srcMrTy, srcStrides, srcOffset)))
       srcStrides = computeCompactStrides(srcMrTy.getShape());
 
     // Keep parent physical shape + strides for bound tile semantics.
@@ -2250,8 +2249,7 @@ struct PTOViewToMemrefPass
 
         SmallVector<int64_t> staticStrides;
         int64_t offset = ShapedType::kDynamic;
-        if (succeeded(mlir::pto::getPTOMemRefStridesAndOffset(
-                mrTy, staticStrides, offset)) &&
+        if (succeeded(getStridesAndOffset(mrTy, staticStrides, offset)) &&
             dimIndex < (int64_t)staticStrides.size() &&
             staticStrides[dimIndex] != ShapedType::kDynamic) {
           rewriter.replaceOpWithNewOp<arith::ConstantIndexOp>(

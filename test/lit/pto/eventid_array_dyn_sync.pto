@@ -15,11 +15,9 @@ module {
 
 // CHECK-LABEL: AICORE void eventid_array_dyn_sync() {
 // CHECK: const int64_t {{v[0-9]+}} = 0;
-// CHECK: PTOAS_EventIdArray<4> [[ARR:v[0-9]+]];
-// CHECK: PTOAS_EventIdArray<4> [[ARR_VAL:v[0-9]+]] = [[ARR]];
-// CHECK: [[ARR_VAL]][{{v[0-9]+}}] = {{v[0-9]+}};
-// CHECK: int64_t [[EID:v[0-9]+]] = [[ARR_VAL]][{{v[0-9]+}}];
-// CHECK: event_t {{v[0-9]+}} = (event_t) [[EID]];
+// CHECK: PTOAS_EventIdArray<4> {{v[0-9]+}};
+// CHECK: {{v[0-9]+}}[{{v[0-9]+}}] = {{v[0-9]+}};
+// CHECK: event_t {{v[0-9]+}} = (event_t) {{v[0-9]+}}[{{v[0-9]+}}];
 // CHECK: set_flag(PIPE_MTE2, PIPE_MTE3, {{v[0-9]+}});
-// CHECK: event_t {{v[0-9]+}} = (event_t) [[EID]];
+// CHECK: event_t {{v[0-9]+}} = (event_t) {{v[0-9]+}}[{{v[0-9]+}}];
 // CHECK: wait_flag(PIPE_MTE2, PIPE_MTE3, {{v[0-9]+}});

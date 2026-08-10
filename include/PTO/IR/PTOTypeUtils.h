@@ -9,36 +9,12 @@
 #ifndef PTO_IR_PTOTYPEUTILS_H
 #define PTO_IR_PTOTYPEUTILS_H
 
-#include "llvm/ADT/SmallVector.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
-#include "mlir/Support/LLVM.h"
 
 namespace mlir::pto {
 
-namespace detail {
-template <typename MemRefT>
-inline auto getPTOMemRefStridesAndOffsetImpl(
-    MemRefT memTy, SmallVectorImpl<int64_t> &strides, int64_t &offset, int)
-    -> decltype(memTy.getStridesAndOffset(strides, offset)) {
-  return memTy.getStridesAndOffset(strides, offset);
-}
-
-template <typename MemRefT>
-inline LogicalResult getPTOMemRefStridesAndOffsetImpl(
-    MemRefT memTy, SmallVectorImpl<int64_t> &strides, int64_t &offset, long) {
-  return getStridesAndOffset(memTy, strides, offset);
-}
-} // namespace detail
-
-inline LogicalResult getPTOMemRefStridesAndOffset(
-    MemRefType memTy, SmallVectorImpl<int64_t> &strides, int64_t &offset) {
-  return detail::getPTOMemRefStridesAndOffsetImpl(memTy, strides, offset, 0);
-}
-
 bool isPTOFloat8Type(Type t);
-bool isPTOFloat8E4M3LikeType(Type t);
-bool isPTOFloat8E5M2LikeType(Type t);
 bool isPTOHiFloat8Type(Type t);
 bool isPTOF8E8M0Type(Type t);
 bool isPTOHiFloat8x2Type(Type t);

@@ -5,8 +5,8 @@
 //
 // CHECK-DAG: pipe_barrier(PIPE_ALL)
 // CHECK-LABEL: AICORE void loop_if_else_loop_carried_sync()
-// CHECK: for (int64_t [[IV:[ij][0-9]+]] =
-// CHECK: if ([[IV]] ==
+// CHECK: for (size_t
+// CHECK: if ((int64_t)
 // CHECK: } else {
 // CHECK: #endif // __DAV_CUBE__
 

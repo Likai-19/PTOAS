@@ -4,7 +4,7 @@
 // a post-loop vector consumer must wait on MTE2->V before TROWEXPANDDIV.
 //
 // CHECK-LABEL: AICORE void qwen3_scope2_incore_5
-// CHECK: for (int64_t
+// CHECK: for (size_t
 // CHECK: }
 // CHECK: wait_flag(PIPE_MTE2, PIPE_V, EVENT_ID[[POST:[0-9]+]]);
 // CHECK: TROWEXPANDDIV

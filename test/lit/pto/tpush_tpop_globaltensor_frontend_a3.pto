@@ -67,15 +67,13 @@ module {
 // CHECK-SAME: (__gm__ float* [[CUBE_GM:v[0-9]+]],
 // CHECK: TPipe<0, Direction::DIR_C2V, 1024, 8, 8, true>([[CUBE_GM]], {{.*}}, {{.*}});
 // CHECK: GlobalTensor<float, pto::Shape<1, 1, 1, 16, 16>, pto::Stride<256, 256, 256, 16, 1>, pto::Layout::ND> [[CUBE_ENTRY:v[0-9]+]](nullptr);
-// CHECK: GlobalTensor<float, pto::Shape<1, 1, 1, 16, 16>, pto::Stride<256, 256, 256, 16, 1>, pto::Layout::ND> [[CUBE_ENTRY_VAL:v[0-9]+]] = [[CUBE_ENTRY]];
-// CHECK: TALLOC<TPipe<0, Direction::DIR_C2V, 1024, 8, 8, true>, GlobalTensor<float, pto::Shape<1, 1, 1, 16, 16>, pto::Stride<256, 256, 256, 16, 1>, pto::Layout::ND>, TileSplitAxis::TILE_NO_SPLIT>({{.*}}, [[CUBE_ENTRY_VAL]]);
+// CHECK: TALLOC<TPipe<0, Direction::DIR_C2V, 1024, 8, 8, true>, GlobalTensor<float, pto::Shape<1, 1, 1, 16, 16>, pto::Stride<256, 256, 256, 16, 1>, pto::Layout::ND>, TileSplitAxis::TILE_NO_SPLIT>({{.*}}, [[CUBE_ENTRY]]);
 // CHECK: TSTORE
-// CHECK: TPUSH<TPipe<0, Direction::DIR_C2V, 1024, 8, 8, true>, GlobalTensor<float, pto::Shape<1, 1, 1, 16, 16>, pto::Stride<256, 256, 256, 16, 1>, pto::Layout::ND>, TileSplitAxis::TILE_NO_SPLIT>({{.*}}, [[CUBE_ENTRY_VAL]]);
+// CHECK: TPUSH<TPipe<0, Direction::DIR_C2V, 1024, 8, 8, true>, GlobalTensor<float, pto::Shape<1, 1, 1, 16, 16>, pto::Stride<256, 256, 256, 16, 1>, pto::Layout::ND>, TileSplitAxis::TILE_NO_SPLIT>({{.*}}, [[CUBE_ENTRY]]);
 // CHECK-LABEL: AICORE void vector_kernel
 // CHECK-SAME: (__gm__ float* [[VEC_GM:v[0-9]+]],
 // CHECK: TPipe<0, Direction::DIR_C2V, 1024, 8, 8, true>([[VEC_GM]], {{.*}}, {{.*}});
 // CHECK: GlobalTensor<float, pto::Shape<1, 1, 1, 16, 16>, pto::Stride<256, 256, 256, 16, 1>, pto::Layout::ND> [[VEC_ENTRY:v[0-9]+]](nullptr);
-// CHECK: GlobalTensor<float, pto::Shape<1, 1, 1, 16, 16>, pto::Stride<256, 256, 256, 16, 1>, pto::Layout::ND> [[VEC_ENTRY_VAL:v[0-9]+]] = [[VEC_ENTRY]];
 // CHECK: TPOP<TPipe<0, Direction::DIR_C2V, 1024, 8, 8, true>, GlobalTensor<float, pto::Shape<1, 1, 1, 16, 16>, pto::Stride<256, 256, 256, 16, 1>, pto::Layout::ND>, TileSplitAxis::TILE_NO_SPLIT>(
 // CHECK: TLOAD
 // CHECK: TFREE<TPipe<0, Direction::DIR_C2V, 1024, 8, 8, true>, GlobalTensor<float, pto::Shape<1, 1, 1, 16, 16>, pto::Stride<256, 256, 256, 16, 1>, pto::Layout::ND>, TileSplitAxis::TILE_NO_SPLIT>(

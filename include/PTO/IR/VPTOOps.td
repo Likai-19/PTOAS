@@ -72,13 +72,13 @@ def PTO_V2F8E4M3FNType : Type<
   CPred<"::llvm::isa<::mlir::VectorType>($_self) && "
         "::llvm::cast<::mlir::VectorType>($_self).getRank() == 1 && "
         "::llvm::cast<::mlir::VectorType>($_self).getDimSize(0) == 2 && "
-        "::llvm::isa<::mlir::Float8E4M3FNType>(::llvm::cast<::mlir::VectorType>($_self).getElementType())">,
+        "::llvm::cast<::mlir::VectorType>($_self).getElementType().isFloat8E4M3FN()">,
   "vector<2xf8E4M3FN>">;
 def PTO_V2F8E5M2Type : Type<
   CPred<"::llvm::isa<::mlir::VectorType>($_self) && "
         "::llvm::cast<::mlir::VectorType>($_self).getRank() == 1 && "
         "::llvm::cast<::mlir::VectorType>($_self).getDimSize(0) == 2 && "
-        "::llvm::isa<::mlir::Float8E5M2Type>(::llvm::cast<::mlir::VectorType>($_self).getElementType())">,
+        "::llvm::cast<::mlir::VectorType>($_self).getElementType().isFloat8E5M2()">,
   "vector<2xf8E5M2>">;
 def PTO_V2HiF8Type : Type<
   CPred<"::llvm::isa<::mlir::pto::HiF8x2Type>($_self)">,

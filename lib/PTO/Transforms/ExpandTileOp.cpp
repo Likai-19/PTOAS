@@ -26,7 +26,6 @@
 //
 
 #include "PTO/IR/PTO.h"
-#include "PTO/IR/PTOTypeUtils.h"
 #include "PTO/Transforms/Passes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -200,8 +199,8 @@ static std::string getDtypeString(Type elemTy) {
   if (elemTy.isF32()) return "f32";
   if (elemTy.isF16()) return "f16";
   if (elemTy.isBF16()) return "bf16";
-  if (isa<Float8E4M3FNType>(elemTy)) return "f8e4m3";
-  if (isa<Float8E5M2Type>(elemTy)) return "f8e5m2";
+  if (elemTy.isFloat8E4M3FN()) return "f8e4m3";
+  if (elemTy.isFloat8E5M2()) return "f8e5m2";
   if (isa<pto::HiF8Type>(elemTy)) return "hif8";
   if (isa<pto::F4E1M2x2Type>(elemTy)) return "f4e1m2x2";
   if (isa<pto::F4E2M1x2Type>(elemTy)) return "f4e2m1x2";
@@ -522,13 +521,12 @@ static bool getStaticIntFromValue(Value value, int64_t &out) {
 }
 
 static int64_t getStaticIntOrDynamic(OpFoldResult ofr) {
-  if (isa<Attribute>(ofr)) {
-    Attribute attr = cast<Attribute>(ofr);
+  if (auto attr = ofr.dyn_cast<Attribute>()) {
     if (auto intAttr = dyn_cast<IntegerAttr>(attr))
       return intAttr.getInt();
     return ShapedType::kDynamic;
   }
-  Value value = cast<Value>(ofr);
+  auto value = llvm::cast<Value>(ofr);
   int64_t result = ShapedType::kDynamic;
   if (getStaticIntFromValue(value, result))
     return result;
@@ -598,8 +596,7 @@ static void populateViewShapeAndStrides(Value value,
       shape.assign(memrefTy.getShape().begin(), memrefTy.getShape().end());
     if (strides.empty()) {
       int64_t offset = ShapedType::kDynamic;
-      if (succeeded(
-              mlir::pto::getPTOMemRefStridesAndOffset(memrefTy, strides, offset))) {
+      if (succeeded(getStridesAndOffset(memrefTy, strides, offset))) {
         // strides populated — dynamic dims remain ShapedType::kDynamic.
       }
     }
@@ -647,8 +644,7 @@ static std::optional<OperandTypeInfo> buildOperandTypeInfo(Value value) {
       info.viewShape.assign(mrTy.getShape().begin(), mrTy.getShape().end());
     if (info.viewStrides.empty()) {
       int64_t offset = ShapedType::kDynamic;
-      if (succeeded(mlir::pto::getPTOMemRefStridesAndOffset(
-              mrTy, info.viewStrides, offset))) {
+      if (succeeded(getStridesAndOffset(mrTy, info.viewStrides, offset))) {
         // strides populated — dynamic dims remain ShapedType::kDynamic.
       }
     }

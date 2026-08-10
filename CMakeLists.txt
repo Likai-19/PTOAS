@@ -18,66 +18,6 @@ if(POLICY CMP0169)
   set(CMAKE_POLICY_DEFAULT_CMP0169 OLD)
 endif()
 
-function(ptoas_get_cmake_cache_value cache_file variable out_var)
-  if(NOT EXISTS "${cache_file}")
-    set(${out_var} "" PARENT_SCOPE)
-    return()
-  endif()
-
-  file(STRINGS "${cache_file}" cache_lines
-       REGEX "^${variable}:[^=]*=")
-  if(cache_lines)
-    list(GET cache_lines 0 cache_line)
-    string(REGEX REPLACE "^[^=]*=" "" cache_value "${cache_line}")
-    set(${out_var} "${cache_value}" PARENT_SCOPE)
-  else()
-    set(${out_var} "" PARENT_SCOPE)
-  endif()
-endfunction()
-
-function(ptoas_get_llvm_build_dir_from_llvm_dir out_var)
-  if(NOT DEFINED LLVM_DIR OR LLVM_DIR STREQUAL "")
-    set(${out_var} "" PARENT_SCOPE)
-    return()
-  endif()
-
-  get_filename_component(llvm_cmake_dir "${LLVM_DIR}" REALPATH)
-  get_filename_component(llvm_build_dir "${llvm_cmake_dir}/../../.." REALPATH)
-  if(EXISTS "${llvm_build_dir}/CMakeCache.txt")
-    set(${out_var} "${llvm_build_dir}" PARENT_SCOPE)
-  else()
-    set(${out_var} "" PARENT_SCOPE)
-  endif()
-endfunction()
-
-function(ptoas_preseed_compilers_from_llvm_cache)
-  ptoas_get_llvm_build_dir_from_llvm_dir(llvm_build_dir)
-  if(llvm_build_dir STREQUAL "")
-    return()
-  endif()
-
-  set(llvm_cache "${llvm_build_dir}/CMakeCache.txt")
-  if(NOT DEFINED CMAKE_C_COMPILER AND "$ENV{CC}" STREQUAL "")
-    ptoas_get_cmake_cache_value("${llvm_cache}" "CMAKE_C_COMPILER"
-                                llvm_c_compiler)
-    if(llvm_c_compiler AND EXISTS "${llvm_c_compiler}")
-      set(CMAKE_C_COMPILER "${llvm_c_compiler}" CACHE FILEPATH
-          "C compiler inherited from the configured LLVM build" FORCE)
-    endif()
-  endif()
-
-  if(NOT DEFINED CMAKE_CXX_COMPILER AND "$ENV{CXX}" STREQUAL "")
-    ptoas_get_cmake_cache_value("${llvm_cache}" "CMAKE_CXX_COMPILER"
-                                llvm_cxx_compiler)
-    if(llvm_cxx_compiler AND EXISTS "${llvm_cxx_compiler}")
-      set(CMAKE_CXX_COMPILER "${llvm_cxx_compiler}" CACHE FILEPATH
-          "C++ compiler inherited from the configured LLVM build" FORCE)
-    endif()
-  endif()
-endfunction()
-
-ptoas_preseed_compilers_from_llvm_cache()
-
 project(ptoas VERSION 0.49)
 
 option(PTOAS_VALIDATE_CMAKE4_FETCHCONTENT_COMPAT
@@ -132,7 +72,7 @@ endif()
 message(STATUS "PTOAS CLI version: ${PTOAS_CLI_VERSION}")
 
 # =========================================================
-# [新增] 强制设置 C++17 标准 (LLVM/MLIR 必需)
+# [新增] 强制设置 C++17 标准 (LLVM 19 必需)
 # =========================================================
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -145,41 +85,6 @@ find_package(LLVM REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "LLVM CMake Dir: ${LLVM_CMAKE_DIR}")
 message(STATUS "LLVM Include Dir: ${LLVM_INCLUDE_DIRS}")
-if(NOT DEFINED LLVM_VERSION_MAJOR)
-  string(REGEX MATCH "^[0-9]+" LLVM_VERSION_MAJOR "${LLVM_PACKAGE_VERSION}")
-endif()
-if(NOT LLVM_VERSION_MAJOR STREQUAL "21")
-  message(FATAL_ERROR
-    "PTOAS requires LLVM 21 after the LLVM21 upgrade, but found "
-    "LLVM ${LLVM_PACKAGE_VERSION}. Please point LLVM_DIR/MLIR_DIR to an "
-    "LLVM 21 build, for example vpto-dev/llvm-project:feature-vpto-llvm21.")
-endif()
-get_filename_component(PTO_LLVM_BUILD_LIBRARY_DIR
-  "${LLVM_BUILD_LIBRARY_DIR}" REALPATH)
-ptoas_get_llvm_build_dir_from_llvm_dir(PTO_LLVM_BUILD_DIR)
-if(PTO_LLVM_BUILD_DIR)
-  ptoas_get_cmake_cache_value("${PTO_LLVM_BUILD_DIR}/CMakeCache.txt"
-                              "CMAKE_CXX_COMPILER"
-                              PTO_LLVM_CXX_COMPILER)
-endif()
-if(PTO_LLVM_CXX_COMPILER AND EXISTS "${PTO_LLVM_CXX_COMPILER}")
-  execute_process(
-    COMMAND "${PTO_LLVM_CXX_COMPILER}" --version
-    OUTPUT_VARIABLE PTO_LLVM_CXX_VERSION_TEXT
-    ERROR_VARIABLE PTO_LLVM_CXX_VERSION_TEXT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_STRIP_TRAILING_WHITESPACE)
-  if(PTO_LLVM_CXX_VERSION_TEXT MATCHES "[Cc]lang"
-     AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    message(FATAL_ERROR
-      "PTOAS is being configured with GNU C++ (${CMAKE_CXX_COMPILER}), "
-      "but the selected LLVM build was compiled with a Clang-compatible "
-      "compiler (${PTO_LLVM_CXX_COMPILER}). MLIR TypeID fallback strings are "
-      "compiler-family sensitive across shared libraries; use "
-      "-DCMAKE_CXX_COMPILER=${PTO_LLVM_CXX_COMPILER} or leave the compiler "
-      "unset so PTOAS can inherit it from LLVM_DIR.")
-  endif()
-endif()
 
 # 将 LLVM 模块路径加入 CMake 搜索路径
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
@@ -226,7 +131,7 @@ include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_BINARY_DIR}/include)
 
-link_directories(${PTO_LLVM_BUILD_LIBRARY_DIR})
+link_directories(${LLVM_BUILD_LIBRARY_DIR})
 add_definitions(${LLVM_DEFINITIONS})
 
 # =========================================================

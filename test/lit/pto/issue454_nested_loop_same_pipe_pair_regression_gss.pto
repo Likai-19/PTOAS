@@ -8,7 +8,7 @@
 // - Inner-loop and outer-loop event chains must both keep their set/wait handshake.
 //
 // CHECK-LABEL: AICORE void nested_loop_same_pipe_pair()
-// CHECK-COUNT-2: for (int64_t
+// CHECK-COUNT-2: for (size_t
 // CHECK: TMATMUL(
 // CHECK: #endif // __DAV_CUBE__
 

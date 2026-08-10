@@ -5,7 +5,7 @@
 // - Preserve the tail drain before the auto tail barrier helper.
 //
 // CHECK-LABEL: tri_inv_block2x2_fp16(
-// CHECK: for (int64_t [[LOOP0:[ij][0-9]+]] =
+// CHECK: for (size_t [[LOOP0:v[0-9]+]] =
 // CHECK: wait_flag(PIPE_M, PIPE_MTE1, EVENT_ID2);
 // CHECK: TMOV({{v[0-9]+}}, {{v[0-9]+}});
 // CHECK: TMOV({{v[0-9]+}}, {{v[0-9]+}});
@@ -37,7 +37,7 @@
 // CHECK: set_flag(PIPE_M, PIPE_MTE1, EVENT_ID2);
 // CHECK: set_flag(PIPE_FIX, PIPE_M, EVENT_ID2);
 // CHECK: }
-// CHECK: for (int64_t [[LOOP1:[ij][0-9]+]] =
+// CHECK: for (size_t [[LOOP1:v[0-9]+]] =
 // CHECK: wait_flag(PIPE_M, PIPE_MTE1, EVENT_ID7);
 // CHECK: TMOV({{v[0-9]+}}, {{v[0-9]+}});
 // CHECK: TMOV({{v[0-9]+}}, {{v[0-9]+}});

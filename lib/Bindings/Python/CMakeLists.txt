@@ -19,9 +19,6 @@ find_package(pybind11 CONFIG REQUIRED)
 include(TableGen)
 include(AddMLIR)
 
-get_filename_component(PTO_LLVM_BUILD_LIBRARY_DIR
-  "${LLVM_BUILD_LIBRARY_DIR}" REALPATH)
-
 # ---- 1) Python native extension: mlir._mlir_libs._pto ----
 pybind11_add_module(_pto MODULE
   PTOModule.cpp
@@ -57,8 +54,8 @@ target_link_libraries(_pto PRIVATE
 # 关键：放到 mlir/_mlir_libs 下（匹配 MLIR dialect python 的 import 习惯）
 set_target_properties(_pto PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/python/mlir/_mlir_libs"
-  BUILD_RPATH "${PTO_LLVM_BUILD_LIBRARY_DIR}"
-  INSTALL_RPATH "${PTO_LLVM_BUILD_LIBRARY_DIR}"
+  BUILD_RPATH "${LLVM_BUILD_LIBRARY_DIR}"
+  INSTALL_RPATH "${LLVM_BUILD_LIBRARY_DIR}"
 )
 # macOS: 避免 ld 警告 "-undefined suppress is deprecated"，仅保留 -undefined dynamic_lookup
 if(APPLE)

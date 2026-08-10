@@ -12,7 +12,6 @@ import os
 import re
 import sys
 from tempfile import TemporaryDirectory
-from typing import Optional
 from unittest import mock
 
 
@@ -36,7 +35,7 @@ def expect(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def expect_raises(exc_type, func, message_substring: Optional[str] = None) -> Exception:
+def expect_raises(exc_type, func, message_substring: str | None = None) -> Exception:
     try:
         func()
     except exc_type as exc:

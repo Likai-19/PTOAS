@@ -37,8 +37,11 @@ module {
 // CPP: int32_t [[ARR:v[0-9]+]][2];
 // CPP: [[ARR]][{{v[0-9]+}}] = {{v[0-9]+}};
 // CPP: [[ARR]][{{v[0-9]+}}] = {{v[0-9]+}};
-// CPP: int32_t [[CUR:v[0-9]+]] = [[ARR]][{{v[0-9]+}}];
-// CPP-NEXT: [[ARR]][{{v[0-9]+}}] = {{.*}}(uint32_t) [[CUR]]{{.*}};
+// CPP: int32_t [[CUR:v[0-9]+]];
+// CPP-NEXT: [[CUR]] = [[ARR]][{{v[0-9]+}}];
+// CPP-NEXT: uint32_t [[NEW_U:v[0-9]+]] = (uint32_t) [[CUR]];
+// CPP-NEXT: [[ARR]][{{v[0-9]+}}] = {{.*}}[[NEW_U]]{{.*}};
 // CPP-NOT: [[ARR]][
-// CPP: int32_t [[SUM:v[0-9]+]] = {{.*}}(uint32_t) [[CUR]]{{.*}};
+// CPP: uint32_t [[SUM_U:v[0-9]+]] = (uint32_t) [[CUR]];
+// CPP-NEXT: int32_t [[SUM:v[0-9]+]] = {{.*}}[[SUM_U]]{{.*}};
 // CPP-NEXT: [[OUT]][{{v[0-9]+}}] = [[SUM]];

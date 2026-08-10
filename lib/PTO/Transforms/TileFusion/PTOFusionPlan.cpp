@@ -528,6 +528,9 @@ struct FusionPlanPass : public pto::impl::FusionPlanBase<FusionPlanPass> {
   using pto::impl::FusionPlanBase<FusionPlanPass>::FusionPlanBase;
 
   FusionPlanPass() = default;
+  FusionPlanPass(const pto::FusionPlanOptions &options) {
+    enableShapeInference = options.enableShapeInference;
+  }
 
   void runOnOperation() override {
     func::FuncOp func = getOperation();

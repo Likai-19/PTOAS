@@ -86,14 +86,12 @@ module attributes {pto.target_arch = "a5"} {
   }
 }
 
-// CHECK-LABEL: AICORE void mgather_emitc
 // CHECK: TLOAD({{v[0-9]+}}, {{v[0-9]+}});
-// CHECK-DAG: __ubuf__ int32_t* [[MGATHER_IDX:v[0-9]+]] = {{.*}};
-// CHECK-DAG: __ubuf__ float* [[MGATHER_DST:v[0-9]+]] = {{.*}};
+// CHECK: __ubuf__ int32_t* [[MGATHER_IDX:v[0-9]+]] = {{.*}};
+// CHECK: __ubuf__ float* [[MGATHER_DST:v[0-9]+]] = {{.*}};
 // CHECK: MGATHER<pto::Coalesce::Row, pto::GatherOOB::Zero>([[MGATHER_DST]], {{v[0-9]+}}, [[MGATHER_IDX]]);
-// CHECK-LABEL: AICORE void mscatter_emitc
 // CHECK: TLOAD({{v[0-9]+}}, {{v[0-9]+}});
 // CHECK: TLOAD({{v[0-9]+}}, {{v[0-9]+}});
-// CHECK-DAG: __ubuf__ float* [[MSCATTER_SRC:v[0-9]+]] = {{.*}};
-// CHECK-DAG: __ubuf__ int32_t* [[MSCATTER_IDX:v[0-9]+]] = {{.*}};
+// CHECK: __ubuf__ float* [[MSCATTER_SRC:v[0-9]+]] = {{.*}};
+// CHECK: __ubuf__ int32_t* [[MSCATTER_IDX:v[0-9]+]] = {{.*}};
 // CHECK: MSCATTER<pto::Coalesce::Elem, pto::ScatterAtomicOp::Add, pto::ScatterOOB::Skip, pto::ScatterConflict::Default>({{v[0-9]+}}, [[MSCATTER_SRC]], [[MSCATTER_IDX]]);

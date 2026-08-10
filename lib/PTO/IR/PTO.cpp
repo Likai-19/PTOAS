@@ -3776,7 +3776,7 @@ static LogicalResult verifyAsyncFlatContiguous1DGMMemRef(Operation *op,
 
   SmallVector<int64_t> strides;
   int64_t offset = 0;
-  if (failed(getPTOMemRefStridesAndOffset(memTy, strides, offset)))
+  if (failed(getStridesAndOffset(memTy, strides, offset)))
     return op->emitOpError() << "expects " << name
                              << " to be a strided memref with a known layout";
 
@@ -3997,7 +3997,10 @@ static bool isSupportedMGatherMScatterPayloadElemType(Operation *op, Type ty) {
     return true;
   if (!isTargetArchA5(op))
     return false;
-  return isPTOHiFloat8Type(ty) || isPTOFloat8Type(ty);
+  if (isPTOHiFloat8Type(ty))
+    return true;
+  return ty.isFloat8E4M3() || ty.isFloat8E4M3FN() || ty.isFloat8E4M3FNUZ() ||
+         ty.isFloat8E4M3B11FNUZ() || ty.isFloat8E5M2() || ty.isFloat8E5M2FNUZ();
 }
 
 static bool isSupportedMScatterAtomicPayloadElemType(Type ty,
@@ -4274,7 +4277,8 @@ static bool isA5AccStorePreQuantDstType(Type srcElem, Type dstElem) {
     return false;
   return dstElem.isInteger(8) || dstElem.isF16() || dstElem.isBF16() ||
          dstElem.isF32() || isPTOHiFloat8Type(dstElem) ||
-         isPTOFloat8E4M3LikeType(dstElem);
+         dstElem.isFloat8E4M3() || dstElem.isFloat8E4M3FN() ||
+         dstElem.isFloat8E4M3FNUZ() || dstElem.isFloat8E4M3B11FNUZ();
 }
 
 static bool isA5LowPrecisionTCvtPair(Type srcElem, Type dstElem) {
@@ -5198,7 +5202,11 @@ static LogicalResult verifyMatmulTypeTriple(Operation *op, Type lhsElemTy,
     return success();
 
   auto isA5TMatmulFp8Type = [](Type ty) {
-    return isPTOFloat8Type(ty);
+    if (auto ft = mlir::dyn_cast<FloatType>(ty))
+      return ft.isFloat8E4M3() || ft.isFloat8E4M3FN() ||
+             ft.isFloat8E4M3FNUZ() || ft.isFloat8E4M3B11FNUZ() ||
+             ft.isFloat8E5M2() || ft.isFloat8E5M2FNUZ();
+    return false;
   };
   if (isA5 && dstElemTy.isF32()) {
     if (isA5TMatmulFp8Type(lhsElemTy) && isA5TMatmulFp8Type(rhsElemTy))
@@ -6975,7 +6983,9 @@ static bool isA5Fp8LikeType(Type ty) {
 }
 
 static bool isA5MxFp8InputType(Type ty) {
-  return ty && isa<Float8E4M3FNType, Float8E5M2Type>(ty);
+  if (auto ft = dyn_cast<FloatType>(ty))
+    return ft.isFloat8E4M3FN() || ft.isFloat8E5M2();
+  return false;
 }
 
 static bool isA5MxInputTypePair(Type lhsTy, Type rhsTy) {
@@ -13435,7 +13445,7 @@ mlir::LogicalResult mlir::pto::SimdTileToMemrefOp::verify() {
 
     SmallVector<int64_t, 4> memStrides;
     int64_t memOffset = ShapedType::kDynamic;
-    if (failed(getPTOMemRefStridesAndOffset(memTy, memStrides, memOffset)))
+    if (failed(getStridesAndOffset(memTy, memStrides, memOffset)))
       return emitOpError("expects memref to use strided layout");
     if (memOffset != 0)
       return emitOpError("expects memref offset to be 0");
@@ -14700,7 +14710,8 @@ static void printFrontendInitializePipeOp(InitOpT op, OpAsmPrinter &p) {
     needsComma = true;
   };
 
-  printClause("id", op.getId());
+  if (op.getId() != 0)
+    printClause("id", op.getId());
   printClause("dir_mask", static_cast<int32_t>(op.getDirMask()));
   printClause("slot_size", op.getSlotSize());
   if (auto slotNumAttr = op.getSlotNumAttr())

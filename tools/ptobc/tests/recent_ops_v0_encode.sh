@@ -22,19 +22,14 @@ if [[ -z "${TESTDATA_DIR}" ]]; then
 fi
 
 IN="${TESTDATA_DIR}/recent_ops_v0_roundtrip.pto"
-MX_IN="${TESTDATA_DIR}/recent_mx_ops_v0_roundtrip.pto"
 OUT_DIR=${OUT_DIR:-"${PWD}/ptobc_recent_ops_out"}
 mkdir -p "${OUT_DIR}"
 
 BC="${OUT_DIR}/recent_ops_v0_roundtrip.ptobc"
 ROUNDTRIP="${OUT_DIR}/recent_ops_v0_roundtrip.roundtrip.pto"
-MX_BC="${OUT_DIR}/recent_mx_ops_v0_roundtrip.ptobc"
-MX_ROUNDTRIP="${OUT_DIR}/recent_mx_ops_v0_roundtrip.roundtrip.pto"
 
 "${PTOBC_BIN}" encode "${IN}" -o "${BC}"
 "${PTOBC_BIN}" decode "${BC}" -o "${ROUNDTRIP}"
-"${PTOBC_BIN}" encode "${MX_IN}" -o "${MX_BC}"
-"${PTOBC_BIN}" decode "${MX_BC}" -o "${MX_ROUNDTRIP}"
 
 grep -F "pto.subview " "${ROUNDTRIP}" >/dev/null
 grep -F "pto.tprint ins(" "${ROUNDTRIP}" >/dev/null
@@ -46,6 +41,6 @@ grep -F "pto.trowexpandmul ins(" "${ROUNDTRIP}" >/dev/null
 grep -F "pto.trsqrt ins(" "${ROUNDTRIP}" >/dev/null
 grep -E "pto\\.trsqrt ins\\(%[^,]+, %[^:]+ :" "${ROUNDTRIP}" >/dev/null
 grep -F "pto.tpartmul ins(" "${ROUNDTRIP}" >/dev/null
-grep -F "pto.tgemv.mx ins(" "${MX_ROUNDTRIP}" >/dev/null
-grep -F "pto.tgemv.mx.acc ins(" "${MX_ROUNDTRIP}" >/dev/null
-grep -F "pto.tgemv.mx.bias ins(" "${MX_ROUNDTRIP}" >/dev/null
+grep -F "pto.tgemv.mx ins(" "${ROUNDTRIP}" >/dev/null
+grep -F "pto.tgemv.mx.acc ins(" "${ROUNDTRIP}" >/dev/null
+grep -F "pto.tgemv.mx.bias ins(" "${ROUNDTRIP}" >/dev/null

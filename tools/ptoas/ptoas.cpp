@@ -587,11 +587,6 @@ static LogicalResult emitSharedPreBackendSeamIR(ModuleOp module,
   return success();
 }
 
-static void printSharedPreBackendSeamIR(ModuleOp module) {
-  module->print(llvm::errs());
-  llvm::errs() << "\n";
-}
-
 static bool hasUnexpandedTileOps(ModuleOp module) {
   bool found = false;
   module.walk([&](Operation *op) {
@@ -835,199 +830,9 @@ static void dropEmptyEmitCExpressions(Operation *rootOp) {
     expr.erase();
 }
 
-static void appendEmitCIntegerAttrLiteral(std::string &storage,
-                                          const APInt &value, bool isUnsigned) {
-  if (value.getBitWidth() == 0) {
-    storage.append("0");
-    return;
-  }
-  if (value.getBitWidth() == 1) {
-    storage.append(value.getBoolValue() ? "true" : "false");
-    return;
-  }
-
-  SmallString<128> strValue;
-  value.toString(strValue, 10, !isUnsigned, false);
-  storage.append(strValue.data(), strValue.size());
-}
-
-static bool shouldPrintEmitCIntegerAttrAsUnsigned(IntegerAttr attr) {
-  auto intTy = dyn_cast<IntegerType>(attr.getType());
-  return intTy && intTy.getSignedness() == IntegerType::Unsigned;
-}
-
-static std::string getEmitCIntegerAttrLiteral(IntegerAttr attr) {
-  std::string literal;
-  appendEmitCIntegerAttrLiteral(literal, attr.getValue(),
-                                shouldPrintEmitCIntegerAttrAsUnsigned(attr));
-  return literal;
-}
-
-static std::optional<std::string>
-getEmitCDenseIntElementsAttrLiteral(DenseIntElementsAttr attr) {
-  auto tensorTy = dyn_cast<TensorType>(attr.getType());
-  if (!tensorTy)
-    return std::nullopt;
-
-  Type elementType = tensorTy.getElementType();
-  bool isUnsigned = false;
-  if (auto intTy = dyn_cast<IntegerType>(elementType)) {
-    isUnsigned = intTy.getSignedness() == IntegerType::Unsigned;
-  } else if (!isa<IndexType>(elementType)) {
-    return std::nullopt;
-  }
-
-  std::string literal;
-  literal.push_back('{');
-  bool first = true;
-  for (const APInt &value : attr) {
-    if (!first)
-      literal.append(", ");
-    first = false;
-    appendEmitCIntegerAttrLiteral(literal, value, isUnsigned);
-  }
-  literal.push_back('}');
-  return literal;
-}
-
-static Attribute normalizeEmitCPrintedAttrForCppEmission(MLIRContext *ctx,
-                                                         Attribute attr) {
-  if (auto intAttr = dyn_cast<IntegerAttr>(attr))
-    return emitc::OpaqueAttr::get(ctx, getEmitCIntegerAttrLiteral(intAttr));
-
-  if (auto denseAttr = dyn_cast<DenseIntElementsAttr>(attr)) {
-    if (std::optional<std::string> literal =
-            getEmitCDenseIntElementsAttrLiteral(denseAttr))
-      return emitc::OpaqueAttr::get(ctx, *literal);
-  }
-
-  if (auto arrayAttr = dyn_cast<ArrayAttr>(attr)) {
-    SmallVector<Attribute> normalized;
-    normalized.reserve(arrayAttr.size());
-    bool changed = false;
-    for (Attribute element : arrayAttr) {
-      Attribute normalizedElement =
-          normalizeEmitCPrintedAttrForCppEmission(ctx, element);
-      changed |= normalizedElement != element;
-      normalized.push_back(normalizedElement);
-    }
-    if (changed)
-      return ArrayAttr::get(ctx, normalized);
-  }
-
-  return attr;
-}
-
-static IntegerAttr normalizeEmitCIndexPlaceholderAttr(MLIRContext *ctx,
-                                                      IntegerAttr attr) {
-  const APInt &value = attr.getValue();
-  int64_t index = value.getBitWidth() == 0 ? 0 : value.getSExtValue();
-  return IntegerAttr::get(IndexType::get(ctx), APInt(64, index));
-}
-
-static ArrayAttr normalizeEmitCCallArgsForCppEmission(MLIRContext *ctx,
-                                                      ArrayAttr args) {
-  SmallVector<Attribute> normalized;
-  normalized.reserve(args.size());
-  bool changed = false;
-
-  for (Attribute attr : args) {
-    if (auto intAttr = dyn_cast<IntegerAttr>(attr)) {
-      if (isa<IndexType>(intAttr.getType())) {
-        Attribute normalizedAttr =
-            normalizeEmitCIndexPlaceholderAttr(ctx, intAttr);
-        changed |= normalizedAttr != attr;
-        normalized.push_back(normalizedAttr);
-        continue;
-      }
-
-      Attribute normalizedAttr =
-          normalizeEmitCPrintedAttrForCppEmission(ctx, attr);
-      changed |= normalizedAttr != attr;
-      normalized.push_back(normalizedAttr);
-      continue;
-    }
-
-    Attribute normalizedAttr =
-        normalizeEmitCPrintedAttrForCppEmission(ctx, attr);
-    changed |= normalizedAttr != attr;
-    normalized.push_back(normalizedAttr);
-  }
-
-  return changed ? ArrayAttr::get(ctx, normalized) : args;
-}
-
-static ArrayAttr normalizeEmitCTemplateArgsForCppEmission(MLIRContext *ctx,
-                                                          ArrayAttr args) {
-  SmallVector<Attribute> normalized;
-  normalized.reserve(args.size());
-  bool changed = false;
-
-  for (Attribute attr : args) {
-    Attribute normalizedAttr =
-        normalizeEmitCPrintedAttrForCppEmission(ctx, attr);
-    changed |= normalizedAttr != attr;
-    normalized.push_back(normalizedAttr);
-  }
-
-  return changed ? ArrayAttr::get(ctx, normalized) : args;
-}
-
-static void normalizeEmitCIntegerAttrsForCppEmission(Operation *rootOp) {
-  MLIRContext *ctx = rootOp->getContext();
-  rootOp->walk([&](Operation *op) {
-    if (auto constant = dyn_cast<emitc::ConstantOp>(op)) {
-      Attribute value = constant.getValue();
-      Attribute normalized =
-          normalizeEmitCPrintedAttrForCppEmission(ctx, value);
-      if (normalized != value)
-        constant.getProperties().setValue(normalized);
-      return;
-    }
-
-    if (auto variable = dyn_cast<emitc::VariableOp>(op)) {
-      Attribute value = variable.getValue();
-      Attribute normalized =
-          normalizeEmitCPrintedAttrForCppEmission(ctx, value);
-      if (normalized != value)
-        variable.getProperties().setValue(normalized);
-      return;
-    }
-
-    if (auto global = dyn_cast<emitc::GlobalOp>(op)) {
-      std::optional<Attribute> initialValue = global.getInitialValue();
-      if (!initialValue)
-        return;
-      Attribute normalized =
-          normalizeEmitCPrintedAttrForCppEmission(ctx, *initialValue);
-      if (normalized != *initialValue)
-        global.getProperties().setInitialValue(normalized);
-      return;
-    }
-
-    if (auto call = dyn_cast<emitc::CallOpaqueOp>(op)) {
-      if (std::optional<ArrayAttr> args = call.getArgs()) {
-        ArrayAttr normalized = normalizeEmitCCallArgsForCppEmission(ctx, *args);
-        if (normalized != *args)
-          call.getProperties().setArgs(normalized);
-      }
-      if (std::optional<ArrayAttr> templateArgs = call.getTemplateArgs()) {
-        ArrayAttr normalized =
-            normalizeEmitCTemplateArgsForCppEmission(ctx, *templateArgs);
-        if (normalized != *templateArgs)
-          call.getProperties().setTemplateArgs(normalized);
-      }
-      return;
-    }
-  });
-}
-
 static Attribute getDefaultEmitCVariableInitAttr(OpBuilder &builder, Type type) {
-  if (auto intTy = dyn_cast<IntegerType>(type)) {
-    if (intTy.getWidth() == 0)
-      return emitc::OpaqueAttr::get(builder.getContext(), "0");
+  if (auto intTy = dyn_cast<IntegerType>(type))
     return builder.getIntegerAttr(intTy, 0);
-  }
   if (isa<IndexType>(type))
     return builder.getIndexAttr(0);
   if (auto floatTy = dyn_cast<FloatType>(type))
@@ -1035,12 +840,6 @@ static Attribute getDefaultEmitCVariableInitAttr(OpBuilder &builder, Type type) 
   if (isa<emitc::OpaqueType, emitc::PointerType>(type))
     return emitc::OpaqueAttr::get(builder.getContext(), "");
   return Attribute{};
-}
-
-static Type getEmitCVariableStorageType(Type valueType) {
-  if (isa<emitc::ArrayType, emitc::LValueType>(valueType))
-    return valueType;
-  return emitc::LValueType::get(valueType);
 }
 
 // FormExpressions may inline conditions into emitc.expression, but the C++
@@ -1068,21 +867,12 @@ static void materializeControlFlowOperands(Operation *rootOp) {
       if (!initAttr)
         continue;
 
-      Value tmp = builder
-                      .create<emitc::VariableOp>(
-                          op->getLoc(), getEmitCVariableStorageType(value.getType()),
-                          initAttr)
-                      .getResult();
+      Value tmp =
+          builder.create<emitc::VariableOp>(op->getLoc(), value.getType(),
+                                            initAttr)
+              .getResult();
       builder.create<emitc::AssignOp>(op->getLoc(), tmp, value);
-      if (auto lvalueTy = dyn_cast<emitc::LValueType>(tmp.getType())) {
-        Value loaded = builder
-                           .create<emitc::LoadOp>(op->getLoc(),
-                                                  lvalueTy.getValueType(), tmp)
-                           .getResult();
-        operand.set(loaded);
-      } else {
-        operand.set(tmp);
-      }
+      operand.set(tmp);
     }
   }
 }
@@ -2168,8 +1958,10 @@ int mlir::pto::compilePTOASModule(
       return 1;
     }
 
-    if (ptoPrintSeamIR)
-      printSharedPreBackendSeamIR(*module);
+    if (ptoPrintSeamIR) {
+      module->print(llvm::errs());
+      llvm::errs() << "\n";
+    }
     if (failed(emitSharedPreBackendSeamIR(*module, ptoSeamIRFile)))
       return 1;
 
@@ -2179,37 +1971,21 @@ int mlir::pto::compilePTOASModule(
                                  context.getCANNVersionOrDefault());
   }
 
-  if (failed(pm.run(*module))) {
-    llvm::errs() << "Error: Pass execution failed.\n";
-    return 1;
-  }
-
-  if (ptoPrintSeamIR)
-    printSharedPreBackendSeamIR(*module);
-  if (failed(emitSharedPreBackendSeamIR(*module, ptoSeamIRFile)))
-    return 1;
-
-  PassManager emitcPM(module->getContext());
-  emitcPM.enableVerifier();
   if (arch == "a3") {
-    emitcPM.addPass(pto::createEmitPTOManualPass(pto::PTOArch::A3));
+    pm.addPass(pto::createEmitPTOManualPass(pto::PTOArch::A3));
   } else {
-    emitcPM.addPass(pto::createEmitPTOManualPass(pto::PTOArch::A5));
+    pm.addPass(pto::createEmitPTOManualPass(pto::PTOArch::A5));
   }
-  emitcPM.addPass(emitc::createFormExpressionsPass());
-  emitcPM.addPass(mlir::createCSEPass());
-  if (failed(applyConfiguredPassManagerCLOptions(
-          emitcPM, "EmitC backend pipeline")))
-    return 1;
+  pm.addPass(emitc::createFormExpressionsPass());
+  pm.addPass(mlir::createCSEPass());
 
-  if (failed(emitcPM.run(*module))) {
+  if (failed(pm.run(*module))) {
     llvm::errs() << "Error: Pass execution failed.\n";
     return 1;
   }
 
   dropEmptyEmitCExpressions(module.get());
   materializeControlFlowOperands(module.get());
-  normalizeEmitCIntegerAttrsForCppEmission(module.get());
   if (failed(reorderEmitCFunctions(module.get()))) {
     llvm::errs() << "Error: Failed to order emitted functions for C++ emission.\n";
     return 1;

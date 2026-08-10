@@ -735,26 +735,7 @@ def _load_function_source_info(py_fn: Callable[..., Any]) -> _FunctionSourceInfo
         return None
 
     source = textwrap.dedent("".join(source_lines))
-    try:
-        module = ast.parse(source)
-    except SyntaxError:
-        try:
-            module = ast.parse(Path(path).read_text(encoding="utf-8"))
-        except (OSError, IOError, SyntaxError):
-            return None
-        code_line = getattr(py_fn, "__code__", None)
-        code_first_line = code_line.co_firstlineno if code_line is not None else start_line
-        for node in ast.walk(module):
-            if not isinstance(node, ast.FunctionDef) or node.name != py_fn.__name__:
-                continue
-            first_line = min(
-                [node.lineno] + [decorator.lineno for decorator in node.decorator_list]
-            )
-            last_line = getattr(node, "end_lineno", node.lineno)
-            if first_line <= code_first_line <= last_line:
-                return _FunctionSourceInfo(path=path, start_line=1, function_def=node)
-        return None
-
+    module = ast.parse(source)
     for node in module.body:
         if isinstance(node, ast.FunctionDef) and node.name == py_fn.__name__:
             return _FunctionSourceInfo(path=path, start_line=start_line, function_def=node)

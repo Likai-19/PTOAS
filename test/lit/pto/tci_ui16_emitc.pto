@@ -5,7 +5,9 @@ module {
     %c7_i16 = arith.constant 7 : i16
     %c7_ui16 = builtin.unrealized_conversion_cast %c7_i16 : i16 to ui16
     %c0 = arith.constant 0 : index
-    %src = memref.reinterpret_cast %dst to offset: [0], sizes: [1, 16], strides: [16, 1] {layout = #pto.layout<nd>} : memref<16xui16, #pto.address_space<gm>> to memref<1x16xui16, strided<[16, 1], offset: ?>, #pto.address_space<gm>>
+    %c1 = arith.constant 1 : index
+    %c16 = arith.constant 16 : index
+    %src = memref.reinterpret_cast %dst to offset: [%c0], sizes: [%c1, %c16], strides: [%c16, %c1] {layout = #pto.layout<nd>} : memref<16xui16, #pto.address_space<gm>> to memref<1x16xui16, strided<[16, 1], offset: ?>, #pto.address_space<gm>>
     %tile = pto.alloc_tile : !pto.tile_buf<loc=vec, dtype=ui16, rows=1, cols=16, v_row=1, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>
     pto.tci ins(%c7_ui16 : ui16) outs(%tile : !pto.tile_buf<loc=vec, dtype=ui16, rows=1, cols=16, v_row=1, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>)
     pto.tstore ins(%tile : !pto.tile_buf<loc=vec, dtype=ui16, rows=1, cols=16, v_row=1, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>) outs(%src : memref<1x16xui16, strided<[16, 1], offset: ?>, #pto.address_space<gm>>) {layout = #pto.layout<nd>, pto.inferred_layout = true}

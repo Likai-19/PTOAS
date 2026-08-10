@@ -1420,9 +1420,10 @@ static VcvtElemKind classifyVcvtElemType(Type type) {
     return VcvtElemKind::BF16;
   if (type.isF32())
     return VcvtElemKind::F32;
-  if (pto::isPTOFloat8E4M3LikeType(type))
+  if (type.isFloat8E4M3() || type.isFloat8E4M3FN() ||
+      type.isFloat8E4M3FNUZ() || type.isFloat8E4M3B11FNUZ())
     return VcvtElemKind::F8E4M3;
-  if (pto::isPTOFloat8E5M2LikeType(type))
+  if (type.isFloat8E5M2() || type.isFloat8E5M2FNUZ())
     return VcvtElemKind::F8E5M2;
   if (pto::isPTOHiFloat8Type(type))
     return VcvtElemKind::HiF8;
