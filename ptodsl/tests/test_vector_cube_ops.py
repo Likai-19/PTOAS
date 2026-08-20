@@ -388,10 +388,12 @@ class VectorCubeSurfaceTest(unittest.TestCase):
         preferred_names = [
             "set_cross_block", "wait_cross_block",
             "set_intra_block", "wait_intra_block",
-        ]
-        legacy_names = [
             "set_cross_flag", "wait_cross_flag",
             "set_intra_flag", "wait_intra_flag",
+        ]
+        legacy_names = [
+            "set_cross_core", "wait_flag_dev",
+            "wait_intra_core",
         ]
 
         for name in preferred_names:

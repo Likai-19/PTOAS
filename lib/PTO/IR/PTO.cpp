@@ -4052,9 +4052,9 @@ LogicalResult mlir::pto::SyncSetOp::verify() {
   auto verifyA5 = [&]() -> LogicalResult {
     if (IntegerAttr eventIdAttr = getEventIdAttr()) {
       int64_t eventId = eventIdAttr.getInt();
-      if (eventId < 0 || eventId > 15) {
+      if (eventId < 0 || eventId > 31) {
         return emitOpError()
-               << "A5 sync.set expects static FFTS event_id in [0, 15], but got "
+               << "A5 sync.set expects static event_id in [0, 31], but got "
                << eventId;
       }
     }
@@ -4209,9 +4209,9 @@ LogicalResult mlir::pto::SyncWaitOp::verify() {
   auto verifyA5 = [&]() -> LogicalResult {
     if (IntegerAttr eventIdAttr = getEventIdAttr()) {
       int64_t eventId = eventIdAttr.getInt();
-      if (eventId < 0 || eventId > 15) {
+      if (eventId < 0 || eventId > 31) {
         return emitOpError()
-               << "A5 sync.wait expects static FFTS event_id in [0, 15], but got "
+               << "A5 sync.wait expects static physical event_id in [0, 31], but got "
                << eventId;
       }
     }
