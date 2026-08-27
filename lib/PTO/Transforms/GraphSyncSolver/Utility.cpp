@@ -28,12 +28,14 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+
+#include "mlir/IR/Value.h"
+#include "llvm/Support/ErrorHandling.h"
+
 #include "PTO/IR/PTO.h"
 #include "PTO/Support/CodeConstants.h"
 #include "PTO/Transforms/GraphSyncSolver/SyncSolverIR.h"
 #include "PTO/Transforms/GraphSyncSolver/Utility.h"
-#include "mlir/IR/Value.h"
-#include "llvm/Support/ErrorHandling.h"
 
 
 using namespace mlir;
@@ -306,7 +308,7 @@ int64_t getHWAvailableEventIdNum(SyncMode syncMode, pto::PIPE setPipe,
   llvm_unreachable("getHWAvailableEventIdNum: unhandled SyncMode");
 }
 
-SmallVector<int64_t> getHWAvailableEventIds(SyncMode syncMode,
+[[maybe_unused]] static SmallVector<int64_t> getHWAvailableEventIds(SyncMode syncMode,
                                             pto::PIPE setPipe,
                                             pto::PIPE waitPipe) {
   if (syncMode == SyncMode::INTRA_CORE_SYNC) {
@@ -351,7 +353,7 @@ SmallVector<int64_t> getHWAvailableEventIds(SyncMode syncMode,
 
 // Build a Value that is true for the first iteration of the given scf::ForOp.
 // Inserted at the start of the loop body and compares induction var with lower.
-Value getIsFirstIterationValue(scf::ForOp forOp, Location loc,
+[[maybe_unused]] static Value getIsFirstIterationValue(scf::ForOp forOp, Location loc,
                                IRRewriter &rewriter) {
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointToStart(forOp.getBody());
@@ -364,7 +366,7 @@ Value getIsFirstIterationValue(scf::ForOp forOp, Location loc,
 
 // Build a Value that is true for the last iteration of the given scf::ForOp.
 // Compares next induction value with the upper bound.
-Value getIsLastIterationValue(scf::ForOp forOp, Location loc,
+[[maybe_unused]] static Value getIsLastIterationValue(scf::ForOp forOp, Location loc,
                               IRRewriter &rewriter) {
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointToStart(forOp.getBody());
@@ -407,7 +409,7 @@ bool checkAllParentLoopsAreForLoops(Operation *op) {
   return true;
 }
 
-Value getValueOrCreateCastToI64(IRRewriter &rewriter, Location loc, Value val) {
+[[maybe_unused]] static Value getValueOrCreateCastToI64(IRRewriter &rewriter, Location loc, Value val) {
   assert(isa<OpResult>(val));
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointAfterValue(val);
@@ -425,7 +427,7 @@ Value getValueOrCreateCastToI64(IRRewriter &rewriter, Location loc, Value val) {
   return val;
 }
 
-pto::TCoreType getOppositeCoreType(pto::TCoreType coreType) {
+[[maybe_unused]] static pto::TCoreType getOppositeCoreType(pto::TCoreType coreType) {
   switch (coreType) {
   case pto::TCoreType::CUBE:
     return pto::TCoreType::VECTOR;

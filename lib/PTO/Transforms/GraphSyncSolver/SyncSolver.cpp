@@ -31,13 +31,7 @@
 #include <numeric>
 #include <tuple>
 #include <utility>
-#include "PTO/IR/PTO.h"
-#include "PTO/Transforms/GraphSyncSolver/GraphSolver.h"
-#include "PTO/Transforms/GraphSyncSolver/MemInfo.h"
-#include "PTO/Transforms/GraphSyncSolver/SyncSolver.h"
-#include "PTO/Transforms/GraphSyncSolver/SyncSolverIR.h"
-#include "PTO/Transforms/GraphSyncSolver/Utility.h"
-#include "PTO/Transforms/SlotAffineAnalysis.h"
+
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
@@ -49,6 +43,14 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LogicalResult.h"
+
+#include "PTO/IR/PTO.h"
+#include "PTO/Transforms/GraphSyncSolver/GraphSolver.h"
+#include "PTO/Transforms/GraphSyncSolver/MemInfo.h"
+#include "PTO/Transforms/GraphSyncSolver/SyncSolver.h"
+#include "PTO/Transforms/GraphSyncSolver/SyncSolverIR.h"
+#include "PTO/Transforms/GraphSyncSolver/Utility.h"
+#include "PTO/Transforms/SlotAffineAnalysis.h"
 
 
 #define DEBUG_TYPE "PTO-gss-solver"
@@ -713,8 +715,9 @@ Solver::checkCVMultiBufferPreloadEventIdInfo(RWOperation *rwOp1,
   // dynamic scf.while has no equivalent first/last iteration formula; leave
   // this optional optimization disabled and let ordinary synchronization
   // planning handle the pair.
-  if (!isa<scf::ForOp>(parentLoop1->op))
+  if (!isa<scf::ForOp>(parentLoop1->op)) {
     return {};
+  }
 
   assert(parentScope1->preloadNum.has_value());
   assert(parentScope2->preloadNum.has_value());

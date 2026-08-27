@@ -14,18 +14,18 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <algorithm>
+
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/Pass/Pass.h"
+
 #include "PTO/Transforms/GraphSyncSolver/SyncSolver.h"
 #include "PTO/Transforms/GraphSyncSolver/SyncSolverCodeGen.h"
 #include "PTO/Transforms/GraphSyncSolver/SyncSolverIRTranslator.h"
 #include "PTO/Transforms/GraphSyncSolver/Utility.h"
 #include "PTO/Transforms/Passes.h"
-
 #include "PTO/IR/PTO.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/IR/Operation.h"
-#include "mlir/Pass/Pass.h"
-
-#include <algorithm>
 
 namespace mlir {
 namespace pto {

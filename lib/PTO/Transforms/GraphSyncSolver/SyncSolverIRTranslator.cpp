@@ -23,10 +23,8 @@
 //===--------- IRTranslator.cpp ------- Graph Sync Solver -------===//
 //===----------------------------------------------------------------------===//
 
-#include "PTO/Transforms/GraphSyncSolver/SyncSolverIRTranslator.h"
+#include <queue>
 
-#include "PTO/IR/PTO.h"
-#include "../Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -37,7 +35,10 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/STLExtras.h"
-#include <queue>
+
+#include "PTO/Transforms/GraphSyncSolver/SyncSolverIRTranslator.h"
+#include "PTO/IR/PTO.h"
+#include "../Utils.h"
 
 #define DEBUG_TYPE "pto-gss-ir-translator"
 
@@ -93,23 +94,28 @@ llvm::SmallVector<Value> IRTranslator::tracebackMemValsStep(Value val) {
   }
 
   auto result = dyn_cast<OpResult>(val);
-  if (!result)
+  if (!result) {
     return out;
+  }
 
   Operation *defOp = result.getDefiningOp();
   unsigned resultNo = result.getResultNumber();
   if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
     out.push_back(ifOp.thenYield()->getOperand(resultNo));
-    if (ifOp.elseBlock())
+    if (ifOp.elseBlock()) {
       out.push_back(ifOp.elseYield()->getOperand(resultNo));
+    }
   } else if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
-    if (forOp.getYieldedValues().size() > resultNo)
+    if (forOp.getYieldedValues().size() > resultNo) {
       out.push_back(forOp.getYieldedValues()[resultNo]);
+    }
   } else if (auto whileOp = dyn_cast<scf::WhileOp>(defOp)) {
-    if (whileOp.getConditionOp().getArgs().size() > resultNo)
+    if (whileOp.getConditionOp().getArgs().size() > resultNo) {
       out.push_back(whileOp.getConditionOp().getArgs()[resultNo]);
-    if (whileOp.getYieldedValues().size() > resultNo)
+    }
+    if (whileOp.getYieldedValues().size() > resultNo) {
       out.push_back(whileOp.getYieldedValues()[resultNo]);
+    }
   }
 
   // Stop at `pto.multi_tile_get` so getMemInfo preserves the selected slot
@@ -124,19 +130,22 @@ llvm::SmallVector<Value> IRTranslator::tracebackMemValsStep(Value val) {
   } else if (auto addPtr = dyn_cast<pto::AddPtrOp>(defOp)) {
     out.push_back(addPtr.getPtr());
   } else if (auto intToPtr = dyn_cast<pto::IntToPtrOp>(defOp)) {
-    if (auto ptrToInt = intToPtr.getAddr().getDefiningOp<pto::PtrToIntOp>())
+    if (auto ptrToInt = intToPtr.getAddr().getDefiningOp<pto::PtrToIntOp>()) {
       out.push_back(ptrToInt.getPtr());
+    }
   } else if (auto castPtr = dyn_cast<pto::CastPtrOp>(defOp);
              castPtr &&
              isa<pto::PtrType>(castPtr.getInput().getType()) &&
              isa<pto::PtrType>(castPtr.getResult().getType())) {
     out.push_back(castPtr.getInput());
   } else if (auto alias = pto::getOperationAliasInfo(defOp)) {
-    if (alias->first == result)
+    if (alias->first == result) {
       out.push_back(alias->second);
+    }
   } else if (auto dsi = dyn_cast<DestinationStyleOpInterface>(defOp)) {
-    for (Value init : dsi.getDpsInits())
+    for (Value init : dsi.getDpsInits()) {
       out.push_back(init);
+    }
   }
   return out;
 }
@@ -169,8 +178,9 @@ llvm::SmallVector<Value> IRTranslator::tracebackMemVals(Value val) {
     }
 
     auto result = dyn_cast<OpResult>(cur);
-    if (!result)
+    if (!result) {
       continue;
+    }
     Operation *defOp = result.getDefiningOp();
     // `pto.multi_tile_get` stops traversal so getMemInfo can extract the
     // slot-narrowed physical addresses.
@@ -188,9 +198,11 @@ llvm::SmallVector<Value> IRTranslator::tracebackMemVals(Value val) {
 llvm::SmallVector<Value>
 IRTranslator::getMemoryOps(const SmallVector<Value> &vals) {
   llvm::SetVector<Value> out;
-  for (Value val : vals)
-    for (Value memVal : tracebackMemVals(val))
+  for (Value val : vals) {
+    for (Value memVal : tracebackMemVals(val)) {
       out.insert(memVal);
+    }
+  }
   return out.takeVector();
 }
 
@@ -206,12 +218,15 @@ IRTranslator::getReadWriteMemoryOps(Operation *op) {
     memEffect.getEffects(effects);
     for (auto &effect : effects) {
       Value value = effect.getValue();
-      if (!value)
+      if (!value) {
         continue;
-      if (isa<MemoryEffects::Read>(effect.getEffect()))
+      }
+      if (isa<MemoryEffects::Read>(effect.getEffect())) {
         llvm::append_range(reads, getMemoryOps({value}));
-      else if (isa<MemoryEffects::Write>(effect.getEffect()))
+      }
+      else if (isa<MemoryEffects::Write>(effect.getEffect())) {
         llvm::append_range(writes, getMemoryOps({value}));
+      }
     }
   }
 
@@ -229,8 +244,9 @@ IRTranslator::getPipeInterfaceOp(pto::OpPipeInterface op,
   pto::PIPE pipeRead = op.getPipe();
   pto::PIPE pipeWrite = op.getPipe();
   if (pipeRead == pto::PIPE::PIPE_UNASSIGNED ||
-      pipeWrite == pto::PIPE::PIPE_UNASSIGNED)
+      pipeWrite == pto::PIPE::PIPE_UNASSIGNED) {
     return nullptr;
+  }
   return std::make_unique<RWOperation>(
       op.getOperation(), parentOp, TCoreType::CUBE_OR_VECTOR, pipeRead,
       pipeWrite, reads, writes);
@@ -239,8 +255,9 @@ IRTranslator::getPipeInterfaceOp(pto::OpPipeInterface op,
 std::unique_ptr<OperationBase>
 IRTranslator::getScalarMemoryOp(Operation *op, OperationBase *parentOp) {
   auto [reads, writes] = getReadWriteMemoryOps(op);
-  if (reads.empty() && writes.empty())
+  if (reads.empty() && writes.empty()) {
     return nullptr;
+  }
   return std::make_unique<RWOperation>(
       op, parentOp, TCoreType::CUBE_OR_VECTOR, pto::PIPE::PIPE_S,
       pto::PIPE::PIPE_S, reads, writes);
@@ -263,10 +280,12 @@ IRTranslator::getCallOp(func::CallOp callOp, OperationBase *parentOp) {
 
 void IRTranslator::updateBlockArgAliases(Block *block,
                                          OperandRange destOperands) {
-  if (block->getNumArguments() != destOperands.size())
+  if (block->getNumArguments() != destOperands.size()) {
     return;
-  for (auto [arg, operand] : llvm::zip(block->getArguments(), destOperands))
+  }
+  for (auto [arg, operand] : llvm::zip(block->getArguments(), destOperands)) {
     blockArgAliases[arg].push_back(operand);
+  }
 }
 
 bool IRTranslator::isUnlikelyCondition(Condition *condOp) {
@@ -298,8 +317,9 @@ std::unique_ptr<Scope> IRTranslator::funcIrBuilder(Region &region,
   auto scopeOp = std::make_unique<Scope>();
   scopeOp->parentOp = parentOp;
   bool isFunctionRegion = isa_and_present<Function>(parentOp);
-  if (!isFunctionRegion && region.getBlocks().size() > 1)
+  if (!isFunctionRegion && region.getBlocks().size() > 1) {
     return scopeOp;
+  }
 
   translateRegionIntoScope(region, scopeOp.get(), skipEmptyScopes,
                            isFunctionRegion);
@@ -339,14 +359,16 @@ void IRTranslator::translateBlockIntoScope(Block &block, Scope *parScope,
       auto trueScope =
           funcIrBuilder(ifOp.getThenRegion(), nullptr, skipEmptyScopes);
       std::unique_ptr<Scope> falseScope;
-      if (ifOp.elseBlock())
+      if (ifOp.elseBlock()) {
         falseScope =
             funcIrBuilder(ifOp.getElseRegion(), nullptr, skipEmptyScopes);
+      }
       auto cond = std::make_unique<Condition>(
           &op, parScope, std::move(trueScope), std::move(falseScope));
       cond->isUnlikely = isUnlikelyCondition(cond.get());
-      if (!skipEmptyScopes || !isEmptyScope(cond.get()))
+      if (!skipEmptyScopes || !isEmptyScope(cond.get())) {
         parScope->body.push_back(std::move(cond));
+      }
       continue;
     }
 
@@ -371,8 +393,9 @@ void IRTranslator::translateBlockIntoScope(Block &block, Scope *parScope,
     }
 
     if (isTransparentGraphSyncRegionOp(op)) {
-      for (Region &nested : op.getRegions())
+      for (Region &nested : op.getRegions()) {
         translateRegionIntoScope(nested, parScope, skipEmptyScopes);
+      }
       continue;
     }
 
@@ -389,25 +412,30 @@ void IRTranslator::translateBlockIntoScope(Block &block, Scope *parScope,
     }
 
     if (auto pipeOp = dyn_cast<pto::OpPipeInterface>(op)) {
-      if (auto rw = getPipeInterfaceOp(pipeOp, parScope))
+      if (auto rw = getPipeInterfaceOp(pipeOp, parScope)) {
         parScope->body.push_back(std::move(rw));
+      }
     } else if (isa<pto::LoadScalarOp, pto::StoreScalarOp>(op)) {
-      if (auto rw = getScalarMemoryOp(&op, parScope))
+      if (auto rw = getScalarMemoryOp(&op, parScope)) {
         parScope->body.push_back(std::move(rw));
+      }
     } else if (auto extractOp = dyn_cast<tensor::ExtractOp>(op)) {
-      if (auto rw = getTensorExtractOp(extractOp, parScope))
+      if (auto rw = getTensorExtractOp(extractOp, parScope)) {
         parScope->body.push_back(std::move(rw));
+      }
     } else if (auto callOp = dyn_cast<func::CallOp>(op)) {
-      if (auto rw = getCallOp(callOp, parScope))
+      if (auto rw = getCallOp(callOp, parScope)) {
         parScope->body.push_back(std::move(rw));
+      }
     }
   }
 }
 
 bool IRTranslator::skipLaterIterations(Occurrence *occ1, Occurrence *occ2) {
   auto skip = [](Occurrence *occ, Occurrence *other) {
-    if (!occ->parentOcc || !isa<Loop>(occ->parentOcc->op))
+    if (!occ->parentOcc || !isa<Loop>(occ->parentOcc->op)) {
       return false;
+    }
     int split = occ->parentOcc->loopSplitIndex;
     return occ->syncIrIndex < split && split <= other->syncIrIndex;
   };
@@ -416,8 +444,9 @@ bool IRTranslator::skipLaterIterations(Occurrence *occ1, Occurrence *occ2) {
 
 void IRTranslator::generateProcessingOrders(Occurrence *occ1, Occurrence *occ2,
                                             bool isUseless) {
-  if (skipLaterIterations(occ1, occ2))
+  if (skipLaterIterations(occ1, occ2)) {
     return;
+  }
   if (isa<Scope>(occ1->op) && isa<Scope>(occ2->op)) {
     generateProcessingOrders(occ1->childOccs, occ2->childOccs, isUseless);
   }
@@ -428,25 +457,30 @@ void IRTranslator::generateProcessingOrders(Occurrence *occ1, Occurrence *occ2,
     generateProcessingOrders(occ1->childOccs, {occ2}, isUseless);
   }
   if (auto *rw1 = dyn_cast<RWOperation>(occ1->op)) {
-    if (auto *rw2 = dyn_cast<RWOperation>(occ2->op))
+    if (auto *rw2 = dyn_cast<RWOperation>(occ2->op)) {
       generateProcessingOrders(rw1, rw2, occ1, occ2, isUseless);
+    }
   }
 }
 
 void IRTranslator::generateProcessingOrders(
     const llvm::SmallVector<Occurrence *> &occs, bool isUseless) {
   int64_t n = static_cast<int64_t>(occs.size());
-  for (int64_t i = 0; i < n; ++i)
-    for (int64_t j = i - 1; j >= 0; --j)
+  for (int64_t i = 0; i < n; ++i) {
+    for (int64_t j = i - 1; j >= 0; --j) {
       generateProcessingOrders(occs[j], occs[i], isUseless);
+    }
+  }
 }
 
 void IRTranslator::generateProcessingOrders(
     const llvm::SmallVector<Occurrence *> &occs1,
     const llvm::SmallVector<Occurrence *> &occs2, bool isUseless) {
-  for (auto *occ2 : occs2)
-    for (auto *occ1 : llvm::reverse(occs1))
+  for (auto *occ2 : occs2) {
+    for (auto *occ1 : llvm::reverse(occs1)) {
       generateProcessingOrders(occ1, occ2, isUseless);
+    }
+  }
 }
 
 void IRTranslator::generateProcessingOrders(Scope *scopeOp, Occurrence *occ,
@@ -457,8 +491,9 @@ void IRTranslator::generateProcessingOrders(Scope *scopeOp, Occurrence *occ,
 void IRTranslator::generateProcessingOrders(Loop *loopOp, Occurrence *occ,
                                             bool isUseless) {
   int64_t childNum = static_cast<int64_t>(occ->childOccs.size());
-  if (childNum == 0 || childNum % kBalancedOccurrenceSplitFactor != 0)
+  if (childNum == 0 || childNum % kBalancedOccurrenceSplitFactor != 0) {
     return;
+  }
   int64_t halfChildNum = childNum / kBalancedOccurrenceSplitFactor;
   SmallVector<Occurrence *> first(occ->childOccs.begin(),
                                   occ->childOccs.begin() + halfChildNum);
@@ -466,9 +501,11 @@ void IRTranslator::generateProcessingOrders(Loop *loopOp, Occurrence *occ,
                                    occ->childOccs.end());
   generateProcessingOrders(first, isUseless);
   generateProcessingOrders(second, /*isUseless=*/true);
-  for (auto *occ2 : second)
-    for (auto *occ1 : llvm::reverse(first))
+  for (auto *occ2 : second) {
+    for (auto *occ1 : llvm::reverse(first)) {
       generateProcessingOrders(occ1->childOccs, occ2->childOccs, isUseless);
+    }
+  }
 }
 
 void IRTranslator::generateProcessingOrders(RWOperation *rwOp1,
@@ -483,24 +520,29 @@ void IRTranslator::syncIrBuilder(OperationBase *op, Occurrence *parentOcc,
   int startIndex = globalIndex++;
   auto occ = std::make_unique<Occurrence>(op, parentOcc, depth, startIndex, -1);
   occ->syncIrIndex = static_cast<int>(syncIr.size());
-  if (auto *rwOp = dyn_cast<RWOperation>(op))
+  if (auto *rwOp = dyn_cast<RWOperation>(op)) {
     occ->hasUnitFlagFeat = rwOp->hasUnitFlagFeat;
+  }
   syncIr.push_back(std::move(occ));
   Occurrence *occPtr = syncIr.back().get();
   opAllOccurrences[op].push_back(occPtr);
-  if (parentOcc)
+  if (parentOcc) {
     parentOcc->childOccs.push_back(occPtr);
+  }
 
   if (auto *loopOp = dyn_cast<Loop>(op)) {
-    for (auto &child : loopOp->body)
+    for (auto &child : loopOp->body) {
       syncIrBuilder(child.get(), occPtr, depth + 1, isUseless);
+    }
     occPtr->loopSplitIndex = static_cast<int>(syncIr.size());
-    for (auto &child : loopOp->body)
+    for (auto &child : loopOp->body) {
       syncIrBuilder(child.get(), occPtr, depth + 1, true);
+    }
     generateProcessingOrders(loopOp, occPtr, isUseless);
   } else if (auto *scopeOp = dyn_cast<Scope>(op)) {
-    for (auto &child : scopeOp->body)
+    for (auto &child : scopeOp->body) {
       syncIrBuilder(child.get(), occPtr, depth + 1, isUseless);
+    }
     generateProcessingOrders(scopeOp, occPtr, isUseless);
   }
 

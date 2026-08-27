@@ -26,8 +26,7 @@
 #include <cstdint>
 #include <numeric>
 #include <utility>
-#include "PTO/Transforms/GraphSyncSolver/EventIdSolver.h"
-#include "PTO/Transforms/GraphSyncSolver/Utility.h"
+
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -35,6 +34,9 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
+
+#include "PTO/Transforms/GraphSyncSolver/EventIdSolver.h"
+#include "PTO/Transforms/GraphSyncSolver/Utility.h"
 
 
 #define DEBUG_TYPE "PTO-gss-eventidsolver"

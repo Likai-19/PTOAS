@@ -472,18 +472,10 @@ getHWAvailableEventIdNum(SyncMode syncMode,
                          pto::PIPE setPipe = pto::PIPE::PIPE_UNASSIGNED,
                          pto::PIPE waitPipe = pto::PIPE::PIPE_UNASSIGNED);
 
-llvm::SmallVector<int64_t>
-getHWAvailableEventIds(SyncMode syncMode,
-                       pto::PIPE setPipe = pto::PIPE::PIPE_UNASSIGNED,
-                       pto::PIPE waitPipe = pto::PIPE::PIPE_UNASSIGNED);
 
 // Create a boolean Value that is true for the first iteration of `forOp`.
-Value getIsFirstIterationValue(scf::ForOp forOp, Location loc,
-                               IRRewriter &rewriter);
 
 // Create a boolean Value that is true for the last iteration of `forOp`.
-Value getIsLastIterationValue(scf::ForOp forOp, Location loc,
-                              IRRewriter &rewriter);
 
 // Helper to stringify a Value to std::string for logging.
 std::string op2str(Value val);
@@ -496,9 +488,7 @@ std::string op2str(Operation *op);
 bool checkAllParentLoopsAreForLoops(Operation *op);
 
 // Cast `val` to i64 type if it is not already.
-Value getValueOrCreateCastToI64(IRRewriter &rewriter, Location loc, Value val);
 
-pto::TCoreType getOppositeCoreType(pto::TCoreType coreType);
 
 template <typename OpTy>
 llvm::FailureOr<std::pair<OpTy, OpTy>> getFirstLastOp(Operation *parentOp) {

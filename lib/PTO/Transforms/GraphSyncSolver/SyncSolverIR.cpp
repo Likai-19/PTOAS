@@ -24,12 +24,14 @@
 //===----------------------------------------------------------------------===//
 
 #include <string>
+
+#include "llvm/ADT/StringExtras.h"
+
 #include "PTO/IR/PTO.h"
 #include "PTO/Support/CodeConstants.h"
 #include "PTO/Transforms/GraphSyncSolver/MemInfo.h"
 #include "PTO/Transforms/GraphSyncSolver/SyncSolverIR.h"
 #include "PTO/Transforms/GraphSyncSolver/Utility.h"
-#include "llvm/ADT/StringExtras.h"
 
 
 using namespace mlir;
@@ -54,7 +56,7 @@ static llvm::StringRef stringifyTCoreType(pto::TCoreType coreType) {
 }
 
 // Map OpType enum to human-readable strings for debugging output.
-std::string getOpTypeStr(OpType opType) {
+static std::string getOpTypeStr(OpType opType) {
   const llvm::DenseMap<OpType, std::string> conv = {
       {OpType::OPERATION, "OperationBase"},
       {OpType::PLACE_HOLDER, "PlaceHolder"},

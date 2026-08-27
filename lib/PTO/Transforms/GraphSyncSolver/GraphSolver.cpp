@@ -26,10 +26,12 @@
 #include <optional>
 #include <queue>
 #include <utility>
+
+#include "llvm/Support/Debug.h"
+
 #include "PTO/IR/PTO.h"
 #include "PTO/Transforms/GraphSyncSolver/GraphSolver.h"
 #include "PTO/Transforms/GraphSyncSolver/Utility.h"
-#include "llvm/Support/Debug.h"
 
 
 #define DEBUG_TYPE "PTO-gss-graph-solver"

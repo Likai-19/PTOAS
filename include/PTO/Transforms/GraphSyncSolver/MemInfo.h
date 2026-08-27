@@ -75,7 +75,6 @@ MemInfo getMemInfo(Value val);
 
 MemInfo getMemInfo(const llvm::SmallVector<int64_t> &addrs);
 
-bool isWorkSpaceFuncArgument(Value value);
 
 } // namespace mlir::pto::syncsolver
 

@@ -24,12 +24,7 @@
 //===----------------------------------------------------------------------===//
 
 #include <cstdint>
-#include "../Utils.h"
-#include "PTO/IR/PTO.h"
-#include "PTO/IR/PTOMultiBuffer.h"
-#include "PTO/IR/PTOTypeUtils.h"
-#include "PTO/Support/CodeConstants.h"
-#include "PTO/Transforms/GraphSyncSolver/MemInfo.h"
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinTypeInterfaces.h"
 #include "mlir/IR/Matchers.h"
@@ -37,11 +32,20 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 
+#include "../Utils.h"
+#include "PTO/IR/PTO.h"
+#include "PTO/IR/PTOMultiBuffer.h"
+#include "PTO/IR/PTOTypeUtils.h"
+#include "PTO/Support/CodeConstants.h"
+#include "PTO/Transforms/GraphSyncSolver/MemInfo.h"
+
 
 using namespace mlir;
 using namespace pto::syncsolver;
 
 namespace mlir::pto::syncsolver {
+
+static bool isWorkSpaceFuncArgument(Value value);
 
 static std::optional<int64_t> getTileBufferBitSize(pto::TileBufType type) {
   auto bitWidth = getPTOStorageElemBitWidth(type.getElementType());
@@ -327,7 +331,7 @@ bool MemInfo::checkConflict(const MemInfo &memInfo1, const MemInfo &memInfo2,
   return memInfo1.value == memInfo2.value;
 }
 
-bool isWorkSpaceFuncArgument(Value value) {
+static bool isWorkSpaceFuncArgument(Value value) {
   auto blockArg = dyn_cast_if_present<BlockArgument>(value);
   if (!blockArg) {
     return false;

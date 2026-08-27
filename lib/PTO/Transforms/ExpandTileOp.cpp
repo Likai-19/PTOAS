@@ -27,13 +27,8 @@
 //      operands directly (no type bridging needed).
 //
 
-#include "PTO/Support/CodeConstants.h"
-#include "PTO/IR/PTO.h"
-#include "PTO/IR/PTOTypeUtils.h"
-#include "PTO/Transforms/Passes.h"
-#include "PTO/Transforms/TileLibService.h"
-#include "PTO/Transforms/TileOpExpansionUtils.h"
-#include "Utils.h"
+#include <optional>
+#include <string>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -46,7 +41,6 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
-
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
@@ -56,8 +50,13 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include <optional>
-#include <string>
+#include "PTO/Support/CodeConstants.h"
+#include "PTO/IR/PTO.h"
+#include "PTO/IR/PTOTypeUtils.h"
+#include "PTO/Transforms/Passes.h"
+#include "PTO/Transforms/TileLibService.h"
+#include "PTO/Transforms/TileOpExpansionUtils.h"
+#include "Utils.h"
 
 namespace mlir {
 namespace pto {

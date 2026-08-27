@@ -29,7 +29,6 @@ enum class InsertSyncDebugLevel : unsigned {
 };
 
 /// Runtime-configurable debug verbosity for the InsertSync pipeline.
-unsigned getInsertSyncDebugLevel();
 
 /// Returns true when InsertSync debug is enabled at or above \p minLevel.
 bool isInsertSyncDebugEnabled(

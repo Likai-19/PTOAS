@@ -110,7 +110,6 @@ enum struct OpType {
   RW_OPERATION_END
 };
 
-std::string getOpTypeStr(OpType opType);
 
 class OperationBase {
 public:

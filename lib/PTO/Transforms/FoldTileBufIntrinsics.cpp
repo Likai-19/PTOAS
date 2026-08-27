@@ -32,10 +32,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "PTO/Support/CodeConstants.h"
-#include "PTO/IR/PTO.h"
-#include "PTO/Transforms/Passes.h"
-
 #include <optional>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -44,6 +40,10 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
+
+#include "PTO/Support/CodeConstants.h"
+#include "PTO/IR/PTO.h"
+#include "PTO/Transforms/Passes.h"
 
 namespace mlir {
 namespace pto {

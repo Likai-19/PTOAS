@@ -11,16 +11,18 @@
 
 #include <optional>
 #include <set>
-#include "PTO/IR/PTO.h"
-#include "PTO/IR/PTOTypeUtils.h"
-#include "PTO/IR/VMIUtils.h"
-#include "PTO/Support/CodeConstants.h"
+
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/Types.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
+
+#include "PTO/IR/PTO.h"
+#include "PTO/IR/PTOTypeUtils.h"
+#include "PTO/IR/VMIUtils.h"
+#include "PTO/Support/CodeConstants.h"
 
 
 using namespace mlir;
@@ -1814,7 +1816,7 @@ LogicalResult VMIReduceAddFOp::verify() {
   return verifyMaskMatchesData(getOperation(), maskType, sourceType);
 }
 
-template <typename OpTy> LogicalResult verifyReduceMinMaxFOp(OpTy op) {
+template <typename OpTy> static LogicalResult verifyReduceMinMaxFOp(OpTy op) {
   auto sourceType = cast<VMIVRegType>(op.getSource().getType());
   auto maskType = cast<VMIMaskType>(op.getMask().getType());
   auto resultType = cast<VMIVRegType>(op.getResult().getType());
@@ -1838,7 +1840,7 @@ LogicalResult VMIReduceMaxFOp::verify() { return verifyReduceMinMaxFOp(*this); }
 
 LogicalResult VMIReduceMinFOp::verify() { return verifyReduceMinMaxFOp(*this); }
 
-template <typename OpTy> LogicalResult verifyReduceMinMaxIOp(OpTy op) {
+template <typename OpTy> static LogicalResult verifyReduceMinMaxIOp(OpTy op) {
   auto sourceType = cast<VMIVRegType>(op.getSource().getType());
   auto maskType = cast<VMIMaskType>(op.getMask().getType());
   auto resultType = cast<VMIVRegType>(op.getResult().getType());

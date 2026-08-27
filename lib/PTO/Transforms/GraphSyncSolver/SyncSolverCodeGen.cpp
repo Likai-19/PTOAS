@@ -9,12 +9,12 @@
 //===---------- SyncSolverCodeGen.cpp ---- Graph Sync Solver --------------===//
 //===----------------------------------------------------------------------===//
 
-#include "PTO/Transforms/GraphSyncSolver/SyncSolverCodeGen.h"
-
-#include "PTO/IR/PTO.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/Support/Casting.h"
+
+#include "PTO/Transforms/GraphSyncSolver/SyncSolverCodeGen.h"
+#include "PTO/IR/PTO.h"
 
 using namespace mlir;
 using namespace mlir::pto;

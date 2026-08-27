@@ -9,11 +9,11 @@
 //===- InsertSyncDebug.cpp - Debug printing for PTO InsertSync ------------===//
 //===----------------------------------------------------------------------===//
 
-#include "PTO/Transforms/InsertSync/InsertSyncDebug.h"
-
 #include "mlir/IR/AsmState.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormatVariadic.h"
+
+#include "PTO/Transforms/InsertSync/InsertSyncDebug.h"
 
 using namespace mlir;
 using namespace mlir::pto;
@@ -30,7 +30,7 @@ llvm::cl::opt<unsigned> insertSyncDebugLevelOpt(
 
 } // namespace
 
-unsigned mlir::pto::getInsertSyncDebugLevel() { return insertSyncDebugLevelOpt; }
+static unsigned getInsertSyncDebugLevel() { return insertSyncDebugLevelOpt; }
 
 bool mlir::pto::isInsertSyncDebugEnabled(InsertSyncDebugLevel minLevel) {
   return getInsertSyncDebugLevel() >= static_cast<unsigned>(minLevel);
