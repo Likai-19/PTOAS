@@ -78,7 +78,6 @@ struct PTOGraphSyncSolverPass
                            /*isRegBasedArch=*/isA5);
     opts.eventIdNumMax = eventIdNumMax;
     auto translator = std::make_unique<IRTranslator>(func, opts);
-
     // Trivial / empty function bodies have nothing to solve.
     if (translator->processingOrders.empty()) {
       return;

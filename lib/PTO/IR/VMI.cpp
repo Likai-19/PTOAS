@@ -3825,7 +3825,6 @@ LogicalResult VMIvcaddOp::verify() {
   auto maskType = cast<VMIMaskType>(getMask().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
   auto elemTy = sourceType.getElementType();
-
   if (failed(verifyBF16x2ComputeElementType(getOperation(), elemTy))) {
     return failure();
 }
@@ -3895,7 +3894,6 @@ LogicalResult VMIvcmaxOp::verify() {
   auto maskType = cast<VMIMaskType>(getMask().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
   auto elemTy = sourceType.getElementType();
-
   if (failed(verifyBF16x2ComputeElementType(getOperation(), elemTy))) {
     return failure();
 }
@@ -3956,7 +3954,6 @@ LogicalResult VMIvcminOp::verify() {
   auto maskType = cast<VMIMaskType>(getMask().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
   auto elemTy = sourceType.getElementType();
-
   if (failed(verifyBF16x2ComputeElementType(getOperation(), elemTy))) {
     return failure();
 }
@@ -4413,7 +4410,6 @@ LogicalResult VMIVmulaOp::verify() {
 LogicalResult VMICvtOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
-
   // 1. Lane count must match.
   if (sourceType.getElementCount() != resultType.getElementCount()) {
     return emitOpError(
@@ -4751,7 +4747,6 @@ ParseResult VMIvStoreOp::parse(OpAsmParser &parser, OperationState &result) {
   }
 
   size_t expectedTypes = nValues + 1 + (hasMask ? 1 : 0);
-
   if (nTypes != expectedTypes) {
     return parser.emitError(parser.getCurrentLocation())
            << "expected " << expectedTypes << " types (" << nValues

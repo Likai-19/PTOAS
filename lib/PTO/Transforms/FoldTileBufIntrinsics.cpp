@@ -45,14 +45,14 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 
-using namespace mlir;
-
 namespace mlir {
 namespace pto {
   #define GEN_PASS_DEF_FOLDTILEBUFINTRINSICS
   #include "PTO/Transforms/Passes.h.inc"
 } // namespace pto
 } // namespace mlir
+
+using namespace mlir;
 
 namespace {
 

@@ -320,7 +320,6 @@ bool InsertSyncAnalysis::IsNoNeedToInsertSync(
     const CompoundInstanceElement *frontCompound, bool isBackwardDep) const {
   const PipelineType frontPipe = frontCompound->kPipeValue;
   const PipelineType nowPipe = nowCompound->kPipeValue;
-
   if (frontPipe == nowPipe && frontPipe == PipelineType::PIPE_S) {
     return true;
   }
@@ -650,7 +649,6 @@ void InsertSyncAnalysis::InsertSyncOperation(
     const std::optional<unsigned> &forEndIndex) {
   PipelineType nowPipe = nowCompound->kPipeValue;
   PipelineType frontPipe = frontCompound->kPipeValue;
-
   if (nowPipe == frontPipe) {
     unsigned insertBarrierId = nowCompound->GetIndex();
     auto barrierOp = std::make_unique<SyncOperation>(

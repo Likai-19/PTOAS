@@ -59,8 +59,6 @@
 #include <optional>
 #include <string>
 
-using namespace mlir;
-
 namespace mlir {
 namespace pto {
   namespace func = ::mlir::func;
@@ -69,6 +67,8 @@ namespace pto {
 #include "PTO/Transforms/Passes.h.inc"
 } // namespace pto
 } // namespace mlir
+
+using namespace mlir;
 
 namespace {
 
