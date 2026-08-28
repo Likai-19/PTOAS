@@ -1055,6 +1055,12 @@ static bool isValueOwnedByRegion(Value value, Region *region) {
 
 static FailureOr<Value> resolveStoreAlignRoot(Value value, Operation *user);
 static FailureOr<Value> resolveLoadAlignRoot(Value value, Operation *user);
+static FailureOr<Value> resolveLoadAlignRootImpl(
+    Value current, llvm::SmallPtrSet<void *, mlir::pto::kValue8> visited);
+static FailureOr<Value> resolveStoreAlignForResult(Value current,
+                                                   scf::ForOp forOp);
+static FailureOr<Value> resolveStoreAlignRootImpl(
+    Value current, llvm::SmallPtrSet<void *, mlir::pto::kValue8> visited);
 
 static FailureOr<Value> resolveLoadAlignForResult(Value current,
                                                   scf::ForOp forOp) {
@@ -1143,6 +1149,19 @@ static FailureOr<Value> resolveLoadAlignRootImpl(
   }
 }
 
+
+static FailureOr<Value> resolveStoreAlignForResult(Value current,
+                                                  scf::ForOp forOp) {
+  auto result = dyn_cast<OpResult>(current);
+  if (!result) {
+    return failure();
+  }
+  unsigned resultIdx = result.getResultNumber();
+  if (resultIdx >= forOp.getYieldedValues().size()) {
+    return failure();
+  }
+  return forOp.getYieldedValues()[resultIdx];
+}
 
 static FailureOr<Value> resolveStoreAlignIfResult(
     Value current, scf::IfOp ifOp,
@@ -1320,10 +1339,12 @@ static scf::IfOp getCommonStoreAlignBranchIf(
 
 static LogicalResult collectStoreAlignLinearUses(
     Value current, Operation *user, SmallVectorImpl<Value> &nextValues,
+    SmallVectorImpl<Operation *> &terminalUsers,
     SmallVectorImpl<Operation *> &branchUsers) {
   for (OpOperand &use : current.getUses()) {
     Operation *owner = use.getOwner();
     if (isStoreAlignSink(owner)) {
+      terminalUsers.push_back(owner);
       branchUsers.push_back(owner);
       continue;
     }
@@ -1367,12 +1388,13 @@ static LogicalResult verifyStoreAlignLinearUses(Value value, Operation *user) {
   Value current = value;
   while (visited.insert(current.getAsOpaquePointer()).second) {
     SmallVector<Value> nextValues;
+    SmallVector<Operation *> terminalUsers;
     SmallVector<Operation *> branchUsers;
     if (failed(collectStoreAlignLinearUses(current, user, nextValues,
-                                           branchUsers))) {
+                                           terminalUsers, branchUsers))) {
       return failure();
     }
-    if (nextValues.size() + branchUsers.size() > 1) {
+    if (nextValues.size() + terminalUsers.size() > 1) {
       scf::IfOp commonIf = getCommonStoreAlignBranchIf(branchUsers);
       if (commonIf) {
         FailureOr<Value> mergedValue = resolveSingleAlignIfResult(commonIf);
@@ -3262,6 +3284,55 @@ static ParseResult parseStructuredAccStoreAtomic(
   return success();
 }
 
+
+static bool classifyStructuredAccStoreClause(
+    StringRef keyword, StructuredAccStoreClauseKind &kind) {
+  if (keyword == "unit_flag") {
+    kind = StructuredAccStoreClauseKind::UnitFlag;
+  } else if (keyword == "pre_quant") {
+    kind = StructuredAccStoreClauseKind::PreQuant;
+  } else if (keyword == "pre_relu") {
+    kind = StructuredAccStoreClauseKind::PreRelu;
+  } else if (keyword == "nz2nd" || keyword == "nz2dn" || keyword == "nz2nz") {
+    kind = StructuredAccStoreClauseKind::Layout;
+  } else if (keyword == "loop3") {
+    kind = StructuredAccStoreClauseKind::Loop3;
+  } else if (keyword == "sat" || keyword == "nosat") {
+    kind = StructuredAccStoreClauseKind::Sat;
+  } else if (keyword == "atomic") {
+    kind = StructuredAccStoreClauseKind::Atomic;
+  } else {
+    return false;
+  }
+  return true;
+}
+
+static ParseResult parseStructuredAccStoreSatClause(
+    OpAsmParser &parser, StructuredAccStoreAsmState &state,
+    StringRef keyword) {
+  if (state.satMode) {
+    return parser.emitError(parser.getCurrentLocation(), "duplicate sat/nosat clause");
+  }
+  if (keyword == "nosat") {
+    state.satMode = AccStoreSatMode::NoSat;
+    return success();
+  }
+  if (succeeded(parser.parseOptionalLParen())) {
+    StringRef satOption;
+    if (parser.parseKeyword(&satOption) || satOption != "preserve_nan") {
+      return parser.emitError(parser.getCurrentLocation(),
+                              "expected preserve_nan");
+    }
+    if (parser.parseRParen()) {
+      return failure();
+    }
+    state.satMode = AccStoreSatMode::SatPreserveNan;
+  } else {
+    state.satMode = AccStoreSatMode::Sat;
+  }
+  return success();
+}
+
 static ParseResult parseStructuredAccStoreClauses(
     OpAsmParser &parser, StructuredAccStoreAsmState &state) {
   int lastClause = -1;
@@ -3283,36 +3354,21 @@ static ParseResult parseStructuredAccStoreClauses(
     seenClause = true;
 
     StructuredAccStoreClauseKind kind;
-    if (keyword == "unit_flag") {
-      kind = StructuredAccStoreClauseKind::UnitFlag;
-    }
-    else if (keyword == "pre_quant") {
-      kind = StructuredAccStoreClauseKind::PreQuant;
-    }
-    else if (keyword == "pre_relu") {
-      kind = StructuredAccStoreClauseKind::PreRelu;
-    }
-    else if (keyword == "nz2nd" || keyword == "nz2dn" || keyword == "nz2nz") {
-      kind = StructuredAccStoreClauseKind::Layout;
-    }
-    else if (keyword == "loop3") {
-      kind = StructuredAccStoreClauseKind::Loop3;
-    }
-    else if (keyword == "sat" || keyword == "nosat") {
-      kind = StructuredAccStoreClauseKind::Sat;
-    }
-    else if (keyword == "atomic") {
-      kind = StructuredAccStoreClauseKind::Atomic;
-    }
-    else {
+    if (!classifyStructuredAccStoreClause(keyword, kind)) {
       return parser.emitError(parser.getCurrentLocation(), "unknown mte_l0c clause");
-}
-
+    }
     if (static_cast<int>(kind) < lastClause) {
       return parser.emitError(parser.getCurrentLocation(),
                               "mte_l0c clauses must follow canonical order");
     }
     lastClause = static_cast<int>(kind);
+
+    if (kind == StructuredAccStoreClauseKind::Sat) {
+      if (failed(parseStructuredAccStoreSatClause(parser, state, keyword))) {
+        return failure();
+      }
+      continue;
+    }
 
     ParseResult parseResult = success();
     switch (kind) {
@@ -3331,30 +3387,10 @@ static ParseResult parseStructuredAccStoreClauses(
     case StructuredAccStoreClauseKind::Loop3:
       parseResult = parseStructuredAccStoreLoop3(parser, state);
       break;
-    case StructuredAccStoreClauseKind::Sat:
-      if (state.satMode) {
-        return parser.emitError(parser.getCurrentLocation(), "duplicate sat/nosat clause");
-      }
-      if (keyword == "nosat") {
-        state.satMode = AccStoreSatMode::NoSat;
-        break;
-      }
-      if (succeeded(parser.parseOptionalLParen())) {
-        StringRef satOption;
-        if (parser.parseKeyword(&satOption) || satOption != "preserve_nan") {
-          return parser.emitError(parser.getCurrentLocation(),
-                                  "expected preserve_nan");
-        }
-        if (parser.parseRParen()) {
-          return failure();
-        }
-        state.satMode = AccStoreSatMode::SatPreserveNan;
-      } else {
-        state.satMode = AccStoreSatMode::Sat;
-      }
-      break;
     case StructuredAccStoreClauseKind::Atomic:
       parseResult = parseStructuredAccStoreAtomic(parser, state);
+      break;
+    case StructuredAccStoreClauseKind::Sat:
       break;
     }
     if (failed(parseResult)) {
@@ -3362,6 +3398,7 @@ static ParseResult parseStructuredAccStoreClauses(
     }
   }
 }
+
 
 static ParseResult parseStructuredOptionalType(OpAsmParser &parser,
                                                SmallVectorImpl<Type> &types) {
@@ -3570,6 +3607,44 @@ static LogicalResult verifyStructuredAccStoreLike(
   return success();
 }
 
+
+static void printStructuredAccStoreMode(OpAsmPrinter &printer,
+                                        AccStoreMode mode, Value split,
+                                        Value loop0SrcStride) {
+  switch (mode) {
+  case AccStoreMode::Nz2nd:
+    printer << ", nz2nd";
+    break;
+  case AccStoreMode::Nz2dn:
+    printer << ", nz2dn";
+    if (loop0SrcStride) {
+      printer << "(" << loop0SrcStride << ")";
+    }
+    break;
+  case AccStoreMode::Nz2nz:
+    printer << ", nz2nz";
+    if (split) {
+      printer << "(" << split << ")";
+    }
+    break;
+  }
+}
+
+static void printStructuredAccStoreSatMode(OpAsmPrinter &printer,
+                                           AccStoreSatMode satMode) {
+  switch (satMode) {
+  case AccStoreSatMode::Sat:
+    printer << ", sat";
+    break;
+  case AccStoreSatMode::NoSat:
+    printer << ", nosat";
+    break;
+  case AccStoreSatMode::SatPreserveNan:
+    printer << ", sat(preserve_nan)";
+    break;
+  }
+}
+
 static void printStructuredAccStoreClauses(
     OpAsmPrinter &printer, std::optional<AccStoreUnitFlagCtrl> unitFlag,
     Value preQuant,
@@ -3602,46 +3677,21 @@ static void printStructuredAccStoreClauses(
     printer << ")";
   }
   if (mode) {
-    switch (*mode) {
-    case AccStoreMode::Nz2nd:
-      printer << ", nz2nd";
-      break;
-    case AccStoreMode::Nz2dn:
-      printer << ", nz2dn";
-      if (loop0SrcStride) {
-        printer << "(" << loop0SrcStride << ")";
-      }
-      break;
-    case AccStoreMode::Nz2nz:
-      printer << ", nz2nz";
-      if (split) {
-        printer << "(" << split << ")";
-      }
-      break;
-    }
+    printStructuredAccStoreMode(printer, *mode, split, loop0SrcStride);
   }
   if (loop3Count) {
     printer << ", loop3(" << loop3Count << ", " << loop3SrcStride << ", "
             << loop3DstStride << ")";
   }
   if (satMode) {
-    switch (*satMode) {
-    case AccStoreSatMode::Sat:
-      printer << ", sat";
-      break;
-    case AccStoreSatMode::NoSat:
-      printer << ", nosat";
-      break;
-    case AccStoreSatMode::SatPreserveNan:
-      printer << ", sat(preserve_nan)";
-      break;
-    }
+    printStructuredAccStoreSatMode(printer, *satMode);
   }
   if (atomicType && atomicOp) {
     printer << ", atomic(type = " << stringifyAccStoreAtomicType(*atomicType)
             << ", op = " << stringifyAccStoreAtomicOp(*atomicOp) << ")";
   }
 }
+
 
 static void printStructuredAccStoreOptionalTypes(
     OpAsmPrinter &printer, Value preQuant, Value preRelu, Value clipValue,
@@ -3668,31 +3718,31 @@ static void printStructuredAccStoreOptionalTypes(
   }
 }
 
+
+static ParseResult parseStructuredAccStoreOptionalType(
+    OpAsmParser &parser, bool hasOperand, SmallVectorImpl<Type> &types) {
+  if (!hasOperand) {
+    return success();
+  }
+  if (parser.parseComma() || parseStructuredOptionalType(parser, types)) {
+    return failure();
+  }
+  return success();
+}
+
 static ParseResult parseStructuredAccStoreTailTypes(
     OpAsmParser &parser, StructuredAccStoreAsmState &state) {
-  if (!state.preQuantOperands.empty() &&
-      (parser.parseComma() ||
-       parseStructuredOptionalType(parser, state.preQuantTypes))) {
-    return failure();
-  }
-  if (!state.preReluOperands.empty() &&
-      (parser.parseComma() ||
-       parseStructuredOptionalType(parser, state.preReluTypes))) {
-    return failure();
-  }
-  if (!state.clipValueOperands.empty() &&
-      (parser.parseComma() ||
-       parseStructuredOptionalType(parser, state.clipValueTypes))) {
-    return failure();
-  }
-  if (!state.splitOperands.empty() &&
-      (parser.parseComma() ||
-       parseStructuredOptionalType(parser, state.splitTypes))) {
-    return failure();
-  }
-  if (!state.loop0SrcStrideOperands.empty() &&
-      (parser.parseComma() ||
-       parseStructuredOptionalType(parser, state.loop0SrcStrideTypes))) {
+  if (failed(parseStructuredAccStoreOptionalType(
+          parser, !state.preQuantOperands.empty(), state.preQuantTypes)) ||
+      failed(parseStructuredAccStoreOptionalType(
+          parser, !state.preReluOperands.empty(), state.preReluTypes)) ||
+      failed(parseStructuredAccStoreOptionalType(
+          parser, !state.clipValueOperands.empty(), state.clipValueTypes)) ||
+      failed(parseStructuredAccStoreOptionalType(
+          parser, !state.splitOperands.empty(), state.splitTypes)) ||
+      failed(parseStructuredAccStoreOptionalType(
+          parser, !state.loop0SrcStrideOperands.empty(),
+          state.loop0SrcStrideTypes))) {
     return failure();
   }
   if (!state.loop3CountOperands.empty() &&
@@ -3706,6 +3756,7 @@ static ParseResult parseStructuredAccStoreTailTypes(
   }
   return success();
 }
+
 
 template <typename OpTy>
 static void setStructuredAccStoreSegmentSizes(OperationState &result,
@@ -5202,6 +5253,60 @@ static bool isVgather2B8ResultType(IntegerType sourceType,
   return !resultType.isUnsigned();
 }
 
+
+static LogicalResult resolveVgather2WidthInfo(
+    Operation *op, Type sourceElemType, Type resultElemType,
+    unsigned &expectedOffsetWidth, StringRef &expectedMaskGranularity,
+    int64_t &expectedLanes) {
+  unsigned sourceElemWidth = getPTOStorageElemBitWidth(sourceElemType);
+  if (sourceElemWidth == mlir::pto::kValue8 && isa<IntegerType>(sourceElemType)) {
+    if (!isVgather2B8ResultType(cast<IntegerType>(sourceElemType),
+                                dyn_cast<IntegerType>(resultElemType))) {
+      return op->emitOpError(
+          "8-bit gather requires i8/ui8 source and matching i16/ui16 result");
+    }
+    expectedOffsetWidth = mlir::pto::kValue16;
+    expectedMaskGranularity = "b16";
+    expectedLanes = mlir::pto::kValue128;
+    return success();
+  }
+  if (sourceElemWidth == mlir::pto::kValue16) {
+    if (auto sourceInt = dyn_cast<IntegerType>(sourceElemType)) {
+      if (!isSameVgather2IntegerSemantics(
+              sourceInt, dyn_cast<IntegerType>(resultElemType))) {
+        return op->emitOpError(
+            "16-bit integer gather requires matching i16/ui16 result");
+      }
+    } else if (!(sourceElemType.isF16() || sourceElemType.isBF16()) ||
+               sourceElemType != resultElemType) {
+      return op->emitOpError(
+          "16-bit gather requires i16/ui16/f16/bf16 source and matching result");
+    }
+    expectedOffsetWidth = mlir::pto::kValue16;
+    expectedMaskGranularity = "b16";
+    expectedLanes = mlir::pto::kValue128;
+    return success();
+  }
+  if (sourceElemWidth == mlir::pto::kValue32) {
+    if (auto sourceInt = dyn_cast<IntegerType>(sourceElemType)) {
+      if (!isSameVgather2IntegerSemantics(
+              sourceInt, dyn_cast<IntegerType>(resultElemType))) {
+        return op->emitOpError(
+            "32-bit integer gather requires matching i32/ui32 result");
+      }
+    } else if (!sourceElemType.isF32() || sourceElemType != resultElemType) {
+      return op->emitOpError(
+          "32-bit gather requires i32/ui32/f32 source and matching result");
+    }
+    expectedOffsetWidth = mlir::pto::kValue32;
+    expectedMaskGranularity = "b32";
+    expectedLanes = mlir::pto::kValue64;
+    return success();
+  }
+  return op->emitOpError(
+      "requires source element type i8/ui8/i16/ui16/i32/ui32/f16/bf16/f32");
+}
+
 LogicalResult Vgather2Op::verify() {
   if (!isBufferLike(getSource().getType())) {
     return emitOpError("requires a pointer-like source");
@@ -5210,13 +5315,11 @@ LogicalResult Vgather2Op::verify() {
   if (sourceRole == MemoryRole::GM) {
     return emitOpError("requires a UB-backed source");
   }
-
   auto offsetsType = dyn_cast<VRegType>(getOffsets().getType());
   auto resultType = dyn_cast<VRegType>(getResult().getType());
   if (!offsetsType || !resultType) {
     return emitOpError("offsets and result must be !pto.vreg<...>");
   }
-
   auto offsetsElemType = dyn_cast<IntegerType>(offsetsType.getElementType());
   if (!offsetsElemType) {
     return emitOpError("offset vector must use integer element type");
@@ -5224,58 +5327,17 @@ LogicalResult Vgather2Op::verify() {
   if (offsetsType.getElementCount() != resultType.getElementCount()) {
     return emitOpError("offset and result vectors must have the same element count");
   }
-
   Type sourceElemType = getBufferElementType(getSource().getType());
   Type resultElemType = resultType.getElementType();
-  unsigned sourceElemWidth = getPTOStorageElemBitWidth(sourceElemType);
   unsigned resultElemWidth = getPTOStorageElemBitWidth(resultElemType);
   unsigned expectedOffsetWidth = 0;
   StringRef expectedMaskGranularity;
   int64_t expectedLanes = 0;
-
-  if (sourceElemWidth == mlir::pto::kValue8 && isa<IntegerType>(sourceElemType)) {
-    if (!isVgather2B8ResultType(cast<IntegerType>(sourceElemType),
-                                dyn_cast<IntegerType>(resultElemType))) {
-      return emitOpError(
-          "8-bit gather requires i8/ui8 source and matching i16/ui16 result");
-    }
-    expectedOffsetWidth = mlir::pto::kValue16;
-    expectedMaskGranularity = "b16";
-    expectedLanes = mlir::pto::kValue128;
-  } else if (sourceElemWidth == mlir::pto::kValue16) {
-    if (auto sourceInt = dyn_cast<IntegerType>(sourceElemType)) {
-      if (!isSameVgather2IntegerSemantics(
-              sourceInt, dyn_cast<IntegerType>(resultElemType))) {
-        return emitOpError(
-            "16-bit integer gather requires matching i16/ui16 result");
-      }
-    } else if (!(sourceElemType.isF16() || sourceElemType.isBF16()) ||
-               sourceElemType != resultElemType) {
-      return emitOpError(
-          "16-bit gather requires i16/ui16/f16/bf16 source and matching result");
-    }
-    expectedOffsetWidth = mlir::pto::kValue16;
-    expectedMaskGranularity = "b16";
-    expectedLanes = mlir::pto::kValue128;
-  } else if (sourceElemWidth == mlir::pto::kValue32) {
-    if (auto sourceInt = dyn_cast<IntegerType>(sourceElemType)) {
-      if (!isSameVgather2IntegerSemantics(
-              sourceInt, dyn_cast<IntegerType>(resultElemType))) {
-        return emitOpError(
-            "32-bit integer gather requires matching i32/ui32 result");
-      }
-    } else if (!sourceElemType.isF32() || sourceElemType != resultElemType) {
-      return emitOpError(
-          "32-bit gather requires i32/ui32/f32 source and matching result");
-    }
-    expectedOffsetWidth = mlir::pto::kValue32;
-    expectedMaskGranularity = "b32";
-    expectedLanes = mlir::pto::kValue64;
-  } else {
-    return emitOpError(
-        "requires source element type i8/ui8/i16/ui16/i32/ui32/f16/bf16/f32");
+  if (failed(resolveVgather2WidthInfo(*this, sourceElemType, resultElemType,
+                                      expectedOffsetWidth,
+                                      expectedMaskGranularity, expectedLanes))) {
+    return failure();
   }
-
   if (resultElemWidth != mlir::pto::kValue16 && resultElemWidth != 32) {
     return emitOpError("result element type must be 16-bit or 32-bit");
   }
@@ -5294,6 +5356,7 @@ LogicalResult Vgather2Op::verify() {
   }
   return success();
 }
+
 
 LogicalResult CopyUbufToUbufOp::verify() {
   if (!isBufferLike(getSource().getType()) || !isBufferLike(getDestination().getType())) {
@@ -5475,45 +5538,66 @@ void VbitsortOp::getEffects(
   effects.emplace_back(MemoryEffects::Write::get(), &getDestinationMutable());
 }
 
-LogicalResult Vmrgsort4Op::verify() {
-  if (!isBufferLike(getDestination().getType()) || !isBufferLike(getSource0().getType()) ||
-      !isBufferLike(getSource1().getType()) || !isBufferLike(getSource2().getType()) ||
-      !isBufferLike(getSource3().getType())) {
-    return emitOpError("requires pointer-like destination and sources");
+
+static LogicalResult verifyVmrgsort4BufferRoles(
+    Operation *op, Value destination, Value source0, Value source1,
+    Value source2, Value source3) {
+  if (!isBufferLike(destination.getType()) || !isBufferLike(source0.getType()) ||
+      !isBufferLike(source1.getType()) || !isBufferLike(source2.getType()) ||
+      !isBufferLike(source3.getType())) {
+    return op->emitOpError("requires pointer-like destination and sources");
   }
-  if (classifyMemoryRole(getDestination().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSource0().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSource1().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSource2().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSource3().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed destination and sources");
+  if (classifyMemoryRole(destination.getType()) != MemoryRole::UB ||
+      classifyMemoryRole(source0.getType()) != MemoryRole::UB ||
+      classifyMemoryRole(source1.getType()) != MemoryRole::UB ||
+      classifyMemoryRole(source2.getType()) != MemoryRole::UB ||
+      classifyMemoryRole(source3.getType()) != MemoryRole::UB) {
+    return op->emitOpError("requires UB-backed destination and sources");
   }
-  auto dstPtrType = dyn_cast<pto::PtrType>(getDestination().getType());
-  auto src0PtrType = dyn_cast<pto::PtrType>(getSource0().getType());
-  auto src1PtrType = dyn_cast<pto::PtrType>(getSource1().getType());
-  auto src2PtrType = dyn_cast<pto::PtrType>(getSource2().getType());
-  auto src3PtrType = dyn_cast<pto::PtrType>(getSource3().getType());
+  return success();
+}
+
+static LogicalResult verifyVmrgsort4PtrAndElementTypes(
+    Operation *op, Value destination, Value source0, Value source1,
+    Value source2, Value source3) {
+  auto dstPtrType = dyn_cast<pto::PtrType>(destination.getType());
+  auto src0PtrType = dyn_cast<pto::PtrType>(source0.getType());
+  auto src1PtrType = dyn_cast<pto::PtrType>(source1.getType());
+  auto src2PtrType = dyn_cast<pto::PtrType>(source2.getType());
+  auto src3PtrType = dyn_cast<pto::PtrType>(source3.getType());
   if (!dstPtrType || !src0PtrType || !src1PtrType || !src2PtrType ||
       !src3PtrType) {
-    return emitOpError("requires ptr-backed destination and sources");
+    return op->emitOpError("requires ptr-backed destination and sources");
   }
-
   Type elemType = dstPtrType.getElementType();
   if (src0PtrType.getElementType() != elemType ||
       src1PtrType.getElementType() != elemType ||
       src2PtrType.getElementType() != elemType ||
       src3PtrType.getElementType() != elemType) {
-    return emitOpError(
+    return op->emitOpError(
         "requires destination and all sources to have the same element type");
   }
   if (!elemType.isF16() && !elemType.isF32()) {
-    return emitOpError("requires f16 or f32 element type");
+    return op->emitOpError("requires f16 or f32 element type");
+  }
+  return success();
+}
+
+LogicalResult Vmrgsort4Op::verify() {
+  if (failed(verifyVmrgsort4BufferRoles(*this, getDestination(), getSource0(),
+                                        getSource1(), getSource2(),
+                                        getSource3())) ||
+      failed(verifyVmrgsort4PtrAndElementTypes(
+          *this, getDestination(), getSource0(), getSource1(), getSource2(),
+          getSource3()))) {
+    return failure();
   }
   if (failed(verifyNotNestedInVecScope(*this, "pto.vmrgsort4"))) {
     return failure();
   }
   return success();
 }
+
 
 LogicalResult VmaxOp::verify() {
   if (failed(verifyVRegTypeLike(*this, getLhs().getType(), "lhs")) ||
