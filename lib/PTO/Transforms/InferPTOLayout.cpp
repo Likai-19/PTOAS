@@ -385,73 +385,88 @@ struct LayoutPreference {
   bool conflict = false;
 };
 
+static void mergeLayoutPreference(LayoutPreference &result,
+                                  std::optional<Layout> candidate) {
+  if (!candidate) {
+    return;
+  }
+  if (!result.preferred) {
+    result.preferred = candidate;
+    return;
+  }
+  if (*result.preferred != *candidate) {
+    result.preferred = std::nullopt;
+    result.conflict = true;
+  }
+}
+
+// The MAT F8 destination config selects an MX layout when the tile's 2D
+// b/s-layout pair is unambiguous.
+static void mergeMatF8LoadLayout(TileBufType dstTy, LayoutPreference &result) {
+  auto cfg = dstTy.getConfigAttr();
+  auto bl = dyn_cast_or_null<BLayoutAttr>(cfg.getBLayout());
+  auto sl = dyn_cast_or_null<SLayoutAttr>(cfg.getSLayout());
+  if (!bl || !sl) {
+    return;
+  }
+  if (bl.getValue() == BLayout::RowMajor && sl.getValue() == SLayout::RowMajor &&
+      dstTy.getShape().size() == 2 && dstTy.getShape()[0] != 1) {
+    mergeLayoutPreference(result, Layout::MX_A_ZZ);
+    return;
+  }
+  if (bl.getValue() == BLayout::ColMajor && sl.getValue() == SLayout::ColMajor) {
+    mergeLayoutPreference(result, Layout::MX_B_NN);
+  }
+}
+
+// Merge the layout preference implied by a TLoadOp consumer of the tensor view.
+static void mergeTLoadLayout(pto::TLoadOp load, LayoutPreference &result) {
+  auto dstTy = dyn_cast<TileBufType>(load.getDst().getType());
+  if (!dstTy) {
+    return;
+  }
+  auto dstSpace = dyn_cast_or_null<AddressSpaceAttr>(dstTy.getMemorySpace());
+  if (dstSpace && dstSpace.getAddressSpace() == AddressSpace::MAT &&
+      isF8E8M0ElemType(dstTy.getElementType())) {
+    mergeMatF8LoadLayout(dstTy, result);
+    return;
+  }
+  if (isVectorTileType(dstTy)) {
+    mergeLayoutPreference(result, tileBLayoutToGlobalLayout(dstTy));
+  }
+}
+
+// Recursively walk the consumers of a tensor view (following partition views)
+// and merge every load/store layout preference into `result`.
+static void collectPreferredLayoutFromUses(Value v, LayoutPreference &result) {
+  for (OpOperand &use : v.getUses()) {
+    Operation *owner = use.getOwner();
+    unsigned operandIndex = use.getOperandNumber();
+    if (auto part = dyn_cast<PartitionViewOp>(owner)) {
+      if (operandIndex == 0) {
+        collectPreferredLayoutFromUses(part.getResult(), result);
+      }
+      continue;
+    }
+    if (auto load = dyn_cast<pto::TLoadOp>(owner)) {
+      if (operandIndex == 0) {
+        mergeTLoadLayout(load, result);
+      }
+      continue;
+    }
+    if (auto store = dyn_cast<pto::TStoreOp>(owner)) {
+      if (operandIndex == 1 && isVectorTileType(store.getSrc().getType())) {
+        mergeLayoutPreference(
+            result, tileBLayoutToGlobalLayout(store.getSrc().getType()));
+      }
+      continue;
+    }
+  }
+}
+
 static LayoutPreference collectPreferredLayoutFromConsumers(Value tensorView) {
   LayoutPreference result;
-  auto mergePref = [&result](std::optional<Layout> candidate) {
-    if (!candidate) {
-      return;
-    }
-    if (!result.preferred) {
-      result.preferred = candidate;
-      return;
-    }
-    if (*result.preferred != *candidate) {
-      result.preferred = std::nullopt;
-      result.conflict = true;
-    }
-  };
-
-  auto walkUses = [&mergePref](auto &&self, Value v) -> void {
-    for (OpOperand &use : v.getUses()) {
-      Operation *owner = use.getOwner();
-      unsigned operandIndex = use.getOperandNumber();
-
-      if (auto part = dyn_cast<PartitionViewOp>(owner)) {
-        if (operandIndex == 0) {
-          self(self, part.getResult());
-        }
-        continue;
-      }
-
-      if (auto load = dyn_cast<pto::TLoadOp>(owner)) {
-        if (operandIndex == 0) {
-          if (auto dstTy = dyn_cast<TileBufType>(load.getDst().getType())) {
-            auto dstSpace =
-                dyn_cast_or_null<AddressSpaceAttr>(dstTy.getMemorySpace());
-            if (dstSpace &&
-                dstSpace.getAddressSpace() == AddressSpace::MAT &&
-                isF8E8M0ElemType(dstTy.getElementType())) {
-              auto cfg = dstTy.getConfigAttr();
-              auto bl = dyn_cast_or_null<BLayoutAttr>(cfg.getBLayout());
-              auto sl = dyn_cast_or_null<SLayoutAttr>(cfg.getSLayout());
-              if (bl && sl) {
-                if (bl.getValue() == BLayout::RowMajor &&
-                    sl.getValue() == SLayout::RowMajor &&
-                    dstTy.getShape().size() == 2 && dstTy.getShape()[0] != 1) {
-                  mergePref(Layout::MX_A_ZZ);
-                } else if (bl.getValue() == BLayout::ColMajor &&
-                           sl.getValue() == SLayout::ColMajor) {
-                  mergePref(Layout::MX_B_NN);
-                }
-              }
-            } else if (isVectorTileType(dstTy)) {
-              mergePref(tileBLayoutToGlobalLayout(dstTy));
-            }
-          }
-        }
-        continue;
-      }
-
-      if (auto store = dyn_cast<pto::TStoreOp>(owner)) {
-        if (operandIndex == 1 && isVectorTileType(store.getSrc().getType())) {
-          mergePref(tileBLayoutToGlobalLayout(store.getSrc().getType()));
-        }
-        continue;
-      }
-    }
-  };
-
-  walkUses(walkUses, tensorView);
+  collectPreferredLayoutFromUses(tensorView, result);
   return result;
 }
 
@@ -620,6 +635,46 @@ static void inferReinterpretCastLayoutAttr(memref::ReinterpretCastOp op,
                         isMinor2DAmbiguous);
 }
 
+static void inferSubviewLayoutAttr(memref::SubViewOp op) {
+  auto resTy = dyn_cast<MemRefType>(op.getType());
+  if (!resTy || !isGlobalMemRef(resTy)) {
+    return;
+  }
+  if (op->getAttrOfType<LayoutAttr>(kLayoutAttrName)) {
+    return;
+  }
+  if (Operation *def = op.getSource().getDefiningOp()) {
+    if (auto srcLayout = def->getAttrOfType<LayoutAttr>(kLayoutAttrName)) {
+      op->setAttr(kLayoutAttrName, srcLayout);
+      if (auto inferred =
+              def->getAttrOfType<BoolAttr>(kInferredLayoutAttrName)) {
+        op->setAttr(kInferredLayoutAttrName, inferred);
+      }
+      return;
+    }
+  }
+  // Fallback: if source memref type is fully static, infer from it.
+  auto srcTy = dyn_cast<MemRefType>(op.getSource().getType());
+  if (!srcTy || !srcTy.hasStaticShape()) {
+    setLayoutAttr(op.getOperation(), Layout::ND, /*inferred=*/true);
+    return;
+  }
+  SmallVector<int64_t> strideInts;
+  int64_t offset = ShapedType::kDynamic;
+  if (failed(mlir::pto::getPTOMemRefStridesAndOffset(srcTy, strideInts,
+                                                     offset)) ||
+      offset == ShapedType::kDynamic ||
+      llvm::any_of(strideInts,
+                   [](int64_t s) { return s == ShapedType::kDynamic; })) {
+    setLayoutAttr(op.getOperation(), Layout::ND, /*inferred=*/true);
+    return;
+  }
+  auto inferred = inferLayout5D(srcTy.getShape(), strideInts,
+                                elemByteSize(srcTy.getElementType()));
+  setLayoutAttr(op.getOperation(), inferred.value_or(Layout::ND),
+                /*inferred=*/true);
+}
+
 struct InferPTOLayoutPass
     : public mlir::pto::impl::InferPTOLayoutBase<InferPTOLayoutPass> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(InferPTOLayoutPass)
@@ -630,84 +685,37 @@ struct InferPTOLayoutPass
     return "Infer GlobalTensor layout (ND/DN/NZ) for make_tensor_view";
   }
 
-  void runOnOperation() override {
-    func::FuncOp func = getOperation();
-    // ------------------------------------------------------------------
-    // 1) pto.make_tensor_view (only if it still exists in the pipeline)
-    // ------------------------------------------------------------------
-    func.walk([&](MakeTensorViewOp op) {
-      inferMakeTensorViewLayoutAttr(op, [this] { signalPassFailure(); });
-    });
-
-    // ------------------------------------------------------------------
-    // 2) memref.reinterpret_cast (lowered from make_tensor_view)
-    // ------------------------------------------------------------------
-    func.walk([&](memref::ReinterpretCastOp op) {
-      inferReinterpretCastLayoutAttr(op, [this] { signalPassFailure(); });
-    });
-
-    // ------------------------------------------------------------------
-    // 3) memref.subview: layout is preserved from the source view
-    // ------------------------------------------------------------------
-    func.walk([&](memref::SubViewOp op) {
-      auto resTy = dyn_cast<MemRefType>(op.getType());
-      if (!resTy || !isGlobalMemRef(resTy)) {
-        return;
-      }
-
-      if (op->getAttrOfType<LayoutAttr>(kLayoutAttrName)) {
-        return;
-      }
-
-      if (Operation *def = op.getSource().getDefiningOp()) {
-        if (auto srcLayout = def->getAttrOfType<LayoutAttr>(kLayoutAttrName)) {
-          op->setAttr(kLayoutAttrName, srcLayout);
-          if (auto inferred =
-                  def->getAttrOfType<BoolAttr>(kInferredLayoutAttrName)) {
-            op->setAttr(kInferredLayoutAttrName, inferred);
-          }
-          return;
-        }
-      }
-
-      // Fallback: if source memref type is fully static, infer from it.
-      auto srcTy = dyn_cast<MemRefType>(op.getSource().getType());
-      if (!srcTy || !srcTy.hasStaticShape()) {
-        setLayoutAttr(op.getOperation(), Layout::ND, /*inferred=*/true);
-        return;
-      }
-
-      SmallVector<int64_t> strideInts;
-      int64_t offset = ShapedType::kDynamic;
-      if (failed(mlir::pto::getPTOMemRefStridesAndOffset(srcTy, strideInts,
-                                                         offset)) ||
-          offset == ShapedType::kDynamic ||
-          llvm::any_of(strideInts,
-                       [](int64_t s) { return s == ShapedType::kDynamic; })) {
-        setLayoutAttr(op.getOperation(), Layout::ND, /*inferred=*/true);
-        return;
-      }
-
-      auto inferred = inferLayout5D(srcTy.getShape(), strideInts,
-                                    elemByteSize(srcTy.getElementType()));
-      setLayoutAttr(op.getOperation(), inferred.value_or(Layout::ND),
-                    /*inferred=*/true);
-    });
-
-    // ------------------------------------------------------------------
-    // 4) pto.tload / pto.tstore: attach layout for static GM memrefs so EmitC
-    //    doesn't need to infer again in buildGlobalTensorFromMemref().
-    // ------------------------------------------------------------------
-    func.walk([&](pto::TLoadOp op) {
-      attachLoadStoreLayout(op, [](auto load) { return load.getSrc(); },
-                            [](auto load) { return load.getDst(); });
-    });
-
-    func.walk([&](pto::TStoreOp op) {
-      attachLoadStoreLayout(op, [](auto store) { return store.getDst(); },
-                            [](auto store) { return store.getSrc(); });
-    });
-  }
+void runOnOperation() override {
+  func::FuncOp func = getOperation();
+  // ------------------------------------------------------------------
+  // 1) pto.make_tensor_view (only if it still exists in the pipeline)
+  // ------------------------------------------------------------------
+  func.walk([&](MakeTensorViewOp op) {
+    inferMakeTensorViewLayoutAttr(op, [this] { signalPassFailure(); });
+  });
+  // ------------------------------------------------------------------
+  // 2) memref.reinterpret_cast (lowered from make_tensor_view)
+  // ------------------------------------------------------------------
+  func.walk([&](memref::ReinterpretCastOp op) {
+    inferReinterpretCastLayoutAttr(op, [this] { signalPassFailure(); });
+  });
+  // ------------------------------------------------------------------
+  // 3) memref.subview: layout is preserved from the source view
+  // ------------------------------------------------------------------
+  func.walk([&](memref::SubViewOp op) { inferSubviewLayoutAttr(op); });
+  // ------------------------------------------------------------------
+  // 4) pto.tload / pto.tstore: attach layout for static GM memrefs so EmitC
+  //    doesn't need to infer again in buildGlobalTensorFromMemref().
+  // ------------------------------------------------------------------
+  func.walk([&](pto::TLoadOp op) {
+    attachLoadStoreLayout(op, [](auto load) { return load.getSrc(); },
+                          [](auto load) { return load.getDst(); });
+  });
+  func.walk([&](pto::TStoreOp op) {
+    attachLoadStoreLayout(op, [](auto store) { return store.getDst(); },
+                          [](auto store) { return store.getSrc(); });
+  });
+}
 };
 
 } // namespace

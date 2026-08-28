@@ -642,6 +642,54 @@ bool InsertSyncAnalysis::CanPrunePipeVBarrier(
   return true;
 }
 
+// Resolve one unambiguous producer/consumer slot SSA pair for the whole
+// dependency group and configure a dynamic set/wait pair with it. Returns the
+// effective event-id count: when the group decomposes into a single slot
+// expression per side, slotSSAExpr/slotCount are filled and `eventIdNum` is
+// kept; otherwise a single static event id is used for the whole group.
+static int configureDynEventSlots(
+    SyncOperation *setOp, SyncOperation *waitOp,
+    const DepBaseMemInfoPairVec &depBaseMemInfosVec, int eventIdNum) {
+  if (eventIdNum <= 1) {
+    return eventIdNum;
+  }
+  Value producerSlot;
+  Value consumerSlot;
+  bool hasAmbiguousSlot = false;
+  for (auto &pair : depBaseMemInfosVec) {
+    Value pairProducerSlot;
+    Value pairConsumerSlot;
+    if (pair.second && pair.second->baseBuffer) {
+      pairProducerSlot = findMultiTileSlotExpr(pair.second->baseBuffer);
+    }
+    if (pair.first && pair.first->baseBuffer) {
+      pairConsumerSlot = findMultiTileSlotExpr(pair.first->baseBuffer);
+    }
+    if (!pairProducerSlot || !pairConsumerSlot) {
+      hasAmbiguousSlot = true;
+      break;
+    }
+    if ((producerSlot && producerSlot != pairProducerSlot) ||
+        (consumerSlot && consumerSlot != pairConsumerSlot)) {
+      hasAmbiguousSlot = true;
+      break;
+    }
+    producerSlot = pairProducerSlot;
+    consumerSlot = pairConsumerSlot;
+  }
+  if (hasAmbiguousSlot || !producerSlot || !consumerSlot) {
+    // Missing or ambiguous slot SSA -- fall back to a single event id. This
+    // also keeps non-multi-buffer codepaths untouched if their baseAddresses
+    // have multiple entries for another reason.
+    return 1;
+  }
+  setOp->slotSSAExpr = producerSlot;
+  setOp->slotCount = static_cast<uint32_t>(eventIdNum);
+  waitOp->slotSSAExpr = consumerSlot;
+  waitOp->slotCount = static_cast<uint32_t>(eventIdNum);
+  return eventIdNum;
+}
+
 void InsertSyncAnalysis::InsertSyncOperation(
     CompoundInstanceElement *nowCompound, CompoundInstanceElement *frontCompound,
     DepBaseMemInfoPairVec &depBaseMemInfosVec,
@@ -673,54 +721,13 @@ void InsertSyncAnalysis::InsertSyncOperation(
     setOp->SetDepSyncIRIndex(frontCompound->GetIndex());
     waitOp->SetDepSyncIRIndex(frontCompound->GetIndex());
 
-    // Back-edge dependencies may require multi-buffer event IDs. When N
-    // dyn event IDs are warranted, also plumb the per-side slot SSA so
-    // codegen can lower into `pto.set_flag_dyn` / `pto.wait_flag_dyn`.
+    // Back-edge dependencies may require multi-buffer event IDs. When N dyn
+    // event IDs are warranted, also plumb the per-side slot SSA so codegen can
+    // lower into `pto.set_flag_dyn` / `pto.wait_flag_dyn`.
     if (forEndIndex.has_value()) {
-      int eventIdNum = GetEventIdNum(depBaseMemInfosVec);
-      if (eventIdNum > 1) {
-        // Each dep pair has (now=consumer, front=producer). The producer's
-        // slot SSA gates the `set_flag_dyn`; the consumer's gates the
-        // `wait_flag_dyn`. A single dynamic event pair can represent only one
-        // slot expression on each side. If the dependency group contains
-        // multiple expressions, fall back to a static event that guards the
-        // whole group instead of silently synchronizing just the first one.
-        Value producerSlot;
-        Value consumerSlot;
-        bool hasAmbiguousSlot = false;
-        for (auto &pair : depBaseMemInfosVec) {
-          Value pairProducerSlot;
-          Value pairConsumerSlot;
-          if (pair.second && pair.second->baseBuffer) {
-            pairProducerSlot = findMultiTileSlotExpr(pair.second->baseBuffer);
-          }
-          if (pair.first && pair.first->baseBuffer) {
-            pairConsumerSlot = findMultiTileSlotExpr(pair.first->baseBuffer);
-          }
-          if (!pairProducerSlot || !pairConsumerSlot) {
-            hasAmbiguousSlot = true;
-            break;
-          }
-          if ((producerSlot && producerSlot != pairProducerSlot) ||
-              (consumerSlot && consumerSlot != pairConsumerSlot)) {
-            hasAmbiguousSlot = true;
-            break;
-          }
-          producerSlot = pairProducerSlot;
-          consumerSlot = pairConsumerSlot;
-        }
-        if (hasAmbiguousSlot || !producerSlot || !consumerSlot) {
-          // Missing or ambiguous slot SSA -- fall back to a single event id.
-          // This also keeps non-multi-buffer codepaths untouched if their
-          // baseAddresses have multiple entries for another reason.
-          eventIdNum = 1;
-        } else {
-          setOp->slotSSAExpr = producerSlot;
-          setOp->slotCount = static_cast<uint32_t>(eventIdNum);
-          waitOp->slotSSAExpr = consumerSlot;
-          waitOp->slotCount = static_cast<uint32_t>(eventIdNum);
-        }
-      }
+      int eventIdNum = configureDynEventSlots(
+          setOp.get(), waitOp.get(), depBaseMemInfosVec,
+          GetEventIdNum(depBaseMemInfosVec));
       setOp->eventIdNum = eventIdNum;
       waitOp->eventIdNum = eventIdNum;
     }
@@ -733,7 +740,6 @@ void InsertSyncAnalysis::InsertSyncOperation(
     newSync.emplace_back(std::move(waitOp));
     syncOperations_.emplace_back(std::move(newSync));
   }
-
   syncIndex_++;
   assert(syncOperations_.size() == syncIndex_);
 }
