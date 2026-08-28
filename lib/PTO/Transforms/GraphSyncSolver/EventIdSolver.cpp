@@ -44,6 +44,97 @@
 using namespace mlir;
 using namespace pto::syncsolver;
 
+namespace {
+
+// Comparator ordering event-id nodes by (value, reversePriority, id). Used by
+// calcEventIds so the most constrained node is always processed first.
+struct EventIdNodeValueCompare {
+  bool operator()(const std::pair<int64_t, EventIdNode *> &a,
+                  const std::pair<int64_t, EventIdNode *> &b) const {
+    if (a.first != b.first) {
+      return a.first < b.first;
+    }
+    if (a.second->reversePriority != b.second->reversePriority) {
+      return a.second->reversePriority < b.second->reversePriority;
+    }
+    return a.second->id < b.second->id;
+  }
+};
+
+// Greedily pick the smallest free event ids in ascending order for nodes with
+// normal priority.
+void appendChosenEventIdsForward(EventIdNode *node,
+                                 const llvm::SmallVector<int64_t> &usedEventIds,
+                                 llvm::SmallVector<int64_t> &chosenEventIds) {
+  int64_t curEventId = 0;
+  auto *it = usedEventIds.begin();
+  while (static_cast<int64_t>(chosenEventIds.size()) < node->eventIdNum) {
+    while ((it != usedEventIds.end()) && ((*it) < curEventId)) {
+      it++;
+    }
+    if ((it != usedEventIds.end()) && ((*it) == curEventId)) {
+      it++;
+    } else {
+      chosenEventIds.push_back(curEventId);
+    }
+    curEventId++;
+  }
+}
+
+// Greedily pick the largest free event ids in descending order for nodes with
+// reverse priority, then fill the remaining eventIdNum slots past eventIdMax.
+void appendChosenEventIdsBackward(EventIdNode *node,
+                                  const llvm::SmallVector<int64_t> &usedEventIds,
+                                  int64_t eventIdMax, int64_t eventIdsNumMax,
+                                  llvm::SmallVector<int64_t> &chosenEventIds) {
+  int64_t curEventId = std::max(eventIdMax, eventIdsNumMax - 1);
+  auto it = usedEventIds.rbegin();
+  while ((curEventId >= 0) &&
+         (static_cast<int64_t>(chosenEventIds.size()) < node->eventIdNum)) {
+    while ((it != usedEventIds.rend()) && ((*it) > curEventId)) {
+      it++;
+    }
+    if ((it != usedEventIds.rend()) && ((*it) == curEventId)) {
+      it++;
+    } else {
+      chosenEventIds.push_back(curEventId);
+    }
+    curEventId--;
+  }
+  std::reverse(chosenEventIds.begin(), chosenEventIds.end());
+  if (int64_t rem =
+          node->eventIdNum - static_cast<int64_t>(chosenEventIds.size());
+      rem > 0) {
+    for (int64_t i = 0; i < rem; i++) {
+      chosenEventIds.push_back(eventIdMax + i + 1);
+    }
+  }
+}
+
+// Decrease the running values of the not-yet-ordered neighbors of `node`
+// during the top-down ordering pass of calcEventIds.
+void decreaseAdjNodeValues(
+    EventIdNode *node, llvm::DenseMap<EventIdNode *, int64_t> &nodeValue,
+    std::set<std::pair<int64_t, EventIdNode *>, EventIdNodeValueCompare> &st,
+    const llvm::DenseMap<EventIdNode *,
+                         llvm::DenseMap<EventIdNode *, int64_t>> &adjList) {
+  auto adjIt = adjList.find(node);
+  if (adjIt == adjList.end()) {
+    return;
+  }
+  for (auto [adjNode, frq] : adjIt->second) {
+    if (!nodeValue.contains(adjNode)) {
+      continue;
+    }
+    assert(st.count({nodeValue[adjNode], adjNode}));
+    st.erase({nodeValue[adjNode], adjNode});
+    nodeValue[adjNode] -= node->eventIdNum;
+    st.insert({nodeValue[adjNode], adjNode});
+  }
+}
+
+} // namespace
+
 int64_t EventIdSolver::getEventIdsNum(bool dontCalcEventIds) {
   if (!dontCalcEventIds) {
     calcEventIds();
@@ -256,42 +347,10 @@ EventIdSolver::getChosenEventIds(EventIdNode *node, int64_t eventIdMax) {
   llvm::SmallVector<int64_t> chosenEventIds;
   llvm::SmallVector<int64_t> usedEventIds = getAdjNodesUsedEventIds(node);
   if (!node->reversePriority) {
-    int64_t curEventId = 0;
-    auto *it = usedEventIds.begin();
-    while (static_cast<int64_t>(chosenEventIds.size()) < node->eventIdNum) {
-      while ((it != usedEventIds.end()) && ((*it) < curEventId)) {
-        it++;
-      }
-      if ((it != usedEventIds.end()) && ((*it) == curEventId)) {
-        it++;
-      } else {
-        chosenEventIds.push_back(curEventId);
-      }
-      curEventId++;
-    }
+    appendChosenEventIdsForward(node, usedEventIds, chosenEventIds);
   } else {
-    int64_t curEventId = std::max(eventIdMax, this->eventIdsNumMax - 1);
-    auto it = usedEventIds.rbegin();
-    while ((curEventId >= 0) &&
-           (static_cast<int64_t>(chosenEventIds.size()) < node->eventIdNum)) {
-      while ((it != usedEventIds.rend()) && ((*it) > curEventId)) {
-        it++;
-      }
-      if ((it != usedEventIds.rend()) && ((*it) == curEventId)) {
-        it++;
-      } else {
-        chosenEventIds.push_back(curEventId);
-      }
-      curEventId--;
-    }
-    std::reverse(chosenEventIds.begin(), chosenEventIds.end());
-    if (int64_t rem =
-            node->eventIdNum - static_cast<int64_t>(chosenEventIds.size());
-        rem > 0) {
-      for (int64_t i = 0; i < rem; i++) {
-        chosenEventIds.push_back(eventIdMax + i + 1);
-      }
-    }
+    appendChosenEventIdsBackward(node, usedEventIds, eventIdMax,
+                                 this->eventIdsNumMax, chosenEventIds);
   }
   LLVM_DEBUG({
     llvm::dbgs() << "chosen-event-ids: ";
@@ -306,19 +365,8 @@ EventIdSolver::getChosenEventIds(EventIdNode *node, int64_t eventIdMax) {
 }
 
 void EventIdSolver::calcEventIds() {
-  auto cmp = [](const std::pair<int64_t, EventIdNode *> &a,
-                const std::pair<int64_t, EventIdNode *> &b) {
-    if (a.first != b.first) {
-      return a.first < b.first;
-    }
-    if (a.second->reversePriority != b.second->reversePriority) {
-      return a.second->reversePriority < b.second->reversePriority;
-    }
-    return a.second->id < b.second->id;
-  };
-  std::set<std::pair<int64_t, EventIdNode *>, decltype(cmp)> st(cmp);
-
   llvm::DenseMap<EventIdNode *, int64_t> nodeValue;
+  std::set<std::pair<int64_t, EventIdNode *>, EventIdNodeValueCompare> st;
   for (auto &node : nodes) {
     assignEventIds(node.get(), {});
     int64_t curNodeValue = sumAdjListSizes[node.get()] + node->eventIdNum;
@@ -332,14 +380,7 @@ void EventIdSolver::calcEventIds() {
     st.erase(st.begin());
     nodeValue.erase(node);
     orderedNodes.emplace_back(node);
-    for (auto [adjNode, frq] : adjList[node]) {
-      if (nodeValue.contains(adjNode)) {
-        assert(st.count({nodeValue[adjNode], adjNode}));
-        st.erase({nodeValue[adjNode], adjNode});
-        nodeValue[adjNode] -= node->eventIdNum;
-        st.insert({nodeValue[adjNode], adjNode});
-      }
-    }
+    decreaseAdjNodeValues(node, nodeValue, st, adjList);
   }
 
   int64_t eventIdMax = 0;

@@ -28,6 +28,65 @@ static EventAttr makeEvent(MLIRContext *ctx, int64_t eventId) {
   return EventAttr::get(ctx, static_cast<EVENT>(eventId));
 }
 
+namespace {
+
+// Multi-buffer dyn-event path: collapse the per-slot fanout into a single
+// `pto.set_flag_dyn` / `pto.wait_flag_dyn`. The hardware event id is selected
+// at runtime by an N-way `arith.select` chain over the allocated event ids
+// keyed off `slotSSAExpr % N`.
+void emitDynEventSync(IRRewriter &rewriter, SetWaitOp *setWait,
+                      Location loc) {
+  int64_t n = static_cast<int64_t>(setWait->eventIds.size());
+  Value slot = setWait->slotSSAExpr;
+  if (slot.getType() != rewriter.getIndexType()) {
+    slot = rewriter.create<arith::IndexCastOp>(loc, rewriter.getIndexType(),
+                                               slot);
+  }
+  Value nConst = rewriter.create<arith::ConstantIndexOp>(loc, n);
+  Value slotMod = rewriter.create<arith::RemUIOp>(loc, slot, nConst);
+
+  Value selected =
+      rewriter.create<arith::ConstantIndexOp>(loc, setWait->eventIds[0]);
+  for (int64_t i = 1; i < n; ++i) {
+    Value iIdx = rewriter.create<arith::ConstantIndexOp>(loc, i);
+    Value isThis = rewriter.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::eq, slotMod, iIdx);
+    Value idI = rewriter.create<arith::ConstantIndexOp>(
+        loc, setWait->eventIds[static_cast<size_t>(i)]);
+    selected = rewriter.create<arith::SelectOp>(loc, isThis, idI, selected);
+  }
+
+  auto srcAttr = makePipe(rewriter.getContext(), setWait->pipeSrc);
+  auto dstAttr = makePipe(rewriter.getContext(), setWait->pipeDst);
+  if (isa<syncsolver::SetFlagOp>(setWait)) {
+    rewriter.create<pto::SetFlagDynOp>(loc, srcAttr, dstAttr, selected);
+    return;
+  }
+  if (isa<syncsolver::WaitFlagOp>(setWait)) {
+    rewriter.create<pto::WaitFlagDynOp>(loc, srcAttr, dstAttr, selected);
+  }
+}
+
+// Scope-anchored fallback: emit one static set/wait flag per assigned event
+// id.
+void emitStaticEventIds(IRRewriter &rewriter, SetWaitOp *setWait,
+                        Location loc) {
+  auto srcAttr = makePipe(rewriter.getContext(), setWait->pipeSrc);
+  auto dstAttr = makePipe(rewriter.getContext(), setWait->pipeDst);
+  for (int64_t eventId : setWait->eventIds) {
+    auto eventAttr = makeEvent(rewriter.getContext(), eventId);
+    if (isa<syncsolver::SetFlagOp>(setWait)) {
+      rewriter.create<pto::SetFlagOp>(loc, srcAttr, dstAttr, eventAttr);
+      continue;
+    }
+    if (isa<syncsolver::WaitFlagOp>(setWait)) {
+      rewriter.create<pto::WaitFlagOp>(loc, srcAttr, dstAttr, eventAttr);
+    }
+  }
+}
+
+} // namespace
+
 Operation *CodeGenerator::resolveSyncAnchor(OperationBase *opBase) {
   if (!opBase) {
     return nullptr;
@@ -104,14 +163,14 @@ void CodeGenerator::setInsertionPoint(IRRewriter &rewriter,
 }
 
 void CodeGenerator::emitSyncOp(IRRewriter &rewriter, SyncOp *syncOp) {
-  if (auto *barrier = dyn_cast<BarrierOp>(syncOp)) {
+  if (auto *barrier = dyn_cast<syncsolver::BarrierOp>(syncOp)) {
     rewriter.create<pto::BarrierOp>(resolveSyncLoc(barrier),
                                     makePipe(rewriter.getContext(),
                                              barrier->pipe));
     return;
   }
 
-  auto *setWait = dyn_cast<SetWaitOp>(syncOp);
+  auto *setWait = dyn_cast<syncsolver::SetWaitOp>(syncOp);
   if (!setWait || setWait->eventIds.empty()) {
     return;
   }
@@ -126,47 +185,16 @@ void CodeGenerator::emitSyncOp(IRRewriter &rewriter, SyncOp *syncOp) {
   assert(!setWait->checkLastIter &&
          "checkLastIter wrapping not implemented in codegen");
 
-  auto srcAttr = makePipe(rewriter.getContext(), setWait->pipeSrc);
-  auto dstAttr = makePipe(rewriter.getContext(), setWait->pipeDst);
   Location loc = resolveSyncLoc(setWait);
-  bool isSet = isa<SetFlagOp>(setWait);
-  bool isWait = isa<WaitFlagOp>(setWait);
-
   // Multi-buffer dyn-event path: when the sync was produced by a
   // multi-buffer back-edge (eventIds.size() > 1 AND we have a slot SSA),
-  // collapse the per-slot fanout into a single `pto.set_flag_dyn` /
-  // `pto.wait_flag_dyn`. The hardware event id is selected at runtime by
-  // an N-way `arith.select` chain over the allocated event ids keyed off
+  // collapse the per-slot fanout into a single dyn set/wait selected by
   // `slotSSAExpr % N`. The `allAtOnce` scopes (pre-loop prime / post-loop
   // drain) keep their static fanout so each per-slot event gets primed /
   // drained exactly once.
   if (!setWait->allAtOnce && setWait->eventIds.size() > 1 &&
       setWait->slotSSAExpr) {
-    int64_t n = static_cast<int64_t>(setWait->eventIds.size());
-    Value slot = setWait->slotSSAExpr;
-    if (slot.getType() != rewriter.getIndexType()) {
-      slot = rewriter.create<arith::IndexCastOp>(
-          loc, rewriter.getIndexType(), slot);
-    }
-    Value nConst = rewriter.create<arith::ConstantIndexOp>(loc, n);
-    Value slotMod = rewriter.create<arith::RemUIOp>(loc, slot, nConst);
-
-    Value selected = rewriter.create<arith::ConstantIndexOp>(
-        loc, setWait->eventIds[0]);
-    for (int64_t i = 1; i < n; ++i) {
-      Value iIdx = rewriter.create<arith::ConstantIndexOp>(loc, i);
-      Value isThis = rewriter.create<arith::CmpIOp>(
-          loc, arith::CmpIPredicate::eq, slotMod, iIdx);
-      Value idI = rewriter.create<arith::ConstantIndexOp>(
-          loc, setWait->eventIds[static_cast<size_t>(i)]);
-      selected = rewriter.create<arith::SelectOp>(loc, isThis, idI, selected);
-    }
-
-    if (isSet) {
-      rewriter.create<pto::SetFlagDynOp>(loc, srcAttr, dstAttr, selected);
-    } else if (isWait) {
-      rewriter.create<pto::WaitFlagDynOp>(loc, srcAttr, dstAttr, selected);
-    }
+    emitDynEventSync(rewriter, setWait, loc);
     return;
   }
 
@@ -174,14 +202,7 @@ void CodeGenerator::emitSyncOp(IRRewriter &rewriter, SyncOp *syncOp) {
   // id. Always used for `allAtOnce` prime/drain pairs and for syncs that
   // could not have their slot SSA recovered (in which case we degrade to
   // the conservative N-static fanout rather than dropping the dep).
-  for (int64_t eventId : setWait->eventIds) {
-    auto eventAttr = makeEvent(rewriter.getContext(), eventId);
-    if (isSet) {
-      rewriter.create<pto::SetFlagOp>(loc, srcAttr, dstAttr, eventAttr);
-    } else if (isWait) {
-      rewriter.create<pto::WaitFlagOp>(loc, srcAttr, dstAttr, eventAttr);
-    }
-  }
+  emitStaticEventIds(rewriter, setWait, loc);
 }
 
 void CodeGenerator::emitSyncMap(IRRewriter &rewriter, SyncMap &syncMap,

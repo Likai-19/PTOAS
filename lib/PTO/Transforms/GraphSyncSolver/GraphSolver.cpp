@@ -39,6 +39,48 @@
 using namespace mlir;
 using namespace pto::syncsolver;
 
+namespace {
+
+// Compact one interval set: drop edges whose interval is fully covered by a
+// later edge so queries never scan useless successors.
+std::set<GraphSolver::Edge> optimizeEdgeSet(
+    const std::set<GraphSolver::Edge> &edges) {
+  std::set<GraphSolver::Edge> optimizedEdges;
+  for (const auto &edge : edges) {
+    while (!optimizedEdges.empty() &&
+           optimizedEdges.rbegin()->endIndex >= edge.endIndex) {
+      optimizedEdges.erase(*optimizedEdges.rbegin());
+    }
+    optimizedEdges.insert(edge);
+  }
+  return optimizedEdges;
+}
+
+// Relax the adjacency edges of the current pipe: enqueue every edge that
+// improves the recorded distance to its destination pipe.
+void relaxEdges(
+    CorePipeInfo curCorePipe, int curIndex,
+    llvm::DenseMap<CorePipeInfo, int> &distance,
+    std::priority_queue<std::pair<int, CorePipeInfo>,
+                        std::vector<std::pair<int, CorePipeInfo>>,
+                        std::greater<std::pair<int, CorePipeInfo>>> &que,
+    llvm::DenseMap<CorePipeInfo,
+                   llvm::DenseMap<CorePipeInfo, std::set<GraphSolver::Edge>>> &adjacencyList) {
+  for (auto &[endCorePipe, edges] : adjacencyList[curCorePipe]) {
+    auto it =
+        edges.lower_bound(GraphSolver::Edge(curCorePipe, endCorePipe, curIndex, -1));
+    for (; it != edges.end(); it++) {
+      if (!distance.count(endCorePipe) ||
+          (distance[endCorePipe] > (it->endIndex))) {
+        distance[endCorePipe] = it->endIndex;
+        que.emplace(it->endIndex, endCorePipe);
+      }
+    }
+  }
+}
+
+} // namespace
+
 // Compare edges (used for ordered sets). Edges must share endpoints when
 // compared.
 bool GraphSolver::Edge::operator<(const Edge &other) const {
@@ -113,15 +155,7 @@ void GraphSolver::addConflictPair(ConflictPair *conflictPair) {
 void GraphSolver::optimizeAdjacencyList() {
   for (auto &[corePipeSrc, dstMap] : adjacencyList) {
     for (auto &[corePipeDst, edges] : dstMap) {
-      std::set<Edge> optimizedEdges;
-      for (auto &edge : edges) {
-        while (!optimizedEdges.empty() &&
-               optimizedEdges.rbegin()->endIndex >= edge.endIndex) {
-          optimizedEdges.erase(*optimizedEdges.rbegin());
-        }
-        optimizedEdges.insert(edge);
-      }
-      edges = std::move(optimizedEdges);
+      edges = optimizeEdgeSet(edges);
     }
   }
 }
@@ -170,16 +204,7 @@ std::optional<int> GraphSolver::runDijkstra(CorePipeInfo corePipeSrc,
       break;
     }
 
-    for (auto &[endCorePipe, edges] : adjacencyList[curCorePipe]) {
-      auto it = edges.lower_bound(Edge(curCorePipe, endCorePipe, curIndex, -1));
-      for (; it != edges.end(); it++) {
-        if (!distance.count(endCorePipe) ||
-            (distance[endCorePipe] > (it->endIndex))) {
-          distance[endCorePipe] = it->endIndex;
-          que.emplace(it->endIndex, endCorePipe);
-        }
-      }
-    }
+    relaxEdges(curCorePipe, curIndex, distance, que, adjacencyList);
   }
 
   return distance.count(corePipeDst) ? distance[corePipeDst]

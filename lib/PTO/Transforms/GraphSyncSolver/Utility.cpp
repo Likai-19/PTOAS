@@ -275,80 +275,60 @@ std::vector<std::pair<int, int>> getRanges(ConflictPair *conflictPair) {
   return ret;
 }
 
+// Number of hardware-available EVENT ids reserved for a special
+// (setPipe, waitPipe) pair in intra-core mode: each listed pair claims one
+// dedicated id.
+static int64_t getIntraCoreEventIdNum(pto::PIPE setPipe, pto::PIPE waitPipe) {
+  const llvm::DenseMap<std::tuple<PIPE, PIPE>, int64_t> reservedEventIdNum = {
+      {{pto::PIPE::PIPE_V, pto::PIPE::PIPE_S}, 1},
+      {{pto::PIPE::PIPE_S, pto::PIPE::PIPE_V}, 1},
+      {{pto::PIPE::PIPE_M, pto::PIPE::PIPE_FIX}, 1},
+      {{pto::PIPE::PIPE_FIX, pto::PIPE::PIPE_M}, 1},
+  };
+  int64_t eventIdNum = kIntraCoreEventIdCount;
+  eventIdNum -= kReservedIntraCoreEventIdCount;
+  auto it = reservedEventIdNum.find({setPipe, waitPipe});
+  if (it != reservedEventIdNum.end()) {
+    eventIdNum -= it->second;
+  }
+  return eventIdNum;
+}
+
+// Number of hardware-available EVENT ids for a given sync mode and
+// (setPipe, waitPipe) pair; llvm_unreachable for unhandled modes.
+static int64_t getSyncModeEventIdNum(SyncMode syncMode, pto::PIPE setPipe,
+                                     pto::PIPE waitPipe) {
+  if (syncMode == SyncMode::INTRA_CORE_SYNC) {
+    return getIntraCoreEventIdNum(setPipe, waitPipe);
+  }
+  if (syncMode == SyncMode::CROSS_CORE_SYNC) {
+    return kCrossCoreEventIdCount - kReservedCrossCoreEventIdCount;
+  }
+  if (syncMode == SyncMode::TEST_INTRA_CORE_MODE) {
+    return kTestIntraCoreEventIdCount;
+  }
+  if (syncMode == SyncMode::TEST_CROSS_CORE_MODE) {
+    return kTestCrossCoreEventIdCount;
+  }
+  llvm_unreachable("unsupported SyncMode for hardware event ids");
+}
+
 // Return the hardware-available EVENT ids for a given (setPipe, waitPipe) pair.
 // Respects reserved ids for special pipe pairs and returns a vector of usable
 // ids.
 int64_t getHWAvailableEventIdNum(SyncMode syncMode, pto::PIPE setPipe,
                                  pto::PIPE waitPipe) {
-  if (syncMode == SyncMode::INTRA_CORE_SYNC) {
-    const llvm::DenseMap<std::tuple<PIPE, PIPE>, int64_t> reservedEventIdNum = {
-        {{pto::PIPE::PIPE_V, pto::PIPE::PIPE_S}, 1},
-        {{pto::PIPE::PIPE_S, pto::PIPE::PIPE_V}, 1},
-        {{pto::PIPE::PIPE_M, pto::PIPE::PIPE_FIX}, 1},
-        {{pto::PIPE::PIPE_FIX, pto::PIPE::PIPE_M}, 1},
-    };
-    int64_t eventIdNum = kIntraCoreEventIdCount;
-    eventIdNum -= kReservedIntraCoreEventIdCount;
-    auto it = reservedEventIdNum.find({setPipe, waitPipe});
-    if (it != reservedEventIdNum.end()) {
-      eventIdNum -= it->second;
-    }
-    return eventIdNum;
-  } else if (syncMode == SyncMode::CROSS_CORE_SYNC) {
-    int64_t eventIdNum = kCrossCoreEventIdCount;
-    eventIdNum -= kReservedCrossCoreEventIdCount;
-    return eventIdNum;
-  } else if (syncMode == SyncMode::TEST_INTRA_CORE_MODE) {
-    int64_t eventIdNum = kTestIntraCoreEventIdCount;
-    return eventIdNum;
-  } else if (syncMode == SyncMode::TEST_CROSS_CORE_MODE) {
-    int64_t eventIdNum = kTestCrossCoreEventIdCount;
-    return eventIdNum;
-  }
-  llvm_unreachable("getHWAvailableEventIdNum: unhandled SyncMode");
+  return getSyncModeEventIdNum(syncMode, setPipe, waitPipe);
 }
 
 [[maybe_unused]] static SmallVector<int64_t> getHWAvailableEventIds(SyncMode syncMode,
                                             pto::PIPE setPipe,
                                             pto::PIPE waitPipe) {
-  if (syncMode == SyncMode::INTRA_CORE_SYNC) {
-    const llvm::DenseMap<std::tuple<PIPE, PIPE>, int64_t> reservedEventIdNum = {
-        {{pto::PIPE::PIPE_V, pto::PIPE::PIPE_S}, 1},
-        {{pto::PIPE::PIPE_S, pto::PIPE::PIPE_V}, 1},
-        {{pto::PIPE::PIPE_M, pto::PIPE::PIPE_FIX}, 1},
-        {{pto::PIPE::PIPE_FIX, pto::PIPE::PIPE_M}, 1},
-    };
-    int64_t eventIdNum = kIntraCoreEventIdCount;
-    eventIdNum -= kReservedIntraCoreEventIdCount;
-    auto it = reservedEventIdNum.find({setPipe, waitPipe});
-    if (it != reservedEventIdNum.end()) {
-      eventIdNum -= it->second;
-    }
-    SmallVector<int64_t> hwAvailableEventIds(eventIdNum);
-    std::iota(hwAvailableEventIds.begin(), hwAvailableEventIds.end(),
-              static_cast<int64_t>(0));
-    return hwAvailableEventIds;
-  } else if (syncMode == SyncMode::CROSS_CORE_SYNC) {
-    int64_t eventIdNum = kCrossCoreEventIdCount;
-    eventIdNum -= kReservedCrossCoreEventIdCount;
-    SmallVector<int64_t> hwAvailableEventIds(eventIdNum);
-    std::iota(hwAvailableEventIds.begin(), hwAvailableEventIds.end(),
-              static_cast<int64_t>(0));
-    return hwAvailableEventIds;
-  } else if (syncMode == SyncMode::TEST_INTRA_CORE_MODE) {
-    int64_t eventIdNum = kTestIntraCoreEventIdCount;
-    SmallVector<int64_t> availableEventIds(eventIdNum);
-    std::iota(availableEventIds.begin(), availableEventIds.end(),
-              static_cast<int64_t>(0));
-    return availableEventIds;
-  } else if (syncMode == SyncMode::TEST_CROSS_CORE_MODE) {
-    int64_t eventIdNum = kTestCrossCoreEventIdCount;
-    SmallVector<int64_t> availableEventIds(eventIdNum);
-    std::iota(availableEventIds.begin(), availableEventIds.end(),
-              static_cast<int64_t>(0));
-    return availableEventIds;
-  }
-  llvm_unreachable("getHWAvailableEventIds: unhandled SyncMode");
+  int64_t eventIdNum = getSyncModeEventIdNum(syncMode, setPipe, waitPipe);
+  SmallVector<int64_t> hwAvailableEventIds(eventIdNum);
+  std::iota(hwAvailableEventIds.begin(), hwAvailableEventIds.end(),
+            static_cast<int64_t>(0));
+  return hwAvailableEventIds;
 }
 
 // Build a Value that is true for the first iteration of the given scf::ForOp.

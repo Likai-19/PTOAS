@@ -223,24 +223,50 @@ MemInfo getMemInfo(const llvm::SmallVector<int64_t> &addrs) {
   return memInfo;
 }
 
-bool PointerLikeInfo::checkConflict(const PointerLikeInfo &pointerLikeInfo1,
-                                    const PointerLikeInfo &pointerLikeInfo2,
-                                    std::optional<int64_t> lcmLen,
-                                    std::optional<int64_t> eventIdNum) {
-  if (!pointerLikeInfo1.addressSpace.has_value() ||
-      !pointerLikeInfo2.addressSpace.has_value()) {
-    return false;
-  }
-  if (pointerLikeInfo1.addressSpace.value() !=
-      pointerLikeInfo2.addressSpace.value()) {
-    return false;
+enum class AddressPairCheckResult { Continue, Conflict };
+
+// Compare one (i, j) address pair of two pointer-like layouts. Returns
+// Conflict when the pair proves the regions may overlap and Continue when it
+// is provably disjoint (same event-id slot, dynamic offsets, or
+// non-overlapping allocation ranges).
+static AddressPairCheckResult checkAddressPair(
+    const PointerLikeInfo &pointerLikeInfo1,
+    const PointerLikeInfo &pointerLikeInfo2, std::optional<int64_t> eventIdNum,
+    int64_t i, int64_t j, int64_t sz1, int64_t sz2) {
+  if (eventIdNum.has_value() &&
+      (i % eventIdNum.value()) == (j % eventIdNum.value())) {
+    return AddressPairCheckResult::Continue;
   }
 
-  if (pointerLikeInfo1.aliasesUnknownRange ||
-      pointerLikeInfo2.aliasesUnknownRange) {
-    return true;
+  auto &offsets1 = pointerLikeInfo1.addresses;
+  auto &offsets2 = pointerLikeInfo2.addresses;
+  auto offset1 = offsets1[i % sz1];
+  auto offset2 = offsets2[j % sz2];
+  if (offset1 == ShapedType::kDynamic || offset2 == ShapedType::kDynamic) {
+    return AddressPairCheckResult::Conflict;
   }
 
+  assert(pointerLikeInfo1.allocateSize.has_value());
+  assert(pointerLikeInfo2.allocateSize.has_value());
+  auto allocSz1 = pointerLikeInfo1.allocateSize.value();
+  auto allocSz2 = pointerLikeInfo2.allocateSize.value();
+
+  if ((allocSz1 != ShapedType::kDynamic) &&
+      (offset1 + allocSz1 < offset2 + 1)) {
+    return AddressPairCheckResult::Continue;
+  }
+  if ((allocSz2 != ShapedType::kDynamic) &&
+      (offset2 + allocSz2 < offset1 + 1)) {
+    return AddressPairCheckResult::Continue;
+  }
+  return AddressPairCheckResult::Conflict;
+}
+
+// Return true when any (i, j) address pair of the two layouts conflicts.
+static bool hasConflictingAddressPair(
+    const PointerLikeInfo &pointerLikeInfo1,
+    const PointerLikeInfo &pointerLikeInfo2, std::optional<int64_t> lcmLen,
+    std::optional<int64_t> eventIdNum) {
   auto &offsets1 = pointerLikeInfo1.addresses;
   auto &offsets2 = pointerLikeInfo2.addresses;
   auto sz1 = static_cast<int64_t>(offsets1.size());
@@ -259,35 +285,35 @@ bool PointerLikeInfo::checkConflict(const PointerLikeInfo &pointerLikeInfo1,
 
   for (int64_t i = 0; i < len1; i++) {
     for (int64_t j = 0; j < len2; j++) {
-      if (eventIdNum.has_value()) {
-        if ((i % eventIdNum.value()) == (j % eventIdNum.value())) {
-          continue;
-        }
-      }
-
-      auto offset1 = offsets1[i % sz1];
-      auto offset2 = offsets2[j % sz2];
-      if (offset1 == ShapedType::kDynamic || offset2 == ShapedType::kDynamic) {
+      if (checkAddressPair(pointerLikeInfo1, pointerLikeInfo2, eventIdNum, i,
+                           j, sz1, sz2) == AddressPairCheckResult::Conflict) {
         return true;
       }
-
-      assert(pointerLikeInfo1.allocateSize.has_value());
-      assert(pointerLikeInfo2.allocateSize.has_value());
-      auto allocSz1 = pointerLikeInfo1.allocateSize.value();
-      auto allocSz2 = pointerLikeInfo2.allocateSize.value();
-
-      if ((allocSz1 != ShapedType::kDynamic) &&
-          (offset1 + allocSz1 < offset2 + 1)) {
-        continue;
-      }
-      if ((allocSz2 != ShapedType::kDynamic) &&
-          (offset2 + allocSz2 < offset1 + 1)) {
-        continue;
-      }
-      return true;
     }
   }
   return false;
+}
+
+bool PointerLikeInfo::checkConflict(const PointerLikeInfo &pointerLikeInfo1,
+                                    const PointerLikeInfo &pointerLikeInfo2,
+                                    std::optional<int64_t> lcmLen,
+                                    std::optional<int64_t> eventIdNum) {
+  if (!pointerLikeInfo1.addressSpace.has_value() ||
+      !pointerLikeInfo2.addressSpace.has_value()) {
+    return false;
+  }
+  if (pointerLikeInfo1.addressSpace.value() !=
+      pointerLikeInfo2.addressSpace.value()) {
+    return false;
+  }
+
+  if (pointerLikeInfo1.aliasesUnknownRange ||
+      pointerLikeInfo2.aliasesUnknownRange) {
+    return true;
+  }
+
+  return hasConflictingAddressPair(pointerLikeInfo1, pointerLikeInfo2, lcmLen,
+                                   eventIdNum);
 }
 
 bool MemInfo::checkConflict(const MemInfo &memInfo1, const MemInfo &memInfo2,

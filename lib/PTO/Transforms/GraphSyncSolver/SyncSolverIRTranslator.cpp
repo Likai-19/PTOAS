@@ -53,6 +53,18 @@ constexpr int64_t kBalancedOccurrenceSplitFactor = 2;
 bool isTransparentGraphSyncRegionOp(Operation &op) {
   return isa<pto::SectionCubeOp, pto::SectionVectorOp>(op);
 }
+
+// Enqueue every traced-back successor value that has not been visited yet.
+void enqueueTracebackSuccessors(const llvm::SmallVector<Value> &nextVals,
+                                llvm::DenseSet<Value> &visited,
+                                std::queue<Value> &queue) {
+  for (Value next : nextVals) {
+    if (next && !visited.contains(next)) {
+      queue.push(next);
+      visited.insert(next);
+    }
+  }
+}
 } // namespace
 
 llvm::SmallVector<Value> IRTranslator::tracebackMemValsStep(Value val) {
@@ -163,12 +175,7 @@ llvm::SmallVector<Value> IRTranslator::tracebackMemVals(Value val) {
 
     auto nextVals = tracebackMemValsStep(cur);
     if (!nextVals.empty()) {
-      for (Value next : nextVals) {
-        if (next && !visited.contains(next)) {
-          queue.push(next);
-          visited.insert(next);
-        }
-      }
+      enqueueTracebackSuccessors(nextVals, visited, queue);
       continue;
     }
 
@@ -177,19 +184,13 @@ llvm::SmallVector<Value> IRTranslator::tracebackMemVals(Value val) {
       continue;
     }
 
-    auto result = dyn_cast<OpResult>(cur);
-    if (!result) {
-      continue;
-    }
-    Operation *defOp = result.getDefiningOp();
-    // `pto.multi_tile_get` stops traversal so getMemInfo can extract the
-    // slot-narrowed physical addresses.
-    if (isa<pto::AllocTileOp, pto::AllocMultiTileOp, tensor::EmptyOp,
-            pto::MultiTileGetOp>(defOp)) {
+    // Any OpResult reached here is a traversal leaf. In particular
+    // `pto.multi_tile_get` stops the walk so getMemInfo can extract the
+    // slot-narrowed physical addresses instead of tracing through the
+    // metadata-only view.
+    if (auto result = dyn_cast<OpResult>(cur)) {
       leaves.insert(result);
-      continue;
     }
-    leaves.insert(result);
   }
 
   return leaves.takeVector();
@@ -211,22 +212,24 @@ IRTranslator::getReadWriteMemoryOps(Operation *op) {
   llvm::SmallVector<Value> reads;
   llvm::SmallVector<Value> writes;
 
+  SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>,
+              kMemoryEffectInlineCapacity>
+      effects;
   if (auto memEffect = dyn_cast<MemoryEffectOpInterface>(op)) {
-    SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>,
-                kMemoryEffectInlineCapacity>
-        effects;
     memEffect.getEffects(effects);
-    for (auto &effect : effects) {
-      Value value = effect.getValue();
-      if (!value) {
-        continue;
-      }
-      if (isa<MemoryEffects::Read>(effect.getEffect())) {
-        llvm::append_range(reads, getMemoryOps({value}));
-      }
-      else if (isa<MemoryEffects::Write>(effect.getEffect())) {
-        llvm::append_range(writes, getMemoryOps({value}));
-      }
+  }
+
+  for (auto &effect : effects) {
+    Value value = effect.getValue();
+    if (!value) {
+      continue;
+    }
+    if (isa<MemoryEffects::Read>(effect.getEffect())) {
+      llvm::append_range(reads, getMemoryOps({value}));
+      continue;
+    }
+    if (isa<MemoryEffects::Write>(effect.getEffect())) {
+      llvm::append_range(writes, getMemoryOps({value}));
     }
   }
 
