@@ -1081,6 +1081,71 @@ void VMILayoutAttr::print(AsmPrinter &printer) const {
   printer << ">";
 }
 
+
+static LogicalResult verifyContiguousLayout(
+    function_ref<InFlightDiagnostic()> emitError, int64_t factor,
+    int64_t blockElems, int64_t slots) {
+  if (factor != 1 || blockElems != 1 || slots != 0) {
+    return emitError()
+           << "#pto.vmi.layout<contiguous> requires factor, block_elems, "
+              "and slots to be their defaults";
+  }
+  return success();
+}
+
+static LogicalResult verifyDeinterleavedLayout(
+    function_ref<InFlightDiagnostic()> emitError, int64_t factor,
+    int64_t blockElems, int64_t slots) {
+  if (factor != mlir::pto::kValue2 && factor != 4) {
+    return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
+                       << "> expected factor to be 2 or 4";
+  }
+  if (blockElems != 1) {
+    return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
+                       << ", block_elems = " << blockElems
+                       << "> requires block_elems to be omitted";
+  }
+  if (slots != 0) {
+    return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
+                       << "> requires slots to be omitted";
+  }
+  return success();
+}
+
+static LogicalResult verifyBlockDeinterleavedLayout(
+    function_ref<InFlightDiagnostic()> emitError, int64_t factor,
+    int64_t blockElems, int64_t slots, int64_t laneStride) {
+  if (factor != mlir::pto::kValue2 && factor != 4) {
+    return emitError() << "#pto.vmi.layout<block_deinterleaved = " << factor
+                       << "> expected factor to be 2 or 4";
+  }
+  if (blockElems != 1 || slots != 0 || laneStride != 1) {
+    return emitError()
+           << "#pto.vmi.layout<block_deinterleaved = " << factor
+           << "> does not accept block_elems, slots, or lane_stride";
+  }
+  return success();
+}
+
+static LogicalResult verifyNumGroupsLayout(
+    function_ref<InFlightDiagnostic()> emitError, int64_t factor,
+    int64_t blockElems, int64_t slots) {
+  if (factor <= 0) {
+    return emitError() << "#pto.vmi.layout<num_groups = " << factor
+                       << "> requires num_groups to be positive";
+  }
+  if (blockElems != 1) {
+    return emitError() << "#pto.vmi.layout<num_groups = " << factor
+                       << "> requires block_elems to be omitted";
+  }
+  if (slots < 0) {
+    return emitError() << "#pto.vmi.layout<num_groups = " << factor
+                       << ", slots = " << slots
+                       << "> requires slots to be omitted or positive";
+  }
+  return success();
+}
+
 LogicalResult
 VMILayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                       StringRef kind, int64_t factor, int64_t blockElems,
@@ -1089,67 +1154,24 @@ VMILayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
     return emitError() << "#pto.vmi.layout<" << kind
                        << "> requires lane_stride to be positive";
   }
-
   if (kind == "contiguous") {
-    if (factor != 1 || blockElems != 1 || slots != 0) {
-      return emitError()
-             << "#pto.vmi.layout<contiguous> requires factor, block_elems, "
-                "and slots to be their defaults";
-    }
-    return success();
+    return verifyContiguousLayout(emitError, factor, blockElems, slots);
   }
-
   if (kind == "deinterleaved") {
-    if (factor != mlir::pto::kValue2 && factor != 4) {
-      return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
-                         << "> expected factor to be 2 or 4";
-    }
-    if (blockElems != 1) {
-      return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
-                         << ", block_elems = " << blockElems
-                         << "> requires block_elems to be omitted";
-    }
-    if (slots != 0) {
-      return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
-                         << "> requires slots to be omitted";
-    }
-    return success();
+    return verifyDeinterleavedLayout(emitError, factor, blockElems, slots);
   }
-
   if (kind == "block_deinterleaved") {
-    if (factor != mlir::pto::kValue2 && factor != 4) {
-      return emitError() << "#pto.vmi.layout<block_deinterleaved = " << factor
-                         << "> expected factor to be 2 or 4";
-    }
-    if (blockElems != 1 || slots != 0 || laneStride != 1) {
-      return emitError()
-             << "#pto.vmi.layout<block_deinterleaved = " << factor
-             << "> does not accept block_elems, slots, or lane_stride";
-    }
-    return success();
+    return verifyBlockDeinterleavedLayout(emitError, factor, blockElems, slots,
+                                          laneStride);
   }
-
   if (kind == "num_groups") {
-    if (factor <= 0) {
-      return emitError() << "#pto.vmi.layout<num_groups = " << factor
-                         << "> requires num_groups to be positive";
-    }
-    if (blockElems != 1) {
-      return emitError() << "#pto.vmi.layout<num_groups = " << factor
-                         << "> requires block_elems to be omitted";
-    }
-    if (slots < 0) {
-      return emitError() << "#pto.vmi.layout<num_groups = " << factor
-                         << ", slots = " << slots
-                         << "> requires slots to be omitted or positive";
-    }
-    return success();
+    return verifyNumGroupsLayout(emitError, factor, blockElems, slots);
   }
-
   return emitError() << "expected VMI layout kind to be 'contiguous' or "
                         "'deinterleaved' or 'block_deinterleaved' or "
                         "'num_groups'";
 }
+
 
 Type VMIVRegType::parse(AsmParser &parser) {
   SmallVector<int64_t, 1> shape;
@@ -2134,6 +2156,42 @@ LogicalResult VMIGroupBroadcastOp::verify() {
   return verifyNumGroups(getOperation(), resultType, numGroups);
 }
 
+
+template <typename OpTy>
+static LogicalResult verifyVMIHistogramLayouts(OpTy op, VMIVRegType accType,
+                                               VMIVRegType sourceType,
+                                               VMIVRegType resultType,
+                                               VMIMaskType maskType) {
+  if (auto accLayout = accType.getLayoutAttr()) {
+    if (!accLayout.isContiguous()) {
+      return op.emitOpError("requires layout-assigned acc to use contiguous "
+                            "layout");
+    }
+  }
+  if (auto sourceLayout = sourceType.getLayoutAttr()) {
+    if (!sourceLayout.isContiguous()) {
+      return op.emitOpError("requires layout-assigned source to use contiguous "
+                            "layout");
+    }
+  }
+  if (auto resultLayout = resultType.getLayoutAttr()) {
+    if (!resultLayout.isContiguous()) {
+      return op.emitOpError("requires layout-assigned result to use "
+                            "contiguous layout");
+    }
+  }
+  if (auto maskLayout = maskType.getLayoutAttr()) {
+    if (!maskLayout.isContiguous()) {
+      return op.emitOpError("requires layout-assigned mask to use contiguous "
+                            "layout");
+    }
+    if (maskType.getGranularity() != "b8") {
+      return op.emitOpError("requires layout-assigned mask granularity b8");
+    }
+  }
+  return success();
+}
+
 template <typename OpTy> static LogicalResult verifyVMIHistogramOp(OpTy op) {
   auto accType = cast<VMIVRegType>(op.getAcc().getType());
   auto sourceType = cast<VMIVRegType>(op.getSource().getType());
@@ -2171,36 +2229,10 @@ template <typename OpTy> static LogicalResult verifyVMIHistogramOp(OpTy op) {
   if (maskType.getElementCount() != sourceType.getElementCount()) {
     return op.emitOpError("requires mask logical lane count to match source");
   }
-
-  if (auto accLayout = accType.getLayoutAttr()) {
-    if (!accLayout.isContiguous()) {
-      return op.emitOpError("requires layout-assigned acc to use contiguous "
-                            "layout");
-    }
-  }
-  if (auto sourceLayout = sourceType.getLayoutAttr()) {
-    if (!sourceLayout.isContiguous()) {
-      return op.emitOpError("requires layout-assigned source to use contiguous "
-                            "layout");
-    }
-  }
-  if (auto resultLayout = resultType.getLayoutAttr()) {
-    if (!resultLayout.isContiguous()) {
-      return op.emitOpError("requires layout-assigned result to use "
-                            "contiguous layout");
-    }
-  }
-  if (auto maskLayout = maskType.getLayoutAttr()) {
-    if (!maskLayout.isContiguous()) {
-      return op.emitOpError("requires layout-assigned mask to use contiguous "
-                            "layout");
-    }
-    if (maskType.getGranularity() != "b8") {
-      return op.emitOpError("requires layout-assigned mask granularity b8");
-    }
-  }
-  return success();
+  return verifyVMIHistogramLayouts(op, accType, sourceType, resultType,
+                                   maskType);
 }
+
 
 LogicalResult VMIVdhistOp::verify() { return verifyVMIHistogramOp(*this); }
 
@@ -2239,6 +2271,43 @@ LogicalResult VMIExtFOp::verify() {
   return success();
 }
 
+
+static LogicalResult verifyFPToFPRoundingAndSaturate(
+    Operation *op, const std::optional<VMIFpToFpContract> &fpContract) {
+  if (auto roundingAttr = op->getAttrOfType<StringAttr>("rounding")) {
+    StringRef rounding = roundingAttr.getValue();
+    if (rounding.size() != 1) {
+      return op->emitOpError(
+          "rounding attr must be a single-character mode token");
+    }
+    StringRef allowedRndModes =
+        fpContract && !fpContract->allowedRndModes.empty()
+            ? fpContract->allowedRndModes
+            : StringRef("RAHZ");
+    if (!allowedRndModes.contains(rounding)) {
+      if (fpContract && !fpContract->allowedRndModes.empty()) {
+        return op->emitOpError("rounding attr is not valid for this fp-to-fp "
+                               "conversion type pair");
+      }
+      return op->emitOpError("rounding attr must be R, A, H, or Z");
+    }
+  }
+  auto satAttr = op->getAttrOfType<StringAttr>("saturate");
+  if (!fpContract || fpContract->requiresSat) {
+    if (!satAttr) {
+      return op->emitOpError("'saturate' attribute is required (SAT or NOSAT)");
+    }
+    StringRef satVal = satAttr.getValue();
+    if (satVal != "SAT" && satVal != "NOSAT") {
+      return op->emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
+    }
+  } else if (satAttr) {
+    return op->emitOpError("'saturate' attribute is not valid for this fp-to-fp "
+                           "narrow conversion (no saturation)");
+  }
+  return success();
+}
+
 LogicalResult VMITruncFOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
@@ -2249,73 +2318,35 @@ LogicalResult VMITruncFOp::verify() {
   if (sourceType.getElementCount() != resultType.getElementCount()) {
     return emitOpError(
         "requires source and result logical lane counts to match");
-}
+  }
   if (!isVMIFloatLikeType(sourceElementType) ||
       !isVMIFloatLikeType(resultElementType)) {
     return emitOpError(
         "requires floating-point-like source and result element types");
-}
+  }
   if (involvesBF16x2(sourceElementType, resultElementType) && !fpContract) {
     return emitOpError(
         "unsupported bf16x2 fp-to-fp conversion element type pair");
-}
+  }
   if (involvesVMIPackedFloatCarrier(sourceElementType, resultElementType) &&
       !fpContract) {
     return emitOpError(
         "unsupported packed fp-to-fp conversion element type pair");
-}
+  }
   unsigned srcBits = getVMIElementBitWidth(sourceElementType);
   unsigned dstBits = getVMIElementBitWidth(resultElementType);
   if (srcBits < dstBits) {
     return emitOpError(
         "requires result element type to be narrower than or same-width "
         "as source element type");
-}
-  if (srcBits == dstBits) {
-    // Same-width fp→fp (e.g. bf16→f16): only allowed for supported VMI
-    // fp-to-fp contract pairs.
-    if (!fpContract) {
-      return emitOpError("same-width fp-to-fp conversion is not supported "
-                         "for this type pair; see lookupVMIFpToFpContract");
-}
   }
-  if (auto roundingAttr = (*this)->getAttrOfType<StringAttr>("rounding")) {
-    StringRef rounding = roundingAttr.getValue();
-    if (rounding.size() != 1) {
-      return emitOpError(
-          "rounding attr must be a single-character mode token");
-}
-    StringRef allowedRndModes =
-        fpContract && !fpContract->allowedRndModes.empty()
-            ? fpContract->allowedRndModes
-            : StringRef("RAHZ");
-    if (!allowedRndModes.contains(rounding)) {
-      if (fpContract && !fpContract->allowedRndModes.empty()) {
-        return emitOpError("rounding attr is not valid for this fp-to-fp "
-                           "conversion type pair");
-}
-      return emitOpError("rounding attr must be R, A, H, or Z");
-    }
+  if (srcBits == dstBits && !fpContract) {
+    return emitOpError("same-width fp-to-fp conversion is not supported "
+                       "for this type pair; see lookupVMIFpToFpContract");
   }
-  auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
-  // Some fp->fp narrow paths (e.g. bf16x2 -> f4x2) do NOT saturate; consult
-  // the fp-to-fp contract when one exists instead of always requiring SAT.
-  if (!fpContract || fpContract->requiresSat) {
-    if (!satAttr) {
-      return emitOpError("'saturate' attribute is required (SAT or NOSAT)");
-    }
-    StringRef satVal = satAttr.getValue();
-    if (satVal != "SAT" && satVal != "NOSAT") {
-      return emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
-    }
-  } else {
-    if (satAttr) {
-      return emitOpError("'saturate' attribute is not valid for this fp-to-fp "
-                         "narrow conversion (no saturation)");
-    }
-  }
-  return success();
+  return verifyFPToFPRoundingAndSaturate(*this, fpContract);
 }
+
 
 LogicalResult VMIFPToSIOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
