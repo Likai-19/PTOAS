@@ -969,6 +969,67 @@ VMILayoutAttr VMILayoutAttr::getGroupSlots(MLIRContext *context,
                             laneStride);
 }
 
+
+static ParseResult parseContiguousLayoutFields(AsmParser &parser,
+                                               int64_t &laneStride) {
+  while (succeeded(parser.parseOptionalComma())) {
+    StringRef field;
+    if (failed(parser.parseKeyword(&field)) || failed(parser.parseEqual()) ||
+        field != "lane_stride" || failed(parser.parseInteger(laneStride))) {
+      parser.emitError(parser.getCurrentLocation(),
+                       "expected 'lane_stride = <integer>'");
+      return failure();
+    }
+  }
+  return success();
+}
+
+static ParseResult parseDeinterleavedLayoutFields(AsmParser &parser,
+                                                  int64_t &laneStride) {
+  while (succeeded(parser.parseOptionalComma())) {
+    StringRef field;
+    if (failed(parser.parseKeyword(&field)) || failed(parser.parseEqual())) {
+      return failure();
+    }
+    if (field == "lane_stride") {
+      if (failed(parser.parseInteger(laneStride))) {
+        return failure();
+      }
+    } else {
+      parser.emitError(parser.getCurrentLocation(),
+                       "expected 'lane_stride = <integer>'");
+      return failure();
+    }
+  }
+  return success();
+}
+
+static ParseResult parseNumGroupsLayoutFields(AsmParser &parser,
+                                              int64_t &slots,
+                                              int64_t &laneStride) {
+  while (succeeded(parser.parseOptionalComma())) {
+    StringRef field;
+    if (failed(parser.parseKeyword(&field)) || failed(parser.parseEqual())) {
+      return failure();
+    }
+    if (field == "slots") {
+      if (failed(parser.parseInteger(slots))) {
+        return failure();
+      }
+    } else if (field == "lane_stride") {
+      if (failed(parser.parseInteger(laneStride))) {
+        return failure();
+      }
+    } else {
+      parser.emitError(parser.getCurrentLocation(),
+                       "expected 'slots = <integer>' or "
+                       "'lane_stride = <integer>'");
+      return failure();
+    }
+  }
+  return success();
+}
+
 Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
   SMLoc loc = parser.getCurrentLocation();
   StringRef kind;
@@ -983,61 +1044,22 @@ Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
 
   if (kind == "contiguous") {
     factor = 1;
-    while (succeeded(parser.parseOptionalComma())) {
-      StringRef field;
-      if (failed(parser.parseKeyword(&field)) || failed(parser.parseEqual()) ||
-          field != "lane_stride" || failed(parser.parseInteger(laneStride))) {
-        parser.emitError(parser.getCurrentLocation(),
-                         "expected 'lane_stride = <integer>'");
-        return {};
-      }
-    }
-  } else if (kind == "deinterleaved") {
-    if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor))) {
+    if (failed(parseContiguousLayoutFields(parser, laneStride))) {
       return {};
     }
-    while (succeeded(parser.parseOptionalComma())) {
-      StringRef field;
-      if (failed(parser.parseKeyword(&field)) || failed(parser.parseEqual())) {
-        return {};
-      }
-      if (field == "lane_stride") {
-        if (failed(parser.parseInteger(laneStride))) {
-          return {};
-        }
-      } else {
-        parser.emitError(parser.getCurrentLocation(),
-                         "expected 'lane_stride = <integer>'");
-        return {};
-      }
+  } else if (kind == "deinterleaved") {
+    if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor)) ||
+        failed(parseDeinterleavedLayoutFields(parser, laneStride))) {
+      return {};
     }
   } else if (kind == "block_deinterleaved") {
     if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor))) {
       return {};
     }
   } else if (kind == "num_groups") {
-    if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor))) {
+    if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor)) ||
+        failed(parseNumGroupsLayoutFields(parser, slots, laneStride))) {
       return {};
-    }
-    while (succeeded(parser.parseOptionalComma())) {
-      StringRef field;
-      if (failed(parser.parseKeyword(&field)) || failed(parser.parseEqual())) {
-        return {};
-      }
-      if (field == "slots") {
-        if (failed(parser.parseInteger(slots))) {
-          return {};
-        }
-      } else if (field == "lane_stride") {
-        if (failed(parser.parseInteger(laneStride))) {
-          return {};
-        }
-      } else {
-        parser.emitError(parser.getCurrentLocation(),
-                         "expected 'slots = <integer>' or "
-                         "'lane_stride = <integer>'");
-        return {};
-      }
     }
   } else {
     parser.emitError(parser.getCurrentLocation(),
@@ -1050,11 +1072,11 @@ Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
   if (failed(parser.parseGreater())) {
     return {};
   }
-
   return parser.getChecked<VMILayoutAttr>(loc, parser.getContext(), kind,
                                           factor, blockElems, slots,
                                           laneStride);
 }
+
 
 void VMILayoutAttr::print(AsmPrinter &printer) const {
   printer << "<" << getKind();
@@ -5149,51 +5171,28 @@ LogicalResult VMIVcmpsOp::verify() {
 // VMICvtOp — unified elementwise type conversion
 //===----------------------------------------------------------------------===//
 // VMIvLoadOp
-ParseResult VMIvLoadOp::parse(OpAsmParser &parser, OperationState &result) {
-  OpAsmParser::UnresolvedOperand sourceOperand;
-  OpAsmParser::UnresolvedOperand offsetOperand;
-  OpAsmParser::UnresolvedOperand strideOperand;
-  OpAsmParser::UnresolvedOperand blockStrideOperand;
 
-  // Parse: %source[%offset]
-  if (parser.parseOperand(sourceOperand) || parser.parseLSquare() ||
-      parser.parseOperand(offsetOperand) || parser.parseRSquare()) {
-    return failure();
-  }
-
+static ParseResult parseVLoadOptionalPostOperand(
+    OpAsmParser &parser, OperationState &result, int &numPostBracket,
+    OpAsmParser::UnresolvedOperand &postOp1) {
   // Optional comma-separated post-bracket operands.
-  // 1 operand + group attr → stride; otherwise → block_stride.
-  int numPostBracket = 0;
-  OpAsmParser::UnresolvedOperand postOp1;
   if (succeeded(parser.parseOptionalComma())) {
     if (parser.parseOperand(postOp1)) {
       return failure();
     }
     numPostBracket = 1;
   }
+  return success();
+}
 
-  if (parser.parseOptionalAttrDict(result.attributes)) {
-    return failure();
-  }
-
-  Type sourceType;
-  if (parser.parseColonType(sourceType)) {
-    return failure();
-  }
-
-  if (parser.parseArrow()) {
-    return failure();
-  }
-
-  SmallVector<Type, mlir::pto::kValue2> resultTypes;
-  if (parser.parseTypeList(resultTypes)) {
-    return failure();
-  }
-
+static void disambiguateVLoadPostOperands(
+    OperationState &result, int numPostBracket,
+    OpAsmParser::UnresolvedOperand postOp1,
+    OpAsmParser::UnresolvedOperand &strideOperand,
+    OpAsmParser::UnresolvedOperand &blockStrideOperand, bool &hasStride,
+    bool &hasBlock) {
   // Disambiguate post-bracket operands
-  bool hasStride = false;
-  bool hasBlock = false;
-
+  // 1 operand + group attr → stride; otherwise → block_stride.
   if (numPostBracket == 1) {
     if (result.attributes.get("group")) {
       hasStride = true;
@@ -5203,7 +5202,15 @@ ParseResult VMIvLoadOp::parse(OpAsmParser &parser, OperationState &result) {
       blockStrideOperand = postOp1;
     }
   }
+}
 
+static ParseResult resolveVLoadOperandsAndFinalize(
+    OpAsmParser &parser, OperationState &result,
+    OpAsmParser::UnresolvedOperand sourceOperand,
+    OpAsmParser::UnresolvedOperand offsetOperand,
+    OpAsmParser::UnresolvedOperand strideOperand,
+    OpAsmParser::UnresolvedOperand blockStrideOperand, bool hasStride,
+    bool hasBlock, Type sourceType, ArrayRef<Type> resultTypes) {
   if (parser.resolveOperand(sourceOperand, sourceType, result.operands)) {
     return failure();
   }
@@ -5225,10 +5232,49 @@ ParseResult VMIvLoadOp::parse(OpAsmParser &parser, OperationState &result) {
   result.addAttribute("operandSegmentSizes",
                       parser.getBuilder().getDenseI32ArrayAttr(
                           {1, 1, hasStride ? 1 : 0, hasBlock ? 1 : 0}));
-
   result.addTypes(resultTypes);
   return success();
 }
+
+ParseResult VMIvLoadOp::parse(OpAsmParser &parser, OperationState &result) {
+  OpAsmParser::UnresolvedOperand sourceOperand;
+  OpAsmParser::UnresolvedOperand offsetOperand;
+  OpAsmParser::UnresolvedOperand strideOperand;
+  OpAsmParser::UnresolvedOperand blockStrideOperand;
+  // Parse: %source[%offset]
+  if (parser.parseOperand(sourceOperand) || parser.parseLSquare() ||
+      parser.parseOperand(offsetOperand) || parser.parseRSquare()) {
+    return failure();
+  }
+  int numPostBracket = 0;
+  OpAsmParser::UnresolvedOperand postOp1;
+  if (failed(parseVLoadOptionalPostOperand(parser, result, numPostBracket,
+                                           postOp1))) {
+    return failure();
+  }
+  if (parser.parseOptionalAttrDict(result.attributes)) {
+    return failure();
+  }
+  Type sourceType;
+  if (parser.parseColonType(sourceType)) {
+    return failure();
+  }
+  if (parser.parseArrow()) {
+    return failure();
+  }
+  SmallVector<Type, mlir::pto::kValue2> resultTypes;
+  if (parser.parseTypeList(resultTypes)) {
+    return failure();
+  }
+  bool hasStride = false;
+  bool hasBlock = false;
+  disambiguateVLoadPostOperands(result, numPostBracket, postOp1, strideOperand,
+                                blockStrideOperand, hasStride, hasBlock);
+  return resolveVLoadOperandsAndFinalize(
+      parser, result, sourceOperand, offsetOperand, strideOperand,
+      blockStrideOperand, hasStride, hasBlock, sourceType, resultTypes);
+}
+
 
 void VMIvLoadOp::print(OpAsmPrinter &p) {
   p << ' ' << getSource() << '[';
@@ -5246,87 +5292,118 @@ void VMIvLoadOp::print(OpAsmPrinter &p) {
   p << " : " << getSource().getType() << " -> " << getResults().getTypes();
 }
 
-LogicalResult VMIvLoadOp::verify() {
+
+static LogicalResult verifyVLoadGroupAndBlockModes(
+    Operation *op, bool hasGroup, std::optional<StringRef> distMode,
+    bool hasStride, bool hasBlock, int64_t numGroups, size_t nResults) {
   // group and dist_mode are mutually exclusive, except brc which supports
   // group broadcast (one scalar per group → broadcast within each group).
-  if (getGroup() && getDistMode() && getDistMode() != "brc") {
-    return emitOpError("group and dist_mode are mutually exclusive");
+  if (hasGroup && distMode && *distMode != "brc") {
+    return op->emitOpError("group and dist_mode are mutually exclusive");
   }
-  if (getGroup() && !getStride()) {
-    return emitOpError("group requires a stride operand");
+  if (hasGroup && !hasStride) {
+    return op->emitOpError("group requires a stride operand");
   }
-  if (!getGroup() && getStride()) {
-    return emitOpError("stride operand is only valid with group");
+  if (!hasGroup && hasStride) {
+    return op->emitOpError("stride operand is only valid with group");
   }
-
-  if (getGroup()) {
-    int64_t numGroups = getGroupAttr().getInt();
+  if (hasGroup) {
     if (numGroups <= 0) {
-      return emitOpError("group must be positive, got ") << numGroups;
+      return op->emitOpError("group must be positive, got ") << numGroups;
     }
-    if (getResults().size() != 1) {
-      return emitOpError("group mode requires exactly 1 result");
-    }
-    auto resultType = cast<VMIVRegType>(getResults()[0].getType());
-    if (failed(verifyNumGroups(getOperation(), resultType, numGroups))) {
-      return failure();
+    if (nResults != 1) {
+      return op->emitOpError("group mode requires exactly 1 result");
     }
   }
-
   // block_stride is mutually exclusive with dist_mode and group.
-  bool hasBlock = static_cast<bool>(getBlockStride());
   if (hasBlock) {
-    if (getDistMode()) {
-      return emitOpError(
+    if (distMode) {
+      return op->emitOpError(
           "block_stride and dist_mode are mutually exclusive");
     }
-    if (getGroup()) {
-      return emitOpError("block_stride and group are mutually exclusive");
+    if (hasGroup) {
+      return op->emitOpError("block_stride and group are mutually exclusive");
     }
-    if (getResults().size() != 1) {
-      return emitOpError("block-stride mode requires exactly 1 result");
+    if (nResults != 1) {
+      return op->emitOpError("block-stride mode requires exactly 1 result");
     }
   }
+  return success();
+}
 
+static LogicalResult verifyVLoadDistModeAndPmode(
+    Operation *op, std::optional<StringRef> distMode, size_t nResults,
+    std::optional<StringRef> pmode) {
   // result count vs dist-mode
-  auto distMode = getDistMode();
   bool isDintlv = distMode && *distMode == "dintlv";
-  size_t nResults = getResults().size();
   if (isDintlv && nResults != mlir::pto::kValue2) {
-    return emitOpError("dist-mode \"dintlv\" requires exactly 2 results");
+    return op->emitOpError("dist-mode \"dintlv\" requires exactly 2 results");
   }
   if (!isDintlv && nResults != 1) {
-    return emitOpError("requires exactly 1 result for dist-mode \"")
+    return op->emitOpError("requires exactly 1 result for dist-mode \"")
            << (distMode ? *distMode : "continuous") << "\"";
   }
-
   if (distMode && !validDistModes().count(*distMode)) {
-    return emitOpError("invalid dist-mode: \"") << *distMode << "\"";
+    return op->emitOpError("invalid dist-mode: \"") << *distMode << "\"";
   }
-  auto pmode = getPmode();
   if (pmode && !validPModes().count(*pmode)) {
-    return emitOpError("invalid pmode: \"") << *pmode << "\"";
+    return op->emitOpError("invalid pmode: \"") << *pmode << "\"";
   }
+  return success();
+}
 
+static LogicalResult verifyVLoadModeAndResultCounts(
+    Operation *op, bool hasGroup, std::optional<StringRef> distMode,
+    bool hasStride, bool hasBlock, int64_t numGroups, size_t nResults,
+    std::optional<StringRef> pmode) {
+  if (failed(verifyVLoadGroupAndBlockModes(op, hasGroup, distMode, hasStride,
+                                           hasBlock, numGroups, nResults))) {
+    return failure();
+  }
+  return verifyVLoadDistModeAndPmode(op, distMode, nResults, pmode);
+}
+
+static LogicalResult verifyVLoadResultTypes(Operation *op, ValueRange results,
+                                            std::optional<StringRef> distMode) {
   bool isUnpack = distMode && *distMode == "unpack";
-  for (auto res : getResults()) {
+  bool isDintlv = distMode && *distMode == "dintlv";
+  for (auto res : results) {
     auto resType = cast<VMIVRegType>(res.getType());
     // unpack: source element type intentionally differs from result
     if (!isUnpack &&
-        failed(verifyMemoryElementMatches(getOperation(),
-                                          getSource().getType(), resType,
-                                          "source"))) {
+        failed(verifyMemoryElementMatches(op, op->getOperand(0).getType(),
+                                          resType, "source"))) {
       return failure();
     }
     if (isDintlv &&
-        failed(verifyContiguousIfLayoutAssigned(getOperation(), resType,
-                                                "result"))) {
+        failed(verifyContiguousIfLayoutAssigned(op, resType, "result"))) {
       return failure();
     }
   }
-
   return success();
 }
+
+LogicalResult VMIvLoadOp::verify() {
+  bool hasGroup = static_cast<bool>(getGroup());
+  auto distMode = getDistMode();
+  bool hasStride = static_cast<bool>(getStride());
+  bool hasBlock = static_cast<bool>(getBlockStride());
+  size_t nResults = getResults().size();
+  if (failed(verifyVLoadModeAndResultCounts(
+          *this, hasGroup, distMode, hasStride, hasBlock,
+          hasGroup ? getGroupAttr().getInt() : 0, nResults, getPmode()))) {
+    return failure();
+  }
+  if (hasGroup) {
+    auto resultType = cast<VMIVRegType>(getResults()[0].getType());
+    if (failed(verifyNumGroups(getOperation(), resultType,
+                               getGroupAttr().getInt()))) {
+      return failure();
+    }
+  }
+  return verifyVLoadResultTypes(*this, getResults(), distMode);
+}
+
 
 void VMIvLoadOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>

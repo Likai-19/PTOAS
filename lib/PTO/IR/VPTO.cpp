@@ -304,89 +304,129 @@ static bool isSupportedConvertType(Type type) {
          isSupportedLowPrecisionConvertType(type);
 }
 
-static LogicalResult verifyPackedConvertControls(Operation *op, Type srcType,
-                                                 Type dstType,
-                                                 pto::Rounding rounding) {
-  auto isV2F16 = [](Type type) {
-    return isVector2Of(type, [](Type elem) { return elem.isF16(); });
-  };
-  auto isV2BF16 = [](Type type) {
-    return isVector2Of(type, [](Type elem) { return elem.isBF16(); });
-  };
-  auto isV2F32 = [](Type type) {
-    return isVector2Of(type, [](Type elem) { return elem.isF32(); });
-  };
-  auto isV2F8 = [](Type type) {
-    return isVector2Of(type, [](Type elem) { return pto::isPTOFloat8Type(elem); });
-  };
-  auto isV2HiF8 = [](Type type) {
-    return pto::isPTOHiFloat8x2Type(type);
-  };
-  auto isF4 = [](Type type) { return pto::isPTOFloat4PackedType(type); };
-  auto isRoundRAFZC = [](pto::Rounding rounding) {
-    return rounding == pto::Rounding::R || rounding == pto::Rounding::A ||
-           rounding == pto::Rounding::F || rounding == pto::Rounding::C ||
-           rounding == pto::Rounding::Z;
-  };
 
+static bool isV2F16(Type type) {
+  return isVector2Of(type, [](Type elem) { return elem.isF16(); });
+}
+static bool isV2BF16(Type type) {
+  return isVector2Of(type, [](Type elem) { return elem.isBF16(); });
+}
+static bool isV2F32(Type type) {
+  return isVector2Of(type, [](Type elem) { return elem.isF32(); });
+}
+static bool isV2F8(Type type) {
+  return isVector2Of(type, [](Type elem) { return pto::isPTOFloat8Type(elem); });
+}
+static bool isV2HiF8(Type type) { return pto::isPTOHiFloat8x2Type(type); }
+static bool isF4(Type type) { return pto::isPTOFloat4PackedType(type); }
+static bool isRoundRAFZC(pto::Rounding rounding) {
+  return rounding == pto::Rounding::R || rounding == pto::Rounding::A ||
+         rounding == pto::Rounding::F || rounding == pto::Rounding::C ||
+         rounding == pto::Rounding::Z;
+}
+
+static LogicalResult verifyF32x2ToF16x2Pair(Operation *op,
+                                                    pto::Rounding rounding) {
+  if (rounding == pto::Rounding::H) {
+    return op->emitOpError()
+           << "f32x2-to-f16x2 conversion supports rounding r/a/f/c/z/o";
+  }
+  return success();
+}
+
+static LogicalResult verifyF32x2ToBF16x2Pair(Operation *op,
+                                             pto::Rounding rounding) {
+  if (rounding == pto::Rounding::O || rounding == pto::Rounding::H) {
+    return op->emitOpError()
+           << "f32x2-to-bf16x2 conversion supports rounding r/a/f/c/z";
+  }
+  return success();
+}
+
+static LogicalResult verifyPackedToF32x2Pair(Operation *op,
+                                             pto::Rounding rounding) {
+  if (rounding == pto::Rounding::O || rounding == pto::Rounding::H) {
+    return op->emitOpError()
+           << "packed-to-f32x2 conversion supports rounding r/a/f/c/z";
+  }
+  return success();
+}
+
+static LogicalResult verifyF32x2ToF8x2Pair(Operation *op,
+                                           pto::Rounding rounding) {
+  if (rounding != pto::Rounding::R) {
+    return op->emitOpError()
+           << "f32x2-to-f8x2 conversion supports rounding r";
+  }
+  return success();
+}
+
+static LogicalResult verifyToHiF8Pair(Operation *op, pto::Rounding rounding) {
+  if (rounding != pto::Rounding::A && rounding != pto::Rounding::H) {
+    return op->emitOpError()
+           << "f32x2/f16x2-to-hif8x2 conversion supports rounding a/h";
+  }
+  return success();
+}
+
+static LogicalResult verifyFromF8HiF8Pair(Operation *op,
+                                          pto::Rounding rounding) {
+  if (!isRoundRAFZC(rounding)) {
+    return op->emitOpError()
+           << "f8x2/hif8x2-to-f32x2/f16x2 conversion supports rounding r/a/f/c/z";
+  }
+  return success();
+}
+
+static LogicalResult verifyBF16F4Pair(Operation *op, pto::Rounding rounding) {
+  if (!isRoundRAFZC(rounding)) {
+    return op->emitOpError()
+           << "bf16x2-to-f4 and f4-to-bf16x2 conversion supports rounding r/a/f/c/z";
+  }
+  return success();
+}
+
+static LogicalResult verifyPackedConvertPair(Operation *op, Type srcType,
+                                             Type dstType,
+                                             pto::Rounding rounding) {
   if (isV2F32(srcType) && isV2F16(dstType)) {
-    if (rounding == pto::Rounding::H) {
-      return op->emitOpError()
-             << "f32x2-to-f16x2 conversion supports rounding r/a/f/c/z/o";
-    }
-    return success();
+    return verifyF32x2ToF16x2Pair(op, rounding);
   }
   if (isV2F32(srcType) && isV2BF16(dstType)) {
-    if (rounding == pto::Rounding::O || rounding == pto::Rounding::H) {
-      return op->emitOpError()
-             << "f32x2-to-bf16x2 conversion supports rounding r/a/f/c/z";
-    }
-    return success();
+    return verifyF32x2ToBF16x2Pair(op, rounding);
   }
   if ((isV2F16(srcType) || isV2BF16(srcType)) && isV2F32(dstType)) {
-    if (rounding == pto::Rounding::O || rounding == pto::Rounding::H) {
-      return op->emitOpError()
-             << "packed-to-f32x2 conversion supports rounding r/a/f/c/z";
-    }
-    return success();
+    return verifyPackedToF32x2Pair(op, rounding);
   }
   if (isV2F32(srcType) && isV2F8(dstType)) {
-    if (rounding != pto::Rounding::R) {
-      return op->emitOpError()
-             << "f32x2-to-f8x2 conversion supports rounding r";
-    }
-    return success();
+    return verifyF32x2ToF8x2Pair(op, rounding);
   }
   if ((isV2F32(srcType) || isV2F16(srcType)) && isV2HiF8(dstType)) {
-    if (rounding != pto::Rounding::A && rounding != pto::Rounding::H) {
-      return op->emitOpError()
-             << "f32x2/f16x2-to-hif8x2 conversion supports rounding a/h";
-    }
-    return success();
+    return verifyToHiF8Pair(op, rounding);
   }
   if ((isV2F8(srcType) || isV2HiF8(srcType)) &&
       (isV2F32(dstType) || isV2F16(dstType))) {
-    if (!isRoundRAFZC(rounding)) {
-      return op->emitOpError()
-             << "f8x2/hif8x2-to-f32x2/f16x2 conversion supports rounding r/a/f/c/z";
-    }
-    return success();
+    return verifyFromF8HiF8Pair(op, rounding);
   }
-  if ((isV2BF16(srcType) && isF4(dstType)) ||
-      (isF4(srcType) && isV2BF16(dstType))) {
-    if (!isRoundRAFZC(rounding)) {
-      return op->emitOpError()
-             << "bf16x2-to-f4 and f4-to-bf16x2 conversion supports rounding r/a/f/c/z";
-    }
-    return success();
+  bool isBF16F4 = (isV2BF16(srcType) && isF4(dstType)) ||
+                  (isF4(srcType) && isV2BF16(dstType));
+  if (isBF16F4) {
+    return verifyBF16F4Pair(op, rounding);
   }
-
   return op->emitOpError()
          << "unsupported packed conversion type pair; supported packed pairs are "
             "f32x2-to-f16x2, f16x2-to-f32x2, f32x2-to-bf16x2, and "
             "bf16x2-to-f32x2, f32x2-to-f8x2, f32x2/f16x2-to-hif8x2, "
             "f8x2/hif8x2-to-f32x2/f16x2, and bf16x2-to/from-f4";
 }
+
+
+static LogicalResult verifyPackedConvertControls(Operation *op, Type srcType,
+                                                 Type dstType,
+                                                 pto::Rounding rounding) {
+  return verifyPackedConvertPair(op, srcType, dstType, rounding);
+}
+
 
 static LogicalResult verifyConvertControls(Operation *op, Type srcType,
                                            Type dstType,
@@ -1015,6 +1055,46 @@ static bool isValueOwnedByRegion(Value value, Region *region) {
 
 static FailureOr<Value> resolveStoreAlignRoot(Value value, Operation *user);
 static FailureOr<Value> resolveLoadAlignRoot(Value value, Operation *user);
+static FailureOr<Value> resolveStoreAlignRootImpl(
+    Value current, llvm::SmallPtrSet<void *, mlir::pto::kValue8> visited);
+
+
+static FailureOr<Value> resolveStoreAlignForResult(
+    Value current, scf::ForOp forOp) {
+  auto result = dyn_cast<OpResult>(current);
+  if (!result) {
+    return failure();
+  }
+  unsigned resultIdx = result.getResultNumber();
+  if (resultIdx >= forOp.getYieldedValues().size()) {
+    return failure();
+  }
+  return forOp.getYieldedValues()[resultIdx];
+}
+
+static FailureOr<Value> resolveStoreAlignIfResult(
+    Value current, scf::IfOp ifOp,
+    llvm::SmallPtrSet<void *, mlir::pto::kValue8> &visited) {
+  auto result = dyn_cast<OpResult>(current);
+  if (!result || !ifOp.elseBlock()) {
+    return failure();
+  }
+  unsigned resultIdx = result.getResultNumber();
+  auto thenYield = dyn_cast<scf::YieldOp>(ifOp.thenBlock()->getTerminator());
+  auto elseYield = dyn_cast<scf::YieldOp>(ifOp.elseBlock()->getTerminator());
+  if (!thenYield || !elseYield || resultIdx >= thenYield.getNumOperands() ||
+      resultIdx >= elseYield.getNumOperands()) {
+    return failure();
+  }
+  FailureOr<Value> thenRoot =
+      resolveStoreAlignRootImpl(thenYield.getOperand(resultIdx), visited);
+  FailureOr<Value> elseRoot =
+      resolveStoreAlignRootImpl(elseYield.getOperand(resultIdx), visited);
+  if (failed(thenRoot) || failed(elseRoot) || *thenRoot != *elseRoot) {
+    return failure();
+  }
+  return *thenRoot;
+}
 
 static FailureOr<Value> resolveStoreAlignRootImpl(
     Value current, llvm::SmallPtrSet<void *, mlir::pto::kValue8> visited) {
@@ -1022,7 +1102,6 @@ static FailureOr<Value> resolveStoreAlignRootImpl(
     if (!visited.insert(current.getAsOpaquePointer()).second) {
       return failure();
     }
-
     if (auto blockArg = dyn_cast<BlockArgument>(current)) {
       auto *owner = blockArg.getOwner();
       auto forOp = dyn_cast<scf::ForOp>(owner->getParentOp());
@@ -1041,61 +1120,40 @@ static FailureOr<Value> resolveStoreAlignRootImpl(
       current = forOp.getInitArgs()[iterIdx];
       continue;
     }
-
-    if (Operation *def = current.getDefiningOp()) {
-      if (isa<InitAlignOp>(def)) {
-        return current;
-      }
-      if (auto stateOp = dyn_cast<PstuOp>(def)) {
-        current = stateOp.getAlignIn();
-        continue;
-      }
-      if (auto stateOp = dyn_cast<VstusOp>(def)) {
-        current = stateOp.getAlignIn();
-        continue;
-      }
-      if (auto stateOp = dyn_cast<VsturOp>(def)) {
-        current = stateOp.getAlignIn();
-        continue;
-      }
-      if (auto forOp = dyn_cast<scf::ForOp>(def)) {
-        auto result = dyn_cast<OpResult>(current);
-        if (!result) {
-          return failure();
-        }
-        unsigned resultIdx = result.getResultNumber();
-        if (resultIdx >= forOp.getYieldedValues().size()) {
-          return failure();
-        }
-        current = forOp.getYieldedValues()[resultIdx];
-        continue;
-      }
-      if (auto ifOp = dyn_cast<scf::IfOp>(def)) {
-        auto result = dyn_cast<OpResult>(current);
-        if (!result || !ifOp.elseBlock()) {
-          return failure();
-        }
-        unsigned resultIdx = result.getResultNumber();
-        auto thenYield = dyn_cast<scf::YieldOp>(ifOp.thenBlock()->getTerminator());
-        auto elseYield = dyn_cast<scf::YieldOp>(ifOp.elseBlock()->getTerminator());
-        if (!thenYield || !elseYield || resultIdx >= thenYield.getNumOperands() ||
-            resultIdx >= elseYield.getNumOperands()) {
-          return failure();
-        }
-        FailureOr<Value> thenRoot =
-            resolveStoreAlignRootImpl(thenYield.getOperand(resultIdx), visited);
-        FailureOr<Value> elseRoot =
-            resolveStoreAlignRootImpl(elseYield.getOperand(resultIdx), visited);
-        if (failed(thenRoot) || failed(elseRoot) || *thenRoot != *elseRoot) {
-          return failure();
-        }
-        return *thenRoot;
-      }
+    Operation *def = current.getDefiningOp();
+    if (!def) {
+      return failure();
     }
-
+    if (isa<InitAlignOp>(def)) {
+      return current;
+    }
+    if (auto stateOp = dyn_cast<PstuOp>(def)) {
+      current = stateOp.getAlignIn();
+      continue;
+    }
+    if (auto stateOp = dyn_cast<VstusOp>(def)) {
+      current = stateOp.getAlignIn();
+      continue;
+    }
+    if (auto stateOp = dyn_cast<VsturOp>(def)) {
+      current = stateOp.getAlignIn();
+      continue;
+    }
+    if (auto forOp = dyn_cast<scf::ForOp>(def)) {
+      auto next = resolveStoreAlignForResult(current, forOp);
+      if (failed(next)) {
+        return failure();
+      }
+      current = *next;
+      continue;
+    }
+    if (auto ifOp = dyn_cast<scf::IfOp>(def)) {
+      return resolveStoreAlignIfResult(current, ifOp, visited);
+    }
     return failure();
   }
 }
+
 
 static FailureOr<Value> resolveStoreAlignRoot(Value value, Operation *user) {
   (void)user;
