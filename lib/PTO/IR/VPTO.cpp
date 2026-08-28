@@ -1872,187 +1872,161 @@ static bool isValidVcvtRoundModeForContract(StringRef roundMode,
   return StringRef(contract.allowedRndModes).contains(roundMode);
 }
 
+// Vcvt contract lookup helpers — one per source element kind.
+static std::optional<VcvtContract> lookupF32Contract(VcvtElemKind dst) {
+  switch (dst) {
+  case VcvtElemKind::F8E4M3:
+  case VcvtElemKind::F8E5M2:
+    return VcvtContract{true, true, true, VcvtPartFamily::Packed4, "RAHZ"};
+  case VcvtElemKind::HiF8:
+    return VcvtContract{true, true, true, VcvtPartFamily::Packed4, "AH"};
+  case VcvtElemKind::F16:
+  case VcvtElemKind::BF16:
+  case VcvtElemKind::S16:
+  case VcvtElemKind::S64:
+    return VcvtContract{true, true, true};
+  case VcvtElemKind::S32:
+    return VcvtContract{true, true, false};
+  default: return std::nullopt;
+  }
+}
+
+static std::optional<VcvtContract> lookupF16Contract(VcvtElemKind dst) {
+  switch (dst) {
+  case VcvtElemKind::F8E4M3:
+  case VcvtElemKind::F8E5M2:
+    return VcvtContract{true, true, true, std::nullopt, "RAFZC"};
+  case VcvtElemKind::HiF8:
+    return VcvtContract{true, true, true, std::nullopt, "AH"};
+  case VcvtElemKind::F32:
+    return VcvtContract{false, false, true};
+  case VcvtElemKind::S32:
+    return VcvtContract{true, false, true};
+  case VcvtElemKind::S16:
+    return VcvtContract{true, true, false};
+  case VcvtElemKind::S8:
+  case VcvtElemKind::U8:
+    return VcvtContract{true, true, true};
+  default: return std::nullopt;
+  }
+}
+
+static std::optional<VcvtContract> lookupBF16Contract(VcvtElemKind dst) {
+  switch (dst) {
+  case VcvtElemKind::F8E4M3:
+  case VcvtElemKind::F8E5M2:
+    return VcvtContract{true, true, true, std::nullopt, "RAFZC"};
+  case VcvtElemKind::F4E1M2x2:
+  case VcvtElemKind::F4E2M1x2:
+    return VcvtContract{true, false, true, VcvtPartFamily::Packed4, "RAFZC"};
+  case VcvtElemKind::F16:
+    return VcvtContract{true, true, false};
+  case VcvtElemKind::F32:
+    return VcvtContract{false, false, true};
+  case VcvtElemKind::S32:
+    return VcvtContract{true, true, true};
+  default: return std::nullopt;
+  }
+}
+
+static std::optional<VcvtContract> lookupU8Contract(VcvtElemKind dst) {
+  if (dst == VcvtElemKind::F16 || dst == VcvtElemKind::U16 ||
+      dst == VcvtElemKind::U32) {
+    return VcvtContract{false, false, true};
+  }
+  return std::nullopt;
+}
+
+static std::optional<VcvtContract> lookupS8Contract(VcvtElemKind dst) {
+  if (dst == VcvtElemKind::F16 || dst == VcvtElemKind::S16 ||
+      dst == VcvtElemKind::S32) {
+    return VcvtContract{false, false, true};
+  }
+  return std::nullopt;
+}
+
+static std::optional<VcvtContract> lookupU16Contract(VcvtElemKind dst) {
+  if (dst == VcvtElemKind::U8) {
+    return VcvtContract{false, true, true};
+  }
+  if (dst == VcvtElemKind::U32) {
+    return VcvtContract{false, false, true};
+  }
+  return std::nullopt;
+}
+
+static std::optional<VcvtContract> lookupS16Contract(VcvtElemKind dst) {
+  if (dst == VcvtElemKind::F16) {
+    return VcvtContract{true, false, false};
+  }
+  if (dst == VcvtElemKind::U8) {
+    return VcvtContract{false, true, true};
+  }
+  if (dst == VcvtElemKind::F32 || dst == VcvtElemKind::U32 ||
+      dst == VcvtElemKind::S32) {
+    return VcvtContract{false, false, true};
+  }
+  return std::nullopt;
+}
+
+static std::optional<VcvtContract> lookupU32Contract(VcvtElemKind dst) {
+  if (dst == VcvtElemKind::U8 || dst == VcvtElemKind::U16 ||
+      dst == VcvtElemKind::S16) {
+    return VcvtContract{false, true, true};
+  }
+  return std::nullopt;
+}
+
+static std::optional<VcvtContract> lookupS32Contract(VcvtElemKind dst) {
+  if (dst == VcvtElemKind::F32) {
+    return VcvtContract{true, false, false};
+  }
+  if (dst == VcvtElemKind::S64) {
+    return VcvtContract{false, false, true};
+  }
+  if (dst == VcvtElemKind::U8 || dst == VcvtElemKind::U16 ||
+      dst == VcvtElemKind::S16) {
+    return VcvtContract{false, true, true};
+  }
+  return std::nullopt;
+}
+
+static std::optional<VcvtContract> lookupS64Contract(VcvtElemKind dst) {
+  if (dst == VcvtElemKind::F32) {
+    return VcvtContract{true, false, true};
+  }
+  if (dst == VcvtElemKind::S32) {
+    return VcvtContract{false, true, true};
+  }
+  return std::nullopt;
+}
+
 static std::optional<VcvtContract> lookupVcvtContract(VcvtElemKind src,
                                                       VcvtElemKind dst) {
   switch (src) {
-  case VcvtElemKind::F32:
-    switch (dst) {
-    case VcvtElemKind::F8E4M3:
-    case VcvtElemKind::F8E5M2:
-      return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/true,
-                          /*requiresPart=*/true, VcvtPartFamily::Packed4,
-                          "RAHZ"};
-    case VcvtElemKind::HiF8:
-      return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/true,
-                          /*requiresPart=*/true, VcvtPartFamily::Packed4,
-                          "AH"};
-    case VcvtElemKind::F16:
-    case VcvtElemKind::BF16:
-    case VcvtElemKind::S16:
-    case VcvtElemKind::S64:
-      return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/true,
-                          /*requiresPart=*/true};
-    case VcvtElemKind::S32:
-      return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/true,
-                          /*requiresPart=*/false};
-    default:
-      return std::nullopt;
-    }
-  case VcvtElemKind::F16:
-    switch (dst) {
-    case VcvtElemKind::F8E4M3:
-    case VcvtElemKind::F8E5M2:
-      return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/true,
-                          /*requiresPart=*/true, std::nullopt, "RAFZC"};
-    case VcvtElemKind::HiF8:
-      return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/true,
-                          /*requiresPart=*/true, std::nullopt, "AH"};
-    case VcvtElemKind::F32:
-      return VcvtContract{/*requiresRnd=*/false, /*requiresSat=*/false,
-                          /*requiresPart=*/true};
-    case VcvtElemKind::S32:
-      return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/false,
-                          /*requiresPart=*/true};
-    case VcvtElemKind::S16:
-      return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/true,
-                          /*requiresPart=*/false};
-    case VcvtElemKind::S8:
-    case VcvtElemKind::U8:
-      return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/true,
-                          /*requiresPart=*/true};
-    default:
-      return std::nullopt;
-    }
-  case VcvtElemKind::BF16:
-    switch (dst) {
-    case VcvtElemKind::F8E4M3:
-    case VcvtElemKind::F8E5M2:
-      return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/true,
-                          /*requiresPart=*/true, std::nullopt, "RAFZC"};
-    case VcvtElemKind::F4E1M2x2:
-    case VcvtElemKind::F4E2M1x2:
-      return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/false,
-                          /*requiresPart=*/true, VcvtPartFamily::Packed4,
-                          "RAFZC"};
-    case VcvtElemKind::F16:
-      return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/true,
-                          /*requiresPart=*/false};
-    case VcvtElemKind::F32:
-      return VcvtContract{/*requiresRnd=*/false, /*requiresSat=*/false,
-                          /*requiresPart=*/true};
-    case VcvtElemKind::S32:
-      return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/true,
-                          /*requiresPart=*/true};
-    default:
-      return std::nullopt;
-    }
-  case VcvtElemKind::U8:
-    switch (dst) {
-    case VcvtElemKind::F16:
-    case VcvtElemKind::U16:
-    case VcvtElemKind::U32:
-      return VcvtContract{/*requiresRnd=*/false, /*requiresSat=*/false,
-                          /*requiresPart=*/true};
-    default:
-      return std::nullopt;
-    }
-  case VcvtElemKind::S8:
-    switch (dst) {
-    case VcvtElemKind::F16:
-    case VcvtElemKind::S16:
-    case VcvtElemKind::S32:
-      return VcvtContract{/*requiresRnd=*/false, /*requiresSat=*/false,
-                          /*requiresPart=*/true};
-    default:
-      return std::nullopt;
-    }
-  case VcvtElemKind::U16:
-    switch (dst) {
-    case VcvtElemKind::U8:
-      return VcvtContract{/*requiresRnd=*/false, /*requiresSat=*/true,
-                          /*requiresPart=*/true};
-    case VcvtElemKind::U32:
-      return VcvtContract{/*requiresRnd=*/false, /*requiresSat=*/false,
-                          /*requiresPart=*/true};
-    default:
-      return std::nullopt;
-    }
-  case VcvtElemKind::S16:
-    switch (dst) {
-    case VcvtElemKind::F16:
-      return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/false,
-                          /*requiresPart=*/false};
-    case VcvtElemKind::F32:
-    case VcvtElemKind::U32:
-    case VcvtElemKind::S32:
-      return VcvtContract{/*requiresRnd=*/false, /*requiresSat=*/false,
-                          /*requiresPart=*/true};
-    case VcvtElemKind::U8:
-      return VcvtContract{/*requiresRnd=*/false, /*requiresSat=*/true,
-                          /*requiresPart=*/true};
-    default:
-      return std::nullopt;
-    }
-  case VcvtElemKind::U32:
-    switch (dst) {
-    case VcvtElemKind::U8:
-    case VcvtElemKind::U16:
-    case VcvtElemKind::S16:
-      return VcvtContract{/*requiresRnd=*/false, /*requiresSat=*/true,
-                          /*requiresPart=*/true};
-    default:
-      return std::nullopt;
-    }
-  case VcvtElemKind::S32:
-    switch (dst) {
-    case VcvtElemKind::F32:
-      return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/false,
-                          /*requiresPart=*/false};
-    case VcvtElemKind::U8:
-    case VcvtElemKind::U16:
-    case VcvtElemKind::S16:
-      return VcvtContract{/*requiresRnd=*/false, /*requiresSat=*/true,
-                          /*requiresPart=*/true};
-    case VcvtElemKind::S64:
-      return VcvtContract{/*requiresRnd=*/false, /*requiresSat=*/false,
-                          /*requiresPart=*/true};
-    default:
-      return std::nullopt;
-    }
-  case VcvtElemKind::S64:
-    switch (dst) {
-    case VcvtElemKind::F32:
-      return VcvtContract{/*requiresRnd=*/true, /*requiresSat=*/false,
-                          /*requiresPart=*/true};
-    case VcvtElemKind::S32:
-      return VcvtContract{/*requiresRnd=*/false, /*requiresSat=*/true,
-                          /*requiresPart=*/true};
-    default:
-      return std::nullopt;
-    }
+  case VcvtElemKind::F32: return lookupF32Contract(dst);
+  case VcvtElemKind::F16: return lookupF16Contract(dst);
+  case VcvtElemKind::BF16: return lookupBF16Contract(dst);
+  case VcvtElemKind::U8: return lookupU8Contract(dst);
+  case VcvtElemKind::S8: return lookupS8Contract(dst);
+  case VcvtElemKind::U16: return lookupU16Contract(dst);
+  case VcvtElemKind::S16: return lookupS16Contract(dst);
+  case VcvtElemKind::U32: return lookupU32Contract(dst);
+  case VcvtElemKind::S32: return lookupS32Contract(dst);
+  case VcvtElemKind::S64: return lookupS64Contract(dst);
   case VcvtElemKind::F8E4M3:
   case VcvtElemKind::F8E5M2:
   case VcvtElemKind::HiF8:
-    switch (dst) {
-    case VcvtElemKind::F32:
-      return VcvtContract{/*requiresRnd=*/false, /*requiresSat=*/false,
-                          /*requiresPart=*/true, VcvtPartFamily::Packed4};
-    default:
-      return std::nullopt;
-    }
+    if (dst == VcvtElemKind::F32)
+      return VcvtContract{false, false, true, VcvtPartFamily::Packed4};
+    return std::nullopt;
   case VcvtElemKind::F4E1M2x2:
   case VcvtElemKind::F4E2M1x2:
-    switch (dst) {
-    case VcvtElemKind::BF16:
-      return VcvtContract{/*requiresRnd=*/false, /*requiresSat=*/false,
-                          /*requiresPart=*/true, VcvtPartFamily::Packed4};
-    default:
-      return std::nullopt;
-    }
-  case VcvtElemKind::Invalid:
+    if (dst == VcvtElemKind::BF16)
+      return VcvtContract{false, false, true, VcvtPartFamily::Packed4};
     return std::nullopt;
+  default: return std::nullopt;
   }
-  return std::nullopt;
 }
 
 } // namespace
@@ -3644,13 +3618,189 @@ static ParseResult parseStructuredOptionalType(OpAsmParser &parser,
   return success();
 }
 
+// Validate pre_quant mode against source/destination element types.
+static LogicalResult verifyStructuredPreQuant(
+    Operation *op, Value preQuant, Type sourceElementType,
+    Type destinationElementType,
+    std::optional<AccStoreQuantPreMode> preQuantMode) {
+  if (static_cast<bool>(preQuant) != static_cast<bool>(preQuantMode)) {
+    return op->emitOpError("pre_quant requires payload and mode together");
+  }
+  // The no_convert keyword carries no quantization parameters; the
+  // syntactic payload operand is ignored for compatibility with the
+  // structured pre_quant clause form.
+  if (!preQuantMode || *preQuantMode == AccStoreQuantPreMode::NoConvert) {
+    return success();
+  }
+  if (isStructuredAccStoreVectorQuantMode(*preQuantMode)) {
+    if (!isStructuredAccStoreScalingPayload(preQuant)) {
+      return op->emitOpError("vector pre_quant mode requires scaling pointer payload");
+    }
+    if (!isStructuredAccStoreFloatScalarPayloadType(
+            getStructuredAccStoreScalingElementType(preQuant))) {
+      return op->emitOpError(
+          "vector pre_quant mode requires scaling pointer element type to be f16, bf16, or f32");
+    }
+  } else if (!isStructuredAccStoreFloatScalarPayload(preQuant)) {
+    return op->emitOpError(
+        "scalar pre_quant mode requires f16/bf16/f32 payload");
+  }
+  auto emitIncompatibleQuantModeError = [&]() -> LogicalResult {
+    return op->emitOpError()
+           << "pre_quant mode " << stringifyAccStoreQuantPreMode(*preQuantMode)
+           << " is incompatible with source element type " << sourceElementType
+           << " and destination element type " << destinationElementType;
+  };
+  if (*preQuantMode != AccStoreQuantPreMode::NoConvert) {
+    if (isa<Float32Type>(sourceElementType)) {
+      if (!isStructuredAccStoreFloatPreQuantMode(*preQuantMode)) {
+        return emitIncompatibleQuantModeError();
+      }
+    } else if (sourceElementType.isSignlessInteger(mlir::pto::kValue32)) {
+      if (!isStructuredAccStoreInt32PreQuantMode(*preQuantMode)) {
+        return emitIncompatibleQuantModeError();
+      }
+    } else {
+      return op->emitOpError()
+             << "pre_quant requires source element type to be f32 or i32, got "
+             << sourceElementType;
+    }
+    StructuredAccStoreDestinationFamily destinationFamily =
+        getStructuredAccStorePreQuantDestinationFamily(*preQuantMode);
+    if (!isStructuredAccStoreDestinationFamily(destinationElementType,
+                                               destinationFamily)) {
+      return emitIncompatibleQuantModeError();
+    }
+  }
+  return success();
+}
+
+// Validate pre_relu mode and payload.
+static LogicalResult verifyStructuredPreRelu(Operation *op, Value preRelu,
+                                             Value clipValue,
+                                             std::optional<ReluPreMode> preReluMode) {
+  if (!preReluMode) {
+    if (preRelu) {
+      return op->emitOpError("pre_relu payload requires pre_relu mode");
+    }
+    if (clipValue) {
+      return op->emitOpError("clip requires pre_relu clause");
+    }
+    return success();
+  }
+  switch (*preReluMode) {
+  case ReluPreMode::NoRelu:
+    if (preRelu) {
+      return op->emitOpError("mode does not accept pre_relu payload");
+    }
+    break;
+  case ReluPreMode::NormalRelu:
+    if (preRelu) {
+      return op->emitOpError("mode does not accept pre_relu payload");
+    }
+    break;
+  case ReluPreMode::ScalarRelu:
+    if (!preRelu) {
+      return op->emitOpError("scalar_relu requires payload");
+    }
+    if (!isStructuredAccStoreFloatScalarPayload(preRelu)) {
+      return op->emitOpError("scalar_relu requires f16/bf16/f32 payload");
+    }
+    break;
+  case ReluPreMode::VectorRelu:
+    if (!preRelu) {
+      return op->emitOpError("vector_relu requires payload");
+    }
+    if (!isStructuredAccStoreScalingPayload(preRelu)) {
+      return op->emitOpError("vector_relu requires scaling pointer payload");
+    }
+    if (!isStructuredAccStoreFloatScalarPayloadType(
+            getStructuredAccStoreScalingElementType(preRelu))) {
+      return op->emitOpError(
+          "vector_relu requires scaling pointer element type to be f16, bf16, or f32");
+    }
+    break;
+  case ReluPreMode::Pwl:
+    return op->emitOpError("pwl is not supported for target_profile mte_l0c_l1");
+  }
+  return success();
+}
+
+// unit_flag must be off for nz2dn when loop0_src_stride is not a constant 1.
+static LogicalResult verifyAccStoreUnitFlagNz2dn(
+    Operation *op, std::optional<AccStoreUnitFlagCtrl> unitFlag,
+    Value loop0SrcStride) {
+  if (!unitFlag || *unitFlag == AccStoreUnitFlagCtrl::Off) {
+    return success();
+  }
+  APInt loop0Value;
+  if (!matchPattern(loop0SrcStride, m_ConstantInt(&loop0Value)) ||
+      !loop0Value.isOne()) {
+    return op->emitOpError(
+        "unit_flag must be off when nz2dn loop0_src_stride is not 1");
+  }
+  return success();
+}
+
+// Validate mode (nz2nd/nz2dn/nz2nz) and related attributes.
+static LogicalResult verifyStructuredAccStoreMode(
+    Operation *op, Value split, Value loop0SrcStride, Value loop3Count,
+    Type destinationElementType, std::optional<AccStoreUnitFlagCtrl> unitFlag,
+    std::optional<AccStoreMode> mode) {
+  if (!mode) {
+    if (split) {
+      return op->emitOpError("split requires nz2nz");
+    }
+    if (loop0SrcStride) {
+      return op->emitOpError("loop0_src_stride requires nz2dn");
+    }
+    if (loop3Count) {
+      return op->emitOpError("loop3 requires nz2nd or nz2dn");
+    }
+    return success();
+  }
+  switch (*mode) {
+  case AccStoreMode::Nz2nd:
+    if (split) {
+      return op->emitOpError("nz2nd does not accept split");
+    }
+    if (loop0SrcStride) {
+      return op->emitOpError("nz2nd does not accept loop0_src_stride");
+    }
+    break;
+  case AccStoreMode::Nz2dn: {
+    if (!loop0SrcStride) {
+      return op->emitOpError("nz2dn requires loop0_src_stride");
+    }
+    if (split) {
+      return op->emitOpError("nz2dn does not accept split");
+    }
+    if (failed(verifyAccStoreUnitFlagNz2dn(op, unitFlag, loop0SrcStride))) {
+      return failure();
+    }
+    break;
+  }
+  case AccStoreMode::Nz2nz:
+    if (loop0SrcStride) {
+      return op->emitOpError("nz2nz does not accept loop0_src_stride");
+    }
+    if (loop3Count) {
+      return op->emitOpError("loop3 requires nz2nd or nz2dn");
+    }
+    if (!isa<FloatType>(destinationElementType) ||
+        !cast<FloatType>(destinationElementType).isF32()) {
+      return op->emitOpError("nz2nz requires destination element type to be f32");
+    }
+    break;
+  }
+  return success();
+}
+
 static LogicalResult verifyStructuredAccStoreLike(
-    Operation *op, Type srcType, Type dstType, Value preQuant, Value preRelu,
-    Value clipValue,
-    Value split, Value loop0SrcStride, Value loop3Count, Value loop3SrcStride,
-    Value loop3DstStride,
-    std::optional<AccStoreUnitFlagCtrl> unitFlag,
-    std::optional<AccStoreQuantPreMode> preQuantMode,
+    Operation *op, Type srcType, Type dstType, Value preQuant,
+    Value preRelu, Value clipValue, Value split, Value loop0SrcStride,
+    Value loop3Count, Value loop3SrcStride, Value loop3DstStride,
+    std::optional<AccStoreUnitFlagCtrl> unitFlag, std::optional<AccStoreQuantPreMode> preQuantMode,
     std::optional<ReluPreMode> preReluMode, std::optional<AccStoreMode> mode,
     std::optional<AccStoreAtomicType> atomicType,
     std::optional<AccStoreAtomicOp> atomicOp, bool allowAtomic) {
@@ -3665,61 +3815,12 @@ static LogicalResult verifyStructuredAccStoreLike(
   };
   Type sourceElementType = getBufferElementType(srcType);
   Type destinationElementType = getBufferElementType(dstType);
-
-  if (static_cast<bool>(preQuant) != static_cast<bool>(preQuantMode)) {
-    return op->emitOpError("pre_quant requires payload and mode together");
+  if (failed(verifyStructuredPreQuant(op, preQuant, sourceElementType,
+                                     destinationElementType, preQuantMode))) {
+    return failure();
   }
-  if (preQuantMode) {
-    if (*preQuantMode == AccStoreQuantPreMode::NoConvert) {
-      // The no_convert keyword carries no quantization parameters; the
-      // syntactic payload operand is ignored for compatibility with the
-      // structured pre_quant clause form.
-    } else if (isStructuredAccStoreVectorQuantMode(*preQuantMode)) {
-      if (!isStructuredAccStoreScalingPayload(preQuant)) {
-        return op->emitOpError("vector pre_quant mode requires scaling pointer payload");
-      }
-      if (!isStructuredAccStoreFloatScalarPayloadType(
-              getStructuredAccStoreScalingElementType(preQuant))) {
-        return op->emitOpError(
-            "vector pre_quant mode requires scaling pointer element type to be f16, bf16, or f32");
-      }
-    } else if (!isStructuredAccStoreFloatScalarPayload(preQuant)) {
-      return op->emitOpError(
-          "scalar pre_quant mode requires f16/bf16/f32 payload");
-    }
-
-    auto emitIncompatibleQuantModeError = [&]() -> LogicalResult {
-      return op->emitOpError()
-             << "pre_quant mode " << stringifyAccStoreQuantPreMode(*preQuantMode)
-             << " is incompatible with source element type " << sourceElementType
-             << " and destination element type " << destinationElementType;
-    };
-
-    if (*preQuantMode != AccStoreQuantPreMode::NoConvert) {
-      if (isa<Float32Type>(sourceElementType)) {
-        if (!isStructuredAccStoreFloatPreQuantMode(*preQuantMode)) {
-          return emitIncompatibleQuantModeError();
-        }
-      } else if (sourceElementType.isSignlessInteger(mlir::pto::kValue32)) {
-        if (!isStructuredAccStoreInt32PreQuantMode(*preQuantMode)) {
-          return emitIncompatibleQuantModeError();
-        }
-      } else {
-        return op->emitOpError()
-               << "pre_quant requires source element type to be f32 or i32, got "
-               << sourceElementType;
-      }
-
-      StructuredAccStoreDestinationFamily destinationFamily =
-          getStructuredAccStorePreQuantDestinationFamily(*preQuantMode);
-      if (!isStructuredAccStoreDestinationFamily(destinationElementType,
-                                                 destinationFamily)) {
-        return emitIncompatibleQuantModeError();
-      }
-    }
-  }
-
-  if (clipValue && !isStructuredAccStoreClipSupportedElementType(destinationElementType)) {
+  if (clipValue &&
+      !isStructuredAccStoreClipSupportedElementType(destinationElementType)) {
     return op->emitOpError()
            << "clip requires destination element type to be f16, ui8, or signed 4/8/16-bit integer, got "
            << destinationElementType;
@@ -3728,116 +3829,26 @@ static LogicalResult verifyStructuredAccStoreLike(
                                                  clipValue))) {
     return failure();
   }
-
-  if (!preReluMode) {
-    if (preRelu) {
-      return op->emitOpError("pre_relu payload requires pre_relu mode");
-    }
-    if (clipValue) {
-      return op->emitOpError("clip requires pre_relu clause");
-    }
-  } else {
-    switch (*preReluMode) {
-    case ReluPreMode::NoRelu:
-      if (preRelu) {
-        return op->emitOpError("mode does not accept pre_relu payload");
-      }
-      break;
-    case ReluPreMode::NormalRelu:
-      if (preRelu) {
-        return op->emitOpError("mode does not accept pre_relu payload");
-      }
-      break;
-    case ReluPreMode::ScalarRelu:
-      if (!preRelu) {
-        return op->emitOpError("scalar_relu requires payload");
-      }
-      if (!isStructuredAccStoreFloatScalarPayload(preRelu)) {
-        return op->emitOpError("scalar_relu requires f16/bf16/f32 payload");
-      }
-      break;
-    case ReluPreMode::VectorRelu:
-      if (!preRelu) {
-        return op->emitOpError("vector_relu requires payload");
-      }
-      if (!isStructuredAccStoreScalingPayload(preRelu)) {
-        return op->emitOpError("vector_relu requires scaling pointer payload");
-      }
-      if (!isStructuredAccStoreFloatScalarPayloadType(
-              getStructuredAccStoreScalingElementType(preRelu))) {
-        return op->emitOpError(
-            "vector_relu requires scaling pointer element type to be f16, bf16, or f32");
-      }
-      break;
-    case ReluPreMode::Pwl:
-      return op->emitOpError("pwl is not supported for target_profile mte_l0c_l1");
-    }
+  if (failed(verifyStructuredPreRelu(op, preRelu, clipValue, preReluMode))) {
+    return failure();
   }
-
-  bool hasLoop3 = static_cast<bool>(loop3Count) || static_cast<bool>(loop3SrcStride) ||
-                  static_cast<bool>(loop3DstStride);
+  bool hasLoop3 = static_cast<bool>(loop3Count) ||
+                   static_cast<bool>(loop3SrcStride) ||
+                   static_cast<bool>(loop3DstStride);
   if (hasLoop3 && !(loop3Count && loop3SrcStride && loop3DstStride)) {
     return op->emitOpError("loop3 requires count, src stride, and dst stride together");
   }
-
-  if (!mode) {
-    if (split) {
-      return op->emitOpError("split requires nz2nz");
-    }
-    if (loop0SrcStride) {
-      return op->emitOpError("loop0_src_stride requires nz2dn");
-    }
-    if (loop3Count) {
-      return op->emitOpError("loop3 requires nz2nd or nz2dn");
-    }
-  } else {
-    switch (*mode) {
-    case AccStoreMode::Nz2nd:
-      if (split) {
-        return op->emitOpError("nz2nd does not accept split");
-      }
-      if (loop0SrcStride) {
-        return op->emitOpError("nz2nd does not accept loop0_src_stride");
-      }
-      break;
-    case AccStoreMode::Nz2dn: {
-      if (!loop0SrcStride) {
-        return op->emitOpError("nz2dn requires loop0_src_stride");
-      }
-      if (split) {
-        return op->emitOpError("nz2dn does not accept split");
-      }
-      APInt loop0Value;
-      if (unitFlag && *unitFlag != AccStoreUnitFlagCtrl::Off &&
-          (!matchPattern(loop0SrcStride, m_ConstantInt(&loop0Value)) ||
-           !loop0Value.isOne())) {
-        return op->emitOpError(
-            "unit_flag must be off when nz2dn loop0_src_stride is not 1");
-      }
-      break;
-    }
-    case AccStoreMode::Nz2nz:
-      if (loop0SrcStride) {
-        return op->emitOpError("nz2nz does not accept loop0_src_stride");
-      }
-      if (loop3Count) {
-        return op->emitOpError("loop3 requires nz2nd or nz2dn");
-      }
-      if (!isa<FloatType>(destinationElementType) ||
-          !cast<FloatType>(destinationElementType).isF32()) {
-        return op->emitOpError("nz2nz requires destination element type to be f32");
-      }
-      break;
-    }
+  if (failed(verifyStructuredAccStoreMode(op, split, loop0SrcStride, loop3Count,
+                                          destinationElementType, unitFlag,
+                                          mode))) {
+    return failure();
   }
-
   if (static_cast<bool>(atomicType) != static_cast<bool>(atomicOp)) {
     return op->emitOpError("atomic requires type and op together");
   }
   if ((atomicType || atomicOp) && !allowAtomic) {
     return op->emitOpError("atomic is only supported for mte_l0c_gm");
   }
-
   return success();
 }
 
@@ -10427,13 +10438,12 @@ void MteL0cGmOp::getEffects(
   effects.emplace_back(MemoryEffects::Write::get(), &getDestinationMutable());
 }
 
-ParseResult MteL0cUbOp::parse(OpAsmParser &parser, OperationState &result) {
-  Builder builder(parser.getContext());
-  StructuredAccStoreAsmState state;
-  OpAsmParser::UnresolvedOperand source, destination, m, n, srcStride,
-      dstStride, subBlockId;
-  bool hasSubBlockId = false;
-  AccStoreUbDstMode dstMode = AccStoreUbDstMode::Single;
+static ParseResult parseMteL0cUbBasicOperands(
+    OpAsmParser &parser, OpAsmParser::UnresolvedOperand &source,
+    OpAsmParser::UnresolvedOperand &destination,
+    OpAsmParser::UnresolvedOperand &m, OpAsmParser::UnresolvedOperand &n,
+    OpAsmParser::UnresolvedOperand &srcStride,
+    OpAsmParser::UnresolvedOperand &dstStride) {
   if (parseRequiredOperandWithComma(parser, source) ||
       parseRequiredOperandWithComma(parser, destination) ||
       parseRequiredOperandWithComma(parser, m) ||
@@ -10442,11 +10452,38 @@ ParseResult MteL0cUbOp::parse(OpAsmParser &parser, OperationState &result) {
       parseRequiredOperandWithComma(parser, dstStride)) {
     return failure();
   }
+  return success();
+}
+
+static ParseResult parseMteL0cUbTypes(
+    OpAsmParser &parser, Type &sourceType, Type &destinationType, Type &mType,
+    Type &nType, Type &srcStrideType, Type &dstStrideType, bool hasSubBlockId,
+    Type &subBlockIdType, StructuredAccStoreAsmState &state) {
+  if (parser.parseType(sourceType) || parser.parseComma() ||
+      parser.parseType(destinationType) || parser.parseComma() ||
+      parser.parseType(mType) || parser.parseComma() || parser.parseType(nType) ||
+      parser.parseComma() || parser.parseType(srcStrideType) ||
+      parser.parseComma() || parser.parseType(dstStrideType)) {
+    return failure();
+  }
+  if (hasSubBlockId &&
+      (parser.parseComma() || parser.parseType(subBlockIdType))) {
+    return failure();
+  }
+  if (parseStructuredAccStoreTailTypes(parser, state)) {
+    return failure();
+  }
+  return success();
+}
+
+static ParseResult parseMteL0cUbDstMode(OpAsmParser &parser,
+                                        AccStoreUbDstMode &dstMode,
+                                        OpAsmParser::UnresolvedOperand &subBlockId,
+                                        bool &hasSubBlockId) {
   if (parser.parseKeyword("dst_mode") || parser.parseLParen()) {
     return failure();
   }
-  OptionalParseResult subBlockIdParse =
-      parser.parseOptionalOperand(subBlockId);
+  OptionalParseResult subBlockIdParse = parser.parseOptionalOperand(subBlockId);
   if (subBlockIdParse.has_value()) {
     if (failed(*subBlockIdParse)) {
       return failure();
@@ -10462,58 +10499,26 @@ ParseResult MteL0cUbOp::parse(OpAsmParser &parser, OperationState &result) {
     } else if (dstModeKeyword == "split_n") {
       dstMode = AccStoreUbDstMode::SplitN;
     } else {
-      return parser.emitError(
-          parser.getCurrentLocation(),
-          "expected dst_mode(%sub_blockid), dst_mode(split_m), or "
-          "dst_mode(split_n)");
+      return parser.emitError(parser.getCurrentLocation(),
+          "expected dst_mode(%sub_blockid), dst_mode(split_m), or dst_mode(split_n)");
     }
   }
   if (parser.parseRParen()) {
     return failure();
   }
-  if (succeeded(parser.parseOptionalComma()) &&
-      parseStructuredAccStoreClauses(parser, state)) {
-    return failure();
-  }
-  if (parser.parseOptionalAttrDict(result.attributes) || parser.parseColon()) {
-    return failure();
-  }
+  return success();
+}
 
-  Type sourceType, destinationType, mType, nType, srcStrideType, dstStrideType,
-      subBlockIdType;
-  if (parser.parseType(sourceType) || parser.parseComma() ||
-      parser.parseType(destinationType) || parser.parseComma() ||
-      parser.parseType(mType) || parser.parseComma() || parser.parseType(nType) ||
-      parser.parseComma() || parser.parseType(srcStrideType) ||
-      parser.parseComma() || parser.parseType(dstStrideType)) {
-    return failure();
-  }
-  if (hasSubBlockId &&
-      (parser.parseComma() || parser.parseType(subBlockIdType))) {
-    return failure();
-  }
-  if (parseStructuredAccStoreTailTypes(parser, state)) {
-    return failure();
-  }
-
-  setStructuredAccStoreSegmentSizes<MteL0cUbOp>(
-      result, {1, 1, 1, 1, 1, 1, !state.preQuantOperands.empty() ? 1 : 0,
-               !state.preReluOperands.empty() ? 1 : 0,
-               !state.clipValueOperands.empty() ? 1 : 0,
-               hasSubBlockId ? 1 : 0,
-               !state.splitOperands.empty() ? 1 : 0,
-               !state.loop0SrcStrideOperands.empty() ? 1 : 0,
-               !state.loop3CountOperands.empty() ? 1 : 0,
-               !state.loop3SrcStrideOperands.empty() ? 1 : 0,
-               !state.loop3DstStrideOperands.empty() ? 1 : 0});
-  if (state.atomicType || state.atomicOp) {
-    return parser.emitError(parser.getCurrentLocation(),
-                            "atomic is only supported for mte_l0c_gm");
-  }
-  addStructuredAccStoreAttrs<MteL0cUbOp>(result, builder, state);
-  result.addAttribute("dst_mode",
-                      AccStoreUbDstModeAttr::get(builder.getContext(), dstMode));
-
+static ParseResult resolveMteL0cUbOperands(
+    OpAsmParser &parser, OperationState &result,
+    OpAsmParser::UnresolvedOperand source, Type sourceType,
+    OpAsmParser::UnresolvedOperand destination, Type destinationType,
+    OpAsmParser::UnresolvedOperand m, Type mType,
+    OpAsmParser::UnresolvedOperand n, Type nType,
+    OpAsmParser::UnresolvedOperand srcStride, Type srcStrideType,
+    OpAsmParser::UnresolvedOperand dstStride, Type dstStrideType,
+    bool hasSubBlockId, OpAsmParser::UnresolvedOperand subBlockId,
+    Type subBlockIdType, const StructuredAccStoreAsmState &state) {
   if (parser.resolveOperand(source, sourceType, result.operands) ||
       parser.resolveOperand(destination, destinationType, result.operands) ||
       parser.resolveOperand(m, mType, result.operands) ||
@@ -10544,6 +10549,57 @@ ParseResult MteL0cUbOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
   }
   return success();
+}
+
+ParseResult MteL0cUbOp::parse(OpAsmParser &parser, OperationState &result) {
+  Builder builder(parser.getContext());
+  StructuredAccStoreAsmState state;
+  OpAsmParser::UnresolvedOperand source, destination, m, n, srcStride,
+      dstStride, subBlockId;
+  bool hasSubBlockId = false;
+  AccStoreUbDstMode dstMode = AccStoreUbDstMode::Single;
+  if (failed(parseMteL0cUbBasicOperands(parser, source, destination, m,
+                                        n, srcStride, dstStride))) {
+    return failure();
+  }
+  if (failed(parseMteL0cUbDstMode(parser, dstMode, subBlockId, hasSubBlockId))) {
+    return failure();
+  }
+  if (succeeded(parser.parseOptionalComma()) &&
+      parseStructuredAccStoreClauses(parser, state)) {
+    return failure();
+  }
+  if (parser.parseOptionalAttrDict(result.attributes) || parser.parseColon()) {
+    return failure();
+  }
+  Type sourceType, destinationType, mType, nType, srcStrideType,
+      dstStrideType, subBlockIdType;
+  if (failed(parseMteL0cUbTypes(parser, sourceType, destinationType, mType,
+                                nType, srcStrideType, dstStrideType,
+                                hasSubBlockId, subBlockIdType, state))) {
+    return failure();
+  }
+  setStructuredAccStoreSegmentSizes<MteL0cUbOp>(
+      result, {1, 1, 1, 1, 1, 1, !state.preQuantOperands.empty() ? 1 : 0,
+               !state.preReluOperands.empty() ? 1 : 0,
+               !state.clipValueOperands.empty() ? 1 : 0,
+               hasSubBlockId ? 1 : 0,
+               !state.splitOperands.empty() ? 1 : 0,
+               !state.loop0SrcStrideOperands.empty() ? 1 : 0,
+               !state.loop3CountOperands.empty() ? 1 : 0,
+               !state.loop3SrcStrideOperands.empty() ? 1 : 0,
+               !state.loop3DstStrideOperands.empty() ? 1 : 0});
+  if (state.atomicType || state.atomicOp) {
+    return parser.emitError(parser.getCurrentLocation(),
+                            "atomic is only supported for mte_l0c_gm");
+  }
+  addStructuredAccStoreAttrs<MteL0cUbOp>(result, builder, state);
+  result.addAttribute("dst_mode", AccStoreUbDstModeAttr::get(builder.getContext(), dstMode));
+  return resolveMteL0cUbOperands(parser, result, source, sourceType,
+                                 destination, destinationType, m, mType, n,
+                                 nType, srcStride, srcStrideType, dstStride,
+                                 dstStrideType, hasSubBlockId, subBlockId,
+                                 subBlockIdType, state);
 }
 
 void MteL0cUbOp::print(OpAsmPrinter &printer) {

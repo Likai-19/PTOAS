@@ -4401,66 +4401,35 @@ LogicalResult VMIVmulaOp::verify() {
   return success();
 }
 
-LogicalResult VMICvtOp::verify() {
-  auto sourceType = cast<VMIVRegType>(getSource().getType());
-  auto resultType = cast<VMIVRegType>(getResult().getType());
-  // 1. Lane count must match.
-  if (sourceType.getElementCount() != resultType.getElementCount()) {
-    return emitOpError(
-        "requires source and result logical lane counts to match");
-}
 
-  Type srcElem = sourceType.getElementType();
-  Type dstElem = resultType.getElementType();
-  unsigned srcBits = getVMIElementBitWidth(srcElem);
-  unsigned dstBits = getVMIElementBitWidth(dstElem);
-  bool srcFp = isVMIFloatLikeType(srcElem);
-  bool dstFp = isVMIFloatLikeType(dstElem);
-  bool srcInt = isVMIIntegerLikeType(srcElem);
-  bool dstInt = isVMIIntegerLikeType(dstElem);
-  auto fpContract =
-      srcFp && dstFp ? lookupVMIFpToFpContract(srcElem, dstElem)
-                     : std::nullopt;
-
-  if (involvesBF16x2(srcElem, dstElem) && !fpContract) {
-    return emitOpError(
-        "unsupported conversion involving bf16x2 element type");
-}
-  if (srcFp && dstFp &&
-      involvesVMIPackedFloatCarrier(srcElem, dstElem) && !fpContract) {
-    return emitOpError(
-        "unsupported packed fp-to-fp conversion element type pair");
-}
-
-  // 2. Classify the conversion direction.
-  CvtDirection dir;
+static LogicalResult classifyCvtDirection(
+    VMICvtOp op, Type srcElem, Type dstElem, unsigned srcBits, unsigned dstBits,
+    bool srcFp, bool dstFp, bool srcInt, bool dstInt,
+    const std::optional<VMIFpToFpContract> &fpContract, CvtDirection &dir) {
   if (srcFp && dstFp) {
     if (dstBits > srcBits) {
       dir = CvtDirection::FpWiden;
-    }
-    else if (dstBits < srcBits) {
+    } else if (dstBits < srcBits) {
       dir = CvtDirection::FpNarrow;
-    }
-    else {
+    } else {
       // Same-width fp→fp (e.g. bf16 → f16): only allowed for VMI fp-to-fp
       // contract pairs, routed through FpNarrow (1:1 TruncF).
       if (!fpContract) {
-        return emitOpError(
+        return op.emitOpError(
             "same-width fp-to-fp conversion is not supported for this type "
             "pair; see lookupVMIFpToFpContract");
-}
+      }
       dir = CvtDirection::FpNarrow;
     }
   } else if (srcFp && dstInt) {
     if (isVMIUnsignedOrSignlessIntegerType(dstElem)) {
       dir = CvtDirection::FpToUi;
-    }
-    else {
+    } else {
       dir = CvtDirection::FpToSi;
     }
   } else if (srcInt && dstFp) {
     if (!isVMISignedIntegerType(srcElem)) {
-      return emitOpError(
+      return op.emitOpError(
           "int-to-fp conversion requires explicitly signed integer source "
           "element type");
     }
@@ -4468,144 +4437,209 @@ LogicalResult VMICvtOp::verify() {
   } else if (srcInt && dstInt) {
     if (dstBits > srcBits) {
       dir = CvtDirection::IntWiden;
-    }
-    else if (dstBits < srcBits) {
+    } else if (dstBits < srcBits) {
       dir = CvtDirection::IntNarrow;
-    }
-    else {
-      return emitOpError(
+    } else {
+      return op.emitOpError(
           "int-to-int conversion must change element bit-width");
-}
+    }
   } else {
-    return emitOpError(
+    return op.emitOpError(
         "unsupported element type combination for vcvt");
   }
+  return success();
+}
 
-  // 3. Validate attributes against the conversion direction.
-
-  // --- rounding ---
-  if (auto roundingAttr = (*this)->getAttrOfType<StringAttr>("rounding")) {
-    if (dir != CvtDirection::FpNarrow && dir != CvtDirection::FpToSi &&
-        dir != CvtDirection::FpToUi) {
-      return emitOpError("'rounding' attribute is only valid for floating-point "
-                         "narrowing or floating-point-to-integer conversions");
-    }
-    StringRef rnd = roundingAttr.getValue();
-    if (rnd.size() != 1) {
-      return emitOpError("rounding must be a single-character mode token");
-    }
-    if (dir == CvtDirection::FpNarrow) {
-      StringRef allowedRndModes =
-          fpContract && !fpContract->allowedRndModes.empty()
-              ? fpContract->allowedRndModes
-              : StringRef("RAHZ");
-      if (!allowedRndModes.contains(rnd)) {
-        if (fpContract && !fpContract->allowedRndModes.empty()) {
-          return emitOpError(
-              "rounding is not valid for this fp-to-fp conversion type pair");
-        }
-        return emitOpError("rounding must be 'R' (nearest-even), "
-                           "'A' (away-from-zero), 'H' (half-up), "
-                           "or 'Z' (toward-zero)");
-      }
-    } else if (rnd != "R" && rnd != "A" && rnd != "F" && rnd != "C" &&
-               rnd != "Z") {
-      return emitOpError("rounding must be 'R', 'A', 'F', 'C', or 'Z' for "
-                         "floating-point-to-integer conversions");
-    }
+// Validate the rounding attribute for the given conversion direction.
+static LogicalResult verifyCvtRounding(VMICvtOp op, CvtDirection dir,
+                                       Type srcElem, Type dstElem,
+                                       const std::optional<VMIFpToFpContract> &fpContract) {
+  auto roundingAttr = op->getAttrOfType<StringAttr>("rounding");
+  if (!roundingAttr) {
+    return success();
   }
+  if (dir != CvtDirection::FpNarrow && dir != CvtDirection::FpToSi &&
+      dir != CvtDirection::FpToUi) {
+    return op.emitOpError("'rounding' attribute is only valid for floating-point "
+                          "narrowing or floating-point-to-integer conversions");
+  }
+  StringRef rnd = roundingAttr.getValue();
+  if (rnd.size() != 1) {
+    return op.emitOpError("rounding must be a single-character mode token");
+  }
+  if (dir == CvtDirection::FpNarrow) {
+    StringRef allowedRndModes =
+        fpContract && !fpContract->allowedRndModes.empty()
+            ? fpContract->allowedRndModes
+            : StringRef("RAHZ");
+    if (!allowedRndModes.contains(rnd)) {
+      if (fpContract && !fpContract->allowedRndModes.empty()) {
+        return op.emitOpError(
+            "rounding is not valid for this fp-to-fp conversion type pair");
+      }
+      return op.emitOpError("rounding must be 'R' (nearest-even), "
+                            "'A' (away-from-zero), 'H' (half-up), "
+                            "or 'Z' (toward-zero)");
+    }
+  } else if (rnd != "R" && rnd != "A" && rnd != "F" && rnd != "C" &&
+             rnd != "Z") {
+    return op.emitOpError("rounding must be 'R', 'A', 'F', 'C', or 'Z' for "
+                          "floating-point-to-integer conversions");
+  }
+  return success();
+}
 
-  // --- saturate ---
-  auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
+// Validate the saturate attribute for FpToSi conversions.
+static LogicalResult verifyCvtSaturateFpToSi(VMICvtOp op, Type srcElem,
+                                             Type dstElem,
+                                             StringAttr satAttr) {
+  auto contract = lookupVMIFpToSiContract(srcElem, dstElem);
+  if (!contract) {
+    return op.emitOpError("unsupported fp-to-si conversion element type pair");
+  }
+  if (contract->requiresSat) {
+    if (!satAttr) {
+      return op.emitOpError("'saturate' attribute is required for this "
+                            "fp-to-si conversion; write 'SAT' or 'NOSAT'");
+    }
+    StringRef satVal = satAttr.getValue();
+    if (satVal != "SAT" && satVal != "NOSAT") {
+      return op.emitOpError("saturate must be 'SAT' or 'NOSAT'");
+    }
+  } else if (satAttr) {
+    return op.emitOpError("'saturate' attribute is not valid for this "
+                          "fp-to-si conversion (no overflow possible)");
+  }
+  return success();
+}
+
+// Validate the saturate attribute for FpToUi conversions.
+static LogicalResult verifyCvtSaturateFpToUi(VMICvtOp op, Type srcElem,
+                                             Type dstElem,
+                                             StringAttr satAttr) {
+  auto contract = lookupVMIFpToUIContract(srcElem, dstElem);
+  if (!contract) {
+    return op.emitOpError("unsupported fp-to-ui conversion element type pair");
+  }
+  if (contract->requiresSat) {
+    if (!satAttr) {
+      return op.emitOpError("'saturate' attribute is required for this "
+                            "fp-to-ui conversion; write 'SAT' or 'NOSAT'");
+    }
+    StringRef satVal = satAttr.getValue();
+    if (satVal != "SAT" && satVal != "NOSAT") {
+      return op.emitOpError("saturate must be 'SAT' or 'NOSAT'");
+    }
+  } else if (satAttr) {
+    return op.emitOpError("'saturate' attribute is not valid for this "
+                          "fp-to-ui conversion (no overflow possible)");
+  }
+  return success();
+}
+
+// Validate the saturate attribute for narrow (FpNarrow / IntNarrow) conversions.
+static LogicalResult verifyCvtSaturateNarrow(
+    VMICvtOp op, CvtDirection dir, unsigned srcBits, unsigned dstBits,
+    Type srcElem, Type dstElem, StringAttr satAttr,
+    const std::optional<VMIFpToFpContract> &fpContract) {
+  // Fp-narrow: default to requiring a saturate attribute, but consult the
+  // fp-to-fp contract when one exists (e.g. bf16x2->f4x2 narrows with
+  // requiresSat=false and must NOT carry saturate).
+  bool needSat = (dir == CvtDirection::IntNarrow);
+  if (dir == CvtDirection::FpNarrow) {
+    needSat = !fpContract || fpContract->requiresSat;
+  }
+  if (needSat) {
+    if (!satAttr) {
+      return op.emitOpError("'saturate' attribute is required for fp-narrow / "
+                            "int-narrow conversions; write 'SAT' or 'NOSAT'");
+    }
+    StringRef satVal = satAttr.getValue();
+    if (satVal != "SAT" && satVal != "NOSAT") {
+      return op.emitOpError("saturate must be 'SAT' or 'NOSAT'");
+    }
+    // si32 -> si8 IntNarrow has no native hardware form.  Lowering aliases
+    // it through ui32 -> ui8 (bit-pattern equal ONLY under NOSAT).  Reject
+    // SAT here because ui32 -> ui8 SAT clamps to [0, 255], which does NOT
+    // match the expected si32 -> si8 SAT clamp to [-128, 127].
+    if (dir == CvtDirection::IntNarrow && satVal == "SAT" &&
+        srcBits == 32 && dstBits == 8 &&
+        isa<IntegerType>(srcElem) &&
+        cast<IntegerType>(srcElem).isSigned() &&
+        isa<IntegerType>(dstElem) &&
+        cast<IntegerType>(dstElem).isSigned()) {
+      return op.emitOpError("si32 -> si8 int-narrow does not support "
+                            "saturate=\"SAT\" (no native hardware form; "
+                            "only saturate=\"NOSAT\" is allowed)");
+    }
+  } else if (satAttr && dir == CvtDirection::FpNarrow) {
+    return op.emitOpError("'saturate' attribute is not valid for this fp-to-fp "
+                          "narrow conversion (no saturation)");
+  } else if (satAttr) {
+    return op.emitOpError("'saturate' attribute is only valid for fp-narrow / "
+                          "int-narrow conversions");
+  }
+  return success();
+}
+
+// Dispatch saturate validation to the correct sub-verifier.
+static LogicalResult verifyCvtSaturate(VMICvtOp op, CvtDirection dir,
+                                       unsigned srcBits, unsigned dstBits,
+                                       Type srcElem, Type dstElem,
+                                       StringAttr satAttr,
+                                       const std::optional<VMIFpToFpContract> &fpContract) {
   if (dir == CvtDirection::FpToSi) {
-    auto contract = lookupVMIFpToSiContract(srcElem, dstElem);
-    if (!contract) {
-      return emitOpError("unsupported fp-to-si conversion element type pair");
-    }
-    if (contract->requiresSat) {
-      if (!satAttr) {
-        return emitOpError("'saturate' attribute is required for this "
-                           "fp-to-si conversion; write 'SAT' or 'NOSAT'");
-      }
-      StringRef satVal = satAttr.getValue();
-      if (satVal != "SAT" && satVal != "NOSAT") {
-        return emitOpError("saturate must be 'SAT' or 'NOSAT'");
-      }
-    } else {
-      if (satAttr) {
-        return emitOpError("'saturate' attribute is not valid for this "
-                           "fp-to-si conversion (no overflow possible)");
-      }
-    }
-  } else if (dir == CvtDirection::FpToUi) {
-    auto contract = lookupVMIFpToUIContract(srcElem, dstElem);
-    if (!contract) {
-      return emitOpError("unsupported fp-to-ui conversion element type pair");
-    }
-    if (contract->requiresSat) {
-      if (!satAttr) {
-        return emitOpError("'saturate' attribute is required for this "
-                           "fp-to-ui conversion; write 'SAT' or 'NOSAT'");
-}
-      StringRef satVal = satAttr.getValue();
-      if (satVal != "SAT" && satVal != "NOSAT") {
-        return emitOpError("saturate must be 'SAT' or 'NOSAT'");
-      }
-    } else {
-      if (satAttr) {
-        return emitOpError("'saturate' attribute is not valid for this "
-                           "fp-to-ui conversion (no overflow possible)");
-}
-    }
-  } else {
-    bool needSat = (dir == CvtDirection::IntNarrow);
-    // Fp-narrow: default to requiring a saturate attribute, but consult the
-    // fp-to-fp contract when one exists (e.g. bf16x2->f4x2 narrows with
-    // requiresSat=false and must NOT carry saturate).
-    if (dir == CvtDirection::FpNarrow) {
-      needSat = !fpContract || fpContract->requiresSat;
-    }
-    if (needSat) {
-      if (!satAttr) {
-        return emitOpError("'saturate' attribute is required for fp-narrow / "
-                           "int-narrow conversions; write 'SAT' or "
-                           "'NOSAT'");
-}
-      StringRef satVal = satAttr.getValue();
-      if (satVal != "SAT" && satVal != "NOSAT") {
-        return emitOpError("saturate must be 'SAT' or 'NOSAT'");
-      }
-      // si32 -> si8 IntNarrow has no native hardware form.  Lowering aliases
-      // it through ui32 -> ui8 (bit-pattern equal ONLY under NOSAT).  Reject
-      // SAT here because ui32 -> ui8 SAT clamps to [0, 255], which does NOT
-      // match the expected si32 -> si8 SAT clamp to [-128, 127].
-      if (dir == CvtDirection::IntNarrow && satVal == "SAT" &&
-          srcBits == 32 && dstBits == 8 &&
-          isa<IntegerType>(srcElem) &&
-          cast<IntegerType>(srcElem).isSigned() &&
-          isa<IntegerType>(dstElem) &&
-          cast<IntegerType>(dstElem).isSigned()) {
-        return emitOpError("si32 -> si8 int-narrow does not support "
-                           "saturate=\"SAT\" (no native hardware form; "
-                           "only saturate=\"NOSAT\" is allowed)");
-}
-    } else if (satAttr && dir == CvtDirection::FpNarrow) {
-      return emitOpError("'saturate' attribute is not valid for this fp-to-fp "
-                         "narrow conversion (no saturation)");
-    } else if (satAttr) {
-      return emitOpError("'saturate' attribute is only valid for fp-narrow / "
-                         "int-narrow conversions");
-    }
+    return verifyCvtSaturateFpToSi(op, srcElem, dstElem, satAttr);
   }
+  if (dir == CvtDirection::FpToUi) {
+    return verifyCvtSaturateFpToUi(op, srcElem, dstElem, satAttr);
+  }
+  return verifyCvtSaturateNarrow(op, dir, srcBits, dstBits, srcElem, dstElem,
+                                 satAttr, fpContract);
+}
 
-  // --- pmode ---
+LogicalResult VMICvtOp::verify() {
+  auto sourceType = cast<VMIVRegType>(getSource().getType());
+  auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (sourceType.getElementCount() != resultType.getElementCount()) {
+    return emitOpError(
+        "requires source and result logical lane counts to match");
+  }
+  Type srcElem = sourceType.getElementType();
+  Type dstElem = resultType.getElementType();
+unsigned srcBits = getVMIElementBitWidth(srcElem), dstBits = getVMIElementBitWidth(dstElem);
+bool srcFp = isVMIFloatLikeType(srcElem), dstFp = isVMIFloatLikeType(dstElem);
+bool srcInt = isVMIIntegerLikeType(srcElem), dstInt = isVMIIntegerLikeType(dstElem);
+  auto fpContract = srcFp && dstFp ? lookupVMIFpToFpContract(srcElem, dstElem)
+                                   : std::nullopt;
+  if (involvesBF16x2(srcElem, dstElem) && !fpContract) {
+    return emitOpError("unsupported conversion involving bf16x2 element type");
+  }
+  if (srcFp && dstFp && involvesVMIPackedFloatCarrier(srcElem, dstElem) &&
+      !fpContract) {
+    return emitOpError(
+        "unsupported packed fp-to-fp conversion element type pair");
+  }
+  CvtDirection dir = CvtDirection::FpNarrow;
+  if (failed(classifyCvtDirection(*this, srcElem, dstElem, srcBits, dstBits,
+                                  srcFp, dstFp, srcInt, dstInt, fpContract,
+                                  dir))) {
+    return failure();
+  }
+  if (failed(verifyCvtRounding(*this, dir, srcElem, dstElem, fpContract))) {
+    return failure();
+  }
+  auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
+  if (failed(verifyCvtSaturate(*this, dir, srcBits, dstBits, srcElem, dstElem,
+                               satAttr, fpContract))) {
+    return failure();
+  }
   if (auto pmodeAttr = (*this)->getAttrOfType<StringAttr>("pmode")) {
     StringRef pmode = pmodeAttr.getValue();
     if (pmode != "merge" && pmode != "zero") {
       return emitOpError("pmode must be 'merge' or 'zero'");
     }
   }
-
   return success();
 }
 
@@ -4640,17 +4674,15 @@ LogicalResult VMIVinterpretCastOp::verify() {
   return success();
 }
 
-ParseResult VMIvStoreOp::parse(OpAsmParser &parser, OperationState &result) {
-  SmallVector<OpAsmParser::UnresolvedOperand, mlir::pto::kValue4> preBracketOperands;
-  OpAsmParser::UnresolvedOperand operand;
-  OpAsmParser::UnresolvedOperand offsetOperand;
-  SmallVector<OpAsmParser::UnresolvedOperand, mlir::pto::kValue3> postBracketOps;
-
+// Parse pre-bracket operands: value(s) + optional [offset].
+static ParseResult parseVStorePreBracket(
+    OpAsmParser &parser, OpAsmParser::UnresolvedOperand &operand,
+    OpAsmParser::UnresolvedOperand &offsetOperand,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &preBracketOperands) {
   if (parser.parseOperand(operand)) {
     return failure();
   }
   preBracketOperands.push_back(operand);
-
   bool consumedLSquare = false;
   while (!consumedLSquare) {
     if (succeeded(parser.parseOptionalLSquare())) {
@@ -4675,63 +4707,39 @@ ParseResult VMIvStoreOp::parse(OpAsmParser &parser, OperationState &result) {
     }
     preBracketOperands.push_back(operand);
   }
+  return success();
+}
 
-  if (preBracketOperands.empty()) {
-    return parser.emitError(parser.getCurrentLocation(),
-                            "expected at least one value and one destination");
-  }
-
-  // Optional post-bracket operands: stride, block_stride, and/or mask.
-  // Up to 2, disambiguated after parsing attrs and the type list.
-  while (succeeded(parser.parseOptionalComma())) {
-    OpAsmParser::UnresolvedOperand postOp;
-    if (parser.parseOperand(postOp)) {
-      return failure();
-    }
-    postBracketOps.push_back(postOp);
-    if (postBracketOps.size() >= mlir::pto::kValue3) {
-      break;
-    }
-  }
-
-  if (parser.parseOptionalAttrDict(result.attributes)) {
-    return failure();
-  }
-
-  SmallVector<Type, mlir::pto::kValue6> types;
-  if (parser.parseColon() || parser.parseTypeList(types)) {
-    return failure();
-  }
-
-  bool hasGroup = result.attributes.get("group") != nullptr;
-  bool hasStride = false;
-  bool hasBlock = false;
-  bool hasMask = false;
-  int strideIdx = -1;
-  int blockIdx = -1;
-  int maskIdx = -1;
-  size_t nValues = preBracketOperands.size() - 1;
-  size_t nTypes = types.size();
-
+// Disambiguate post-bracket operands into stride/block/mask.
+static void disambiguateVStorePostBracket(
+    bool hasGroup, size_t numPostOps, size_t nValues, size_t nTypes,
+    bool &hasStride, bool &hasBlock, bool &hasMask,
+    int &strideIdx, int &blockIdx, int &maskIdx) {
+  hasStride = false;
+  hasBlock = false;
+  hasMask = false;
+  strideIdx = -1;
+  blockIdx = -1;
+  maskIdx = -1;
   if (hasGroup) {
     // Group mode: post-bracket ops are stride[, mask]
-    if (postBracketOps.size() >= 1) {
+    if (numPostOps >= 1) {
       hasStride = true;
       strideIdx = 0;
     }
-    if (postBracketOps.size() >= mlir::pto::kValue2) {
+    if (numPostOps >= mlir::pto::kValue2) {
       hasMask = true;
       maskIdx = 1;
     }
-  } else if (postBracketOps.size() == mlir::pto::kValue2) {
+  } else if (numPostOps == mlir::pto::kValue2) {
     // Block-stride mode with a mask: block_stride, mask.
     hasBlock = true;
     hasMask = true;
     blockIdx = 0;
     maskIdx = 1;
-  } else if (postBracketOps.size() == 1) {
+  } else if (numPostOps == 1) {
     // The type list includes mask types, but never block-stride types.
-    if (nTypes == nValues + 2) {
+    if (nTypes == nValues + mlir::pto::kValue2) {
       hasMask = true;
       maskIdx = 0;
     } else {
@@ -4739,39 +4747,45 @@ ParseResult VMIvStoreOp::parse(OpAsmParser &parser, OperationState &result) {
       blockIdx = 0;
     }
   }
+}
 
+// Resolve all parsed operands against their types.
+static ParseResult resolveVStoreOperands(
+    OpAsmParser &parser, OperationState &result,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &preBracketOperands,
+    OpAsmParser::UnresolvedOperand offsetOperand,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &postBracketOps,
+    SmallVectorImpl<Type> &types, size_t nValues, bool hasStride,
+    bool hasBlock, bool hasMask, int strideIdx, int blockIdx,
+    int maskIdx) {
   size_t expectedTypes = nValues + 1 + (hasMask ? 1 : 0);
+  size_t nTypes = types.size();
   if (nTypes != expectedTypes) {
     return parser.emitError(parser.getCurrentLocation())
            << "expected " << expectedTypes << " types (" << nValues
            << " value(s), 1 destination" << (hasMask ? ", 1 mask" : "")
            << "), got " << nTypes;
   }
-
   for (size_t i = 0; i < nValues; ++i) {
     if (parser.resolveOperand(preBracketOperands[i], types[i], result.operands)) {
       return failure();
     }
   }
-
   Type destType = types[nValues];
   if (parser.resolveOperand(preBracketOperands[nValues], destType,
                             result.operands)) {
     return failure();
   }
-
   if (parser.resolveOperand(offsetOperand, parser.getBuilder().getIndexType(),
                             result.operands)) {
     return failure();
   }
-
   if (hasStride &&
       parser.resolveOperand(postBracketOps[strideIdx],
                             parser.getBuilder().getIndexType(),
                             result.operands)) {
     return failure();
   }
-
   if (hasBlock &&
       parser.resolveOperand(postBracketOps[blockIdx],
                             parser.getBuilder().getIntegerType(mlir::pto::kValue16),
@@ -4785,7 +4799,54 @@ ParseResult VMIvStoreOp::parse(OpAsmParser &parser, OperationState &result) {
       return failure();
     }
   }
+  return success();
+}
 
+ParseResult VMIvStoreOp::parse(OpAsmParser &parser, OperationState &result) {
+  SmallVector<OpAsmParser::UnresolvedOperand, mlir::pto::kValue4> preBracketOperands;
+  OpAsmParser::UnresolvedOperand operand, offsetOperand;
+  SmallVector<OpAsmParser::UnresolvedOperand, mlir::pto::kValue3> postBracketOps;
+  if (failed(parseVStorePreBracket(parser, operand, offsetOperand,
+                                   preBracketOperands))) {
+    return failure();
+  }
+  if (preBracketOperands.empty()) {
+    return parser.emitError(parser.getCurrentLocation(),
+                            "expected at least one value and one destination");
+  }
+  // Optional post-bracket operands: stride, block_stride, and/or mask.
+  // Up to 2, disambiguated after parsing attrs and the type list.
+  while (succeeded(parser.parseOptionalComma())) {
+    OpAsmParser::UnresolvedOperand postOp;
+    if (parser.parseOperand(postOp)) {
+      return failure();
+    }
+    postBracketOps.push_back(postOp);
+    if (postBracketOps.size() >= mlir::pto::kValue3) {
+      break;
+    }
+  }
+  if (parser.parseOptionalAttrDict(result.attributes)) {
+    return failure();
+  }
+  SmallVector<Type, mlir::pto::kValue6> types;
+  if (parser.parseColon() || parser.parseTypeList(types)) {
+    return failure();
+  }
+  bool hasGroup = result.attributes.get("group") != nullptr;
+  bool hasStride, hasBlock, hasMask;
+  int strideIdx, blockIdx, maskIdx;
+  disambiguateVStorePostBracket(hasGroup, postBracketOps.size(),
+                                preBracketOperands.size() - 1, types.size(),
+                                hasStride, hasBlock, hasMask,
+                                strideIdx, blockIdx, maskIdx);
+  size_t nValues = preBracketOperands.size() - 1;
+  if (failed(resolveVStoreOperands(parser, result, preBracketOperands,
+                                   offsetOperand, postBracketOps, types,
+                                   nValues, hasStride, hasBlock, hasMask,
+                                   strideIdx, blockIdx, maskIdx))) {
+    return failure();
+  }
   result.addAttribute("operandSegmentSizes",
                       parser.getBuilder().getDenseI32ArrayAttr(
                           {static_cast<int32_t>(nValues), 1, 1,
