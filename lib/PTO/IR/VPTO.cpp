@@ -1059,6 +1059,40 @@ static FailureOr<Value> resolveLoadAlignRootImpl(
     Value current, llvm::SmallPtrSet<void *, mlir::pto::kValue8> visited);
 static FailureOr<Value> resolveStoreAlignForResult(Value current,
                                                    scf::ForOp forOp);
+
+static FailureOr<Value> resolveStoreAlignBlockArg(Value current) {
+  auto blockArg = cast<BlockArgument>(current);
+  auto *owner = blockArg.getOwner();
+  auto forOp = dyn_cast<scf::ForOp>(owner->getParentOp());
+  if (!forOp) {
+    return failure();
+  }
+  unsigned argNumber = blockArg.getArgNumber();
+  unsigned ivCount = forOp.getNumInductionVars();
+  if (argNumber < ivCount) {
+    return failure();
+  }
+  unsigned iterIdx = argNumber - ivCount;
+  if (iterIdx >= forOp.getInitArgs().size()) {
+    return failure();
+  }
+  return forOp.getInitArgs()[iterIdx];
+}
+
+
+static std::optional<Value> getStoreAlignStateOpIn(Operation *def) {
+  if (auto stateOp = dyn_cast<PstuOp>(def)) {
+    return stateOp.getAlignIn();
+  }
+  if (auto stateOp = dyn_cast<VstusOp>(def)) {
+    return stateOp.getAlignIn();
+  }
+  if (auto stateOp = dyn_cast<VsturOp>(def)) {
+    return stateOp.getAlignIn();
+  }
+  return std::nullopt;
+}
+
 static FailureOr<Value> resolveStoreAlignRootImpl(
     Value current, llvm::SmallPtrSet<void *, mlir::pto::kValue8> visited);
 
@@ -1102,25 +1136,13 @@ static FailureOr<Value> resolveLoadAlignIfResult(
 static FailureOr<Value> resolveLoadAlignRootImpl(
     Value current, llvm::SmallPtrSet<void *, mlir::pto::kValue8> visited) {
   while (true) {
-    if (!visited.insert(current.getAsOpaquePointer()).second) {
-      return failure();
-    }
+    if (!visited.insert(current.getAsOpaquePointer()).second) { return failure(); }
     if (auto blockArg = dyn_cast<BlockArgument>(current)) {
-      auto *owner = blockArg.getOwner();
-      auto forOp = dyn_cast<scf::ForOp>(owner->getParentOp());
-      if (!forOp) {
+      auto next = resolveStoreAlignBlockArg(current);
+      if (failed(next)) {
         return failure();
       }
-      unsigned argNumber = blockArg.getArgNumber();
-      unsigned ivCount = forOp.getNumInductionVars();
-      if (argNumber < ivCount) {
-        return failure();
-      }
-      unsigned iterIdx = argNumber - ivCount;
-      if (iterIdx >= forOp.getInitArgs().size()) {
-        return failure();
-      }
-      current = forOp.getInitArgs()[iterIdx];
+      current = *next;
       continue;
     }
     Operation *def = current.getDefiningOp();
@@ -1218,16 +1240,8 @@ static FailureOr<Value> resolveStoreAlignRootImpl(
     if (isa<InitAlignOp>(def)) {
       return current;
     }
-    if (auto stateOp = dyn_cast<PstuOp>(def)) {
-      current = stateOp.getAlignIn();
-      continue;
-    }
-    if (auto stateOp = dyn_cast<VstusOp>(def)) {
-      current = stateOp.getAlignIn();
-      continue;
-    }
-    if (auto stateOp = dyn_cast<VsturOp>(def)) {
-      current = stateOp.getAlignIn();
+    if (auto nextState = getStoreAlignStateOpIn(def)) {
+      current = *nextState;
       continue;
     }
     if (auto forOp = dyn_cast<scf::ForOp>(def)) {
@@ -1383,6 +1397,27 @@ static LogicalResult collectStoreAlignLinearUses(
   return success();
 }
 
+
+static LogicalResult tryMergeAlignBranches(
+    unsigned branchCount, ArrayRef<Operation *> branchUsers, Operation *user,
+    Value &mergedValue, bool &didMerge) {
+  didMerge = false;
+  if (branchCount <= 1) {
+    return success();
+  }
+  scf::IfOp commonIf = getCommonStoreAlignBranchIf(branchUsers);
+  if (commonIf) {
+    FailureOr<Value> merged = resolveSingleAlignIfResult(commonIf);
+    if (succeeded(merged)) {
+      mergedValue = *merged;
+      didMerge = true;
+      return success();
+    }
+  }
+  return user->emitOpError()
+         << "!pto.align value must form a single linear store-state chain";
+}
+
 static LogicalResult verifyStoreAlignLinearUses(Value value, Operation *user) {
   llvm::SmallPtrSet<void *, mlir::pto::kValue16> visited;
   Value current = value;
@@ -1394,17 +1429,16 @@ static LogicalResult verifyStoreAlignLinearUses(Value value, Operation *user) {
                                            terminalUsers, branchUsers))) {
       return failure();
     }
-    if (nextValues.size() + terminalUsers.size() > 1) {
-      scf::IfOp commonIf = getCommonStoreAlignBranchIf(branchUsers);
-      if (commonIf) {
-        FailureOr<Value> mergedValue = resolveSingleAlignIfResult(commonIf);
-        if (succeeded(mergedValue)) {
-          current = *mergedValue;
-          continue;
-        }
-      }
-      return user->emitOpError()
-             << "!pto.align value must form a single linear store-state chain";
+    Value mergedValue;
+    bool didMerge = false;
+    if (failed(tryMergeAlignBranches(
+            nextValues.size() + terminalUsers.size(), branchUsers, user,
+            mergedValue, didMerge))) {
+      return failure();
+    }
+    if (didMerge) {
+      current = mergedValue;
+      continue;
     }
     if (nextValues.empty()) {
       return success();
@@ -1480,47 +1514,56 @@ static LogicalResult verifyLoadAlignLoopThreading(Value align, Operation *user,
   return success();
 }
 
+
+static LogicalResult collectLoadAlignLinearUses(
+    Value current, Operation *user, SmallVectorImpl<Value> &nextValues,
+    SmallVectorImpl<Operation *> &branchUsers) {
+  for (OpOperand &use : current.getUses()) {
+    Operation *owner = use.getOwner();
+    if (auto stateOp = dyn_cast<VldusOp>(owner)) {
+      nextValues.push_back(stateOp.getUpdatedAlign());
+      branchUsers.push_back(owner);
+      continue;
+    }
+    if (auto forOp = dyn_cast<scf::ForOp>(owner)) {
+      if (failed(appendStoreAlignForInitUse(forOp, use.getOperandNumber(),
+                                            user, nextValues))) {
+        return failure();
+      }
+      continue;
+    }
+    if (auto yieldOp = dyn_cast<scf::YieldOp>(owner)) {
+      if (failed(appendStoreAlignYieldUse(yieldOp, use.getOperandNumber(),
+                                          user, nextValues))) {
+        return failure();
+      }
+      continue;
+    }
+    return user->emitOpError()
+           << "found unsupported !pto.align consumer " << owner->getName();
+  }
+  return success();
+}
+
 static LogicalResult verifyLoadAlignLinearUses(Value value, Operation *user) {
   llvm::SmallPtrSet<void *, mlir::pto::kValue16> visited;
   Value current = value;
   while (visited.insert(current.getAsOpaquePointer()).second) {
     SmallVector<Value> nextValues;
     SmallVector<Operation *> branchUsers;
-    for (OpOperand &use : current.getUses()) {
-      Operation *owner = use.getOwner();
-      if (auto stateOp = dyn_cast<VldusOp>(owner)) {
-        nextValues.push_back(stateOp.getUpdatedAlign());
-        branchUsers.push_back(owner);
-        continue;
-      }
-      if (auto forOp = dyn_cast<scf::ForOp>(owner)) {
-        if (failed(appendStoreAlignForInitUse(forOp, use.getOperandNumber(),
-                                              user, nextValues))) {
-          return failure();
-        }
-        continue;
-      }
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(owner)) {
-        if (failed(appendStoreAlignYieldUse(yieldOp, use.getOperandNumber(),
-                                            user, nextValues))) {
-          return failure();
-        }
-        continue;
-      }
-      return user->emitOpError()
-             << "found unsupported !pto.align consumer " << owner->getName();
+    if (failed(collectLoadAlignLinearUses(current, user, nextValues,
+                                          branchUsers))) {
+      return failure();
     }
-    if (nextValues.size() > 1) {
-      scf::IfOp commonIf = getCommonStoreAlignBranchIf(branchUsers);
-      if (commonIf) {
-        FailureOr<Value> mergedValue = resolveSingleAlignIfResult(commonIf);
-        if (succeeded(mergedValue)) {
-          current = *mergedValue;
-          continue;
-        }
-      }
-      return user->emitOpError()
-             << "!pto.align value must form a single linear load-state chain";
+    Value mergedValue;
+    bool didMerge = false;
+    if (failed(tryMergeAlignBranches(nextValues.size(), branchUsers, user,
+                                     mergedValue, didMerge))) {
+      return failure();
+    }
+    if (didMerge) {
+      current = mergedValue;
+      continue;
     }
     if (nextValues.empty()) {
       return success();
@@ -1529,6 +1572,7 @@ static LogicalResult verifyLoadAlignLinearUses(Value value, Operation *user) {
   }
   return success();
 }
+
 
 
 static LogicalResult verifyLoadAlignChain(Value align, Operation *user,
@@ -2997,84 +3041,56 @@ enum class StructuredAccStoreDestinationFamily {
 
 static StructuredAccStoreDestinationFamily
 getStructuredAccStorePreQuantDestinationFamily(AccStoreQuantPreMode mode) {
-  static constexpr AccStoreQuantPreMode kF16Modes[] = {
-      AccStoreQuantPreMode::F32F16,
-      AccStoreQuantPreMode::QF322F16PreVec,
-      AccStoreQuantPreMode::QF322F16PreScalar,
-      AccStoreQuantPreMode::DEQF16Vec,
-      AccStoreQuantPreMode::DEQF16Scalar,
+  struct Entry {
+    AccStoreQuantPreMode mode;
+    StructuredAccStoreDestinationFamily family;
   };
-  static constexpr AccStoreQuantPreMode kBF16Modes[] = {
-      AccStoreQuantPreMode::F32BF16,
-      AccStoreQuantPreMode::QF322BF16PreVec,
-      AccStoreQuantPreMode::QF322BF16PreScalar,
-      AccStoreQuantPreMode::QS322BF16PreVec,
-      AccStoreQuantPreMode::QS322BF16PreScalar,
+  static constexpr Entry kEntries[] = {
+      {AccStoreQuantPreMode::F32F16, StructuredAccStoreDestinationFamily::F16},
+      {AccStoreQuantPreMode::QF322F16PreVec, StructuredAccStoreDestinationFamily::F16},
+      {AccStoreQuantPreMode::QF322F16PreScalar, StructuredAccStoreDestinationFamily::F16},
+      {AccStoreQuantPreMode::DEQF16Vec, StructuredAccStoreDestinationFamily::F16},
+      {AccStoreQuantPreMode::DEQF16Scalar, StructuredAccStoreDestinationFamily::F16},
+      {AccStoreQuantPreMode::F32BF16, StructuredAccStoreDestinationFamily::BF16},
+      {AccStoreQuantPreMode::QF322BF16PreVec, StructuredAccStoreDestinationFamily::BF16},
+      {AccStoreQuantPreMode::QF322BF16PreScalar, StructuredAccStoreDestinationFamily::BF16},
+      {AccStoreQuantPreMode::QS322BF16PreVec, StructuredAccStoreDestinationFamily::BF16},
+      {AccStoreQuantPreMode::QS322BF16PreScalar, StructuredAccStoreDestinationFamily::BF16},
+      {AccStoreQuantPreMode::QF322F32PreVec, StructuredAccStoreDestinationFamily::F32},
+      {AccStoreQuantPreMode::QF322F32PreScalar, StructuredAccStoreDestinationFamily::F32},
+      {AccStoreQuantPreMode::QF322HIF8PreVec, StructuredAccStoreDestinationFamily::FP8},
+      {AccStoreQuantPreMode::QF322HIF8PreScalar, StructuredAccStoreDestinationFamily::FP8},
+      {AccStoreQuantPreMode::QF322HIF8PreHybridVec, StructuredAccStoreDestinationFamily::FP8},
+      {AccStoreQuantPreMode::QF322HIF8PreHybridScalar, StructuredAccStoreDestinationFamily::FP8},
+      {AccStoreQuantPreMode::QF322FP8PreVec, StructuredAccStoreDestinationFamily::FP8},
+      {AccStoreQuantPreMode::QF322FP8PreScalar, StructuredAccStoreDestinationFamily::FP8},
+      {AccStoreQuantPreMode::DEQS32IntVec, StructuredAccStoreDestinationFamily::I32},
+      {AccStoreQuantPreMode::DEQS32IntScalar, StructuredAccStoreDestinationFamily::I32},
+      {AccStoreQuantPreMode::QF162S16PreVec, StructuredAccStoreDestinationFamily::I16},
+      {AccStoreQuantPreMode::QF162S16PreScalar, StructuredAccStoreDestinationFamily::I16},
+      {AccStoreQuantPreMode::DEQS16Vec, StructuredAccStoreDestinationFamily::I16},
+      {AccStoreQuantPreMode::DEQS16Scalar, StructuredAccStoreDestinationFamily::I16},
+      {AccStoreQuantPreMode::QF162B8PreVec, StructuredAccStoreDestinationFamily::I8},
+      {AccStoreQuantPreMode::QF162B8PreScalar, StructuredAccStoreDestinationFamily::I8},
+      {AccStoreQuantPreMode::REQ8Vec, StructuredAccStoreDestinationFamily::I8},
+      {AccStoreQuantPreMode::REQ8Scalar, StructuredAccStoreDestinationFamily::I8},
+      {AccStoreQuantPreMode::QF322B8PreVec, StructuredAccStoreDestinationFamily::I8},
+      {AccStoreQuantPreMode::QF322B8PreScalar, StructuredAccStoreDestinationFamily::I8},
+      {AccStoreQuantPreMode::QF162S4PreVec, StructuredAccStoreDestinationFamily::I4},
+      {AccStoreQuantPreMode::QF162S4PreScalar, StructuredAccStoreDestinationFamily::I4},
+      {AccStoreQuantPreMode::REQ4Vec, StructuredAccStoreDestinationFamily::I4},
+      {AccStoreQuantPreMode::REQ4Scalar, StructuredAccStoreDestinationFamily::I4},
+      {AccStoreQuantPreMode::QF322S4PreVec, StructuredAccStoreDestinationFamily::I4},
+      {AccStoreQuantPreMode::QF322S4PreScalar, StructuredAccStoreDestinationFamily::I4},
   };
-  static constexpr AccStoreQuantPreMode kF32Modes[] = {
-      AccStoreQuantPreMode::QF322F32PreVec,
-      AccStoreQuantPreMode::QF322F32PreScalar,
-  };
-  static constexpr AccStoreQuantPreMode kFP8Modes[] = {
-      AccStoreQuantPreMode::QF322HIF8PreVec,
-      AccStoreQuantPreMode::QF322HIF8PreScalar,
-      AccStoreQuantPreMode::QF322HIF8PreHybridVec,
-      AccStoreQuantPreMode::QF322HIF8PreHybridScalar,
-      AccStoreQuantPreMode::QF322FP8PreVec,
-      AccStoreQuantPreMode::QF322FP8PreScalar,
-  };
-  static constexpr AccStoreQuantPreMode kI32Modes[] = {
-      AccStoreQuantPreMode::DEQS32IntVec,
-      AccStoreQuantPreMode::DEQS32IntScalar,
-  };
-  static constexpr AccStoreQuantPreMode kI16Modes[] = {
-      AccStoreQuantPreMode::QF162S16PreVec,
-      AccStoreQuantPreMode::QF162S16PreScalar,
-      AccStoreQuantPreMode::DEQS16Vec,
-      AccStoreQuantPreMode::DEQS16Scalar,
-  };
-  static constexpr AccStoreQuantPreMode kI8Modes[] = {
-      AccStoreQuantPreMode::QF162B8PreVec,
-      AccStoreQuantPreMode::QF162B8PreScalar,
-      AccStoreQuantPreMode::REQ8Vec,
-      AccStoreQuantPreMode::REQ8Scalar,
-      AccStoreQuantPreMode::QF322B8PreVec,
-      AccStoreQuantPreMode::QF322B8PreScalar,
-  };
-  static constexpr AccStoreQuantPreMode kI4Modes[] = {
-      AccStoreQuantPreMode::QF162S4PreVec,
-      AccStoreQuantPreMode::QF162S4PreScalar,
-      AccStoreQuantPreMode::REQ4Vec,
-      AccStoreQuantPreMode::REQ4Scalar,
-      AccStoreQuantPreMode::QF322S4PreVec,
-      AccStoreQuantPreMode::QF322S4PreScalar,
-  };
-  if (llvm::is_contained(kF16Modes, mode)) {
-    return StructuredAccStoreDestinationFamily::F16;
-  }
-  if (llvm::is_contained(kBF16Modes, mode)) {
-    return StructuredAccStoreDestinationFamily::BF16;
-  }
-  if (llvm::is_contained(kF32Modes, mode)) {
-    return StructuredAccStoreDestinationFamily::F32;
-  }
-  if (llvm::is_contained(kFP8Modes, mode)) {
-    return StructuredAccStoreDestinationFamily::FP8;
-  }
-  if (llvm::is_contained(kI32Modes, mode)) {
-    return StructuredAccStoreDestinationFamily::I32;
-  }
-  if (llvm::is_contained(kI16Modes, mode)) {
-    return StructuredAccStoreDestinationFamily::I16;
-  }
-  if (llvm::is_contained(kI8Modes, mode)) {
-    return StructuredAccStoreDestinationFamily::I8;
-  }
-  if (llvm::is_contained(kI4Modes, mode)) {
-    return StructuredAccStoreDestinationFamily::I4;
-  }
-  return StructuredAccStoreDestinationFamily::Any;
+  auto it = llvm::find_if(kEntries, [&](const Entry &entry) {
+    return entry.mode == mode;
+  });
+  return it != std::end(kEntries)
+             ? it->family
+             : StructuredAccStoreDestinationFamily::Any;
 }
+
 
 
 static bool isStructuredAccStoreDestinationFamily(
@@ -3333,6 +3349,29 @@ static ParseResult parseStructuredAccStoreSatClause(
   return success();
 }
 
+
+static ParseResult parseStructuredAccStoreClauseBody(
+    OpAsmParser &parser, StructuredAccStoreAsmState &state,
+    StructuredAccStoreClauseKind kind, StringRef keyword) {
+  switch (kind) {
+  case StructuredAccStoreClauseKind::UnitFlag:
+    return parseStructuredAccStoreUnitFlag(parser, state);
+  case StructuredAccStoreClauseKind::PreQuant:
+    return parseStructuredAccStorePreQuant(parser, state);
+  case StructuredAccStoreClauseKind::PreRelu:
+    return parseStructuredAccStorePreRelu(parser, state);
+  case StructuredAccStoreClauseKind::Layout:
+    return parseStructuredAccStoreLayout(parser, state, keyword);
+  case StructuredAccStoreClauseKind::Loop3:
+    return parseStructuredAccStoreLoop3(parser, state);
+  case StructuredAccStoreClauseKind::Atomic:
+    return parseStructuredAccStoreAtomic(parser, state);
+  case StructuredAccStoreClauseKind::Sat:
+    return success();
+  }
+  return success();
+}
+
 static ParseResult parseStructuredAccStoreClauses(
     OpAsmParser &parser, StructuredAccStoreAsmState &state) {
   int lastClause = -1;
@@ -3369,35 +3408,12 @@ static ParseResult parseStructuredAccStoreClauses(
       }
       continue;
     }
-
-    ParseResult parseResult = success();
-    switch (kind) {
-    case StructuredAccStoreClauseKind::UnitFlag:
-      parseResult = parseStructuredAccStoreUnitFlag(parser, state);
-      break;
-    case StructuredAccStoreClauseKind::PreQuant:
-      parseResult = parseStructuredAccStorePreQuant(parser, state);
-      break;
-    case StructuredAccStoreClauseKind::PreRelu:
-      parseResult = parseStructuredAccStorePreRelu(parser, state);
-      break;
-    case StructuredAccStoreClauseKind::Layout:
-      parseResult = parseStructuredAccStoreLayout(parser, state, keyword);
-      break;
-    case StructuredAccStoreClauseKind::Loop3:
-      parseResult = parseStructuredAccStoreLoop3(parser, state);
-      break;
-    case StructuredAccStoreClauseKind::Atomic:
-      parseResult = parseStructuredAccStoreAtomic(parser, state);
-      break;
-    case StructuredAccStoreClauseKind::Sat:
-      break;
-    }
-    if (failed(parseResult)) {
+    if (failed(parseStructuredAccStoreClauseBody(parser, state, kind, keyword))) {
       return failure();
     }
   }
 }
+
 
 
 static ParseResult parseStructuredOptionalType(OpAsmParser &parser,
