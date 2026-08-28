@@ -79,6 +79,60 @@ void relaxEdges(
   }
 }
 
+// DistKey for unit-flag Dijkstra: (is-unit-flag, last-node-is-occ-dst, core-pipe-info)
+using DistKey = std::tuple<int, int, CorePipeInfo>;
+
+// Relax adjacency edges for the unit-flag Dijkstra variant: enqueue every
+// edge that improves the recorded distance to its destination pipe, tracking
+// unit-flag state and occurrence match.
+void relaxEdgesUnitFlag(
+    CorePipeInfo curCorePipe, int curIndex, int startIndex,
+    Occurrence *occ2, llvm::DenseMap<DistKey, int> &distance,
+    std::priority_queue<std::pair<int, DistKey>,
+                        std::vector<std::pair<int, DistKey>>,
+                        std::greater<std::pair<int, DistKey>>> &que,
+    llvm::DenseMap<CorePipeInfo,
+                   llvm::DenseMap<CorePipeInfo, std::set<GraphSolver::Edge>>>
+        &adjacencyList) {
+  for (auto &[endCorePipe, edges] : adjacencyList[curCorePipe]) {
+    auto it = edges.lower_bound(
+        GraphSolver::Edge(curCorePipe, endCorePipe, curIndex, -1));
+    for (; it != edges.end(); it++) {
+      auto &edge = *it;
+      if (edge.isUnitFlag && curIndex == startIndex &&
+          edge.startIndex != startIndex) {
+        continue;
+      }
+      assert(edge.conflictPair != nullptr);
+      DistKey nxtKey(edge.isUnitFlag,
+                     (edge.conflictPair->waitOcc == occ2), endCorePipe);
+      if (!distance.count(nxtKey) ||
+          (distance[nxtKey] > edge.endIndex)) {
+        distance[nxtKey] = edge.endIndex;
+        que.emplace(edge.endIndex, nxtKey);
+      }
+    }
+  }
+}
+
+// Collect the minimum distance to corePipeDst across all DistKey variants.
+std::optional<int> collectUnitFlagDistance(
+    const llvm::DenseMap<DistKey, int> &distance,
+    CorePipeInfo corePipeDst) {
+  std::optional<int> retDist;
+  DistKey keys[] = {DistKey(false, false, corePipeDst),
+                    DistKey(false, true, corePipeDst),
+                    DistKey(true, true, corePipeDst)};
+  for (const auto &key : keys) {
+    if (auto it = distance.find(key); it != distance.end()) {
+      retDist = retDist.has_value()
+                    ? std::min(retDist.value(), it->second)
+                    : it->second;
+    }
+  }
+  return retDist;
+}
+
 } // namespace
 
 // Compare edges (used for ordered sets). Edges must share endpoints when
@@ -214,9 +268,6 @@ std::optional<int> GraphSolver::runDijkstra(CorePipeInfo corePipeSrc,
 std::optional<int> GraphSolver::runDijkstraUnitFlagEnabled(
     Occurrence *occ1, Occurrence *occ2, CorePipeInfo corePipeSrc,
     CorePipeInfo corePipeDst, int startIndex, int endIndex) {
-  // (is-unit-flag, last-node-is-occ-dst, core-pipe-info)
-  using DistKey = std::tuple<int, int, CorePipeInfo>;
-
   llvm::DenseMap<DistKey, int> distance;
   std::priority_queue<std::pair<int, DistKey>,
                       std::vector<std::pair<int, DistKey>>,
@@ -252,41 +303,9 @@ std::optional<int> GraphSolver::runDijkstraUnitFlagEnabled(
       break;
     }
 
-    for (auto &[endCorePipe, edges] : adjacencyList[curCorePipe]) {
-      auto it = edges.lower_bound(Edge(curCorePipe, endCorePipe, curIndex, -1));
-      for (; it != edges.end(); it++) {
-        auto &edge = *it;
-        if (edge.isUnitFlag) {
-          if (curIndex == startIndex && edge.startIndex != startIndex) {
-            continue;
-          }
-        }
-        assert(edge.conflictPair != nullptr);
-        DistKey nxtKey(edge.isUnitFlag, (edge.conflictPair->waitOcc == occ2),
-                       endCorePipe);
-        if (!distance.count(nxtKey) || (distance[nxtKey] > edge.endIndex)) {
-          distance[nxtKey] = edge.endIndex;
-          que.emplace(edge.endIndex, nxtKey);
-        }
-      }
-    }
+    relaxEdgesUnitFlag(curCorePipe, curIndex, startIndex, occ2, distance,
+                       que, adjacencyList);
   }
 
-  std::optional<int> retDist;
-  if (auto it = distance.find(DistKey(false, false, corePipeDst));
-      it != distance.end()) {
-    retDist = retDist.has_value() ? std::min(retDist.value(), it->second)
-                                  : it->second;
-  }
-  if (auto it = distance.find(DistKey(false, true, corePipeDst));
-      it != distance.end()) {
-    retDist = retDist.has_value() ? std::min(retDist.value(), it->second)
-                                  : it->second;
-  }
-  if (auto it = distance.find(DistKey(true, true, corePipeDst));
-      it != distance.end()) {
-    retDist = retDist.has_value() ? std::min(retDist.value(), it->second)
-                                  : it->second;
-  }
-  return retDist;
+  return collectUnitFlagDistance(distance, corePipeDst);
 }

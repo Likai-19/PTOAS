@@ -65,63 +65,66 @@ void enqueueTracebackSuccessors(const llvm::SmallVector<Value> &nextVals,
     }
   }
 }
-} // namespace
 
-llvm::SmallVector<Value> IRTranslator::tracebackMemValsStep(Value val) {
-  llvm::SmallVector<Value> out;
-  if (auto blockArg = dyn_cast<BlockArgument>(val)) {
-    if (auto forOp =
-            dyn_cast_if_present<scf::ForOp>(blockArg.getOwner()->getParentOp())) {
-      if (auto *init = forOp.getTiedLoopInit(blockArg)) {
-        out.push_back(init->get());
-      }
-      if (auto *yield = forOp.getTiedLoopYieldedValue(blockArg)) {
-        out.push_back(yield->get());
-      }
-    }
-    if (auto whileOp = dyn_cast_if_present<scf::WhileOp>(
-            blockArg.getOwner()->getParentOp())) {
-      unsigned index = blockArg.getArgNumber();
-      if (blockArg.getOwner() == &whileOp.getBefore().front()) {
-        if (index < whileOp.getInits().size()) {
-          out.push_back(whileOp.getInits()[index]);
-        }
-        if (index < whileOp.getYieldedValues().size()) {
-          out.push_back(whileOp.getYieldedValues()[index]);
-        }
-      } else if (blockArg.getOwner() == &whileOp.getAfter().front()) {
-        auto conditionArgs = whileOp.getConditionOp().getArgs();
-        if (index < conditionArgs.size()) {
-          out.push_back(conditionArgs[index]);
-        }
-        if (index < whileOp.getYieldedValues().size()) {
-          out.push_back(whileOp.getYieldedValues()[index]);
-        }
-      }
-    }
-    if (blockArgAliases.contains(val)) {
-      llvm::append_range(out, blockArgAliases[val]);
-    }
-    return out;
+void tracebackForOpBlockArg(BlockArgument blockArg,
+                            llvm::SmallVector<Value> &out) {
+  auto forOp = dyn_cast_if_present<scf::ForOp>(blockArg.getOwner()->getParentOp());
+  if (!forOp) {
+    return;
   }
-
-  auto result = dyn_cast<OpResult>(val);
-  if (!result) {
-    return out;
+  if (auto *init = forOp.getTiedLoopInit(blockArg)) {
+    out.push_back(init->get());
   }
+  if (auto *yield = forOp.getTiedLoopYieldedValue(blockArg)) {
+    out.push_back(yield->get());
+  }
+}
 
-  Operation *defOp = result.getDefiningOp();
-  unsigned resultNo = result.getResultNumber();
+void tracebackWhileOpBlockArg(BlockArgument blockArg,
+                              llvm::SmallVector<Value> &out) {
+  auto whileOp =
+      dyn_cast_if_present<scf::WhileOp>(blockArg.getOwner()->getParentOp());
+  if (!whileOp) {
+    return;
+  }
+  unsigned index = blockArg.getArgNumber();
+  if (blockArg.getOwner() == &whileOp.getBefore().front()) {
+    if (index < whileOp.getInits().size()) {
+      out.push_back(whileOp.getInits()[index]);
+    }
+    if (index < whileOp.getYieldedValues().size()) {
+      out.push_back(whileOp.getYieldedValues()[index]);
+    }
+    return;
+  }
+  if (blockArg.getOwner() != &whileOp.getAfter().front()) {
+    return;
+  }
+  auto conditionArgs = whileOp.getConditionOp().getArgs();
+  if (index < conditionArgs.size()) {
+    out.push_back(conditionArgs[index]);
+  }
+  if (index < whileOp.getYieldedValues().size()) {
+    out.push_back(whileOp.getYieldedValues()[index]);
+  }
+}
+
+void tracebackScfOpResult(Operation *defOp, unsigned resultNo,
+                           llvm::SmallVector<Value> &out) {
   if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
     out.push_back(ifOp.thenYield()->getOperand(resultNo));
     if (ifOp.elseBlock()) {
       out.push_back(ifOp.elseYield()->getOperand(resultNo));
     }
-  } else if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
+    return;
+  }
+  if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
     if (forOp.getYieldedValues().size() > resultNo) {
       out.push_back(forOp.getYieldedValues()[resultNo]);
     }
-  } else if (auto whileOp = dyn_cast<scf::WhileOp>(defOp)) {
+    return;
+  }
+  if (auto whileOp = dyn_cast<scf::WhileOp>(defOp)) {
     if (whileOp.getConditionOp().getArgs().size() > resultNo) {
       out.push_back(whileOp.getConditionOp().getArgs()[resultNo]);
     }
@@ -129,36 +132,104 @@ llvm::SmallVector<Value> IRTranslator::tracebackMemValsStep(Value val) {
       out.push_back(whileOp.getYieldedValues()[resultNo]);
     }
   }
+}
 
+void tracebackOtherOpResult(Operation *defOp, Value result,
+                             llvm::SmallVector<Value> &out) {
+  if (auto select = dyn_cast<arith::SelectOp>(defOp)) {
+    out.push_back(select.getTrueValue());
+    out.push_back(select.getFalseValue());
+    return;
+  }
+  if (auto addPtr = dyn_cast<pto::AddPtrOp>(defOp)) {
+    out.push_back(addPtr.getPtr());
+    return;
+  }
+  if (auto intToPtr = dyn_cast<pto::IntToPtrOp>(defOp)) {
+    if (auto ptrToInt = intToPtr.getAddr().getDefiningOp<pto::PtrToIntOp>()) {
+      out.push_back(ptrToInt.getPtr());
+    }
+    return;
+  }
+  auto castPtr = dyn_cast<pto::CastPtrOp>(defOp);
+  if (castPtr && isa<pto::PtrType>(castPtr.getInput().getType()) &&
+      isa<pto::PtrType>(castPtr.getResult().getType())) {
+    out.push_back(castPtr.getInput());
+    return;
+  }
+  if (auto alias = pto::getOperationAliasInfo(defOp)) {
+    if (alias->first == result) {
+      out.push_back(alias->second);
+    }
+    return;
+  }
+  if (auto dsi = dyn_cast<DestinationStyleOpInterface>(defOp)) {
+    for (Value init : dsi.getDpsInits()) {
+      out.push_back(init);
+    }
+  }
+}
+
+void pushIfNonEmpty(Scope *parScope, bool skipEmptyScopes, bool isEmpty,
+                    std::unique_ptr<OperationBase> op) {
+  if (!skipEmptyScopes || !isEmpty) {
+    parScope->body.push_back(std::move(op));
+  }
+}
+
+void pushIfNonNull(Scope *parScope, std::unique_ptr<OperationBase> op) {
+  if (op) {
+    parScope->body.push_back(std::move(op));
+  }
+}
+
+std::unique_ptr<PlaceHolder> makePlaceHolder(OperationBase *parent,
+                                              Loop *loopOp, bool isBefore) {
+  auto ph = std::make_unique<PlaceHolder>(nullptr, parent);
+  if (isBefore) {
+    ph->beforeOp = loopOp;
+  } else {
+    ph->afterOp = loopOp;
+  }
+  return ph;
+}
+
+void pushLoopWithPlaceHolders(Scope *parScope, bool skipEmptyScopes,
+                              bool isEmpty,
+                              std::unique_ptr<PlaceHolder> before,
+                              std::unique_ptr<Loop> loop,
+                              std::unique_ptr<PlaceHolder> after) {
+  if (!skipEmptyScopes || !isEmpty) {
+    parScope->body.push_back(std::move(before));
+    parScope->body.push_back(std::move(loop));
+    parScope->body.push_back(std::move(after));
+  }
+}
+} // namespace
+
+llvm::SmallVector<Value> IRTranslator::tracebackMemValsStep(Value val) {
+  llvm::SmallVector<Value> out;
+  if (auto blockArg = dyn_cast<BlockArgument>(val)) {
+    tracebackForOpBlockArg(blockArg, out);
+    tracebackWhileOpBlockArg(blockArg, out);
+    if (blockArgAliases.contains(val)) {
+      llvm::append_range(out, blockArgAliases[val]);
+    }
+    return out;
+  }
+  auto result = dyn_cast<OpResult>(val);
+  if (!result) {
+    return out;
+  }
+  Operation *defOp = result.getDefiningOp();
+  unsigned resultNo = result.getResultNumber();
+  tracebackScfOpResult(defOp, resultNo, out);
   // Stop at `pto.multi_tile_get` so getMemInfo preserves the selected slot
   // instead of tracing through the metadata-only view.
   if (isa<pto::MultiTileGetOp>(defOp)) {
     return out;
   }
-
-  if (auto select = dyn_cast<arith::SelectOp>(defOp)) {
-    out.push_back(select.getTrueValue());
-    out.push_back(select.getFalseValue());
-  } else if (auto addPtr = dyn_cast<pto::AddPtrOp>(defOp)) {
-    out.push_back(addPtr.getPtr());
-  } else if (auto intToPtr = dyn_cast<pto::IntToPtrOp>(defOp)) {
-    if (auto ptrToInt = intToPtr.getAddr().getDefiningOp<pto::PtrToIntOp>()) {
-      out.push_back(ptrToInt.getPtr());
-    }
-  } else if (auto castPtr = dyn_cast<pto::CastPtrOp>(defOp);
-             castPtr &&
-             isa<pto::PtrType>(castPtr.getInput().getType()) &&
-             isa<pto::PtrType>(castPtr.getResult().getType())) {
-    out.push_back(castPtr.getInput());
-  } else if (auto alias = pto::getOperationAliasInfo(defOp)) {
-    if (alias->first == result) {
-      out.push_back(alias->second);
-    }
-  } else if (auto dsi = dyn_cast<DestinationStyleOpInterface>(defOp)) {
-    for (Value init : dsi.getDpsInits()) {
-      out.push_back(init);
-    }
-  }
+  tracebackOtherOpResult(defOp, result, out);
   return out;
 }
 
@@ -359,77 +430,49 @@ void IRTranslator::translateBlockIntoScope(Block &block, Scope *parScope,
                                            bool skipEmptyScopes) {
   for (Operation &op : block.getOperations()) {
     if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-      auto trueScope =
-          funcIrBuilder(ifOp.getThenRegion(), nullptr, skipEmptyScopes);
-      std::unique_ptr<Scope> falseScope;
-      if (ifOp.elseBlock()) {
-        falseScope =
-            funcIrBuilder(ifOp.getElseRegion(), nullptr, skipEmptyScopes);
-      }
-      auto cond = std::make_unique<Condition>(
-          &op, parScope, std::move(trueScope), std::move(falseScope));
+      auto trueScope = funcIrBuilder(ifOp.getThenRegion(), nullptr, skipEmptyScopes);
+      auto falseScope = ifOp.elseBlock() ? funcIrBuilder(ifOp.getElseRegion(), nullptr, skipEmptyScopes) : nullptr;
+      auto cond = std::make_unique<Condition>(&op, parScope, std::move(trueScope), std::move(falseScope));
       cond->isUnlikely = isUnlikelyCondition(cond.get());
-      if (!skipEmptyScopes || !isEmptyScope(cond.get())) {
-        parScope->body.push_back(std::move(cond));
-      }
+      pushIfNonEmpty(parScope, skipEmptyScopes, isEmptyScope(cond.get()), std::move(cond));
       continue;
     }
-
     if (isa<LoopLikeOpInterface>(op)) {
       auto loop = std::make_unique<Loop>(&op, parScope);
       loop->isParallel = isParallelLoop(loop.get());
       loop->multibufferUnrollNum = getLoopMultibufferUnrollNum(loop.get());
       for (Region &nested : op.getRegions()) {
-        auto innerScope = funcIrBuilder(nested, loop.get(), skipEmptyScopes);
-        loop->body.push_back(std::move(innerScope));
+        loop->body.push_back(funcIrBuilder(nested, loop.get(), skipEmptyScopes));
       }
-      auto before = std::make_unique<PlaceHolder>(nullptr, loop->parentOp);
-      before->beforeOp = loop.get();
-      auto after = std::make_unique<PlaceHolder>(nullptr, loop->parentOp);
-      after->afterOp = loop.get();
-      if (!skipEmptyScopes || !isEmptyScope(loop.get())) {
-        parScope->body.push_back(std::move(before));
-        parScope->body.push_back(std::move(loop));
-        parScope->body.push_back(std::move(after));
-      }
+      auto before = makePlaceHolder(loop->parentOp, loop.get(), true);
+      auto after = makePlaceHolder(loop->parentOp, loop.get(), false);
+      pushLoopWithPlaceHolders(parScope, skipEmptyScopes, isEmptyScope(loop.get()),
+                               std::move(before), std::move(loop), std::move(after));
       continue;
     }
-
     if (isTransparentGraphSyncRegionOp(op)) {
       for (Region &nested : op.getRegions()) {
         translateRegionIntoScope(nested, parScope, skipEmptyScopes);
       }
       continue;
     }
-
     if (auto branchOp = dyn_cast<cf::BranchOp>(op)) {
       updateBlockArgAliases(branchOp.getDest(), branchOp.getDestOperands());
       continue;
     }
     if (auto condBranchOp = dyn_cast<cf::CondBranchOp>(op)) {
-      updateBlockArgAliases(condBranchOp.getTrueDest(),
-                            condBranchOp.getTrueDestOperands());
-      updateBlockArgAliases(condBranchOp.getFalseDest(),
-                            condBranchOp.getFalseDestOperands());
+      updateBlockArgAliases(condBranchOp.getTrueDest(), condBranchOp.getTrueDestOperands());
+      updateBlockArgAliases(condBranchOp.getFalseDest(), condBranchOp.getFalseDestOperands());
       continue;
     }
-
     if (auto pipeOp = dyn_cast<pto::OpPipeInterface>(op)) {
-      if (auto rw = getPipeInterfaceOp(pipeOp, parScope)) {
-        parScope->body.push_back(std::move(rw));
-      }
+      pushIfNonNull(parScope, getPipeInterfaceOp(pipeOp, parScope));
     } else if (isa<pto::LoadScalarOp, pto::StoreScalarOp>(op)) {
-      if (auto rw = getScalarMemoryOp(&op, parScope)) {
-        parScope->body.push_back(std::move(rw));
-      }
+      pushIfNonNull(parScope, getScalarMemoryOp(&op, parScope));
     } else if (auto extractOp = dyn_cast<tensor::ExtractOp>(op)) {
-      if (auto rw = getTensorExtractOp(extractOp, parScope)) {
-        parScope->body.push_back(std::move(rw));
-      }
+      pushIfNonNull(parScope, getTensorExtractOp(extractOp, parScope));
     } else if (auto callOp = dyn_cast<func::CallOp>(op)) {
-      if (auto rw = getCallOp(callOp, parScope)) {
-        parScope->body.push_back(std::move(rw));
-      }
+      pushIfNonNull(parScope, getCallOp(callOp, parScope));
     }
   }
 }

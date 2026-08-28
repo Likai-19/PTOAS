@@ -190,6 +190,98 @@ static void dumpMemInfoList(llvm::raw_ostream &os, llvm::StringRef tag,
   os << "]";
 }
 
+static void decreaseIndentForClose(InstanceElement *e, int &indent) {
+  if (auto *loop = dyn_cast<LoopInstanceElement>(e)) {
+    if (loop->getLoopKind() == KindOfLoop::LOOP_END) {
+      indent = std::max(0, indent - 1);
+    }
+  }
+  if (auto *branch = dyn_cast<BranchInstanceElement>(e)) {
+    if (branch->getBranchKind() == KindOfBranch::IF_END ||
+        branch->getBranchKind() == KindOfBranch::ELSE_BEGIN) {
+      indent = std::max(0, indent - 1);
+    }
+  }
+}
+
+static void dumpSyncElement(llvm::raw_ostream &os, InstanceElement *e,
+                            unsigned baseIndent, bool showMemInfo,
+                            mlir::AsmState *state) {
+  os.indent(baseIndent);
+  os << llvm::formatv("[{0,4}] ", e->GetIndex());
+
+  switch (e->GetKind()) {
+  case InstanceElement::KindTy::COMPOUND: {
+    auto *comp = cast<CompoundInstanceElement>(e);
+    os << "COMPOUND " << comp->opName.getStringRef() << " ["
+       << getPipelineName(comp->kPipeValue) << "]";
+    os << "\n";
+    if (showMemInfo) {
+      os.indent(baseIndent + kDebugDumpIndentSpaces);
+      dumpMemInfoList(os, "def", comp->defVec, state);
+      os << "\n";
+      os.indent(baseIndent + kDebugDumpIndentSpaces);
+      dumpMemInfoList(os, "use", comp->useVec, state);
+      os << "\n";
+    }
+    break;
+  }
+  case InstanceElement::KindTy::LOOP: {
+    auto *loop = cast<LoopInstanceElement>(e);
+    os << "LOOP " << getLoopKindName(loop->getLoopKind())
+       << " (begin=" << loop->beginId << ", end=" << loop->endId << ")\n";
+    break;
+  }
+  case InstanceElement::KindTy::BRANCH: {
+    auto *branch = cast<BranchInstanceElement>(e);
+    os << "BRANCH " << getBranchKindName(branch->getBranchKind())
+       << " (begin=" << branch->beginId << ", branch=" << branch->branchId
+       << ", end=" << branch->endId << ")\n";
+    break;
+  }
+  case InstanceElement::KindTy::PLACE_HOLDER: {
+    auto *ph = cast<PlaceHolderInstanceElement>(e);
+    os << "PLACE_HOLDER (parentScopeId=" << ph->parentScopeId;
+    if (ph->isVirtualElse) {
+      os << ", virtualElse";
+    }
+    os << ")\n";
+    break;
+  }
+  }
+}
+
+static void dumpSyncOps(llvm::raw_ostream &os, llvm::StringRef prefix,
+                        const SyncOps &ops, unsigned baseIndent,
+                        const InsertSyncDumpOptions &options) {
+  for (const auto *op : ops) {
+    if (!op) {
+      continue;
+    }
+    if (op->uselessSync && !options.showUselessSync) {
+      continue;
+    }
+    os.indent(baseIndent + kDebugDumpIndentSpaces);
+    os << prefix << ": ";
+    dumpSyncOp(os, op, options.showUselessSync);
+    os << "\n";
+  }
+}
+
+static void increaseIndentForOpen(InstanceElement *e, int &indent) {
+  if (auto *loop = dyn_cast<LoopInstanceElement>(e)) {
+    if (loop->getLoopKind() == KindOfLoop::LOOP_BEGIN) {
+      indent += 1;
+    }
+  }
+  if (auto *branch = dyn_cast<BranchInstanceElement>(e)) {
+    if (branch->getBranchKind() == KindOfBranch::IF_BEGIN ||
+        branch->getBranchKind() == KindOfBranch::ELSE_BEGIN) {
+      indent += 1;
+    }
+  }
+}
+
 static void dumpSyncIR(llvm::raw_ostream &os, const SyncIRs &syncIR,
                        Operation *opForPrinting, InsertSyncDumpOptions options,
                        bool showMemInfo) {
@@ -199,99 +291,21 @@ static void dumpSyncIR(llvm::raw_ostream &os, const SyncIRs &syncIR,
   }
 
   int indent = 0;
-  auto indentBy = [&indent](int extra = 0) {
-    return static_cast<unsigned>(std::max(0, indent) * 2 + extra);
-  };
-
   for (const auto &e : syncIR) {
     if (!e) {
       continue;
     }
 
-    if (auto *loop = dyn_cast<LoopInstanceElement>(e.get())) {
-      if (loop->getLoopKind() == KindOfLoop::LOOP_END) {
-        indent = std::max(0, indent - 1);
-      }
-    }
-    if (auto *branch = dyn_cast<BranchInstanceElement>(e.get())) {
-      if (branch->getBranchKind() == KindOfBranch::IF_END ||
-          branch->getBranchKind() == KindOfBranch::ELSE_BEGIN) {
-        indent = std::max(0, indent - 1);
-      }
-    }
+    decreaseIndentForClose(e.get(), indent);
 
-    os.indent(indentBy());
-    os << llvm::formatv("[{0,4}] ", e->GetIndex());
+    unsigned baseIndent = static_cast<unsigned>(std::max(0, indent) * 2);
+    dumpSyncElement(os, e.get(), baseIndent, showMemInfo,
+                    state ? &*state : nullptr);
 
-    switch (e->GetKind()) {
-    case InstanceElement::KindTy::COMPOUND: {
-      auto *comp = cast<CompoundInstanceElement>(e.get());
-      os << "COMPOUND " << comp->opName.getStringRef() << " ["
-         << getPipelineName(comp->kPipeValue) << "]";
-      os << "\n";
-      if (showMemInfo) {
-        os.indent(indentBy(kDebugDumpIndentSpaces));
-        dumpMemInfoList(os, "def", comp->defVec, state ? &*state : nullptr);
-        os << "\n";
-        os.indent(indentBy(kDebugDumpIndentSpaces));
-        dumpMemInfoList(os, "use", comp->useVec, state ? &*state : nullptr);
-        os << "\n";
-      }
-      break;
-    }
-    case InstanceElement::KindTy::LOOP: {
-      auto *loop = cast<LoopInstanceElement>(e.get());
-      os << "LOOP " << getLoopKindName(loop->getLoopKind())
-         << " (begin=" << loop->beginId << ", end=" << loop->endId << ")\n";
-      break;
-    }
-    case InstanceElement::KindTy::BRANCH: {
-      auto *branch = cast<BranchInstanceElement>(e.get());
-      os << "BRANCH " << getBranchKindName(branch->getBranchKind())
-         << " (begin=" << branch->beginId << ", branch=" << branch->branchId
-         << ", end=" << branch->endId << ")\n";
-      break;
-    }
-    case InstanceElement::KindTy::PLACE_HOLDER: {
-      auto *ph = cast<PlaceHolderInstanceElement>(e.get());
-      os << "PLACE_HOLDER (parentScopeId=" << ph->parentScopeId;
-      if (ph->isVirtualElse) {
-        os << ", virtualElse";
-      }
-      os << ")\n";
-      break;
-    }
-    }
+    dumpSyncOps(os, "PRE ", e->pipeBefore, baseIndent, options);
+    dumpSyncOps(os, "POST", e->pipeAfter, baseIndent, options);
 
-    auto dumpOps = [&](llvm::StringRef prefix, const SyncOps &ops) {
-      for (const auto *op : ops) {
-        if (!op) {
-          continue;
-        }
-        if (op->uselessSync && !options.showUselessSync) {
-          continue;
-        }
-        os.indent(indentBy(kDebugDumpIndentSpaces));
-        os << prefix << ": ";
-        dumpSyncOp(os, op, options.showUselessSync);
-        os << "\n";
-      }
-    };
-
-    dumpOps("PRE ", e->pipeBefore);
-    dumpOps("POST", e->pipeAfter);
-
-    if (auto *loop = dyn_cast<LoopInstanceElement>(e.get())) {
-      if (loop->getLoopKind() == KindOfLoop::LOOP_BEGIN) {
-        indent += 1;
-      }
-    }
-    if (auto *branch = dyn_cast<BranchInstanceElement>(e.get())) {
-      if (branch->getBranchKind() == KindOfBranch::IF_BEGIN ||
-          branch->getBranchKind() == KindOfBranch::ELSE_BEGIN) {
-        indent += 1;
-      }
-    }
+    increaseIndentForOpen(e.get(), indent);
   }
 }
 

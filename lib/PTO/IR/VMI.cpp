@@ -4824,123 +4824,140 @@ void VMIvStoreOp::print(OpAsmPrinter &p) {
   }
 }
 
-LogicalResult VMIvStoreOp::verify() {
+static LogicalResult verifyVStoreGroupAndBlockModes(
+    Operation *op, bool hasGroup, std::optional<StringRef> distMode,
+    bool hasStride, bool hasBlock, bool hasMask, int64_t numGroups,
+    size_t nValues, ValueRange values) {
   // group and dist_mode are mutually exclusive
-  if (getGroup() && getDistMode()) {
-    return emitOpError("group and dist_mode are mutually exclusive");
+  if (hasGroup && distMode) {
+    return op->emitOpError("group and dist_mode are mutually exclusive");
   }
-  if (getGroup() && !getStride()) {
-    return emitOpError("group requires a stride operand");
+  if (hasGroup && !hasStride) {
+    return op->emitOpError("group requires a stride operand");
   }
-  if (!getGroup() && getStride()) {
-    return emitOpError("stride operand is only valid with group");
+  if (!hasGroup && hasStride) {
+    return op->emitOpError("stride operand is only valid with group");
   }
-  if (getGroup() && !getMask().empty()) {
-    return emitOpError("group mode does not support mask operand");
+  if (hasGroup && hasMask) {
+    return op->emitOpError("group mode does not support mask operand");
   }
-
-  if (getGroup()) {
-    int64_t numGroups = getGroupAttr().getInt();
+  if (hasGroup) {
     if (numGroups <= 0) {
-      return emitOpError("group must be positive, got ") << numGroups;
+      return op->emitOpError("group must be positive, got ") << numGroups;
     }
-    if (getValues().size() != 1) {
-      return emitOpError("group mode requires exactly 1 value");
+    if (nValues != 1) {
+      return op->emitOpError("group mode requires exactly 1 value");
     }
-    auto valueType = cast<VMIVRegType>(getValues()[0].getType());
-    if (failed(verifyNumGroups(getOperation(), valueType, numGroups))) {
+    auto valueType = cast<VMIVRegType>(values[0].getType());
+    if (failed(verifyNumGroups(op, valueType, numGroups))) {
       return failure();
     }
   }
-
   // block_stride is mutually exclusive with dist_mode and group.
-  bool hasBlock = static_cast<bool>(getBlockStride());
   if (hasBlock) {
-    if (getDistMode()) {
-      return emitOpError(
+    if (distMode) {
+      return op->emitOpError(
           "block_stride and dist_mode are mutually exclusive");
     }
-    if (getGroup()) {
-      return emitOpError("block_stride and group are mutually exclusive");
+    if (hasGroup) {
+      return op->emitOpError("block_stride and group are mutually exclusive");
     }
-    if (getValues().size() != 1) {
-      return emitOpError("block-stride mode requires exactly 1 value");
+    if (nValues != 1) {
+      return op->emitOpError("block-stride mode requires exactly 1 value");
     }
   }
+  return success();
+}
 
-  auto distMode = getDistMode();
-  bool isDintlv = distMode && *distMode == "dintlv";
-  size_t nValues = getValues().size();
+static LogicalResult verifyVStoreDistModeAndPmode(
+    Operation *op, std::optional<StringRef> distMode, size_t nValues,
+    size_t maskCount, std::optional<StringRef> pmode) {
   if (nValues < 1) {
-    return emitOpError("requires at least 1 value");
+    return op->emitOpError("requires at least 1 value");
   }
+  bool isDintlv = distMode && *distMode == "dintlv";
   if (isDintlv && nValues != mlir::pto::kValue2) {
-    return emitOpError("dist-mode \"dintlv\" requires exactly 2 values");
+    return op->emitOpError("dist-mode \"dintlv\" requires exactly 2 values");
   }
   if (!isDintlv && nValues != 1) {
-    return emitOpError("requires exactly 1 value for dist-mode \"")
+    return op->emitOpError("requires exactly 1 value for dist-mode \"")
            << (distMode ? *distMode : "continuous") << "\"";
   }
-
-  bool hasMask = !getMask().empty();
-  if (getMask().size() > 1) {
-    return emitOpError("at most one mask allowed");
+  if (maskCount > 1) {
+    return op->emitOpError("at most one mask allowed");
   }
-
   if (distMode && !validDistModes().count(*distMode)) {
-    return emitOpError("invalid dist-mode: \"") << *distMode << "\"";
+    return op->emitOpError("invalid dist-mode: \"") << *distMode << "\"";
   }
   if (distMode && (*distMode == "unpack" || *distMode == "brc")) {
-    return emitOpError("dist-mode \"")
+    return op->emitOpError("dist-mode \"")
            << *distMode << "\" is not valid for vstore";
   }
-
-  auto pmode = getPmode();
   if (pmode && !validPModes().count(*pmode)) {
-    return emitOpError("invalid pmode: \"") << *pmode << "\"";
+    return op->emitOpError("invalid pmode: \"") << *pmode << "\"";
   }
   if (pmode && *pmode != "zero") {
-    return emitOpError("pmode \"merge\" is not supported for stores: the "
-                       "legacy store lowering is mask-governed only and "
-                       "cannot retain prior destination contents on inactive "
-                       "lanes; omit pmode (defaults to \"zero\")");
+    return op->emitOpError("pmode \"merge\" is not supported for stores: the "
+                          "legacy store lowering is mask-governed only and "
+                          "cannot retain prior destination contents on "
+                          "inactive lanes; omit pmode (defaults to \"zero\")");
   }
+  return success();
+}
 
-  auto valueType = cast<VMIVRegType>(getValues()[0].getType());
+static LogicalResult verifyVStoreValueMaskTypes(
+    Operation *op, bool hasGroup, ValueRange values, Value destination,
+    ValueRange mask) {
+  auto valueType = cast<VMIVRegType>(values[0].getType());
   bool isPackedGroupStore =
-      getGroup() &&
-      isPackedByteGroupStore(getDestination().getType(), valueType);
+      hasGroup &&
+      isPackedByteGroupStore(destination.getType(), valueType);
   if (!isPackedGroupStore &&
-      failed(verifyMemoryElementMatches(getOperation(),
-                                        getDestination().getType(), valueType,
-                                        "destination"))) {
+      failed(verifyMemoryElementMatches(op, destination.getType(),
+                                        valueType, "destination"))) {
     return failure();
   }
-
-  if (nValues == mlir::pto::kValue2) {
-    auto loType = cast<VMIVRegType>(getValues()[0].getType());
-    auto hiType = cast<VMIVRegType>(getValues()[1].getType());
-    if (failed(verifyAllSameVRegShapeAndLayout(getOperation(),
-                                               {loType, hiType},
-                                               /*requireSameElement=*/true))) {
+  if (values.size() == mlir::pto::kValue2) {
+    auto loType = cast<VMIVRegType>(values[0].getType());
+    auto hiType = cast<VMIVRegType>(values[1].getType());
+    if (failed(verifyAllSameVRegShapeAndLayout(
+            op, {loType, hiType}, /*requireSameElement=*/true))) {
       return failure();
     }
-    if (failed(verifyContiguousIfLayoutAssigned(getOperation(), loType,
+    if (failed(verifyContiguousIfLayoutAssigned(op, loType,
                                                 "low input")) ||
-        failed(verifyContiguousIfLayoutAssigned(getOperation(), hiType,
+        failed(verifyContiguousIfLayoutAssigned(op, hiType,
                                                 "high input"))) {
       return failure();
     }
   }
-
-  if (hasMask) {
-    auto maskType = cast<VMIMaskType>(getMask()[0].getType());
-    if (failed(verifyMaskMatchesData(getOperation(), maskType, valueType))) {
+  if (!mask.empty()) {
+    auto maskType = cast<VMIMaskType>(mask[0].getType());
+    if (failed(verifyMaskMatchesData(op, maskType, valueType))) {
       return failure();
     }
   }
-
   return success();
+}
+
+LogicalResult VMIvStoreOp::verify() {
+  bool hasGroup = static_cast<bool>(getGroup());
+  auto distMode = getDistMode();
+  bool hasStride = static_cast<bool>(getStride());
+  bool hasBlock = static_cast<bool>(getBlockStride());
+  bool hasMask = !getMask().empty();
+  size_t nValues = getValues().size();
+  if (failed(verifyVStoreGroupAndBlockModes(
+          getOperation(), hasGroup, distMode, hasStride, hasBlock, hasMask,
+          hasGroup ? getGroupAttr().getInt() : 0, nValues, getValues()))) {
+    return failure();
+  }
+  if (failed(verifyVStoreDistModeAndPmode(getOperation(), distMode, nValues,
+                                         getMask().size(), getPmode()))) {
+    return failure();
+  }
+  return verifyVStoreValueMaskTypes(getOperation(), hasGroup, getValues(),
+                                   getDestination(), getMask());
 }
 
 void VMIvStoreOp::getEffects(

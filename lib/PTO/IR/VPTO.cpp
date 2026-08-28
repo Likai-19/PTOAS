@@ -428,6 +428,118 @@ static LogicalResult verifyPackedConvertControls(Operation *op, Type srcType,
 }
 
 
+static LogicalResult verifyPackedOrLowPrecisionConvert(
+    Operation *op, Type srcType, Type dstType, pto::Rounding rounding,
+    bool srcInt, bool dstInt, Attribute signednessAttr, bool srcPacked,
+    bool dstPacked, bool srcLowPrecision, bool dstLowPrecision) {
+  if (srcInt || dstInt) {
+    return op->emitOpError()
+           << "does not support mixed integer and packed conversion";
+  }
+  if (signednessAttr) {
+    return op->emitOpError()
+           << "does not accept signedness for packed floating conversion";
+  }
+  if (!((srcPacked || srcLowPrecision) && (dstPacked || dstLowPrecision))) {
+    return op->emitOpError()
+           << "does not support mixed scalar and packed conversion";
+  }
+  return verifyPackedConvertControls(op, srcType, dstType, rounding);
+}
+
+static LogicalResult verifyConvertSignedness(Operation *op, bool srcInt,
+                                             bool dstInt,
+                                             Attribute signednessAttr) {
+  if (srcInt && dstInt) {
+    return op->emitOpError()
+           << "does not support integer-to-integer conversion";
+  }
+  if ((srcInt || dstInt) && !signednessAttr) {
+    return op->emitOpError()
+           << "requires signedness when converting to or from integer type";
+  }
+  if (!srcInt && !dstInt && signednessAttr) {
+    return op->emitOpError()
+           << "does not accept signedness for floating-to-floating conversion";
+  }
+  return success();
+}
+
+static LogicalResult verifyIntToFloatConvert(Operation *op, Type srcType,
+                                             Type dstType,
+                                             pto::Rounding rounding,
+                                             pto::Saturation saturation) {
+  if (srcType.isInteger(mlir::pto::kValue64) && !dstType.isF32()) {
+    return op->emitOpError()
+           << "supports i64 conversion only to f32 in the confirmed slice";
+  }
+  if (srcType.isInteger(mlir::pto::kValue32) &&
+      !(dstType.isF32() || dstType.isF16() || dstType.isBF16())) {
+    return op->emitOpError()
+           << "unsupported integer-to-floating conversion type pair";
+  }
+  if (rounding == pto::Rounding::O || rounding == pto::Rounding::H) {
+    return op->emitOpError()
+           << "integer-to-floating conversion supports rounding r/a/f/c/z";
+  }
+  (void)saturation;
+  return success();
+}
+
+static LogicalResult verifyF32ConvertTarget(Operation *op, Type dstType,
+                                            pto::Rounding rounding,
+                                            pto::Saturation saturation) {
+  if (dstType.isInteger(mlir::pto::kValue32) || dstType.isInteger(64)) {
+    if (saturation != pto::Saturation::Enable) {
+      return op->emitOpError()
+             << "fp32-to-integer conversion requires saturation enable";
+    }
+    if (rounding == pto::Rounding::O || rounding == pto::Rounding::H) {
+      return op->emitOpError()
+             << "fp32-to-integer conversion supports rounding r/a/f/c/z";
+    }
+    return success();
+  }
+  if (dstType.isF16() || dstType.isBF16() || dstType.isF32()) {
+    if (dstType.isF16()) {
+      if (rounding == pto::Rounding::H) {
+        return op->emitOpError()
+               << "fp32-to-fp16 conversion supports rounding r/a/f/c/z/o";
+      }
+    } else if (rounding == pto::Rounding::O ||
+               rounding == pto::Rounding::H) {
+      return op->emitOpError()
+             << "fp32-to-floating conversion supports rounding r/a/f/c/z";
+    }
+    return success();
+  }
+  return op->emitOpError() << "unsupported conversion type pair";
+}
+
+static LogicalResult verifyF16OrBF16ConvertTarget(
+    Operation *op, Type dstType, pto::Rounding rounding,
+    pto::Saturation saturation) {
+  if (dstType.isInteger(mlir::pto::kValue32)) {
+    if (saturation != pto::Saturation::Enable) {
+      return op->emitOpError()
+             << "fp16/bf16-to-integer conversion requires saturation enable";
+    }
+    if (rounding == pto::Rounding::O || rounding == pto::Rounding::H) {
+      return op->emitOpError()
+             << "fp16/bf16-to-integer conversion supports rounding r/a/f/c/z";
+    }
+    return success();
+  }
+  if (dstType.isF32() || dstType.isF16() || dstType.isBF16()) {
+    if (rounding == pto::Rounding::O || rounding == pto::Rounding::H) {
+      return op->emitOpError()
+             << "fp16/bf16-to-floating conversion supports rounding r/a/f/c/z";
+    }
+    return success();
+  }
+  return op->emitOpError() << "unsupported conversion type pair";
+}
+
 static LogicalResult verifyConvertControls(Operation *op, Type srcType,
                                            Type dstType,
                                            pto::Rounding rounding,
@@ -438,7 +550,6 @@ static LogicalResult verifyConvertControls(Operation *op, Type srcType,
            << "requires i32, i64, f16, bf16, f32 or supported vector<2xT> "
               "conversion types";
   }
-
   bool srcInt = isIntegerLikeConvertType(srcType);
   bool dstInt = isIntegerLikeConvertType(dstType);
   bool srcPacked = isSupportedPackedConvertType(srcType);
@@ -446,105 +557,26 @@ static LogicalResult verifyConvertControls(Operation *op, Type srcType,
   bool srcLowPrecision = isSupportedLowPrecisionConvertType(srcType);
   bool dstLowPrecision = isSupportedLowPrecisionConvertType(dstType);
   if (srcPacked || dstPacked || srcLowPrecision || dstLowPrecision) {
-    if (srcInt || dstInt) {
-      return op->emitOpError()
-             << "does not support mixed integer and packed conversion";
-    }
-    if (signednessAttr) {
-      return op->emitOpError()
-             << "does not accept signedness for packed floating conversion";
-    }
-    if (!((srcPacked || srcLowPrecision) && (dstPacked || dstLowPrecision))) {
-      return op->emitOpError()
-             << "does not support mixed scalar and packed conversion";
-    }
-    return verifyPackedConvertControls(op, srcType, dstType, rounding);
+    return verifyPackedOrLowPrecisionConvert(
+        op, srcType, dstType, rounding, srcInt, dstInt, signednessAttr,
+        srcPacked, dstPacked, srcLowPrecision, dstLowPrecision);
   }
-
-  if (srcInt && dstInt) {
-    return op->emitOpError()
-           << "does not support integer-to-integer conversion";
+  if (failed(verifyConvertSignedness(op, srcInt, dstInt, signednessAttr))) {
+    return failure();
   }
-
-  if ((srcInt || dstInt) && !signednessAttr) {
-    return op->emitOpError()
-           << "requires signedness when converting to or from integer type";
-  }
-  if (!srcInt && !dstInt && signednessAttr) {
-    return op->emitOpError()
-           << "does not accept signedness for floating-to-floating conversion";
-  }
-
   if (srcInt) {
-    if (srcType.isInteger(mlir::pto::kValue64) && !dstType.isF32()) {
-      return op->emitOpError()
-             << "supports i64 conversion only to f32 in the confirmed slice";
-    }
-    if (srcType.isInteger(mlir::pto::kValue32) &&
-        !(dstType.isF32() || dstType.isF16() || dstType.isBF16())) {
-      return op->emitOpError()
-             << "unsupported integer-to-floating conversion type pair";
-    }
-    if (rounding == pto::Rounding::O || rounding == pto::Rounding::H) {
-      return op->emitOpError()
-             << "integer-to-floating conversion supports rounding r/a/f/c/z";
-    }
-    (void)saturation;
-    return success();
+    return verifyIntToFloatConvert(op, srcType, dstType, rounding, saturation);
   }
-
   if (dstType.isInteger(mlir::pto::kValue64) && !srcType.isF32()) {
     return op->emitOpError()
            << "supports conversion to i64 only from f32 in the confirmed slice";
   }
   if (srcType.isF32()) {
-    if (dstType.isInteger(mlir::pto::kValue32) || dstType.isInteger(64)) {
-      if (saturation != pto::Saturation::Enable) {
-        return op->emitOpError()
-               << "fp32-to-integer conversion requires saturation enable";
-      }
-      if (rounding == pto::Rounding::O || rounding == pto::Rounding::H) {
-        return op->emitOpError()
-               << "fp32-to-integer conversion supports rounding r/a/f/c/z";
-      }
-      return success();
-    }
-    if (dstType.isF16() || dstType.isBF16() || dstType.isF32()) {
-      if (dstType.isF16()) {
-        if (rounding == pto::Rounding::H) {
-          return op->emitOpError()
-                 << "fp32-to-fp16 conversion supports rounding r/a/f/c/z/o";
-        }
-      } else if (rounding == pto::Rounding::O ||
-                 rounding == pto::Rounding::H) {
-        return op->emitOpError()
-               << "fp32-to-floating conversion supports rounding r/a/f/c/z";
-      }
-      return success();
-    }
+    return verifyF32ConvertTarget(op, dstType, rounding, saturation);
   }
-
   if (srcType.isF16() || srcType.isBF16()) {
-    if (dstType.isInteger(mlir::pto::kValue32)) {
-      if (saturation != pto::Saturation::Enable) {
-        return op->emitOpError()
-               << "fp16/bf16-to-integer conversion requires saturation enable";
-      }
-      if (rounding == pto::Rounding::O || rounding == pto::Rounding::H) {
-        return op->emitOpError()
-               << "fp16/bf16-to-integer conversion supports rounding r/a/f/c/z";
-      }
-      return success();
-    }
-    if (dstType.isF32() || dstType.isF16() || dstType.isBF16()) {
-      if (rounding == pto::Rounding::O || rounding == pto::Rounding::H) {
-        return op->emitOpError()
-               << "fp16/bf16-to-floating conversion supports rounding r/a/f/c/z";
-      }
-      return success();
-    }
+    return verifyF16OrBF16ConvertTarget(op, dstType, rounding, saturation);
   }
-
   return op->emitOpError() << "unsupported conversion type pair";
 }
 
@@ -2380,6 +2412,192 @@ static ParseResult parseDmaPadTypes(OpAsmParser &parser,
     }
     types.push_back(leftType);
     types.push_back(rightType);
+  }
+  return success();
+}
+
+static ParseResult parseDmaPadOperandGroup(
+    OpAsmParser &parser,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &padOperands) {
+  if (failed(parser.parseOptionalKeyword("pad"))) {
+    return success();
+  }
+  if (parser.parseLParen()) {
+    return failure();
+  }
+  OpAsmParser::UnresolvedOperand value;
+  if (parser.parseOperand(value)) {
+    return failure();
+  }
+  padOperands.push_back(value);
+  if (succeeded(parser.parseOptionalComma())) {
+    OpAsmParser::UnresolvedOperand left;
+    OpAsmParser::UnresolvedOperand right;
+    if (parser.parseOperand(left) || parser.parseComma() ||
+        parser.parseOperand(right)) {
+      return failure();
+    }
+    padOperands.push_back(left);
+    padOperands.push_back(right);
+  }
+  if (parser.parseRParen()) {
+    return failure();
+  }
+  return success();
+}
+
+static ParseResult parseDmaLoopOperandGroups(
+    OpAsmParser &parser,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopCountOperands,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopSrcStrideOperands,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopDstStrideOperands) {
+  while (true) {
+    StringRef parsedKeyword;
+    SmallVector<OpAsmParser::UnresolvedOperand, mlir::pto::kValue3> loopGroupOperands;
+    if (parseOptionalDmaTripleGroupAlias(parser, {"loop", "loop1", "loop2"},
+                                         parsedKeyword, loopGroupOperands)) {
+      return failure();
+    }
+    if (parsedKeyword.empty()) {
+      break;
+    }
+    loopCountOperands.push_back(loopGroupOperands[0]);
+    loopSrcStrideOperands.push_back(loopGroupOperands[1]);
+    loopDstStrideOperands.push_back(loopGroupOperands[mlir::pto::kValue2]);
+  }
+  return success();
+}
+
+static ParseResult parseDmaLoopTypeGroups(
+    OpAsmParser &parser, SmallVectorImpl<Type> &loopCountTypes,
+    SmallVectorImpl<Type> &loopSrcStrideTypes,
+    SmallVectorImpl<Type> &loopDstStrideTypes) {
+  while (succeeded(parser.parseOptionalComma())) {
+    StringRef keyword;
+    if (parser.parseKeyword(&keyword)) {
+      return failure();
+    }
+    if (!isDmaLoopKeyword(keyword)) {
+      return parser.emitError(parser.getCurrentLocation(), "expected 'loop'");
+    }
+    SmallVector<Type> loopGroupTypes;
+    if (parseDmaTripleTypes(parser, loopGroupTypes)) {
+      return failure();
+    }
+    loopCountTypes.push_back(loopGroupTypes[0]);
+    loopSrcStrideTypes.push_back(loopGroupTypes[1]);
+    loopDstStrideTypes.push_back(loopGroupTypes[mlir::pto::kValue2]);
+  }
+  return success();
+}
+
+static ParseResult parseDmaLoopAndPadTypeGroups(
+    OpAsmParser &parser, SmallVectorImpl<Type> &loopCountTypes,
+    SmallVectorImpl<Type> &loopSrcStrideTypes,
+    SmallVectorImpl<Type> &loopDstStrideTypes,
+    SmallVectorImpl<Type> &padTypes) {
+  while (succeeded(parser.parseOptionalComma())) {
+    StringRef keyword;
+    if (parser.parseKeyword(&keyword)) {
+      return failure();
+    }
+    if (isDmaLoopKeyword(keyword)) {
+      SmallVector<Type> loopGroupTypes;
+      if (parseDmaTripleTypes(parser, loopGroupTypes)) {
+        return failure();
+      }
+      loopCountTypes.push_back(loopGroupTypes[0]);
+      loopSrcStrideTypes.push_back(loopGroupTypes[1]);
+      loopDstStrideTypes.push_back(loopGroupTypes[mlir::pto::kValue2]);
+      continue;
+    }
+    if (keyword == "pad") {
+      if (!padTypes.empty() || parseDmaPadTypes(parser, padTypes)) {
+        return failure();
+      }
+      continue;
+    }
+    return parser.emitError(parser.getCurrentLocation(),
+                            "expected one of 'loop' or 'pad'");
+  }
+  return success();
+}
+
+static ParseResult verifyDmaLoopGroupConsistency(
+    OpAsmParser &parser, size_t countOperands, size_t srcStrideOperands,
+    size_t dstStrideOperands, size_t countTypes, size_t srcStrideTypes,
+    size_t dstStrideTypes) {
+  if (countOperands != srcStrideOperands || countOperands != dstStrideOperands ||
+      countTypes != srcStrideTypes || countTypes != dstStrideTypes) {
+    return parser.emitError(parser.getCurrentLocation(),
+                            "requires each loop group to provide count, src stride, and dst stride");
+  }
+  if (countOperands != countTypes) {
+    return parser.emitError(parser.getCurrentLocation(),
+                            "requires loop operand and type groups to match");
+  }
+  return success();
+}
+
+static ParseResult resolveDmaBasicOperands(
+    OpAsmParser &parser, OperationState &result,
+    OpAsmParser::UnresolvedOperand source, Type sourceType,
+    OpAsmParser::UnresolvedOperand destination, Type destinationType,
+    OpAsmParser::UnresolvedOperand lenBurst, Type lenBurstType,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &nburstOperands,
+    SmallVectorImpl<Type> &nburstTypes) {
+  if (parser.resolveOperand(source, sourceType, result.operands) ||
+      parser.resolveOperand(destination, destinationType, result.operands) ||
+      parser.resolveOperand(lenBurst, lenBurstType, result.operands) ||
+      parser.resolveOperands(nburstOperands, nburstTypes,
+                             parser.getCurrentLocation(), result.operands)) {
+    return failure();
+  }
+  return success();
+}
+
+static ParseResult resolveDmaLoopOperands(
+    OpAsmParser &parser, OperationState &result,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopCountOperands,
+    SmallVectorImpl<Type> &loopCountTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopSrcStrideOperands,
+    SmallVectorImpl<Type> &loopSrcStrideTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopDstStrideOperands,
+    SmallVectorImpl<Type> &loopDstStrideTypes) {
+  auto loc = parser.getCurrentLocation();
+  if (parser.resolveOperands(loopCountOperands, loopCountTypes, loc,
+                             result.operands) ||
+      parser.resolveOperands(loopSrcStrideOperands, loopSrcStrideTypes, loc,
+                             result.operands) ||
+      parser.resolveOperands(loopDstStrideOperands, loopDstStrideTypes, loc,
+                             result.operands)) {
+    return failure();
+  }
+  return success();
+}
+
+static ParseResult resolveDmaTripleOperands(
+    OpAsmParser &parser, OperationState &result,
+    OpAsmParser::UnresolvedOperand source, Type sourceType,
+    OpAsmParser::UnresolvedOperand destination, Type destinationType,
+    OpAsmParser::UnresolvedOperand lenBurst, Type lenBurstType,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &nburstOperands,
+    SmallVectorImpl<Type> &nburstTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopCountOperands,
+    SmallVectorImpl<Type> &loopCountTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopSrcStrideOperands,
+    SmallVectorImpl<Type> &loopSrcStrideTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopDstStrideOperands,
+    SmallVectorImpl<Type> &loopDstStrideTypes) {
+  if (failed(resolveDmaBasicOperands(parser, result, source, sourceType,
+                                     destination, destinationType, lenBurst,
+                                     lenBurstType, nburstOperands,
+                                     nburstTypes)) ||
+      failed(resolveDmaLoopOperands(parser, result, loopCountOperands,
+                                     loopCountTypes, loopSrcStrideOperands,
+                                     loopSrcStrideTypes, loopDstStrideOperands,
+                                     loopDstStrideTypes))) {
+    return failure();
   }
   return success();
 }
@@ -4243,13 +4461,12 @@ void MteGmUbOp::build(OpBuilder &builder, OperationState &state, Value source,
         loops, pad);
 }
 
-ParseResult MteGmUbOp::parse(OpAsmParser &parser, OperationState &result) {
-  OpAsmParser::UnresolvedOperand source, destination, l2CacheCtl, lenBurst;
-  SmallVector<OpAsmParser::UnresolvedOperand> nburstOperands;
-  SmallVector<OpAsmParser::UnresolvedOperand> loopCountOperands;
-  SmallVector<OpAsmParser::UnresolvedOperand> loopSrcStrideOperands;
-  SmallVector<OpAsmParser::UnresolvedOperand> loopDstStrideOperands;
-  SmallVector<OpAsmParser::UnresolvedOperand> padOperands;
+static ParseResult parseMteGmUbBasicOperands(
+    OpAsmParser &parser, OpAsmParser::UnresolvedOperand &source,
+    OpAsmParser::UnresolvedOperand &destination,
+    OpAsmParser::UnresolvedOperand &l2CacheCtl,
+    OpAsmParser::UnresolvedOperand &lenBurst,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &nburstOperands) {
   if (parseRequiredOperandWithComma(parser, source) ||
       parseRequiredOperandWithComma(parser, destination) ||
       parseRequiredOperandWithComma(parser, l2CacheCtl) ||
@@ -4257,53 +4474,13 @@ ParseResult MteGmUbOp::parse(OpAsmParser &parser, OperationState &result) {
       parseDmaTripleGroup(parser, "nburst", nburstOperands)) {
     return failure();
   }
-  while (true) {
-    if (succeeded(parser.parseOptionalKeyword("pad"))) {
-      if (parser.parseLParen()) {
-        return failure();
-      }
-      OpAsmParser::UnresolvedOperand value;
-      if (parser.parseOperand(value)) {
-        return failure();
-      }
-      padOperands.push_back(value);
-      if (succeeded(parser.parseOptionalComma())) {
-        OpAsmParser::UnresolvedOperand left;
-        OpAsmParser::UnresolvedOperand right;
-        if (parser.parseOperand(left) || parser.parseComma() ||
-            parser.parseOperand(right)) {
-          return failure();
-        }
-        padOperands.push_back(left);
-        padOperands.push_back(right);
-      }
-      if (parser.parseRParen()) {
-        return failure();
-      }
-      break;
-    }
+  return success();
+}
 
-    StringRef parsedKeyword;
-    SmallVector<OpAsmParser::UnresolvedOperand, mlir::pto::kValue3> loopGroupOperands;
-    if (parseOptionalDmaTripleGroupAlias(parser, {"loop", "loop1", "loop2"},
-                                         parsedKeyword, loopGroupOperands)) {
-      return failure();
-    }
-    if (parsedKeyword.empty()) {
-      break;
-    }
-    loopCountOperands.push_back(loopGroupOperands[0]);
-    loopSrcStrideOperands.push_back(loopGroupOperands[1]);
-    loopDstStrideOperands.push_back(loopGroupOperands[mlir::pto::kValue2]);
-  }
-
-  if (parser.parseOptionalAttrDict(result.attributes) || parser.parseColon()) {
-    return failure();
-  }
-
-  Type sourceType, destinationType, l2CacheCtlType, lenBurstType;
-  SmallVector<Type> nburstTypes, loopCountTypes, loopSrcStrideTypes,
-      loopDstStrideTypes, padTypes;
+static ParseResult parseMteGmUbBasicTypes(
+    OpAsmParser &parser, Type &sourceType, Type &destinationType,
+    Type &l2CacheCtlType, Type &lenBurstType,
+    SmallVectorImpl<Type> &nburstTypes) {
   if (parser.parseType(sourceType) || parser.parseComma() ||
       parser.parseType(destinationType) || parser.parseComma() ||
       parser.parseType(l2CacheCtlType) || parser.parseComma() ||
@@ -4311,68 +4488,100 @@ ParseResult MteGmUbOp::parse(OpAsmParser &parser, OperationState &result) {
       parseDmaTripleTypes(parser, nburstTypes)) {
     return failure();
   }
-  while (succeeded(parser.parseOptionalComma())) {
-    StringRef keyword;
-    if (parser.parseKeyword(&keyword)) {
-      return failure();
-    }
-    if (isDmaLoopKeyword(keyword)) {
-      SmallVector<Type> loopGroupTypes;
-      if (parseDmaTripleTypes(parser, loopGroupTypes)) {
-        return failure();
-      }
-      loopCountTypes.push_back(loopGroupTypes[0]);
-      loopSrcStrideTypes.push_back(loopGroupTypes[1]);
-      loopDstStrideTypes.push_back(loopGroupTypes[mlir::pto::kValue2]);
-      continue;
-    }
-    if (keyword == "pad") {
-      if (!padTypes.empty() || parseDmaPadTypes(parser, padTypes)) {
-        return failure();
-      }
-      continue;
-    }
-    return parser.emitError(parser.getCurrentLocation(),
-                            "expected one of 'loop' or 'pad'");
-  }
+  return success();
+}
 
-  int32_t loopGroupCount = static_cast<int32_t>(loopCountOperands.size());
-  if (loopCountOperands.size() != loopSrcStrideOperands.size() ||
-      loopCountOperands.size() != loopDstStrideOperands.size() ||
-      loopCountTypes.size() != loopSrcStrideTypes.size() ||
-      loopCountTypes.size() != loopDstStrideTypes.size()) {
-    return parser.emitError(parser.getCurrentLocation(),
-                            "requires each loop group to provide count, src stride, and dst stride");
-  }
-  if (loopCountOperands.size() != loopCountTypes.size()) {
-    return parser.emitError(parser.getCurrentLocation(),
-                            "requires loop operand and type groups to match");
-  }
-
+static void setMteGmUbSegmentSizes(OperationState &result,
+                                    int32_t loopGroupCount,
+                                    size_t padOperandCount) {
   auto &segments =
       result.getOrAddProperties<MteGmUbOp::Properties>().operandSegmentSizes;
   llvm::copy(ArrayRef<int32_t>{1, 1, 1, 1, 1, 1, 1,
                                loopGroupCount, loopGroupCount, loopGroupCount,
-                               static_cast<int32_t>(padOperands.size() ? 1 : 0),
-                               static_cast<int32_t>(padOperands.size() == 3 ? 1 : 0),
-                               static_cast<int32_t>(padOperands.size() == 3 ? 1 : 0)},
-             segments.begin());
+                               static_cast<int32_t>(padOperandCount ? 1 : 0),
+                               static_cast<int32_t>(padOperandCount == 3 ? 1 : 0),
+                               static_cast<int32_t>(padOperandCount == 3 ? 1 : 0)},
+              segments.begin());
+}
 
+static ParseResult resolveMteGmUbOperands(
+    OpAsmParser &parser, OperationState &result,
+    OpAsmParser::UnresolvedOperand source, Type sourceType,
+    OpAsmParser::UnresolvedOperand destination, Type destinationType,
+    OpAsmParser::UnresolvedOperand l2CacheCtl, Type l2CacheCtlType,
+    OpAsmParser::UnresolvedOperand lenBurst, Type lenBurstType,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &nburstOperands,
+    SmallVectorImpl<Type> &nburstTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopCountOperands,
+    SmallVectorImpl<Type> &loopCountTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopSrcStrideOperands,
+    SmallVectorImpl<Type> &loopSrcStrideTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopDstStrideOperands,
+    SmallVectorImpl<Type> &loopDstStrideTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &padOperands,
+    SmallVectorImpl<Type> &padTypes) {
+  auto loc = parser.getCurrentLocation();
   if (parser.resolveOperand(source, sourceType, result.operands) ||
       parser.resolveOperand(destination, destinationType, result.operands) ||
       parser.resolveOperand(l2CacheCtl, l2CacheCtlType, result.operands) ||
       parser.resolveOperand(lenBurst, lenBurstType, result.operands) ||
-      parser.resolveOperands(nburstOperands, nburstTypes, parser.getCurrentLocation(),
+      parser.resolveOperands(nburstOperands, nburstTypes, loc,
                              result.operands) ||
-      parser.resolveOperands(loopCountOperands, loopCountTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(loopSrcStrideOperands, loopSrcStrideTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(loopDstStrideOperands, loopDstStrideTypes,
-                             parser.getCurrentLocation(),
-                             result.operands) ||
-      parser.resolveOperands(padOperands, padTypes, parser.getCurrentLocation(),
-                             result.operands)) {
+      failed(resolveDmaLoopOperands(parser, result, loopCountOperands,
+                                    loopCountTypes, loopSrcStrideOperands,
+                                    loopSrcStrideTypes, loopDstStrideOperands,
+                                    loopDstStrideTypes)) ||
+      parser.resolveOperands(padOperands, padTypes, loc, result.operands)) {
+    return failure();
+  }
+  return success();
+}
+
+ParseResult MteGmUbOp::parse(OpAsmParser &parser, OperationState &result) {
+  OpAsmParser::UnresolvedOperand source, destination, l2CacheCtl, lenBurst;
+  SmallVector<OpAsmParser::UnresolvedOperand> nburstOperands;
+  SmallVector<OpAsmParser::UnresolvedOperand> loopCountOperands;
+  SmallVector<OpAsmParser::UnresolvedOperand> loopSrcStrideOperands;
+  SmallVector<OpAsmParser::UnresolvedOperand> loopDstStrideOperands;
+  SmallVector<OpAsmParser::UnresolvedOperand> padOperands;
+  if (failed(parseMteGmUbBasicOperands(parser, source, destination,
+                                       l2CacheCtl, lenBurst,
+                                       nburstOperands)) ||
+      failed(parseDmaLoopOperandGroups(parser, loopCountOperands,
+                                       loopSrcStrideOperands,
+                                       loopDstStrideOperands)) ||
+      failed(parseDmaPadOperandGroup(parser, padOperands))) {
+    return failure();
+  }
+  if (parser.parseOptionalAttrDict(result.attributes) || parser.parseColon()) {
+    return failure();
+  }
+  Type sourceType, destinationType, l2CacheCtlType, lenBurstType;
+  SmallVector<Type> nburstTypes, loopCountTypes, loopSrcStrideTypes,
+      loopDstStrideTypes, padTypes;
+  if (failed(parseMteGmUbBasicTypes(parser, sourceType, destinationType,
+                                    l2CacheCtlType, lenBurstType,
+                                    nburstTypes)) ||
+      failed(parseDmaLoopAndPadTypeGroups(parser, loopCountTypes,
+                                          loopSrcStrideTypes,
+                                          loopDstStrideTypes, padTypes))) {
+    return failure();
+  }
+  if (failed(verifyDmaLoopGroupConsistency(
+          parser, loopCountOperands.size(), loopSrcStrideOperands.size(),
+          loopDstStrideOperands.size(), loopCountTypes.size(),
+          loopSrcStrideTypes.size(), loopDstStrideTypes.size()))) {
+    return failure();
+  }
+  setMteGmUbSegmentSizes(result,
+                         static_cast<int32_t>(loopCountOperands.size()),
+                         padOperands.size());
+  if (failed(resolveMteGmUbOperands(
+          parser, result, source, sourceType, destination, destinationType,
+          l2CacheCtl, l2CacheCtlType, lenBurst, lenBurstType, nburstOperands,
+          nburstTypes, loopCountOperands, loopCountTypes,
+          loopSrcStrideOperands, loopSrcStrideTypes, loopDstStrideOperands,
+          loopDstStrideTypes, padOperands, padTypes))) {
     return failure();
   }
   return success();
@@ -4675,31 +4884,13 @@ static LogicalResult verifyMadSemanticClauses(Operation *op, Type lhsTy,
   return success();
 }
 
-template <typename OpT>
-static ParseResult parseMadSemanticOpCommon(OpAsmParser &parser,
-                                            OperationState &result,
-                                            bool hasBias,
-                                            bool parseTf32ModeClause) {
-  OpAsmParser::UnresolvedOperand lhs, rhs, dst, bias;
-  OpAsmParser::UnresolvedOperand m, n, k;
+static ParseResult parseMadSemanticClauses(OpAsmParser &parser,
+                                       NamedAttrList &attrs,
+                                       bool parseTf32ModeClause) {
   StringRef unitFlagKeyword;
-  StringRef tf32Keyword;
-  NamedAttrList attrs;
-
-  if (parseRequiredOperandWithComma(parser, lhs) ||
-      parseRequiredOperandWithComma(parser, rhs) ||
-      parseRequiredOperandWithComma(parser, dst) ||
-      (hasBias && parseRequiredOperandWithComma(parser, bias)) ||
-      parseRequiredOperandWithComma(parser, m) ||
-      parseRequiredOperandWithComma(parser, n) ||
-      parser.parseOperand(k)) {
-    return failure();
-  }
-
-  auto parseUnitFlagClause = [&]() -> ParseResult {
-    if (failed(parser.parseOptionalKeyword("unit_flag"))) {
-      return success();
-    }
+  if (failed(parser.parseOptionalKeyword("unit_flag"))) {
+    /* no unit_flag clause */
+  } else {
     if (parser.parseLParen() || parser.parseKeyword(&unitFlagKeyword) ||
         parser.parseRParen()) {
       return failure();
@@ -4711,35 +4902,22 @@ static ParseResult parseMadSemanticOpCommon(OpAsmParser &parser,
     }
     attrs.set("unit_flag_mode",
               pto::MadUnitFlagModeAttr::get(parser.getContext(), *mode));
-    return success();
-  };
-  auto parseDisableGemvClause = [&]() -> ParseResult {
-    if (succeeded(parser.parseOptionalKeyword("disable_gemv"))) {
-      attrs.set("disable_gemv", UnitAttr::get(parser.getContext()));
-    }
-    return success();
-  };
-  auto parseSatClause = [&]() -> ParseResult {
-    if (succeeded(parser.parseOptionalKeyword("sat"))) {
-      attrs.set("sat_mode",
-                pto::MadSatModeAttr::get(parser.getContext(),
-                                         pto::MadSatMode::Sat));
-      return success();
-    }
-    if (succeeded(parser.parseOptionalKeyword("nosat"))) {
-      attrs.set("sat_mode",
-                pto::MadSatModeAttr::get(parser.getContext(),
-                                         pto::MadSatMode::NoSat));
-    }
-    return success();
-  };
-  auto parseTf32Clause = [&]() -> ParseResult {
-    if (!parseTf32ModeClause) {
-      return success();
-    }
-    if (failed(parser.parseOptionalKeyword("tf32_mode"))) {
-      return success();
-    }
+  }
+  if (succeeded(parser.parseOptionalKeyword("disable_gemv"))) {
+    attrs.set("disable_gemv", UnitAttr::get(parser.getContext()));
+  }
+  if (succeeded(parser.parseOptionalKeyword("sat"))) {
+    attrs.set("sat_mode",
+              pto::MadSatModeAttr::get(parser.getContext(),
+                                       pto::MadSatMode::Sat));
+  } else if (succeeded(parser.parseOptionalKeyword("nosat"))) {
+    attrs.set("sat_mode",
+              pto::MadSatModeAttr::get(parser.getContext(),
+                                       pto::MadSatMode::NoSat));
+  }
+  if (parseTf32ModeClause &&
+      succeeded(parser.parseOptionalKeyword("tf32_mode"))) {
+    StringRef tf32Keyword;
     if (parser.parseLParen() || parser.parseKeyword(&tf32Keyword) ||
         parser.parseRParen()) {
       return failure();
@@ -4750,25 +4928,18 @@ static ParseResult parseMadSemanticOpCommon(OpAsmParser &parser,
              << "expected tf32_mode(round_even|round_away)";
     }
     attrs.set("tf32_mode", pto::Tf32ModeAttr::get(parser.getContext(), *mode));
-    return success();
-  };
-  auto parseNDirClause = [&]() -> ParseResult {
-    if (succeeded(parser.parseOptionalKeyword("n_dir"))) {
-      attrs.set("n_dir", UnitAttr::get(parser.getContext()));
-    }
-    return success();
-  };
-  if (failed(parseUnitFlagClause()) || failed(parseDisableGemvClause()) ||
-      failed(parseSatClause()) || failed(parseTf32Clause()) ||
-      failed(parseNDirClause())) {
-    return failure();
   }
-
-  if (parser.parseOptionalAttrDict(attrs) || parser.parseColon()) {
-    return failure();
+  if (succeeded(parser.parseOptionalKeyword("n_dir"))) {
+    attrs.set("n_dir", UnitAttr::get(parser.getContext()));
   }
+  return success();
+}
 
-  Type lhsType, rhsType, dstType, mType, nType, kType, biasType;
+static ParseResult parseMadSemanticTypes(OpAsmParser &parser, bool hasBias,
+                                         Type &lhsType, Type &rhsType,
+                                         Type &dstType, Type &biasType,
+                                         Type &mType, Type &nType,
+                                         Type &kType) {
   if (parser.parseType(lhsType) || parser.parseComma() ||
       parser.parseType(rhsType) || parser.parseComma() ||
       parser.parseType(dstType) || parser.parseComma()) {
@@ -4779,31 +4950,75 @@ static ParseResult parseMadSemanticOpCommon(OpAsmParser &parser,
       return failure();
     }
   }
-  if (parser.parseType(mType) || parser.parseComma() || parser.parseType(nType) ||
-      parser.parseComma() || parser.parseType(kType)) {
+  if (parser.parseType(mType) || parser.parseComma() ||
+      parser.parseType(nType) || parser.parseComma() ||
+      parser.parseType(kType)) {
     return failure();
   }
+  return success();
+}
 
-  result.addAttributes(attrs);
+static ParseResult resolveMadSemanticOperands(
+    OpAsmParser &parser, OperationState &result, bool hasBias,
+    OpAsmParser::UnresolvedOperand lhs, Type lhsType,
+    OpAsmParser::UnresolvedOperand rhs, Type rhsType,
+    OpAsmParser::UnresolvedOperand dst, Type dstType,
+    OpAsmParser::UnresolvedOperand bias, Type biasType,
+    OpAsmParser::UnresolvedOperand m, Type mType,
+    OpAsmParser::UnresolvedOperand n, Type nType,
+    OpAsmParser::UnresolvedOperand k, Type kType) {
+  if (parser.resolveOperand(lhs, lhsType, result.operands) ||
+      parser.resolveOperand(rhs, rhsType, result.operands) ||
+      parser.resolveOperand(dst, dstType, result.operands)) {
+    return failure();
+  }
   if (hasBias) {
-    if (parser.resolveOperand(lhs, lhsType, result.operands) ||
-        parser.resolveOperand(rhs, rhsType, result.operands) ||
-        parser.resolveOperand(dst, dstType, result.operands) ||
-        parser.resolveOperand(bias, biasType, result.operands) ||
-        parser.resolveOperand(m, mType, result.operands) ||
-        parser.resolveOperand(n, nType, result.operands) ||
-        parser.resolveOperand(k, kType, result.operands)) {
+    if (parser.resolveOperand(bias, biasType, result.operands)) {
       return failure();
     }
-  } else {
-    if (parser.resolveOperand(lhs, lhsType, result.operands) ||
-        parser.resolveOperand(rhs, rhsType, result.operands) ||
-        parser.resolveOperand(dst, dstType, result.operands) ||
-        parser.resolveOperand(m, mType, result.operands) ||
-        parser.resolveOperand(n, nType, result.operands) ||
-        parser.resolveOperand(k, kType, result.operands)) {
-      return failure();
-    }
+  }
+  if (parser.resolveOperand(m, mType, result.operands) ||
+      parser.resolveOperand(n, nType, result.operands) ||
+      parser.resolveOperand(k, kType, result.operands)) {
+    return failure();
+  }
+  return success();
+}
+
+template <typename OpT>
+static ParseResult parseMadSemanticOpCommon(OpAsmParser &parser,
+                                            OperationState &result,
+                                            bool hasBias,
+                                            bool parseTf32ModeClause) {
+  OpAsmParser::UnresolvedOperand lhs, rhs, dst, bias;
+  OpAsmParser::UnresolvedOperand m, n, k;
+  if (parseRequiredOperandWithComma(parser, lhs) ||
+      parseRequiredOperandWithComma(parser, rhs) ||
+      parseRequiredOperandWithComma(parser, dst) ||
+      (hasBias && parseRequiredOperandWithComma(parser, bias)) ||
+      parseRequiredOperandWithComma(parser, m) ||
+      parseRequiredOperandWithComma(parser, n) ||
+      parser.parseOperand(k)) {
+    return failure();
+  }
+  NamedAttrList attrs;
+  if (failed(parseMadSemanticClauses(parser, attrs, parseTf32ModeClause))) {
+    return failure();
+  }
+  if (parser.parseOptionalAttrDict(attrs) || parser.parseColon()) {
+    return failure();
+  }
+  Type lhsType, rhsType, dstType, mType, nType, kType, biasType;
+  if (failed(parseMadSemanticTypes(parser, hasBias, lhsType, rhsType, dstType,
+                                   biasType, mType, nType, kType))) {
+    return failure();
+  }
+  result.addAttributes(attrs);
+  if (failed(resolveMadSemanticOperands(parser, result, hasBias, lhs, lhsType,
+                                        rhs, rhsType, dst, dstType, bias,
+                                        biasType, m, mType, n, nType, k,
+                                        kType))) {
+    return failure();
   }
   return success();
 }
@@ -8077,52 +8292,113 @@ void MteUbGmOp::build(OpBuilder &builder, OperationState &state, Value source,
         loops);
 }
 
-ParseResult MteUbGmOp::parse(OpAsmParser &parser, OperationState &result) {
-  OpAsmParser::UnresolvedOperand source, destination, lenBurst, l2CacheCtl;
-  bool hasL2CacheCtl = false;
-  SmallVector<OpAsmParser::UnresolvedOperand> nburstOperands;
-  SmallVector<OpAsmParser::UnresolvedOperand> loopCountOperands;
-  SmallVector<OpAsmParser::UnresolvedOperand> loopSrcStrideOperands;
-  SmallVector<OpAsmParser::UnresolvedOperand> loopDstStrideOperands;
+static ParseResult parseMteUbGmBasicOperands(
+    OpAsmParser &parser, OpAsmParser::UnresolvedOperand &source,
+    OpAsmParser::UnresolvedOperand &destination,
+    OpAsmParser::UnresolvedOperand &lenBurst,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &nburstOperands) {
   if (parseRequiredOperandWithComma(parser, source) ||
       parseRequiredOperandWithComma(parser, destination) ||
       parser.parseOperand(lenBurst) ||
       parseDmaTripleGroup(parser, "nburst", nburstOperands)) {
     return failure();
   }
-  if (succeeded(parser.parseOptionalKeyword("l2_cache_ctl"))) {
-    hasL2CacheCtl = true;
-    if (parser.parseLParen() || parser.parseOperand(l2CacheCtl) ||
-        parser.parseRParen()) {
-      return failure();
-    }
-  }
-  while (true) {
-    StringRef parsedKeyword;
-    SmallVector<OpAsmParser::UnresolvedOperand, mlir::pto::kValue3> loopGroupOperands;
-    if (parseOptionalDmaTripleGroupAlias(parser, {"loop", "loop1", "loop2"},
-                                         parsedKeyword, loopGroupOperands)) {
-      return failure();
-    }
-    if (parsedKeyword.empty()) {
-      break;
-    }
-    loopCountOperands.push_back(loopGroupOperands[0]);
-    loopSrcStrideOperands.push_back(loopGroupOperands[1]);
-    loopDstStrideOperands.push_back(loopGroupOperands[mlir::pto::kValue2]);
-  }
+  return success();
+}
 
-  if (parser.parseOptionalAttrDict(result.attributes) || parser.parseColon()) {
-    return failure();
-  }
-
-  Type sourceType, destinationType, lenBurstType, l2CacheCtlType;
-  SmallVector<Type> nburstTypes, loopCountTypes, loopSrcStrideTypes,
-      loopDstStrideTypes;
+static ParseResult parseMteUbGmBasicTypes(
+    OpAsmParser &parser, Type &sourceType, Type &destinationType,
+    Type &lenBurstType, SmallVectorImpl<Type> &nburstTypes) {
   if (parser.parseType(sourceType) || parser.parseComma() ||
       parser.parseType(destinationType) || parser.parseComma() ||
       parser.parseType(lenBurstType) || parser.parseComma() ||
       parseDmaTripleTypes(parser, nburstTypes)) {
+    return failure();
+  }
+  return success();
+}
+
+static ParseResult parseMteUbGmL2CacheCtlOperand(
+    OpAsmParser &parser, OpAsmParser::UnresolvedOperand &l2CacheCtl,
+    bool &hasL2CacheCtl) {
+  hasL2CacheCtl = succeeded(parser.parseOptionalKeyword("l2_cache_ctl"));
+  if (!hasL2CacheCtl) {
+    return success();
+  }
+  if (parser.parseLParen() || parser.parseOperand(l2CacheCtl) ||
+      parser.parseRParen()) {
+    return failure();
+  }
+  return success();
+}
+
+static void setMteUbGmSegmentSizes(OperationState &result, bool hasL2CacheCtl,
+                                    size_t loopGroupCount) {
+  auto &segments =
+      result.getOrAddProperties<MteUbGmOp::Properties>().operandSegmentSizes;
+  llvm::copy(ArrayRef<int32_t>{1, 1, 1, 1, 1, 1,
+                               hasL2CacheCtl ? 1 : 0,
+                               static_cast<int32_t>(loopGroupCount),
+                               static_cast<int32_t>(loopGroupCount),
+                               static_cast<int32_t>(loopGroupCount)},
+              segments.begin());
+}
+
+static ParseResult resolveMteUbGmOperands(
+    OpAsmParser &parser, OperationState &result, bool hasL2CacheCtl,
+    OpAsmParser::UnresolvedOperand source, Type sourceType,
+    OpAsmParser::UnresolvedOperand destination, Type destinationType,
+    OpAsmParser::UnresolvedOperand lenBurst, Type lenBurstType,
+    OpAsmParser::UnresolvedOperand l2CacheCtl, Type l2CacheCtlType,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &nburstOperands,
+    SmallVectorImpl<Type> &nburstTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopCountOperands,
+    SmallVectorImpl<Type> &loopCountTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopSrcStrideOperands,
+    SmallVectorImpl<Type> &loopSrcStrideTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopDstStrideOperands,
+    SmallVectorImpl<Type> &loopDstStrideTypes) {
+  if (failed(resolveDmaBasicOperands(parser, result, source, sourceType,
+                                     destination, destinationType, lenBurst,
+                                     lenBurstType, nburstOperands,
+                                     nburstTypes))) {
+    return failure();
+  }
+  if (hasL2CacheCtl &&
+      parser.resolveOperand(l2CacheCtl, l2CacheCtlType, result.operands)) {
+    return failure();
+  }
+  if (failed(resolveDmaLoopOperands(parser, result, loopCountOperands,
+                                    loopCountTypes, loopSrcStrideOperands,
+                                    loopSrcStrideTypes, loopDstStrideOperands,
+                                    loopDstStrideTypes))) {
+    return failure();
+  }
+  return success();
+}
+
+ParseResult MteUbGmOp::parse(OpAsmParser &parser, OperationState &result) {
+  OpAsmParser::UnresolvedOperand source, destination, lenBurst, l2CacheCtl;
+  bool hasL2CacheCtl = false;
+  SmallVector<OpAsmParser::UnresolvedOperand> nburstOperands,
+      loopCountOperands, loopSrcStrideOperands, loopDstStrideOperands;
+  if (failed(parseMteUbGmBasicOperands(parser, source, destination, lenBurst,
+                                       nburstOperands)) ||
+      failed(parseMteUbGmL2CacheCtlOperand(parser, l2CacheCtl,
+                                            hasL2CacheCtl)) ||
+      failed(parseDmaLoopOperandGroups(parser, loopCountOperands,
+                                       loopSrcStrideOperands,
+                                       loopDstStrideOperands))) {
+    return failure();
+  }
+  if (parser.parseOptionalAttrDict(result.attributes) || parser.parseColon()) {
+    return failure();
+  }
+  Type sourceType, destinationType, lenBurstType, l2CacheCtlType;
+  SmallVector<Type> nburstTypes, loopCountTypes, loopSrcStrideTypes,
+      loopDstStrideTypes;
+  if (failed(parseMteUbGmBasicTypes(parser, sourceType, destinationType,
+                                    lenBurstType, nburstTypes))) {
     return failure();
   }
   if (hasL2CacheCtl) {
@@ -8130,63 +8406,23 @@ ParseResult MteUbGmOp::parse(OpAsmParser &parser, OperationState &result) {
       return failure();
     }
   }
-  while (succeeded(parser.parseOptionalComma())) {
-    StringRef keyword;
-    if (parser.parseKeyword(&keyword)) {
-      return failure();
-    }
-    if (isDmaLoopKeyword(keyword)) {
-      SmallVector<Type> loopGroupTypes;
-      if (parseDmaTripleTypes(parser, loopGroupTypes)) {
-        return failure();
-      }
-      loopCountTypes.push_back(loopGroupTypes[0]);
-      loopSrcStrideTypes.push_back(loopGroupTypes[1]);
-      loopDstStrideTypes.push_back(loopGroupTypes[mlir::pto::kValue2]);
-      continue;
-    }
-    return parser.emitError(parser.getCurrentLocation(),
-                            "expected 'loop'");
-  }
-
-  int32_t loopGroupCount = static_cast<int32_t>(loopCountOperands.size());
-  if (loopCountOperands.size() != loopSrcStrideOperands.size() ||
-      loopCountOperands.size() != loopDstStrideOperands.size() ||
-      loopCountTypes.size() != loopSrcStrideTypes.size() ||
-      loopCountTypes.size() != loopDstStrideTypes.size()) {
-    return parser.emitError(parser.getCurrentLocation(),
-                            "requires each loop group to provide count, src stride, and dst stride");
-  }
-  if (loopCountOperands.size() != loopCountTypes.size()) {
-    return parser.emitError(parser.getCurrentLocation(),
-                            "requires loop operand and type groups to match");
-  }
-
-  auto &segments =
-      result.getOrAddProperties<MteUbGmOp::Properties>().operandSegmentSizes;
-  llvm::copy(ArrayRef<int32_t>{1, 1, 1, 1, 1, 1,
-                               hasL2CacheCtl ? 1 : 0,
-                               loopGroupCount, loopGroupCount, loopGroupCount},
-             segments.begin());
-
-  if (parser.resolveOperand(source, sourceType, result.operands) ||
-      parser.resolveOperand(destination, destinationType, result.operands) ||
-      parser.resolveOperand(lenBurst, lenBurstType, result.operands) ||
-      parser.resolveOperands(nburstOperands, nburstTypes, parser.getCurrentLocation(),
-                             result.operands)) {
+  if (failed(parseDmaLoopTypeGroups(parser, loopCountTypes,
+                                    loopSrcStrideTypes, loopDstStrideTypes))) {
     return failure();
   }
-  if (hasL2CacheCtl &&
-      parser.resolveOperand(l2CacheCtl, l2CacheCtlType, result.operands)) {
+  if (failed(verifyDmaLoopGroupConsistency(
+          parser, loopCountOperands.size(), loopSrcStrideOperands.size(),
+          loopDstStrideOperands.size(), loopCountTypes.size(),
+          loopSrcStrideTypes.size(), loopDstStrideTypes.size()))) {
     return failure();
   }
-  if (parser.resolveOperands(loopCountOperands, loopCountTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(loopSrcStrideOperands, loopSrcStrideTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(loopDstStrideOperands, loopDstStrideTypes,
-                             parser.getCurrentLocation(),
-                             result.operands)) {
+  setMteUbGmSegmentSizes(result, hasL2CacheCtl, loopCountOperands.size());
+  if (failed(resolveMteUbGmOperands(
+          parser, result, hasL2CacheCtl, source, sourceType,
+          destination, destinationType, lenBurst, lenBurstType, l2CacheCtl,
+          l2CacheCtlType, nburstOperands, nburstTypes, loopCountOperands,
+          loopCountTypes, loopSrcStrideOperands, loopSrcStrideTypes,
+          loopDstStrideOperands, loopDstStrideTypes))) {
     return failure();
   }
   return success();
@@ -8364,96 +8600,6 @@ void MteGmL1FracOp::build(OpBuilder &builder, OperationState &state,
                      CubeLoadFracModeAttr::get(builder.getContext(), mode));
 }
 
-static ParseResult parseDmaLoopOperandGroups(
-    OpAsmParser &parser,
-    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopCountOperands,
-    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopSrcStrideOperands,
-    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopDstStrideOperands) {
-  while (true) {
-    StringRef parsedKeyword;
-    SmallVector<OpAsmParser::UnresolvedOperand, mlir::pto::kValue3> loopGroupOperands;
-    if (parseOptionalDmaTripleGroupAlias(parser, {"loop", "loop1", "loop2"},
-                                         parsedKeyword, loopGroupOperands)) {
-      return failure();
-    }
-    if (parsedKeyword.empty()) {
-      break;
-    }
-    loopCountOperands.push_back(loopGroupOperands[0]);
-    loopSrcStrideOperands.push_back(loopGroupOperands[1]);
-    loopDstStrideOperands.push_back(loopGroupOperands[mlir::pto::kValue2]);
-  }
-  return success();
-}
-
-static ParseResult parseDmaLoopTypeGroups(
-    OpAsmParser &parser, SmallVectorImpl<Type> &loopCountTypes,
-    SmallVectorImpl<Type> &loopSrcStrideTypes,
-    SmallVectorImpl<Type> &loopDstStrideTypes) {
-  while (succeeded(parser.parseOptionalComma())) {
-    StringRef keyword;
-    if (parser.parseKeyword(&keyword)) {
-      return failure();
-    }
-    if (!isDmaLoopKeyword(keyword)) {
-      return parser.emitError(parser.getCurrentLocation(), "expected 'loop'");
-    }
-    SmallVector<Type> loopGroupTypes;
-    if (parseDmaTripleTypes(parser, loopGroupTypes)) {
-      return failure();
-    }
-    loopCountTypes.push_back(loopGroupTypes[0]);
-    loopSrcStrideTypes.push_back(loopGroupTypes[1]);
-    loopDstStrideTypes.push_back(loopGroupTypes[mlir::pto::kValue2]);
-  }
-  return success();
-}
-
-static ParseResult verifyDmaLoopGroupConsistency(
-    OpAsmParser &parser, size_t countOperands, size_t srcStrideOperands,
-    size_t dstStrideOperands, size_t countTypes, size_t srcStrideTypes,
-    size_t dstStrideTypes) {
-  if (countOperands != srcStrideOperands || countOperands != dstStrideOperands ||
-      countTypes != srcStrideTypes || countTypes != dstStrideTypes) {
-    return parser.emitError(parser.getCurrentLocation(),
-                            "requires each loop group to provide count, src stride, and dst stride");
-  }
-  if (countOperands != countTypes) {
-    return parser.emitError(parser.getCurrentLocation(),
-                            "requires loop operand and type groups to match");
-  }
-  return success();
-}
-
-static ParseResult resolveDmaTripleOperands(
-    OpAsmParser &parser, OperationState &result,
-    OpAsmParser::UnresolvedOperand source, Type sourceType,
-    OpAsmParser::UnresolvedOperand destination, Type destinationType,
-    OpAsmParser::UnresolvedOperand lenBurst, Type lenBurstType,
-    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &nburstOperands,
-    SmallVectorImpl<Type> &nburstTypes,
-    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopCountOperands,
-    SmallVectorImpl<Type> &loopCountTypes,
-    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopSrcStrideOperands,
-    SmallVectorImpl<Type> &loopSrcStrideTypes,
-    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopDstStrideOperands,
-    SmallVectorImpl<Type> &loopDstStrideTypes) {
-  if (parser.resolveOperand(source, sourceType, result.operands) ||
-      parser.resolveOperand(destination, destinationType, result.operands) ||
-      parser.resolveOperand(lenBurst, lenBurstType, result.operands) ||
-      parser.resolveOperands(nburstOperands, nburstTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(loopCountOperands, loopCountTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(loopSrcStrideOperands, loopSrcStrideTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(loopDstStrideOperands, loopDstStrideTypes,
-                             parser.getCurrentLocation(), result.operands)) {
-    return failure();
-  }
-  return success();
-}
-
 ParseResult MteGmL1Op::parse(OpAsmParser &parser, OperationState &result) {
   OpAsmParser::UnresolvedOperand source, destination, lenBurst;
   SmallVector<OpAsmParser::UnresolvedOperand> nburstOperands;
@@ -8550,82 +8696,98 @@ ParseResult MteL1UbOp::parse(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
-ParseResult MteGmL1FracOp::parse(OpAsmParser &parser, OperationState &result) {
-  OpAsmParser::UnresolvedOperand source, destination;
-  StringRef modeKeyword;
-  SmallVector<OpAsmParser::UnresolvedOperand> shapeOperands;
-  SmallVector<OpAsmParser::UnresolvedOperand> srcLayoutOperands;
-  SmallVector<OpAsmParser::UnresolvedOperand> dstGroupOperands;
-  SmallVector<OpAsmParser::UnresolvedOperand> ctrlOperands;
-
+static ParseResult parseMteGmL1FracBasicOperands(
+    OpAsmParser &parser, OpAsmParser::UnresolvedOperand &source,
+    OpAsmParser::UnresolvedOperand &destination, StringRef &modeKeyword,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &shapeOperands,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &srcLayoutOperands,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &dstGroupOperands,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &ctrlOperands) {
   if (parseRequiredOperandWithComma(parser, source) ||
       parseRequiredOperandWithComma(parser, destination) ||
       parser.parseKeyword(&modeKeyword) ||
-      failed(parseCubeLoadFracModeKeyword(modeKeyword)) || parser.parseComma() ||
-      parseFixedKeywordOperandGroup(parser, "shape", mlir::pto::kValue2, shapeOperands) ||
+      failed(parseCubeLoadFracModeKeyword(modeKeyword)) ||
+      parser.parseComma() ||
+      parseFixedKeywordOperandGroup(parser, "shape", mlir::pto::kValue2,
+                                    shapeOperands) ||
       parser.parseComma() ||
       parseCubeLoadFracSrcLayoutGroup(parser, srcLayoutOperands) ||
       parser.parseComma() ||
-      parseFixedKeywordOperandGroup(parser, "dst_group", mlir::pto::kValue4, dstGroupOperands) ||
+      parseFixedKeywordOperandGroup(parser, "dst_group", mlir::pto::kValue4,
+                                    dstGroupOperands) ||
       parser.parseComma() ||
-      parseFixedKeywordOperandGroup(parser, "ctrl", mlir::pto::kValue2, ctrlOperands)) {
+      parseFixedKeywordOperandGroup(parser, "ctrl", mlir::pto::kValue2,
+                                    ctrlOperands)) {
     return failure();
   }
+  return success();
+}
 
-  if (parser.parseOptionalAttrDict(result.attributes) || parser.parseColon()) {
-    return failure();
-  }
-
-  Type sourceType, destinationType;
-  SmallVector<Type> shapeTypes;
-  SmallVector<Type> srcLayoutTypes;
-  SmallVector<Type> dstGroupTypes;
-  SmallVector<Type> ctrlTypes;
-
+static ParseResult parseMteGmL1FracBasicTypes(
+    OpAsmParser &parser, Type &sourceType, Type &destinationType,
+    StringRef modeKeyword, SmallVectorImpl<Type> &shapeTypes,
+    SmallVectorImpl<Type> &srcLayoutTypes,
+    SmallVectorImpl<Type> &dstGroupTypes,
+    SmallVectorImpl<Type> &ctrlTypes) {
   if (parser.parseType(sourceType) || parser.parseComma() ||
       parser.parseType(destinationType) || parser.parseComma() ||
       parser.parseKeyword(modeKeyword) || parser.parseComma() ||
-      parseFixedKeywordTypes(parser, "shape", mlir::pto::kValue2, shapeTypes) ||
+      parseFixedKeywordTypes(parser, "shape", mlir::pto::kValue2,
+                            shapeTypes) ||
       parser.parseComma() ||
       parseCubeLoadFracSrcLayoutTypes(parser, srcLayoutTypes) ||
       parser.parseComma() ||
-      parseFixedKeywordTypes(parser, "dst_group", mlir::pto::kValue4, dstGroupTypes) ||
+      parseFixedKeywordTypes(parser, "dst_group", mlir::pto::kValue4,
+                            dstGroupTypes) ||
       parser.parseComma() ||
       parseFixedKeywordTypes(parser, "ctrl", mlir::pto::kValue2, ctrlTypes)) {
     return failure();
   }
+  return success();
+}
 
-  auto modeOr = parseCubeLoadFracModeKeyword(modeKeyword);
-  if (failed(modeOr)) {
-    return parser.emitError(parser.getCurrentLocation(),
-                            "expected one of 'nd2nz' or 'dn2nz'");
-  }
-  if (shapeOperands.size() != 2 || shapeTypes.size() != 2) {
+static ParseResult validateMteGmL1FracOperands(
+    OpAsmParser &parser, size_t shapeOps, size_t shapeTypes,
+    size_t srcLayoutOps, size_t srcLayoutTypes,
+    size_t dstGroupOps, size_t dstGroupTypes,
+    size_t ctrlOps, size_t ctrlTypes) {
+  if (shapeOps != 2 || shapeTypes != 2) {
     return parser.emitError(parser.getCurrentLocation(),
                             "shape requires exactly two operands and types");
   }
-  if (srcLayoutOperands.empty() || srcLayoutOperands.size() > mlir::pto::kValue2 ||
-      srcLayoutTypes.empty() || srcLayoutTypes.size() > mlir::pto::kValue2) {
+  if (srcLayoutOps == 0 || srcLayoutOps > mlir::pto::kValue2 ||
+      srcLayoutTypes == 0 || srcLayoutTypes > mlir::pto::kValue2) {
     return parser.emitError(parser.getCurrentLocation(),
                             "src_layout requires one or two operands and types");
   }
-  if (dstGroupOperands.size() != 4 || dstGroupTypes.size() != 4) {
+  if (dstGroupOps != 4 || dstGroupTypes != 4) {
     return parser.emitError(parser.getCurrentLocation(),
                             "dst_group requires exactly four operands and types");
   }
-  if (ctrlOperands.size() != 2 || ctrlTypes.size() != 2) {
+  if (ctrlOps != 2 || ctrlTypes != 2) {
     return parser.emitError(parser.getCurrentLocation(),
                             "ctrl requires exactly two operands and types");
   }
-  if (srcLayoutOperands.size() != srcLayoutTypes.size()) {
+  if (srcLayoutOps != srcLayoutTypes) {
     return parser.emitError(parser.getCurrentLocation(),
                             "src_layout operand and type groups must match");
   }
+  return success();
+}
 
+static ParseResult resolveMteGmL1FracOperands(
+    OpAsmParser &parser, OperationState &result,
+    OpAsmParser::UnresolvedOperand source, Type sourceType,
+    OpAsmParser::UnresolvedOperand destination, Type destinationType,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &shapeOperands,
+    SmallVectorImpl<Type> &shapeTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &srcLayoutOperands,
+    SmallVectorImpl<Type> &srcLayoutTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &dstGroupOperands,
+    SmallVectorImpl<Type> &dstGroupTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &ctrlOperands,
+    SmallVectorImpl<Type> &ctrlTypes) {
   bool hasSrcOuterStride = srcLayoutOperands.size() == 2;
-  result.addAttribute(getModeAttrName(result.name),
-                      CubeLoadFracModeAttr::get(parser.getContext(), *modeOr));
-
   SmallVector<Type> flatTypes;
   SmallVector<OpAsmParser::UnresolvedOperand> flatOperands;
   flatOperands.append({shapeOperands[0], shapeOperands[1], srcLayoutOperands[0]});
@@ -8638,11 +8800,59 @@ ParseResult MteGmL1FracOp::parse(OpAsmParser &parser, OperationState &result) {
     flatOperands.push_back(srcLayoutOperands[1]);
     flatTypes.push_back(srcLayoutTypes[1]);
   }
-
   if (parser.resolveOperand(source, sourceType, result.operands) ||
       parser.resolveOperand(destination, destinationType, result.operands) ||
-      parser.resolveOperands(flatOperands, flatTypes, parser.getCurrentLocation(),
-                             result.operands)) {
+      parser.resolveOperands(flatOperands, flatTypes,
+                             parser.getCurrentLocation(), result.operands)) {
+    return failure();
+  }
+  return success();
+}
+
+ParseResult MteGmL1FracOp::parse(OpAsmParser &parser, OperationState &result) {
+  OpAsmParser::UnresolvedOperand source, destination;
+  StringRef modeKeyword;
+  SmallVector<OpAsmParser::UnresolvedOperand> shapeOperands;
+  SmallVector<OpAsmParser::UnresolvedOperand> srcLayoutOperands;
+  SmallVector<OpAsmParser::UnresolvedOperand> dstGroupOperands;
+  SmallVector<OpAsmParser::UnresolvedOperand> ctrlOperands;
+  if (failed(parseMteGmL1FracBasicOperands(parser, source, destination,
+                                           modeKeyword, shapeOperands,
+                                           srcLayoutOperands,
+                                           dstGroupOperands, ctrlOperands))) {
+    return failure();
+  }
+  if (parser.parseOptionalAttrDict(result.attributes) || parser.parseColon()) {
+    return failure();
+  }
+  Type sourceType, destinationType;
+  SmallVector<Type> shapeTypes, srcLayoutTypes, dstGroupTypes, ctrlTypes;
+  if (failed(parseMteGmL1FracBasicTypes(parser, sourceType, destinationType,
+                                        modeKeyword, shapeTypes,
+                                        srcLayoutTypes, dstGroupTypes,
+                                        ctrlTypes))) {
+    return failure();
+  }
+  auto modeOr = parseCubeLoadFracModeKeyword(modeKeyword);
+  if (failed(modeOr)) {
+    return parser.emitError(parser.getCurrentLocation(),
+                            "expected one of 'nd2nz' or 'dn2nz'");
+  }
+  if (failed(validateMteGmL1FracOperands(
+          parser, shapeOperands.size(), shapeTypes.size(),
+          srcLayoutOperands.size(), srcLayoutTypes.size(),
+          dstGroupOperands.size(), dstGroupTypes.size(),
+          ctrlOperands.size(), ctrlTypes.size()))) {
+    return failure();
+  }
+  result.addAttribute(getModeAttrName(result.name),
+                      CubeLoadFracModeAttr::get(parser.getContext(), *modeOr));
+  if (failed(resolveMteGmL1FracOperands(parser, result, source, sourceType,
+                                        destination, destinationType,
+                                        shapeOperands, shapeTypes,
+                                        srcLayoutOperands, srcLayoutTypes,
+                                        dstGroupOperands, dstGroupTypes,
+                                        ctrlOperands, ctrlTypes))) {
     return failure();
   }
   return success();
@@ -9169,6 +9379,76 @@ void MteGmL1FracOp::getEffects(
   effects.emplace_back(MemoryEffects::Write::get(), &getDestinationMutable());
 }
 
+static void setMteL0cL1SegmentSizes(OperationState &result,
+                                        const StructuredAccStoreAsmState &st) {
+  setStructuredAccStoreSegmentSizes<MteL0cL1Op>(
+      result, {1, 1, 1, 1, 1, 1, !st.preQuantOperands.empty() ? 1 : 0,
+               !st.preReluOperands.empty() ? 1 : 0,
+               !st.clipValueOperands.empty() ? 1 : 0,
+               !st.splitOperands.empty() ? 1 : 0,
+               !st.loop0SrcStrideOperands.empty() ? 1 : 0,
+               !st.loop3CountOperands.empty() ? 1 : 0,
+               !st.loop3SrcStrideOperands.empty() ? 1 : 0,
+               !st.loop3DstStrideOperands.empty() ? 1 : 0});
+}
+
+static ParseResult parseMteL0cL1Types(
+    OpAsmParser &parser, Type &sourceType, Type &destinationType,
+    Type &mType, Type &nType, Type &srcStrideType, Type &dstStrideType,
+    StructuredAccStoreAsmState &state) {
+  if (parser.parseType(sourceType) || parser.parseComma() ||
+      parser.parseType(destinationType) || parser.parseComma() ||
+      parser.parseType(mType) || parser.parseComma() ||
+      parser.parseType(nType) || parser.parseComma() ||
+      parser.parseType(srcStrideType) || parser.parseComma() ||
+      parser.parseType(dstStrideType) ||
+      parseStructuredAccStoreTailTypes(parser, state)) {
+    return failure();
+  }
+  return success();
+}
+
+static ParseResult resolveMteL0cL1Operands(
+    OpAsmParser &parser, OperationState &result,
+    OpAsmParser::UnresolvedOperand source, Type sourceType,
+    OpAsmParser::UnresolvedOperand destination, Type destinationType,
+    OpAsmParser::UnresolvedOperand m, Type mType,
+    OpAsmParser::UnresolvedOperand n, Type nType,
+    OpAsmParser::UnresolvedOperand srcStride, Type srcStrideType,
+    OpAsmParser::UnresolvedOperand dstStride, Type dstStrideType,
+    StructuredAccStoreAsmState &state) {
+  auto loc = parser.getCurrentLocation();
+  if (parser.resolveOperand(source, sourceType, result.operands) ||
+      parser.resolveOperand(destination, destinationType, result.operands) ||
+      parser.resolveOperand(m, mType, result.operands) ||
+      parser.resolveOperand(n, nType, result.operands) ||
+      parser.resolveOperand(srcStride, srcStrideType, result.operands) ||
+      parser.resolveOperand(dstStride, dstStrideType, result.operands) ||
+      parser.resolveOperands(state.preQuantOperands, state.preQuantTypes,
+                             loc, result.operands) ||
+      parser.resolveOperands(state.preReluOperands, state.preReluTypes,
+                             loc, result.operands) ||
+      parser.resolveOperands(state.clipValueOperands, state.clipValueTypes,
+                             loc, result.operands) ||
+      parser.resolveOperands(state.splitOperands, state.splitTypes,
+                             loc, result.operands) ||
+      parser.resolveOperands(state.loop0SrcStrideOperands,
+                              state.loop0SrcStrideTypes, loc,
+                              result.operands) ||
+      parser.resolveOperands(state.loop3CountOperands,
+                              state.loop3CountTypes, loc,
+                              result.operands) ||
+      parser.resolveOperands(state.loop3SrcStrideOperands,
+                              state.loop3SrcStrideTypes, loc,
+                              result.operands) ||
+      parser.resolveOperands(state.loop3DstStrideOperands,
+                              state.loop3DstStrideTypes, loc,
+                              result.operands)) {
+    return failure();
+  }
+  return success();
+}
+
 ParseResult MteL0cL1Op::parse(OpAsmParser &parser, OperationState &result) {
   Builder builder(parser.getContext());
   StructuredAccStoreAsmState state;
@@ -9184,63 +9464,26 @@ ParseResult MteL0cL1Op::parse(OpAsmParser &parser, OperationState &result) {
       parser.parseOptionalAttrDict(result.attributes) || parser.parseColon()) {
     return failure();
   }
-
   Type sourceType, destinationType, mType, nType, srcStrideType, dstStrideType;
-  if (parser.parseType(sourceType) || parser.parseComma() ||
-      parser.parseType(destinationType) || parser.parseComma() ||
-      parser.parseType(mType) || parser.parseComma() || parser.parseType(nType) ||
-      parser.parseComma() || parser.parseType(srcStrideType) ||
-      parser.parseComma() || parser.parseType(dstStrideType) ||
-      parseStructuredAccStoreTailTypes(parser, state)) {
+  if (failed(parseMteL0cL1Types(parser, sourceType, destinationType, mType,
+                                 nType, srcStrideType, dstStrideType,
+                                 state))) {
     return failure();
   }
-
-  setStructuredAccStoreSegmentSizes<MteL0cL1Op>(
-      result, {1, 1, 1, 1, 1, 1, !state.preQuantOperands.empty() ? 1 : 0,
-               !state.preReluOperands.empty() ? 1 : 0,
-               !state.clipValueOperands.empty() ? 1 : 0,
-               !state.splitOperands.empty() ? 1 : 0,
-               !state.loop0SrcStrideOperands.empty() ? 1 : 0,
-               !state.loop3CountOperands.empty() ? 1 : 0,
-               !state.loop3SrcStrideOperands.empty() ? 1 : 0,
-               !state.loop3DstStrideOperands.empty() ? 1 : 0});
+  setMteL0cL1SegmentSizes(result, state);
   if (state.atomicType || state.atomicOp) {
     return parser.emitError(parser.getCurrentLocation(),
                             "atomic is only supported for mte_l0c_gm");
   }
   addStructuredAccStoreAttrs<MteL0cL1Op>(result, builder, state);
-
-  if (parser.resolveOperand(source, sourceType, result.operands) ||
-      parser.resolveOperand(destination, destinationType, result.operands) ||
-      parser.resolveOperand(m, mType, result.operands) ||
-      parser.resolveOperand(n, nType, result.operands) ||
-      parser.resolveOperand(srcStride, srcStrideType, result.operands) ||
-      parser.resolveOperand(dstStride, dstStrideType, result.operands) ||
-      parser.resolveOperands(state.preQuantOperands, state.preQuantTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(state.preReluOperands, state.preReluTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(state.clipValueOperands, state.clipValueTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(state.splitOperands, state.splitTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(state.loop0SrcStrideOperands,
-                             state.loop0SrcStrideTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(state.loop3CountOperands, state.loop3CountTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(state.loop3SrcStrideOperands,
-                             state.loop3SrcStrideTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(state.loop3DstStrideOperands,
-                             state.loop3DstStrideTypes,
-                             parser.getCurrentLocation(), result.operands)) {
+  if (failed(resolveMteL0cL1Operands(parser, result, source, sourceType,
+                                      destination, destinationType, m, mType,
+                                      n, nType, srcStride, srcStrideType,
+                                      dstStride, dstStrideType, state))) {
     return failure();
   }
   return success();
-}
-
-void MteL0cL1Op::print(OpAsmPrinter &printer) {
+}void MteL0cL1Op::print(OpAsmPrinter &printer) {
   printer << " " << getSource() << ", " << getDestination() << ", " << getM()
           << ", " << getN() << ", " << getSrcStride() << ", " << getDstStride();
   printStructuredAccStoreClauses(printer, getUnitFlag(), getPreQuant(),
@@ -9323,91 +9566,80 @@ static std::optional<unsigned> getCubeBridgeLoadOperandIndex(
   return std::nullopt;
 }
 
-template <typename OpTy>
-static ParseResult parseMteL1L0OptionalOperandsOp(
-    OpAsmParser &parser, OperationState &result, ArrayRef<StringRef> shapeNames,
-    ArrayRef<StringRef> fullNames, StringRef operandDescription = "operands") {
-  OpAsmParser::UnresolvedOperand source;
-  OpAsmParser::UnresolvedOperand destination;
-  if (parser.parseOperand(source) || parser.parseComma() ||
-      parser.parseOperand(destination)) {
+static ParseResult parseCubeBridgeNamedOperand(
+    OpAsmParser &parser, StringRef keyword, ArrayRef<StringRef> shapeNames,
+    ArrayRef<StringRef> fullNames,
+    SmallVectorImpl<CubeBridgeLoadAsmOperand> &namedOperands,
+    SmallVectorImpl<unsigned> &namedOperandOrder) {
+  std::optional<unsigned> index =
+      getCubeBridgeLoadOperandIndex(keyword, shapeNames, fullNames);
+  if (!index) {
+    return parser.emitError(parser.getCurrentLocation(),
+                            "unknown cube bridge load operand '")
+           << keyword << "'";
+  }
+  if (namedOperands[*index].present) {
+    return parser.emitError(parser.getCurrentLocation(),
+                            "duplicate cube bridge load operand '")
+           << keyword << "'";
+  }
+  if (parser.parseLParen() ||
+      parser.parseOperand(namedOperands[*index].operand) ||
+      parser.parseRParen()) {
     return failure();
+  }
+  namedOperands[*index].present = true;
+  namedOperandOrder.push_back(*index);
+  return success();
 }
 
-  SmallVector<OpAsmParser::UnresolvedOperand, 6> legacyOperands;
-  SmallVector<CubeBridgeLoadAsmOperand, 10> namedOperands(10);
-  SmallVector<unsigned, 10> namedOperandOrder;
-  bool usesNamedOperands = false;
-
-  auto parseNamedOperand = [&](StringRef keyword) -> ParseResult {
-    std::optional<unsigned> index =
-        getCubeBridgeLoadOperandIndex(keyword, shapeNames, fullNames);
-    if (!index) {
-      return parser.emitError(parser.getCurrentLocation(),
-                              "unknown cube bridge load operand '")
-             << keyword << "'";
-}
-    if (namedOperands[*index].present) {
-      return parser.emitError(parser.getCurrentLocation(),
-                              "duplicate cube bridge load operand '")
-             << keyword << "'";
-}
-    if (parser.parseLParen() || parser.parseOperand(namedOperands[*index].operand) ||
-        parser.parseRParen()) {
-      return failure();
-}
-    namedOperands[*index].present = true;
-    namedOperandOrder.push_back(*index);
+static ParseResult parseCubeBridgeOptionalOperands(
+    OpAsmParser &parser, ArrayRef<StringRef> shapeNames,
+    ArrayRef<StringRef> fullNames,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &legacyOperands,
+    SmallVectorImpl<CubeBridgeLoadAsmOperand> &namedOperands,
+    SmallVectorImpl<unsigned> &namedOperandOrder, bool &usesNamedOperands) {
+  if (failed(parser.parseOptionalComma())) {
     return success();
-  };
-
-  if (succeeded(parser.parseOptionalComma())) {
-    StringRef keyword;
-    if (succeeded(parser.parseOptionalKeyword(&keyword))) {
-      usesNamedOperands = true;
-      if (parseNamedOperand(keyword)) {
+  }
+  StringRef keyword;
+  if (succeeded(parser.parseOptionalKeyword(&keyword))) {
+    usesNamedOperands = true;
+    if (failed(parseCubeBridgeNamedOperand(parser, keyword, shapeNames,
+                                           fullNames, namedOperands,
+                                           namedOperandOrder))) {
+      return failure();
+    }
+    while (succeeded(parser.parseOptionalComma())) {
+      if (parser.parseKeyword(&keyword) ||
+          failed(parseCubeBridgeNamedOperand(parser, keyword, shapeNames,
+                                              fullNames, namedOperands,
+                                              namedOperandOrder))) {
         return failure();
       }
-      while (succeeded(parser.parseOptionalComma())) {
-        if (parser.parseKeyword(&keyword) || parseNamedOperand(keyword)) {
-          return failure();
-        }
-      }
-    } else {
-      OpAsmParser::UnresolvedOperand operand;
+    }
+  } else {
+    OpAsmParser::UnresolvedOperand operand;
+    if (parser.parseOperand(operand)) {
+      return failure();
+    }
+    legacyOperands.push_back(operand);
+    while (succeeded(parser.parseOptionalComma())) {
       if (parser.parseOperand(operand)) {
         return failure();
       }
       legacyOperands.push_back(operand);
-      while (succeeded(parser.parseOptionalComma())) {
-        if (parser.parseOperand(operand)) {
-          return failure();
-        }
-        legacyOperands.push_back(operand);
-      }
     }
   }
-
-  if (!usesNamedOperands && legacyOperands.size() != 4 &&
-      legacyOperands.size() != 6) {
-    return parser.emitError(
-               parser.getCurrentLocation(),
-               "expects either four shape-derived or six full positional ")
-           << operandDescription;
+  return success();
 }
 
-  if (parser.parseOptionalAttrDict(result.attributes) || parser.parseColon()) {
-    return failure();
-  }
-
-  Type sourceType;
-  Type destinationType;
-  if (parser.parseType(sourceType) || parser.parseComma() ||
-      parser.parseType(destinationType)) {
-    return failure();
-  }
-
-  SmallVector<Type, mlir::pto::kValue6> legacyTypes;
+static ParseResult parseCubeBridgeOptionalTypes(
+    OpAsmParser &parser, bool usesNamedOperands,
+    SmallVectorImpl<unsigned> &namedOperandOrder,
+    SmallVectorImpl<CubeBridgeLoadAsmOperand> &namedOperands,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &legacyOperands,
+    SmallVectorImpl<Type> &legacyTypes) {
   if (usesNamedOperands) {
     for (unsigned index : namedOperandOrder) {
       Type type;
@@ -9425,16 +9657,21 @@ static ParseResult parseMteL1L0OptionalOperandsOp(
       legacyTypes.push_back(type);
     }
   }
+  return success();
+}
 
-  SmallVector<int32_t, 12> segmentSizes(12, 0);
-  segmentSizes[0] = 1;
-  segmentSizes[1] = 1;
-
+static ParseResult resolveCubeBridgeOperands(
+    OpAsmParser &parser, OperationState &result, bool usesNamedOperands,
+    OpAsmParser::UnresolvedOperand source, Type sourceType,
+    OpAsmParser::UnresolvedOperand destination, Type destinationType,
+    SmallVectorImpl<CubeBridgeLoadAsmOperand> &namedOperands,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &legacyOperands,
+    SmallVectorImpl<Type> &legacyTypes,
+    SmallVectorImpl<int32_t> &segmentSizes) {
   if (parser.resolveOperand(source, sourceType, result.operands) ||
       parser.resolveOperand(destination, destinationType, result.operands)) {
     return failure();
-}
-
+  }
   if (usesNamedOperands) {
     for (unsigned index = 0; index < namedOperands.size(); ++index) {
       if (!namedOperands[index].present) {
@@ -9442,20 +9679,73 @@ static ParseResult parseMteL1L0OptionalOperandsOp(
       }
       segmentSizes[2 + index] = 1;
       if (parser.resolveOperand(namedOperands[index].operand,
-                                namedOperands[index].type,
-                                result.operands)) {
+                                 namedOperands[index].type,
+                                 result.operands)) {
         return failure();
-}
+      }
     }
   } else {
     const unsigned base = legacyOperands.size() <= 4 ? 0 : 4;
     for (unsigned index = 0; index < legacyOperands.size(); ++index) {
       segmentSizes[2 + base + index] = 1;
       if (parser.resolveOperand(legacyOperands[index], legacyTypes[index],
-                                result.operands)) {
+                                 result.operands)) {
         return failure();
-}
+      }
     }
+  }
+  return success();
+}
+
+template <typename OpTy>
+static ParseResult parseMteL1L0OptionalOperandsOp(
+    OpAsmParser &parser, OperationState &result, ArrayRef<StringRef> shapeNames,
+    ArrayRef<StringRef> fullNames, StringRef operandDescription = "operands") {
+  OpAsmParser::UnresolvedOperand source;
+  OpAsmParser::UnresolvedOperand destination;
+  if (parser.parseOperand(source) || parser.parseComma() ||
+      parser.parseOperand(destination)) {
+    return failure();
+  }
+  SmallVector<OpAsmParser::UnresolvedOperand, 6> legacyOperands;
+  SmallVector<CubeBridgeLoadAsmOperand, 10> namedOperands(10);
+  SmallVector<unsigned, 10> namedOperandOrder;
+  bool usesNamedOperands = false;
+  if (failed(parseCubeBridgeOptionalOperands(
+          parser, shapeNames, fullNames, legacyOperands, namedOperands,
+          namedOperandOrder, usesNamedOperands))) {
+    return failure();
+  }
+  if (!usesNamedOperands && legacyOperands.size() != 4 &&
+      legacyOperands.size() != 6) {
+    return parser.emitError(
+               parser.getCurrentLocation(),
+               "expects either four shape-derived or six full positional ")
+           << operandDescription;
+  }
+  if (parser.parseOptionalAttrDict(result.attributes) || parser.parseColon()) {
+    return failure();
+  }
+  Type sourceType;
+  Type destinationType;
+  if (parser.parseType(sourceType) || parser.parseComma() ||
+      parser.parseType(destinationType)) {
+    return failure();
+  }
+  SmallVector<Type, mlir::pto::kValue6> legacyTypes;
+  if (failed(parseCubeBridgeOptionalTypes(parser, usesNamedOperands,
+                                          namedOperandOrder, namedOperands,
+                                          legacyOperands, legacyTypes))) {
+    return failure();
+  }
+  SmallVector<int32_t, 12> segmentSizes(12, 0);
+  segmentSizes[0] = 1;
+  segmentSizes[1] = 1;
+  if (failed(resolveCubeBridgeOperands(
+          parser, result, usesNamedOperands, source, sourceType,
+          destination, destinationType, namedOperands, legacyOperands,
+          legacyTypes, segmentSizes))) {
+    return failure();
   }
   setCubeBridgeLoadOperandSegmentSizes<OpTy>(result, segmentSizes);
   return success();
@@ -9970,6 +10260,83 @@ void MteL0cL1Op::getEffects(
   effects.emplace_back(MemoryEffects::Write::get(), &getDestinationMutable());
 }
 
+static void setMteL0cGmSegmentSizes(OperationState &result,
+                                        const StructuredAccStoreAsmState &st) {
+  setStructuredAccStoreSegmentSizes<MteL0cGmOp>(
+      result, {1, 1, 1, 1, 1, 1, !st.preQuantOperands.empty() ? 1 : 0,
+               !st.preReluOperands.empty() ? 1 : 0,
+               !st.clipValueOperands.empty() ? 1 : 0, 1, 1,
+               !st.splitOperands.empty() ? 1 : 0,
+               !st.loop0SrcStrideOperands.empty() ? 1 : 0,
+               !st.loop3CountOperands.empty() ? 1 : 0,
+               !st.loop3SrcStrideOperands.empty() ? 1 : 0,
+               !st.loop3DstStrideOperands.empty() ? 1 : 0});
+}
+
+static ParseResult parseMteL0cGmTypes(
+    OpAsmParser &parser, Type &sourceType, Type &destinationType,
+    Type &mType, Type &nType, Type &srcStrideType, Type &dstStrideType,
+    Type &sidType, Type &l2CacheCtrlType,
+    StructuredAccStoreAsmState &state) {
+  if (parser.parseType(sourceType) || parser.parseComma() ||
+      parser.parseType(destinationType) || parser.parseComma() ||
+      parser.parseType(mType) || parser.parseComma() ||
+      parser.parseType(nType) || parser.parseComma() ||
+      parser.parseType(srcStrideType) || parser.parseComma() ||
+      parser.parseType(dstStrideType) || parser.parseComma() ||
+      parser.parseType(sidType) || parser.parseComma() ||
+      parser.parseType(l2CacheCtrlType) ||
+      parseStructuredAccStoreTailTypes(parser, state)) {
+    return failure();
+  }
+  return success();
+}
+
+static ParseResult resolveMteL0cGmOperands(
+    OpAsmParser &parser, OperationState &result,
+    OpAsmParser::UnresolvedOperand source, Type sourceType,
+    OpAsmParser::UnresolvedOperand destination, Type destinationType,
+    OpAsmParser::UnresolvedOperand m, Type mType,
+    OpAsmParser::UnresolvedOperand n, Type nType,
+    OpAsmParser::UnresolvedOperand srcStride, Type srcStrideType,
+    OpAsmParser::UnresolvedOperand dstStride, Type dstStrideType,
+    OpAsmParser::UnresolvedOperand sid, Type sidType,
+    OpAsmParser::UnresolvedOperand l2CacheCtrl, Type l2CacheCtrlType,
+    StructuredAccStoreAsmState &state) {
+  auto loc = parser.getCurrentLocation();
+  if (parser.resolveOperand(source, sourceType, result.operands) ||
+      parser.resolveOperand(destination, destinationType, result.operands) ||
+      parser.resolveOperand(m, mType, result.operands) ||
+      parser.resolveOperand(n, nType, result.operands) ||
+      parser.resolveOperand(srcStride, srcStrideType, result.operands) ||
+      parser.resolveOperand(dstStride, dstStrideType, result.operands) ||
+      parser.resolveOperands(state.preQuantOperands, state.preQuantTypes,
+                             loc, result.operands) ||
+      parser.resolveOperands(state.preReluOperands, state.preReluTypes,
+                             loc, result.operands) ||
+      parser.resolveOperands(state.clipValueOperands, state.clipValueTypes,
+                             loc, result.operands) ||
+      parser.resolveOperand(sid, sidType, result.operands) ||
+      parser.resolveOperand(l2CacheCtrl, l2CacheCtrlType, result.operands) ||
+      parser.resolveOperands(state.splitOperands, state.splitTypes,
+                             loc, result.operands) ||
+      parser.resolveOperands(state.loop0SrcStrideOperands,
+                              state.loop0SrcStrideTypes, loc,
+                              result.operands) ||
+      parser.resolveOperands(state.loop3CountOperands,
+                              state.loop3CountTypes, loc,
+                              result.operands) ||
+      parser.resolveOperands(state.loop3SrcStrideOperands,
+                              state.loop3SrcStrideTypes, loc,
+                              result.operands) ||
+      parser.resolveOperands(state.loop3DstStrideOperands,
+                              state.loop3DstStrideTypes, loc,
+                              result.operands)) {
+    return failure();
+  }
+  return success();
+}
+
 ParseResult MteL0cGmOp::parse(OpAsmParser &parser, OperationState &result) {
   Builder builder(parser.getContext());
   StructuredAccStoreAsmState state;
@@ -9987,64 +10354,23 @@ ParseResult MteL0cGmOp::parse(OpAsmParser &parser, OperationState &result) {
       parser.parseOptionalAttrDict(result.attributes) || parser.parseColon()) {
     return failure();
   }
-
   Type sourceType, destinationType, mType, nType, srcStrideType, dstStrideType,
       sidType, l2CacheCtrlType;
-  if (parser.parseType(sourceType) || parser.parseComma() ||
-      parser.parseType(destinationType) || parser.parseComma() ||
-      parser.parseType(mType) || parser.parseComma() || parser.parseType(nType) ||
-      parser.parseComma() || parser.parseType(srcStrideType) ||
-      parser.parseComma() || parser.parseType(dstStrideType) ||
-      parser.parseComma() || parser.parseType(sidType) ||
-      parser.parseComma() || parser.parseType(l2CacheCtrlType) ||
-      parseStructuredAccStoreTailTypes(parser, state)) {
+  if (failed(parseMteL0cGmTypes(parser, sourceType, destinationType, mType,
+                                 nType, srcStrideType, dstStrideType,
+                                 sidType, l2CacheCtrlType, state))) {
     return failure();
   }
-
-  setStructuredAccStoreSegmentSizes<MteL0cGmOp>(
-      result, {1, 1, 1, 1, 1, 1, !state.preQuantOperands.empty() ? 1 : 0,
-               !state.preReluOperands.empty() ? 1 : 0,
-               !state.clipValueOperands.empty() ? 1 : 0, 1, 1,
-               !state.splitOperands.empty() ? 1 : 0,
-               !state.loop0SrcStrideOperands.empty() ? 1 : 0,
-               !state.loop3CountOperands.empty() ? 1 : 0,
-               !state.loop3SrcStrideOperands.empty() ? 1 : 0,
-               !state.loop3DstStrideOperands.empty() ? 1 : 0});
+  setMteL0cGmSegmentSizes(result, state);
   addStructuredAccStoreAttrs<MteL0cGmOp>(result, builder, state);
-
-  if (parser.resolveOperand(source, sourceType, result.operands) ||
-      parser.resolveOperand(destination, destinationType, result.operands) ||
-      parser.resolveOperand(m, mType, result.operands) ||
-      parser.resolveOperand(n, nType, result.operands) ||
-      parser.resolveOperand(srcStride, srcStrideType, result.operands) ||
-      parser.resolveOperand(dstStride, dstStrideType, result.operands) ||
-      parser.resolveOperands(state.preQuantOperands, state.preQuantTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(state.preReluOperands, state.preReluTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(state.clipValueOperands, state.clipValueTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperand(sid, sidType, result.operands) ||
-      parser.resolveOperand(l2CacheCtrl, l2CacheCtrlType, result.operands) ||
-      parser.resolveOperands(state.splitOperands, state.splitTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(state.loop0SrcStrideOperands,
-                             state.loop0SrcStrideTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(state.loop3CountOperands, state.loop3CountTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(state.loop3SrcStrideOperands,
-                             state.loop3SrcStrideTypes,
-                             parser.getCurrentLocation(), result.operands) ||
-      parser.resolveOperands(state.loop3DstStrideOperands,
-                             state.loop3DstStrideTypes,
-                             parser.getCurrentLocation(), result.operands)) {
+  if (failed(resolveMteL0cGmOperands(
+          parser, result, source, sourceType, destination, destinationType,
+          m, mType, n, nType, srcStride, srcStrideType, dstStride,
+          dstStrideType, sid, sidType, l2CacheCtrl, l2CacheCtrlType, state))) {
     return failure();
   }
   return success();
-}
-
-void MteL0cGmOp::print(OpAsmPrinter &printer) {
+}void MteL0cGmOp::print(OpAsmPrinter &printer) {
   printer << " " << getSource() << ", " << getDestination() << ", " << getM()
           << ", " << getN() << ", " << getSrcStride() << ", "
           << getDstStride() << ", " << getSid() << ", " << getL2CacheCtrl();

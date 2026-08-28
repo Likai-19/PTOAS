@@ -204,6 +204,10 @@ protected:
                                                        RWOperation *rwOp1,
                                                        RWOperation *rwOp2);
 
+  std::optional<std::tuple<LoopLikeOpInterface, Occurrence *, Occurrence *>>
+  locateMultiBufferLoopForEventId(Occurrence *occ1, Occurrence *occ2,
+                                  RWOperation *rwOp1, RWOperation *rwOp2);
+
   // Determine how many event ids are needed for a particular occurrence pair.
   EventIdInfo getEventIdInfo(Occurrence *occ1, Occurrence *occ2,
                              RWOperation *rwOp1, RWOperation *rwOp2,
@@ -334,8 +338,18 @@ protected:
   bool reuseConflictPair(ConflictPair *conflictPair, Occurrence *scopeOcc1,
                          Occurrence *scopeOcc2);
 
+  ConflictPair *findBestReusableConflictPair(Occurrence *scopeOcc1,
+                                             Occurrence *scopeOcc2,
+                                             ConflictPair *conflictPair);
+
   std::unique_ptr<EventIdSolver> &getEventIdSolverRef(pto::PIPE pipeSrc,
                                                       pto::PIPE pipeDst);
+
+  bool checkColorableForConflictPair(EventIdSolver *solver,
+                                     ConflictPair *conflictPair,
+                                     CorePipeInfo corePipeSrc,
+                                     CorePipeInfo corePipeDst,
+                                     Occurrence *occ2);
 
   bool checkReuseMultiBufferFlagId(ConflictPair *conflictPair);
 
@@ -352,6 +366,39 @@ protected:
   void handleSetWaitConflict(Occurrence *occ1, Occurrence *occ2,
                              CorePipeInfo corePipeSrc, CorePipeInfo corePipeDst,
                              EventIdInfo eventIdInfo, bool isUseless);
+
+  struct SetWaitConflictSetup {
+    std::unique_ptr<ConflictPair> conflictPair;
+    Occurrence *setOcc = nullptr;
+    Occurrence *waitOcc = nullptr;
+    Occurrence *normScopeOcc1 = nullptr;
+    Occurrence *normScopeOcc2 = nullptr;
+    OperationBase *normScopeOp = nullptr;
+    Loop *parentLCALoopOp = nullptr;
+    Occurrence *parentLCALoopOcc = nullptr;
+    Occurrence *parentLCALoopBeforePHOcc = nullptr;
+    Occurrence *parentLCALoopAfterPHOcc = nullptr;
+  };
+
+  SetWaitConflictSetup setupSetWaitConflict(
+      Occurrence *occ1, Occurrence *occ2, RWOperation *rwOp1,
+      RWOperation *rwOp2, CorePipeInfo corePipeSrc, CorePipeInfo corePipeDst,
+      EventIdInfo eventIdInfo, bool isUseless);
+
+  bool tryResolveEventIdForConflictPair(
+      ConflictPair *conflictPair, Occurrence *occ1, Occurrence *occ2,
+      Occurrence *normScopeOcc1, Occurrence *normScopeOcc2,
+      OperationBase *normScopeParent, CorePipeInfo corePipeSrc,
+      CorePipeInfo corePipeDst, EventIdSolver &curEventIdSolver);
+
+  bool finalizeConflictPairResolution(
+      std::unique_ptr<ConflictPair> conflictPair, Occurrence *setOcc,
+      Occurrence *waitOcc, Loop *parentLCALoopOp,
+      Occurrence *parentLCALoopBeforePHOcc,
+      Occurrence *parentLCALoopAfterPHOcc, Occurrence *parentLCALoopOcc,
+      Occurrence *normScopeOcc1, Occurrence *normScopeOcc2,
+      CorePipeInfo corePipeSrc, CorePipeInfo corePipeDst,
+      EventIdSolver &curEventIdSolver, Occurrence *occ2);
 
   void handleUnitFlagConflict(Occurrence *occ1, Occurrence *occ2,
                               CorePipeInfo corePipeSrc,
