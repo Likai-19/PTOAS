@@ -295,24 +295,15 @@ static void dumpSyncIR(llvm::raw_ostream &os, const SyncIRs &syncIR,
   }
 }
 
-void mlir::pto::dumpInsertSyncPhase(llvm::StringRef phase, const SyncIRs &syncIR,
-                                   const SyncOperations &syncOperations,
-                                   Operation *opForPrinting,
-                                   llvm::raw_ostream &os) {
-  const unsigned level = getInsertSyncDebugLevel();
-  if (level < static_cast<unsigned>(InsertSyncDebugLevel::Phase)) {
-    return;
-  }
 
-  unsigned activeOps = 0;
-  unsigned setCnt = 0, waitCnt = 0, barrierCnt = 0;
-  unsigned blockSetCnt = 0, blockWaitCnt = 0, blockAllCnt = 0;
+static void countSyncOperationStats(const SyncOperations &syncOperations,
+                                    unsigned &activeOps, unsigned &setCnt,
+                                    unsigned &waitCnt, unsigned &barrierCnt,
+                                    unsigned &blockSetCnt, unsigned &blockWaitCnt,
+                                    unsigned &blockAllCnt) {
   for (const auto &group : syncOperations) {
     for (const auto &op : group) {
-      if (!op) {
-        continue;
-      }
-      if (op->uselessSync) {
+      if (!op || op->uselessSync) {
         continue;
       }
       activeOps++;
@@ -340,7 +331,21 @@ void mlir::pto::dumpInsertSyncPhase(llvm::StringRef phase, const SyncIRs &syncIR
       }
     }
   }
+}
 
+void mlir::pto::dumpInsertSyncPhase(llvm::StringRef phase, const SyncIRs &syncIR,
+                                   const SyncOperations &syncOperations,
+                                   Operation *opForPrinting,
+                                   llvm::raw_ostream &os) {
+  const unsigned level = getInsertSyncDebugLevel();
+  if (level < static_cast<unsigned>(InsertSyncDebugLevel::Phase)) {
+    return;
+  }
+  unsigned activeOps = 0;
+  unsigned setCnt = 0, waitCnt = 0, barrierCnt = 0;
+  unsigned blockSetCnt = 0, blockWaitCnt = 0, blockAllCnt = 0;
+  countSyncOperationStats(syncOperations, activeOps, setCnt, waitCnt,
+                          barrierCnt, blockSetCnt, blockWaitCnt, blockAllCnt);
   os << "\n// === [PTOInsertSync Debug] " << phase << " === //\n";
   os << llvm::formatv("// nodes={0}, syncGroups={1}, activeOps={2} "
                       "(set={3}, wait={4}, barrier={5}, blockSet={6}, "
@@ -348,18 +353,16 @@ void mlir::pto::dumpInsertSyncPhase(llvm::StringRef phase, const SyncIRs &syncIR
                       syncIR.size(), syncOperations.size(), activeOps, setCnt,
                       waitCnt, barrierCnt, blockSetCnt, blockWaitCnt,
                       blockAllCnt);
-
   if (level < static_cast<unsigned>(InsertSyncDebugLevel::SyncIR)) {
     os << "// ========================================= //\n";
     return;
   }
-
   InsertSyncDumpOptions options;
   const bool showMemInfo =
       level >= static_cast<unsigned>(InsertSyncDebugLevel::Trace);
   options.showMemInfo = showMemInfo;
   options.showUselessSync = showMemInfo;
-
   dumpSyncIR(os, syncIR, opForPrinting, options, showMemInfo);
   os << "// ========================================= //\n";
 }
+

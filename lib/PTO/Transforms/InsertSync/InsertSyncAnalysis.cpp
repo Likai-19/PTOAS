@@ -544,6 +544,18 @@ void InsertSyncAnalysis::MemAnalyze(
   UpdateSyncRecordInfo(frontCompound, syncRecordList);
 }
 
+
+static void collectAccReadReadDependencies(DepBaseMemInfoPairVec &rrDepVec,
+                                           DepBaseMemInfoPairVec &out,
+                                           bool &hasDependency) {
+  for (auto &pair : rrDepVec) {
+    if (pair.first && pair.first->scope == pto::AddressSpace::ACC) {
+      out.push_back(pair);
+      hasDependency = true;
+    }
+  }
+}
+
 bool InsertSyncAnalysis::IsMemInfoHasDependency(
     CompoundInstanceElement *nowCompound,
     CompoundInstanceElement *frontCompound,
@@ -557,7 +569,6 @@ bool InsertSyncAnalysis::IsMemInfoHasDependency(
     hasDependency |= memAnalyzer_.DepBetween(nowCompound->defVec, frontCompound->defVec,
                                             depBaseMemInfosVec);
   }
-
   // Special hazard: ACC (L0C) read/read cross-pipe ordering.
   //
   // Some PTO-ISA sequences have semantically "read/read" patterns on ACC, but
@@ -566,19 +577,10 @@ bool InsertSyncAnalysis::IsMemInfoHasDependency(
     DepBaseMemInfoPairVec rrDepVec;
     if (memAnalyzer_.DepBetween(nowCompound->useVec, frontCompound->useVec,
                                rrDepVec)) {
-      for (auto &pair : rrDepVec) {
-        if (!pair.first) {
-          continue;
-        }
-        if (pair.first->scope != pto::AddressSpace::ACC) {
-          continue;
-        }
-        depBaseMemInfosVec.push_back(pair);
-        hasDependency = true;
-      }
+      collectAccReadReadDependencies(rrDepVec, depBaseMemInfosVec,
+                                      hasDependency);
     }
   }
-
   return hasDependency;
 }
 
@@ -597,7 +599,6 @@ bool InsertSyncAnalysis::CanPrunePipeVBarrier(
       frontCompound->kPipeValue != PipelineType::PIPE_V) {
     return false;
   }
-
   // The same-access fast path only applies to a producer output consumed by
   // the next op. A read/write non-DPS operand is scratch state; pruning its
   // WAW dependency would allow two vector instructions to use it concurrently.
@@ -607,7 +608,6 @@ bool InsertSyncAnalysis::CanPrunePipeVBarrier(
                                     depBaseMemInfosVec)) {
     return false;
   }
-
   // PIPE_V has a hardware-safe same-access chain case: exact same-access
   // dependencies from the producer result to the consumer source do not require
   // a vector-pipe barrier once the producer repeat is large enough. Keep the
@@ -618,7 +618,6 @@ bool InsertSyncAnalysis::CanPrunePipeVBarrier(
     if (!isSameExactAccess(pair.first, pair.second)) {
       return false;
     }
-
     if (containsExactAccess(nowCompound->useVec, pair.first) &&
         containsExactAccess(frontCompound->defVec, pair.second)) {
       if (!llvm::is_contained(producerAccesses, pair.second)) {
@@ -631,7 +630,6 @@ bool InsertSyncAnalysis::CanPrunePipeVBarrier(
   if (producerAccesses.empty()) {
     return false;
   }
-
   // The caller is analyzing this specific front->now dependency. Do not look
   // for a later text-order writer here; it may belong to a different branch
   // path or a zero-trip loop body.
@@ -641,7 +639,6 @@ bool InsertSyncAnalysis::CanPrunePipeVBarrier(
       return false;
     }
   }
-
   return true;
 }
 

@@ -704,175 +704,161 @@ static SmallVector<int64_t> combineSubviewStrides(ArrayRef<int64_t> baseStrides,
   return result;
 }
 
+
+static void recordStaticInts(ValueRange values,
+                             SmallVectorImpl<int64_t> &out, bool clear) {
+  if (clear) {
+    out.clear();
+  }
+  for (Value value : values) {
+    int64_t staticValue = ShapedType::kDynamic;
+    (void)getStaticIntFromValue(value, staticValue);
+    out.push_back(staticValue);
+  }
+}
+
 static void populateViewShapeAndStrides(Value value,
                                         SmallVectorImpl<int64_t> &shape,
                                         SmallVectorImpl<int64_t> &strides) {
-  if (!value) {
-    return;
-  }
-
+  if (!value) { return; }
   if (auto partition = value.getDefiningOp<pto::PartitionViewOp>()) {
     populateViewShapeAndStrides(partition.getSource(), shape, strides);
     SmallVector<int64_t> partitionShape;
-    partitionShape.reserve(partition.getSizes().size());
-    for (Value size : partition.getSizes()) {
-      int64_t staticSize = ShapedType::kDynamic;
-      (void)getStaticIntFromValue(size, staticSize);
-      partitionShape.push_back(staticSize);
-    }
+    recordStaticInts(partition.getSizes(), partitionShape, /*clear=*/false);
     shape = std::move(partitionShape);
     return;
   }
-
   if (auto makeView = value.getDefiningOp<pto::MakeTensorViewOp>()) {
-    shape.clear();
-    strides.clear();
-    for (Value dim : makeView.getShape()) {
-      int64_t staticDim = ShapedType::kDynamic;
-      (void)getStaticIntFromValue(dim, staticDim);
-      shape.push_back(staticDim);
-    }
-    for (Value stride : makeView.getStrides()) {
-      int64_t staticStride = ShapedType::kDynamic;
-      (void)getStaticIntFromValue(stride, staticStride);
-      strides.push_back(staticStride);
-    }
+    recordStaticInts(makeView.getShape(), shape, /*clear=*/true);
+    recordStaticInts(makeView.getStrides(), strides, /*clear=*/true);
     return;
   }
-
   if (auto subview = value.getDefiningOp<memref::SubViewOp>()) {
     populateViewShapeAndStrides(subview.getSource(), shape, strides);
     SmallVector<int64_t> subviewShape;
     recordStaticSizes(subview.getMixedSizes(), subviewShape);
-    if (!subviewShape.empty()) {
-      shape = subviewShape;
-    }
+    if (!subviewShape.empty()) { shape = subviewShape; }
     if (!strides.empty()) {
       strides = combineSubviewStrides(strides, subview.getMixedStrides());
     }
     return;
   }
-
   if (auto reinterpret = value.getDefiningOp<memref::ReinterpretCastOp>()) {
     if (shape.empty()) {
       SmallVector<int64_t> reinterpretShape;
       recordStaticSizes(reinterpret.getMixedSizes(), reinterpretShape);
-      if (!reinterpretShape.empty()) {
-        shape = reinterpretShape;
-      }
+      if (!reinterpretShape.empty()) { shape = reinterpretShape; }
     }
     if (strides.empty()) {
       recordStaticSizes(reinterpret.getMixedStrides(), strides);
     }
     return;
   }
-
   if (auto cast = value.getDefiningOp<memref::CastOp>()) {
     populateViewShapeAndStrides(cast.getSource(), shape, strides);
     return;
   }
-
   if (auto memrefTy = dyn_cast<MemRefType>(value.getType())) {
     if (shape.empty()) {
       shape.assign(memrefTy.getShape().begin(), memrefTy.getShape().end());
     }
     if (strides.empty()) {
       int64_t offset = ShapedType::kDynamic;
-      if (succeeded(
-              mlir::pto::getPTOMemRefStridesAndOffset(memrefTy, strides, offset))) {
-        // strides populated — dynamic dims remain ShapedType::kDynamic.
-      }
+      // strides populated — dynamic dims remain ShapedType::kDynamic.
+      (void)mlir::pto::getPTOMemRefStridesAndOffset(memrefTy, strides, offset);
     }
   }
 }
 
-static std::optional<OperandTypeInfo> buildOperandTypeInfo(Value value) {
-  Type ty = value.getType();
+
+
+static std::optional<OperandTypeInfo> buildTileOperandTypeInfo(
+    pto::TileBufType tbTy) {
   // Tile operand — from TileBufType.
-  if (auto tbTy = dyn_cast<pto::TileBufType>(ty)) {
-    OperandTypeInfo info;
-    info.kind = OperandKind::Tile;
-    info.dtype = getDtypeString(tbTy.getElementType());
-    if (info.dtype.empty()) {
-      return std::nullopt;
-    }
-    info.tileShape.assign(tbTy.getShape().begin(), tbTy.getShape().end());
-    auto validShape = tbTy.getValidShape();
-    if (validShape.empty()) {
-      info.tileValidShape.assign(tbTy.getShape().begin(), tbTy.getShape().end());
-    }
-    else {
-      info.tileValidShape.assign(validShape.begin(), validShape.end());
+  OperandTypeInfo info;
+  info.kind = OperandKind::Tile;
+  info.dtype = getDtypeString(tbTy.getElementType());
+  if (info.dtype.empty()) {
+    return std::nullopt;
+  }
+  info.tileShape.assign(tbTy.getShape().begin(), tbTy.getShape().end());
+  auto validShape = tbTy.getValidShape();
+  if (validShape.empty()) {
+    info.tileValidShape.assign(tbTy.getShape().begin(), tbTy.getShape().end());
+  } else {
+    info.tileValidShape.assign(validShape.begin(), validShape.end());
+  }
+  info.tileMemorySpace = getMemorySpaceString(tbTy);
+  if (auto config = tbTy.getConfigAttr()) {
+    info.blayout = static_cast<int32_t>(config.getBLayout().getValue());
+    info.slayout = static_cast<int32_t>(config.getSLayout().getValue());
+    info.fractal = config.getSFractalSize()
+                       ? static_cast<int32_t>(config.getSFractalSize().getInt())
+                       : 0;
+    info.pad = static_cast<uint64_t>(config.getPad().getValue());
+    info.compact = static_cast<int32_t>(config.getCompactMode().getValue());
+  }
+  return info;
 }
-    info.tileMemorySpace = getMemorySpaceString(tbTy);
-    if (auto config = tbTy.getConfigAttr()) {
-      info.blayout = static_cast<int32_t>(config.getBLayout().getValue());
-      info.slayout = static_cast<int32_t>(config.getSLayout().getValue());
-      info.fractal = config.getSFractalSize()
-                         ? static_cast<int32_t>(config.getSFractalSize().getInt())
-                         : 0;
-      info.pad = static_cast<uint64_t>(config.getPad().getValue());
-      info.compact =
-          static_cast<int32_t>(config.getCompactMode().getValue());
-    }
-    return info;
-  }
 
+static std::optional<OperandTypeInfo> buildMemRefOperandTypeInfo(
+    Value value, MemRefType mrTy) {
   // View operand — from MemRefType (lowered PartitionTensorViewType).
-  if (auto mrTy = dyn_cast<MemRefType>(ty)) {
-    OperandTypeInfo info;
-    info.kind = OperandKind::View;
-    info.dtype = getDtypeString(mrTy.getElementType());
-    if (info.dtype.empty()) {
-      return std::nullopt;
-    }
-    info.viewMemorySpace = getMemorySpaceString(mrTy);
-    info.viewLayout = resolveViewLayout(value);
-    populateViewShapeAndStrides(value, info.viewShape, info.viewStrides);
-    if (info.viewShape.empty()) {
-      info.viewShape.assign(mrTy.getShape().begin(), mrTy.getShape().end());
-    }
-    if (info.viewStrides.empty()) {
-      int64_t offset = ShapedType::kDynamic;
-      if (succeeded(mlir::pto::getPTOMemRefStridesAndOffset(
-              mrTy, info.viewStrides, offset))) {
-        // strides populated — dynamic dims remain ShapedType::kDynamic.
-      }
-    }
-    return info;
+  OperandTypeInfo info;
+  info.kind = OperandKind::View;
+  info.dtype = getDtypeString(mrTy.getElementType());
+  if (info.dtype.empty()) {
+    return std::nullopt;
   }
-
-  if (auto viewTy = dyn_cast<pto::PartitionTensorViewType>(ty)) {
-    OperandTypeInfo info;
-    info.kind = OperandKind::View;
-    info.dtype = getDtypeString(viewTy.getElementType());
-    if (info.dtype.empty()) {
-      return std::nullopt;
-    }
-    info.viewMemorySpace = "gm";
-    info.viewLayout = resolveViewLayout(value);
-    populateViewShapeAndStrides(value, info.viewShape, info.viewStrides);
-    if (info.viewShape.empty()) {
-      info.viewShape.assign(viewTy.getShape().begin(), viewTy.getShape().end());
-    }
-    if (info.viewStrides.empty()) {
-      info.viewStrides.assign(viewTy.getRank(), ShapedType::kDynamic);
-    }
-    return info;
+  info.viewMemorySpace = getMemorySpaceString(mrTy);
+  info.viewLayout = resolveViewLayout(value);
+  populateViewShapeAndStrides(value, info.viewShape, info.viewStrides);
+  if (info.viewShape.empty()) {
+    info.viewShape.assign(mrTy.getShape().begin(), mrTy.getShape().end());
   }
+  if (info.viewStrides.empty()) {
+    int64_t offset = ShapedType::kDynamic;
+    // strides populated — dynamic dims remain ShapedType::kDynamic.
+    (void)mlir::pto::getPTOMemRefStridesAndOffset(mrTy, info.viewStrides, offset);
+  }
+  return info;
+}
 
+static std::optional<OperandTypeInfo> buildPartitionViewOperandTypeInfo(
+    Value value, pto::PartitionTensorViewType viewTy) {
+  OperandTypeInfo info;
+  info.kind = OperandKind::View;
+  info.dtype = getDtypeString(viewTy.getElementType());
+  if (info.dtype.empty()) {
+    return std::nullopt;
+  }
+  info.viewMemorySpace = "gm";
+  info.viewLayout = resolveViewLayout(value);
+  populateViewShapeAndStrides(value, info.viewShape, info.viewStrides);
+  if (info.viewShape.empty()) {
+    info.viewShape.assign(viewTy.getShape().begin(), viewTy.getShape().end());
+  }
+  if (info.viewStrides.empty()) {
+    info.viewStrides.assign(viewTy.getRank(), ShapedType::kDynamic);
+  }
+  return info;
+}
+
+static std::optional<OperandTypeInfo> buildVectorOperandTypeInfo(
+    VectorType vecTy) {
   // Auxiliary vector operand — from builtin VectorType (e.g. vector<4xi16>).
-  if (auto vecTy = dyn_cast<VectorType>(ty)) {
-    OperandTypeInfo info;
-    info.kind = OperandKind::Vector;
-    info.dtype = getDtypeString(vecTy.getElementType());
-    if (info.dtype.empty()) {
-      return std::nullopt;
-    }
-    info.vectorShape.assign(vecTy.getShape().begin(), vecTy.getShape().end());
-    return info;
+  OperandTypeInfo info;
+  info.kind = OperandKind::Vector;
+  info.dtype = getDtypeString(vecTy.getElementType());
+  if (info.dtype.empty()) {
+    return std::nullopt;
   }
+  info.vectorShape.assign(vecTy.getShape().begin(), vecTy.getShape().end());
+  return info;
+}
 
+static std::optional<OperandTypeInfo> buildScalarOperandTypeInfo(Value value,
+                                                                 Type ty) {
   // Scalar operand — from a scalar element type.
   OperandTypeInfo info;
   info.kind = OperandKind::Scalar;
@@ -886,6 +872,24 @@ static std::optional<OperandTypeInfo> buildOperandTypeInfo(Value value) {
   }
   return info;
 }
+
+static std::optional<OperandTypeInfo> buildOperandTypeInfo(Value value) {
+  Type ty = value.getType();
+  if (auto tbTy = dyn_cast<pto::TileBufType>(ty)) {
+    return buildTileOperandTypeInfo(tbTy);
+  }
+  if (auto mrTy = dyn_cast<MemRefType>(ty)) {
+    return buildMemRefOperandTypeInfo(value, mrTy);
+  }
+  if (auto viewTy = dyn_cast<pto::PartitionTensorViewType>(ty)) {
+    return buildPartitionViewOperandTypeInfo(value, viewTy);
+  }
+  if (auto vecTy = dyn_cast<VectorType>(ty)) {
+    return buildVectorOperandTypeInfo(vecTy);
+  }
+  return buildScalarOperandTypeInfo(value, ty);
+}
+
 
 static FailureOr<SpecKey> buildSpecKey(Operation *op) {
   SpecKey key;

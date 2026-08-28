@@ -231,56 +231,46 @@ static std::optional<TileHandleInfo> resolveTileHandle(Value tileBuf,
       auto yieldOp = dyn_cast<pto::YieldOp>(
           fusionRegion.getBody().front().getTerminator());
       if (!yieldOp) {
-        user->emitError("FoldTileBufIntrinsics: pto.fusion_region must "
-                        "terminate with pto.yield");
+        user->emitError("FoldTileBufIntrinsics: pto.fusion_region must terminate with pto.yield");
         return std::nullopt;
       }
       unsigned resultIndex = regionResult.getResultNumber();
       if (resultIndex >= yieldOp.getNumOperands()) {
-        user->emitError("FoldTileBufIntrinsics: pto.fusion_region result/yield "
-                        "sizes are inconsistent");
+        user->emitError("FoldTileBufIntrinsics: pto.fusion_region result/yield sizes are inconsistent");
         return std::nullopt;
       }
       return resolveTileHandle(yieldOp.getOperand(resultIndex), user);
     }
   }
-
   tileBuf = unwrapBridgingCasts(tileBuf);
   if (auto alloc = tileBuf.getDefiningOp<pto::AllocTileOp>()) {
     auto tileTy = dyn_cast<pto::TileBufType>(alloc.getResult().getType());
     if (!tileTy) {
-      user->emitError(
-          "FoldTileBufIntrinsics: pto.alloc_tile must produce !pto.tile_buf");
+      user->emitError("FoldTileBufIntrinsics: pto.alloc_tile must produce !pto.tile_buf");
       return std::nullopt;
     }
     return TileHandleInfo{alloc.getAddr(), alloc.getValidRow(),
                           alloc.getValidCol(), tileTy.getConfigAttr()};
   }
-
   if (auto reshape = tileBuf.getDefiningOp<pto::TReshapeOp>()) {
     auto sourceInfo = resolveTileHandle(reshape.getSrc(), user);
     if (!sourceInfo) {
       return std::nullopt;
     }
-
     auto tileTy = dyn_cast<pto::TileBufType>(reshape.getResult().getType());
     if (!tileTy) {
-      user->emitError(
-          "FoldTileBufIntrinsics: pto.treshape must produce !pto.tile_buf");
+      user->emitError("FoldTileBufIntrinsics: pto.treshape must produce !pto.tile_buf");
       return std::nullopt;
     }
-
     auto [validRow, validCol] = findSetValidShapeOverride(tileBuf);
     return TileHandleInfo{sourceInfo->addr,
                           validRow ? validRow : sourceInfo->validRow,
                           validCol ? validCol : sourceInfo->validCol,
                           tileTy.getConfigAttr()};
   }
-
   user->emitError("FoldTileBufIntrinsics: expected tile_buf to be defined by "
-                  "the active materialized tile-handle bridge "
-                  "(pto.alloc_tile or pto.treshape, "
-                  "or a pto.fusion_region result that yields one of them)");
+                  "the active materialized tile-handle bridge (pto.alloc_tile or "
+                  "pto.treshape, or a pto.fusion_region result that yields one of them)");
   return std::nullopt;
 }
 
@@ -293,9 +283,7 @@ struct ViewChain {
 
 static std::optional<ViewChain> traceViewChain(Value tensorView,
                                                Operation *user) {
-  Value memrefVal;
-  UnrealizedConversionCastOp castOp;
-
+  Value memrefVal; UnrealizedConversionCastOp castOp;
   if (isa<MemRefType>(tensorView.getType())) {
     memrefVal = tensorView;
   } else {
@@ -314,7 +302,6 @@ static std::optional<ViewChain> traceViewChain(Value tensorView,
       return std::nullopt;
     }
   }
-
   if (auto memrefCastOp =
           memrefVal.getDefiningOp<UnrealizedConversionCastOp>()) {
     if (memrefCastOp.getNumOperands() == 1 && memrefCastOp.getNumResults() == 1 &&
@@ -324,7 +311,6 @@ static std::optional<ViewChain> traceViewChain(Value tensorView,
       memrefVal = memrefCastOp.getOperand(0);
     }
   }
-
   auto subviewOp = memrefVal.getDefiningOp<memref::SubViewOp>();
   if (!subviewOp) {
     user->emitError("FoldTileBufIntrinsics: expected memref to be defined by "
@@ -334,7 +320,6 @@ static std::optional<ViewChain> traceViewChain(Value tensorView,
                 : StringRef("block argument"));
     return std::nullopt;
   }
-
   auto rcOp = subviewOp.getSource().getDefiningOp<memref::ReinterpretCastOp>();
   if (!rcOp) {
     user->emitError(
@@ -345,7 +330,6 @@ static std::optional<ViewChain> traceViewChain(Value tensorView,
                 : StringRef("block argument"));
     return std::nullopt;
   }
-
   return ViewChain{castOp, subviewOp, rcOp, rcOp.getSource()};
 }
 
@@ -418,6 +402,26 @@ static Value computeResultStride(OpBuilder &builder, Location loc,
   return builder.create<arith::MulIOp>(loc, lhs, rhs);
 }
 
+
+static Value accumulateLinearOffsetTerms(OpBuilder &builder, Location loc,
+                                         ArrayRef<OpFoldResult> offsets,
+                                         ArrayRef<OpFoldResult> strides) {
+  Value part;
+  for (auto [offset, stride] : llvm::zip(offsets, strides)) {
+    if (auto attr = dyn_cast<Attribute>(offset)) {
+      auto intAttr = dyn_cast<IntegerAttr>(attr);
+      if (intAttr && intAttr.getInt() == 0) {
+        continue;
+      }
+    }
+    Value off = getValueOrCreateConstant(builder, loc, offset);
+    Value strideVal = getValueOrCreateConstant(builder, loc, stride);
+    Value term = builder.create<arith::MulIOp>(loc, off, strideVal);
+    part = part ? builder.create<arith::AddIOp>(loc, part, term) : term;
+  }
+  return part;
+}
+
 static Value computeLinearOffset(OpBuilder &builder, Location loc,
                                  ArrayRef<OpFoldResult> rcOffsets,
                                  ArrayRef<OpFoldResult> svOffsets,
@@ -427,24 +431,10 @@ static Value computeLinearOffset(OpBuilder &builder, Location loc,
   if (rcAllZero && svAllZero) {
     return Value();
   }
-
-  Value svPart;
-  if (!svAllZero) {
-    for (auto [svOffset, rcStride] : llvm::zip(svOffsets, rcStrides)) {
-      if (auto attr = dyn_cast<Attribute>(svOffset)) {
-        auto intAttr = dyn_cast<IntegerAttr>(attr);
-        if (intAttr && intAttr.getInt() == 0) {
-          continue;
-        }
-      }
-
-      Value off = getValueOrCreateConstant(builder, loc, svOffset);
-      Value stride = getValueOrCreateConstant(builder, loc, rcStride);
-      Value term = builder.create<arith::MulIOp>(loc, off, stride);
-      svPart = svPart ? builder.create<arith::AddIOp>(loc, svPart, term) : term;
-    }
-  }
-
+  Value svPart = svAllZero
+                     ? Value()
+                     : accumulateLinearOffsetTerms(builder, loc, svOffsets,
+                                                   rcStrides);
   Value rcPart;
   if (!rcAllZero) {
     if (rcOffsets.empty()) {
@@ -452,12 +442,12 @@ static Value computeLinearOffset(OpBuilder &builder, Location loc,
     }
     rcPart = getValueOrCreateConstant(builder, loc, rcOffsets.front());
   }
-
   if (rcPart && svPart) {
     return builder.create<arith::AddIOp>(loc, rcPart, svPart);
   }
   return rcPart ? rcPart : svPart;
 }
+
 
 static Value unwrapPTOViewBridge(Value value) {
   while (auto cast = value.getDefiningOp<UnrealizedConversionCastOp>()) {
@@ -474,6 +464,12 @@ enum class PTOViewProjectionKind { Dim, Stride, Address };
 static Value projectSCFIfViewResult(Value view, PTOViewProjectionKind kind,
                                     int64_t dim, pto::PtrType resultPtrType,
                                     OpBuilder &builder, Operation *user);
+
+
+
+
+
+
 
 static Value resolvePTOViewDim(Value view, int64_t dim, OpBuilder &builder,
                                Operation *user) {
@@ -572,6 +568,39 @@ static void cloneBlockWithoutTerminator(Block *source, Block *target,
   }
 }
 
+static bool cloneSCFIfProjection(OpBuilder &builder, Block *source, Block *target,
+                                 scf::YieldOp oldYield, unsigned resultIndex,
+                                 PTOViewProjectionKind kind, int64_t dim,
+                                 pto::PtrType resultPtrType, Operation *user) {
+  IRMapping mapping;
+  cloneBlockWithoutTerminator(source, target, mapping, builder);
+  SmallVector<Value> yields;
+  yields.reserve(oldYield.getNumOperands() + 1);
+  for (Value operand : oldYield.getOperands()) {
+    yields.push_back(mapping.lookupOrDefault(operand));
+  }
+  Value yieldedView = yields[resultIndex];
+  builder.setInsertionPointToEnd(target);
+  Value projection;
+  switch (kind) {
+  case PTOViewProjectionKind::Dim:
+    projection = resolvePTOViewDim(yieldedView, dim, builder, user);
+    break;
+  case PTOViewProjectionKind::Stride:
+    projection = resolvePTOViewStride(yieldedView, dim, builder, user);
+    break;
+  case PTOViewProjectionKind::Address:
+    projection =
+        resolvePTOViewAddress(yieldedView, resultPtrType, builder, user);
+    break;
+  }
+  if (!projection) {
+    return false;
+  }
+  yields.push_back(projection);
+  builder.create<scf::YieldOp>(oldYield.getLoc(), yields);
+  return true;
+}
 static Value projectSCFIfViewResult(Value view, PTOViewProjectionKind kind,
                                     int64_t dim, pto::PtrType resultPtrType,
                                     OpBuilder &builder, Operation *user) {
@@ -591,7 +620,6 @@ static Value projectSCFIfViewResult(Value view, PTOViewProjectionKind kind,
       resultIndex >= elseYield.getNumOperands()) {
     return {};
   }
-
   Type projectionType = kind == PTOViewProjectionKind::Address
                             ? Type(resultPtrType)
                             : Type(builder.getIndexType());
@@ -601,56 +629,21 @@ static Value projectSCFIfViewResult(Value view, PTOViewProjectionKind kind,
   SmallVector<Type> resultTypes(ifOp.getResultTypes().begin(),
                                 ifOp.getResultTypes().end());
   resultTypes.push_back(projectionType);
-
   OpBuilder ifBuilder(ifOp);
-  auto newIf = ifBuilder.create<scf::IfOp>(
-      ifOp.getLoc(), resultTypes, ifOp.getCondition(),
-      /*addThenBlock=*/true, /*addElseBlock=*/true);
+  auto newIf = ifBuilder.create<scf::IfOp>(ifOp.getLoc(), resultTypes,
+      ifOp.getCondition(), true, true);
   newIf->setAttrs(ifOp->getAttrs());
-
-  auto cloneBranch = [&ifBuilder, dim, kind, resultIndex, resultPtrType, user](
-                         Block *source, Block *target, scf::YieldOp oldYield,
-                         bool &failed) {
-    IRMapping mapping;
-    cloneBlockWithoutTerminator(source, target, mapping, ifBuilder);
-    SmallVector<Value> yields;
-    yields.reserve(oldYield.getNumOperands() + 1);
-    for (Value operand : oldYield.getOperands()) {
-      yields.push_back(mapping.lookupOrDefault(operand));
-    }
-    Value yieldedView = yields[resultIndex];
-    ifBuilder.setInsertionPointToEnd(target);
-    Value projection;
-    switch (kind) {
-    case PTOViewProjectionKind::Dim:
-      projection =
-          resolvePTOViewDim(yieldedView, dim, ifBuilder, user);
-      break;
-    case PTOViewProjectionKind::Stride:
-      projection =
-          resolvePTOViewStride(yieldedView, dim, ifBuilder, user);
-      break;
-    case PTOViewProjectionKind::Address:
-      projection = resolvePTOViewAddress(yieldedView, resultPtrType, ifBuilder,
-                                         user);
-      break;
-    }
-    if (!projection) {
-      failed = true;
-      return;
-    }
-    yields.push_back(projection);
-    ifBuilder.create<scf::YieldOp>(oldYield.getLoc(), yields);
-  };
-
   bool failed = false;
-  cloneBranch(ifOp.thenBlock(), newIf.thenBlock(), thenYield, failed);
-  cloneBranch(ifOp.elseBlock(), newIf.elseBlock(), elseYield, failed);
+  failed |= !cloneSCFIfProjection(ifBuilder, ifOp.thenBlock(), newIf.thenBlock(),
+                                  thenYield, resultIndex, kind, dim,
+                                  resultPtrType, user);
+  failed |= !cloneSCFIfProjection(ifBuilder, ifOp.elseBlock(), newIf.elseBlock(),
+                                  elseYield, resultIndex, kind, dim,
+                                  resultPtrType, user);
   if (failed) {
     newIf.erase();
     return {};
   }
-
   for (auto [oldResult, newResult] :
        llvm::zip_equal(ifOp.getResults(), newIf.getResults().take_front(
                                               ifOp.getNumResults()))) {
@@ -660,7 +653,6 @@ static Value projectSCFIfViewResult(Value view, PTOViewProjectionKind kind,
   ifOp.erase();
   return projection;
 }
-
 struct FoldTileBufIntrinsicsPass
     : public pto::impl::FoldTileBufIntrinsicsBase<FoldTileBufIntrinsicsPass> {
   using FoldTileBufIntrinsicsBase::FoldTileBufIntrinsicsBase;

@@ -520,15 +520,13 @@ static LogicalResult verifyAtomicCommon(Operation *op, Value ptr, Type valueType
                                         Type resultType, bool bitwise,
                                         Attribute signednessAttr) {
   if (!isSupportedAtomicScalarType(valueType)) {
-    return op->emitOpError()
-           << "requires i32, i64, f16, bf16, f32, vector<2xf16> or "
-              "vector<2xbf16> atomic value type";
+    return op->emitOpError() << "requires i32, i64, f16, bf16, f32, "
+                                "vector<2xf16> or vector<2xbf16> atomic value type";
   }
   if (resultType != valueType) {
     return op->emitOpError()
            << "requires atomic result type to match value type";
   }
-
   auto ptrTy = dyn_cast<PtrType>(ptr.getType());
   if (!ptrTy) {
     return op->emitOpError() << "requires !pto.ptr pointer operand";
@@ -537,7 +535,6 @@ static LogicalResult verifyAtomicCommon(Operation *op, Value ptr, Type valueType
     return op->emitOpError()
            << "requires atomic value type to match pointer element type";
   }
-
   AddressSpace addressSpace = ptrTy.getMemorySpace().getAddressSpace();
   if (addressSpace != AddressSpace::GM && addressSpace != AddressSpace::VEC) {
     return op->emitOpError() << "requires GM or UB pointer";
@@ -545,7 +542,6 @@ static LogicalResult verifyAtomicCommon(Operation *op, Value ptr, Type valueType
   if (addressSpace == AddressSpace::VEC && valueType.isInteger(mlir::pto::kValue64)) {
     return op->emitOpError() << "does not support i64 UB-space atomics";
   }
-
   auto intType = dyn_cast<IntegerType>(valueType);
   if (bitwise) {
     if (!intType) {
@@ -555,21 +551,18 @@ static LogicalResult verifyAtomicCommon(Operation *op, Value ptr, Type valueType
       return op->emitOpError() << "does not support i64 UB-space bitwise atomics";
     }
   }
-
   if (signednessAttr && !intType) {
     return op->emitOpError()
            << "does not accept signedness for floating-point atomics";
   }
   if (isVector2F16OrBF16Type(valueType)) {
     if (!isInsideSimtExecutionScope(op)) {
-      return op->emitOpError()
-             << "requires packed atomics to be inside a pto.simt_entry "
-                "function or pto.section.simt on beta.1";
+      return op->emitOpError() << "requires packed atomics to be inside a "
+                                    "pto.simt_entry function or pto.section.simt on beta.1";
     }
     if (!op->getResult(0).use_empty()) {
-      return op->emitOpError()
-             << "does not support using the old value result for packed "
-                "atomics on beta.1; leave the result unused";
+      return op->emitOpError() << "does not support using the old value result for "
+                                    "packed atomics on beta.1; leave the result unused";
     }
   }
   return success();
@@ -5716,13 +5709,9 @@ LogicalResult VdupOp::verify() {
 }
 
 LogicalResult TensorViewAddrOp::verify() {
-  Type srcType = getSrc().getType();
-  Type dstType = getDst().getType();
-
-  Type elementType;
-  int64_t expectedRank = -1;
+  Type srcType = getSrc().getType(); Type dstType = getDst().getType();
+  Type elementType; int64_t expectedRank = -1;
   auto gmSpace = pto::AddressSpaceAttr::get(getContext(), pto::AddressSpace::GM);
-
   if (auto tvType = dyn_cast<pto::TensorViewType>(srcType)) {
     elementType = tvType.getElementType();
     expectedRank = tvType.getRank();
@@ -5741,7 +5730,6 @@ LogicalResult TensorViewAddrOp::verify() {
     return emitOpError(
         "source must be a tensor_view, partition_tensor_view, or memref");
   }
-
   if (auto dstMemRefType = dyn_cast<BaseMemRefType>(dstType)) {
     if (dstMemRefType.getElementType() != elementType) {
       return emitOpError(
@@ -5757,7 +5745,6 @@ LogicalResult TensorViewAddrOp::verify() {
     }
     return success();
   }
-
   auto dstPtrType = dyn_cast<pto::PtrType>(dstType);
   if (!dstPtrType) {
     return emitOpError("result must be a memref or !pto.ptr<...>");
@@ -6380,21 +6367,17 @@ static LogicalResult verifyShiftVecOp(BinaryOp op) {
           op.getOperation(), op.getLhs().getType(), "lhs type"))) {
     return failure();
   }
-
   auto lhsType = cast<VRegType>(op.getLhs().getType());
   auto rhsType = cast<VRegType>(op.getRhs().getType());
   auto resultType = cast<VRegType>(op.getResult().getType());
-
   // Shifting is only meaningful for integer vectors.
   if (!isa<IntegerType>(lhsType.getElementType())) {
     return op.emitOpError("requires integer vector element type");
   }
-
   // Result type must match lhs exactly.
   if (lhsType != resultType) {
     return op.emitOpError("requires matching result register vector shape");
   }
-
   // Shift count must have the same lane count and element bitwidth as the
   // shifted data.
   const bool hasMismatchedLaneCount =
@@ -7505,14 +7488,12 @@ LogicalResult VscatterOp::verify() {
   if (valueElemWidth != mlir::pto::kValue8 && valueElemWidth != 16 && valueElemWidth != 32) {
     return emitOpError("requires 8-, 16-, or 32-bit value elements");
   }
-
   unsigned expectedOffsetWidth = valueElemWidth == 32 ? 32 : 16;
   if (offsetsElemType.getWidth() != expectedOffsetWidth) {
     return emitOpError() << "requires " << expectedOffsetWidth
                          << "-bit offset vector elements for "
                          << valueElemWidth << "-bit values";
   }
-
   int64_t expectedOffsetCount = valueElemWidth == 8
                                     ? valueType.getElementCount() / 2
                                     : valueType.getElementCount();
@@ -7521,7 +7502,6 @@ LogicalResult VscatterOp::verify() {
                          << " offsets for " << valueType.getElementCount()
                          << "x" << valueElemWidth << "-bit values";
   }
-
   if (failed(verifyMaskTypeWithGranularityLike(
           *this, getMask().getType(), "mask type",
           valueElemWidth == mlir::pto::kValue32 ? "b32" : "b16"))) {
@@ -8612,72 +8592,77 @@ static StringRef getAddressSpaceDiagnosticName(pto::AddressSpace space) {
   return "unknown";
 }
 
+
+static LogicalResult checkNonNegativeConst(Operation *op, Value value,
+                                           StringRef name) {
+  if (!value) {
+    return success();
+  }
+  APInt intValue;
+  if (matchPattern(value, m_ConstantInt(&intValue)) && intValue.isNegative()) {
+    return op->emitOpError() << name << " must be non-negative";
+  }
+  return success();
+}
+
+static LogicalResult checkConstMax(Operation *op, Value value, StringRef name,
+                                   uint64_t max) {
+  if (!value) {
+    return success();
+  }
+  APInt intValue;
+  if (matchPattern(value, m_ConstantInt(&intValue))) {
+    uint64_t fieldValue = intValue.getZExtValue();
+    if (fieldValue > max) {
+      return op->emitOpError() << name << " must be <= " << max;
+    }
+  }
+  return success();
+}
+
+static LogicalResult checkConstAlignment(Operation *op, Value value,
+                                         StringRef name,
+                                         uint64_t alignment) {
+  if (!value) {
+    return success();
+  }
+  APInt intValue;
+  const bool hasUnalignedConstant =
+      matchPattern(value, m_ConstantInt(&intValue)) &&
+      intValue.urem(alignment) != 0;
+  if (hasUnalignedConstant) {
+    return op->emitOpError()
+           << name << " must be a multiple of " << alignment << " bytes";
+  }
+  return success();
+}
+
 static LogicalResult verifyRawFillGeometry(Operation *op, Value byteOffset,
                                            Value repeatTimes,
                                            Value blockNum32b, Value dstGap32b) {
-  auto checkNonNegativeConst = [&](Value value, StringRef name) -> LogicalResult {
-    if (!value) {
-      return success();
-    }
-    APInt intValue;
-    if (matchPattern(value, m_ConstantInt(&intValue))) {
-      if (intValue.isNegative()) {
-        return op->emitOpError() << name << " must be non-negative";
-      }
-    }
-    return success();
-  };
-  auto checkConstMax = [&](Value value, StringRef name,
-                           uint64_t max) -> LogicalResult {
-    if (!value) {
-      return success();
-    }
-    APInt intValue;
-    if (matchPattern(value, m_ConstantInt(&intValue))) {
-      uint64_t fieldValue = intValue.getZExtValue();
-      if (fieldValue > max) {
-        return op->emitOpError() << name << " must be <= " << max;
-      }
-    }
-    return success();
-  };
-  auto checkConstAlignment = [&](Value value, StringRef name,
-                                 uint64_t alignment) -> LogicalResult {
-    if (!value) {
-      return success();
-    }
-    APInt intValue;
-    const bool hasUnalignedConstant =
-        matchPattern(value, m_ConstantInt(&intValue)) &&
-        intValue.urem(alignment) != 0;
-    if (hasUnalignedConstant) {
-      return op->emitOpError()
-             << name << " must be a multiple of " << alignment << " bytes";
-    }
-    return success();
-  };
   const bool hasNonNegativeGeometry =
-      succeeded(checkNonNegativeConst(byteOffset, "byte_offset")) &&
-      succeeded(checkNonNegativeConst(repeatTimes, "repeat_times")) &&
-      succeeded(checkNonNegativeConst(blockNum32b, "block_num_32b")) &&
-      succeeded(checkNonNegativeConst(dstGap32b, "dst_gap_32b"));
+      succeeded(checkNonNegativeConst(op, byteOffset, "byte_offset")) &&
+      succeeded(checkNonNegativeConst(op, repeatTimes, "repeat_times")) &&
+      succeeded(checkNonNegativeConst(op, blockNum32b, "block_num_32b")) &&
+      succeeded(checkNonNegativeConst(op, dstGap32b, "dst_gap_32b"));
   if (!hasNonNegativeGeometry) {
     return failure();
   }
-  if (failed(checkConstAlignment(byteOffset, "byte_offset",
+  if (failed(checkConstAlignment(op, byteOffset, "byte_offset",
                                  kRawFillByteOffsetAlignment))) {
     return failure();
   }
-  if (failed(checkConstMax(repeatTimes, "repeat_times",
+  if (failed(checkConstMax(op, repeatTimes, "repeat_times",
                            kRawFillControlFieldMax)) ||
-      failed(checkConstMax(blockNum32b, "block_num_32b",
+      failed(checkConstMax(op, blockNum32b, "block_num_32b",
                            kRawFillControlFieldMax)) ||
-      failed(checkConstMax(dstGap32b, "dst_gap_32b",
+      failed(checkConstMax(op, dstGap32b, "dst_gap_32b",
                            kRawFillControlFieldMax))) {
     return failure();
   }
   return success();
 }
+
 
 static LogicalResult verifyRawFillWordBits(Operation *op, int64_t fillWordBits) {
   const bool validWordBits = fillWordBits == 16 || fillWordBits == 32;
@@ -9292,7 +9277,6 @@ static LogicalResult verifyMxLoadOperands(Operation *op,
     }
     return success();
   };
-
   const bool hasShape = llvm::any_of(shapeOperands, [](Value value) {
     return static_cast<bool>(value);
   });
@@ -9300,14 +9284,11 @@ static LogicalResult verifyMxLoadOperands(Operation *op,
     return static_cast<bool>(value);
   });
   if (hasShape && hasFull) {
-    return op->emitOpError()
-           << "cannot mix shape-derived MX operands with full MX operands";
+    return op->emitOpError() << "cannot mix shape-derived MX operands with full MX operands";
   }
   if (!hasShape && !hasFull) {
-    return op->emitOpError()
-           << "requires either all shape-derived MX operands or all full MX operands";
+    return op->emitOpError() << "requires either all shape-derived MX operands or all full MX operands";
   }
-
   if (hasShape) {
     for (auto [value, name] : llvm::zip(shapeOperands, shapeNames)) {
       if (!value) {
@@ -9318,7 +9299,6 @@ static LogicalResult verifyMxLoadOperands(Operation *op,
     return verifyCubeBridgeLoadStart(op, shapeOperands[mlir::pto::kValue2], shapeNames[mlir::pto::kValue2],
                                      shapeOperands[mlir::pto::kValue3], shapeNames[mlir::pto::kValue3]);
   }
-
   static constexpr StringRef kFullNames[] = {
       "x_start", "y_start", "x_step", "y_step", "src_stride", "dst_stride"};
   for (auto [value, name] : llvm::zip(fullOperands, kFullNames)) {
@@ -9478,7 +9458,6 @@ static LogicalResult verifyMteL1L0LoadOperands(
     return op->emitOpError(
         "requires either all shape-derived operands or all full control operands");
 }
-
   if (hasShape) {
     for (auto [value, name] : llvm::zip(shapeOperands, shapeNames)) {
       if (!value) {
@@ -9489,7 +9468,6 @@ static LogicalResult verifyMteL1L0LoadOperands(
     return verifyCubeBridgeLoadStart(op, shapeOperands[2], shapeNames[2],
                                      shapeOperands[3], shapeNames[3]);
   }
-
   static constexpr StringRef kFullNames[] = {
       "m_start", "k_start", "m_step", "k_step", "src_stride", "dst_stride"};
   for (auto [value, name] : llvm::zip(fullOperands, kFullNames)) {
@@ -9497,7 +9475,6 @@ static LogicalResult verifyMteL1L0LoadOperands(
       return op->emitOpError() << "full control form requires " << name;
 }
 }
-
   constexpr int64_t kU16Max = 65535;
   constexpr int64_t kU8Max = 255;
   if (failed(verifyStaticControlRange(op, fullOperands[0], "m_start", 0,

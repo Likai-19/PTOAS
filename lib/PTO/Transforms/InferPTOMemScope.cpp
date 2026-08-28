@@ -530,20 +530,14 @@ void InferPTOMemScopePass::runOnOperation() {
     deviceFuncList.push_back(func);
     return;
   });
-
   SmallVector<gpu::GPUFuncOp> gpuFuncList;
   getOperation()->walk([&](gpu::GPUModuleOp gpuModule) {
-    gpuModule->walk([&](gpu::GPUFuncOp gpuFunc) -> void {
-      gpuFuncList.push_back(gpuFunc);
-    });
+    gpuModule->walk(
+        [&](gpu::GPUFuncOp gpuFunc) { gpuFuncList.push_back(gpuFunc); });
   });
-
   for (auto func : gpuFuncList) {
-    if (failed(inferAndPropagateMemScopeForGpuFunc(func))) {
-      signalPassFailure();
-    }
+    if (failed(inferAndPropagateMemScopeForGpuFunc(func))) { signalPassFailure(); }
   }
-
   // Infer and propagate memory scope for device functions.
   for (auto func : deviceFuncList) {
     // Set the memory scope of values related to `pto::MmadL1Op` to L1 or L0C.
@@ -552,30 +546,25 @@ void InferPTOMemScopePass::runOnOperation() {
         signalPassFailure();
       }
     });
-
     func->walk([&](mlir::pto::TMatmulAccOp op) {
       if (failed(inferAndPropagateMemScopeForMatmulAccDps(op))) {
         signalPassFailure();
       }
     });
-
     func->walk([&](mlir::pto::TMatmulBiasOp op) {
       if (failed(inferAndPropagateMemScopeForMatmulBiasDps(op))) {
         signalPassFailure();
       }
     });
-
     func->walk([&](mlir::pto::TMovOp op) {
       if (failed(inferAndPropagateMemScopeForMovDps(op))) {
         signalPassFailure();
       }
     });
-
     // Set device function arguments' memory scope to GM.
     if (failed(inferAndPropagateMemScopeForFunc(func))) {
       signalPassFailure();
     }
-
     // Finally, set the remaining memory scope in the device kernel to UB.
     func->walk([&](memref::AllocOp op) {
       if (failed(inferAndPropagateUbufMemScope(op))) {
@@ -583,13 +572,13 @@ void InferPTOMemScopePass::runOnOperation() {
       }
     });
   }
-
   for (auto func : deviceFuncList) {
     if (failed(fixDeviceCallSite(func))) {
       signalPassFailure();
     }
   }
 }
+
 
 std::unique_ptr<Pass> mlir::pto::createInferPTOMemScopePass() {
   return std::make_unique<InferPTOMemScopePass>();
