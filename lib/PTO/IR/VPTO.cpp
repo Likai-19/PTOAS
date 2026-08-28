@@ -2017,13 +2017,11 @@ static std::optional<VcvtContract> lookupVcvtContract(VcvtElemKind src,
   case VcvtElemKind::F8E4M3:
   case VcvtElemKind::F8E5M2:
   case VcvtElemKind::HiF8:
-    if (dst == VcvtElemKind::F32)
-      return VcvtContract{false, false, true, VcvtPartFamily::Packed4};
+    if (dst == VcvtElemKind::F32) { return VcvtContract{false, false, true, VcvtPartFamily::Packed4}; }
     return std::nullopt;
   case VcvtElemKind::F4E1M2x2:
   case VcvtElemKind::F4E2M1x2:
-    if (dst == VcvtElemKind::BF16)
-      return VcvtContract{false, false, true, VcvtPartFamily::Packed4};
+    if (dst == VcvtElemKind::BF16) { return VcvtContract{false, false, true, VcvtPartFamily::Packed4}; }
     return std::nullopt;
   default: return std::nullopt;
   }
@@ -3748,15 +3746,9 @@ static LogicalResult verifyStructuredAccStoreMode(
     Type destinationElementType, std::optional<AccStoreUnitFlagCtrl> unitFlag,
     std::optional<AccStoreMode> mode) {
   if (!mode) {
-    if (split) {
-      return op->emitOpError("split requires nz2nz");
-    }
-    if (loop0SrcStride) {
-      return op->emitOpError("loop0_src_stride requires nz2dn");
-    }
-    if (loop3Count) {
-      return op->emitOpError("loop3 requires nz2nd or nz2dn");
-    }
+    if (split) { return op->emitOpError("split requires nz2nz"); }
+    if (loop0SrcStride) { return op->emitOpError("loop0_src_stride requires nz2dn"); }
+    if (loop3Count) { return op->emitOpError("loop3 requires nz2nd or nz2dn"); }
     return success();
   }
   switch (*mode) {
