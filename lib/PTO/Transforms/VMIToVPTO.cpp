@@ -1941,14 +1941,37 @@ checkSupportedGatherShape(VMIGatherOp op, std::string *reason) {
   auto indexElementType = dyn_cast<IntegerType>(indicesType.getElementType());
   if (!indexElementType || indexElementType.isSigned())
     return fail("requires signless or unsigned integer indices");
-  bool isU16Gather = resultBits == 16 && indexElementType.isUnsigned() &&
-                     indexElementType.getWidth() == 16 &&
-                     maskType.getGranularity() == "b16";
+  Type sourceElemType = getMemoryElementType(op.getSource().getType());
+  auto sourceInt = dyn_cast<IntegerType>(sourceElemType);
+  auto resultInt = dyn_cast<IntegerType>(resultType.getElementType());
+  bool isB8To16Gather =
+      resultBits == 16 && sourceInt && resultInt &&
+      sourceInt.getWidth() == mlir::pto::kValue8 &&
+      resultInt.getWidth() == mlir::pto::kValue16 &&
+      indexElementType.isUnsigned() &&
+      indexElementType.getWidth() == 16 &&
+      maskType.getGranularity() == "b16" &&
+      ((sourceInt.isUnsigned() && resultInt.isUnsigned()) ||
+       (!sourceInt.isUnsigned() && !resultInt.isUnsigned()));
+  bool isSameWidth16Gather =
+      resultBits == 16 && indexElementType.isUnsigned() &&
+      indexElementType.getWidth() == 16 &&
+      maskType.getGranularity() == "b16" &&
+      ((sourceInt && resultInt &&
+        sourceInt.getWidth() == mlir::pto::kValue16 &&
+        resultInt.getWidth() == mlir::pto::kValue16 &&
+        ((sourceInt.isUnsigned() && resultInt.isUnsigned()) ||
+         (!sourceInt.isUnsigned() && !resultInt.isUnsigned()))) ||
+       (sourceElemType == resultType.getElementType() &&
+        (sourceElemType.isF16() || sourceElemType.isBF16())));
+  bool isB16Gather = isSameWidth16Gather || isB8To16Gather;
   bool isB32Gather = resultBits == 32 && indexElementType.getWidth() == 32 &&
                      maskType.getGranularity() == "b32";
-  if (!isU16Gather && !isB32Gather)
+  if (!isB16Gather && !isB32Gather) {
     return fail("requires either 32-bit results with 32-bit indices and b32 "
-                "mask, or ui16 results with ui16 indices and b16 mask");
+                "mask, or ui16/i16/f16/bf16 results with ui16 indices and "
+                "b16 mask (including i8/ui8 -> i16/ui16 promotion)");
+  }
 
   FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
   FailureOr<int64_t> indicesArity = getVMIPhysicalArity(indicesType);
@@ -1962,7 +1985,16 @@ checkSupportedGatherShape(VMIGatherOp op, std::string *reason) {
     return fail("requires result, indices, passthru, and mask to have the "
                 "same physical arity");
 
-  if (isB32Gather) {
+  // Each pto.vgather2/pto.vgather2_bc emits one physical vector register per
+  // result part. The ISA has a hard limit of four physical registers per
+  // pto.vmi instruction, so reject anything above that instead of silently
+  // lowering to five or more physical gathers.
+  if (*resultArity > mlir::pto::kValue4) {
+    return fail("gather exceeds the 4 physical register limit per VMI "
+                "instruction");
+  }
+
+  if (isB32Gather || (isB16Gather && *resultArity != 1)) {
     std::string resultReason;
     std::string indicesReason;
     std::string passthruReason;
@@ -1978,8 +2010,6 @@ checkSupportedGatherShape(VMIGatherOp op, std::string *reason) {
                   passthruReason);
     if (failed(checkFullVMIPhysicalChunks(maskType, &maskReason)))
       return fail(Twine("mask requires full physical chunks; ") + maskReason);
-  } else if (*resultArity != 1) {
-    return fail("ui16 gather currently supports one physical chunk");
   }
 
   return success();
@@ -7048,6 +7078,13 @@ struct OneToNVMIGatherOpPattern : OneToNOpConversionPattern<VMIGatherOp> {
         indicesParts.size() != passthruParts.size() ||
         indicesParts.size() != resultTypes.size())
       return rewriter.notifyMatchFailure(op, "gather physical arity mismatch");
+    // Static all-active masks select gathered[0] for every lane, so the
+    // trailing vsel is a semantic no-op. Skip it and keep gathered directly.
+    // Non-static masks still take the original gather + vsel path.
+    auto resultVMIType = cast<VMIVRegType>(op.getResult().getType());
+    bool allActive = isStaticAllActiveMask(op.getMask(),
+                                           resultVMIType.getElementCount());
+
 
     SmallVector<Value> results;
     results.reserve(resultTypes.size());
@@ -7069,10 +7106,14 @@ struct OneToNVMIGatherOpPattern : OneToNOpConversionPattern<VMIGatherOp> {
                                  .create<Vgather2BcOp>(op.getLoc(), resultType,
                                                        *source, indices, mask)
                                  .getResult();
-      results.push_back(
-          rewriter
-              .create<VselOp>(op.getLoc(), resultType, gathered, passthru, mask)
-              .getResult());
+      if (allActive) {
+        results.push_back(gathered);
+      } else {
+        results.push_back(
+            rewriter
+                .create<VselOp>(op.getLoc(), resultType, gathered, passthru, mask)
+                .getResult());
+      }
     }
 
     replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
@@ -13394,9 +13435,10 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
         return WalkResult::advance();
       gather.emitError()
           << kVMIDiagUnsupportedPrefix
-          << "pto.vmi.gather lowers through pto.vgather2_bc + pto.vsel only "
+          << "pto.vmi.gather lowers through pto.vgather2/pto.vgather2_bc + pto.vsel only "
              "for UB pointer sources, contiguous full physical chunks, "
-             "32-bit result elements, i32 indices, and b32 masks ("
+             "ui16/i16/f16/bf16 results with ui16 indices and b16 masks, "
+             "or 32-bit results with i32 indices and b32 masks ("
           << reason << ")";
       return WalkResult::interrupt();
     }

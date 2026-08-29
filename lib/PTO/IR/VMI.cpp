@@ -562,6 +562,72 @@ static LogicalResult verifyMemoryElementMatches(Operation *op, Type memoryType,
   return success();
 }
 
+// 8->16 gather promotion is a zero-extension (unsigned) operation. signless
+// i8/i16 are accepted and treated as unsigned bytes; sign-extension is not
+// supported (see VMIVgatherOp / Vgather2Op description).
+static bool isVMI8To16GatherPair(Type sourceElemType, Type resultElemType) {
+  auto srcInt = dyn_cast<IntegerType>(sourceElemType);
+  auto resInt = dyn_cast<IntegerType>(resultElemType);
+  if (!srcInt || !resInt ||
+      srcInt.getWidth() != mlir::pto::kValue8 ||
+      resInt.getWidth() != mlir::pto::kValue16) {
+    return false;
+  }
+  if (srcInt.isUnsigned()) {
+    return resInt.isUnsigned();
+  }
+  return !resInt.isUnsigned();
+}
+
+static LogicalResult verifyGatherMemoryElementMatches(
+    Operation *op, Type memoryType, VMIVRegType dataType, StringRef role) {
+  Type memoryElementType = getMemoryElementType(memoryType);
+  if (!memoryElementType) {
+    return success();
+  }
+  if (memoryElementType == dataType.getElementType()) {
+    return success();
+  }
+  if (isVMI8To16GatherPair(memoryElementType, dataType.getElementType())) {
+    return success();
+  }
+  return op->emitOpError()
+         << "requires memory " << role
+         << " element type to match VMI data element type"
+            " or be an 8-bit integer promoted to a matching 16-bit integer";
+}
+
+static bool isSameWidth16BitGatherPair(Type sourceElemType,
+                                       Type resultElemType) {
+  // Existing VMI f16/bf16 path: same-width 16-bit float gather.
+  if (sourceElemType == resultElemType &&
+      (sourceElemType.isF16() || sourceElemType.isBF16())) {
+    return true;
+  }
+  auto srcInt = dyn_cast<IntegerType>(sourceElemType);
+  auto resInt = dyn_cast<IntegerType>(resultElemType);
+  // Existing VMI ui16/i16 path: same-width 16-bit integer gather with matching
+  // integer semantics (signless i16 / i16 is accepted as the non-unsigned side).
+  if (!srcInt || !resInt ||
+      srcInt.getWidth() != mlir::pto::kValue16 ||
+      resInt.getWidth() != mlir::pto::kValue16) {
+    return false;
+  }
+  if (srcInt.isUnsigned()) {
+    return resInt.isUnsigned();
+  }
+  return !resInt.isUnsigned();
+}
+
+static bool isSupported16BitGatherResult(Type sourceElemType,
+                                         Type resultElemType) {
+  // New 8 -> 16 path: i8/ui8 -> i16/ui16 with matching integer semantics.
+  if (isVMI8To16GatherPair(sourceElemType, resultElemType)) {
+    return true;
+  }
+  return isSameWidth16BitGatherPair(sourceElemType, resultElemType);
+}
+
 static LogicalResult verifyContiguousIfLayoutAssigned(Operation *op,
                                                       VMIVRegType type,
                                                       StringRef role) {
@@ -2582,7 +2648,7 @@ LogicalResult VMIGatherOp::verify() {
   auto maskType = cast<VMIMaskType>(getMask().getType());
   auto passthruType = cast<VMIVRegType>(getPassthru().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
-  if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
+  if (failed(verifyGatherMemoryElementMatches(getOperation(), getSource().getType(),
                                         resultType, "source"))) {
     return failure();
   }
@@ -2609,13 +2675,13 @@ LogicalResult VMIGatherOp::verify() {
     return failure();
   }
 
-  auto resultIntegerType = dyn_cast<IntegerType>(resultType.getElementType());
   if (indexElementType.getWidth() == mlir::pto::kValue16 &&
-      (!resultIntegerType || !resultIntegerType.isUnsigned() ||
-       resultIntegerType.getWidth() != mlir::pto::kValue16)) {
+      !isSupported16BitGatherResult(
+          getMemoryElementType(getSource().getType()),
+          resultType.getElementType())) {
     return emitOpError(
-        "requires ui16 result and passthru element type when using ui16 "
-        "indices");
+        "requires i16/ui16/f16/bf16 result and passthru element type when "
+        "using ui16 indices, or i8/ui8 -> i16/ui16 integer promotion");
   }
   return verifyMaskMatchesData(getOperation(), maskType, resultType);
 }
@@ -4022,7 +4088,7 @@ LogicalResult VMIVgatherOp::verify() {
     return failure();
   }
 
-  if (failed(verifyMemoryElementMatches(getOperation(), getSource().getType(),
+  if (failed(verifyGatherMemoryElementMatches(getOperation(), getSource().getType(),
                                         resultType, "source"))) {
     return failure();
   }
@@ -4044,16 +4110,15 @@ LogicalResult VMIVgatherOp::verify() {
     return failure();
   }
 
-  // 16-bit offsets only address the ui16 gather path (pto.vgather2 / b16 mask),
-  // which requires a ui16 result element type. Reject other 16-bit-offset
-  // results here so the error surfaces at the vgather op rather than later in
-  // the legacy gather it lowers to.
-  auto resultIntegerType = dyn_cast<IntegerType>(resultType.getElementType());
+  // 16-bit offsets address the pto.vgather2 / b16 mask path.  It supports
+  // i16/ui16/f16/bf16 same-width gather and i8/ui8 -> i16/ui16 promotion.
   if (indexElementType.getWidth() == mlir::pto::kValue16 &&
-      (!resultIntegerType || !resultIntegerType.isUnsigned() ||
-       resultIntegerType.getWidth() != mlir::pto::kValue16)) {
+      !isSupported16BitGatherResult(
+          getMemoryElementType(getSource().getType()),
+          resultType.getElementType())) {
     return emitOpError(
-        "requires ui16 result element type when using ui16 offsets");
+        "requires i16/ui16/f16/bf16 result element type when using ui16 "
+        "offsets, or i8/ui8 -> i16/ui16 integer promotion");
   }
 
   if (auto pmode = getPmode()) {

@@ -6,21 +6,21 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: not pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto 2>&1 | FileCheck %s
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment | FileCheck %s
 
 module {
-  func.func @vmi_to_vpto_gather_f16_invalid(
-      %src: !pto.ptr<f16, ub>,
-      %indices: !pto.vmi.vreg<128xi32, #pto.vmi.layout<contiguous>>,
-      %mask: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>) {
+  func.func @gather_pred_inferred_b16(
+      %src: !pto.ptr<ui16, ub>,
+      %indices: !pto.vmi.vreg<32xui16>,
+      %mask: !pto.vmi.mask<32xpred>)
+      -> !pto.vmi.vreg<32xui16> {
     %out = pto.vmi.vgather %src, %indices, %mask
-        : !pto.ptr<f16, ub>,
-          !pto.vmi.vreg<128xi32, #pto.vmi.layout<contiguous>>,
-          !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
-        -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
-    return
+        : !pto.ptr<ui16, ub>, !pto.vmi.vreg<32xui16>, !pto.vmi.mask<32xpred>
+        -> !pto.vmi.vreg<32xui16>
+    return %out : !pto.vmi.vreg<32xui16>
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.gather lowers through pto.vgather2/pto.vgather2_bc + pto.vsel only
-// CHECK-SAME: or 32-bit results
+// CHECK-LABEL: func.func @gather_pred_inferred_b16(
+// CHECK: !pto.vmi.mask<32xb16>
+// CHECK-NOT: !pto.vmi.mask<32xpred>

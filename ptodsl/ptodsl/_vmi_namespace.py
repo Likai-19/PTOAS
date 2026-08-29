@@ -432,10 +432,21 @@ def _derive_hist_result_type(acc, *, context: str):
 
 def _derive_vgather_result_type(source, offsets, *, context: str):
     offsets_type = _as_vmi_vreg_type(_type_of(offsets), context=context)
-    result_type = _pointer_element_type(_type_of(source), context=context)
+    result_elem_type = _pointer_element_type(_type_of(source), context=context)
+    # 8-bit integer sources use the B16 gather promotion path (i8 -> i16,
+    # ui8 -> ui16, si8 -> si16).
+    if IntegerType.isinstance(result_elem_type):
+        source_int_type = IntegerType(result_elem_type)
+        if source_int_type.width == 8:
+            if source_int_type.is_unsigned:
+                result_elem_type = IntegerType.get_unsigned(16)
+            elif source_int_type.is_signed:
+                result_elem_type = IntegerType.get_signed(16)
+            else:
+                result_elem_type = IntegerType.get_signless(16)
     return _pto.VMIVRegType.get(
         offsets_type.element_count,
-        result_type,
+        result_elem_type,
         layout=offsets_type.layout,
     )
 
