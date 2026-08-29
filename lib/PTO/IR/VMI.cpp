@@ -100,7 +100,7 @@ static bool isVMIF16BF16OrF32Type(Type type) {
 
 static bool isVMIPredicateMaskableElementType(Type type) {
   unsigned elementBits = pto::getPTOStorageElemBitWidth(type);
-  return elementBits == mlir::pto::kValue8 || elementBits == 16 || elementBits == 32;
+  return elementBits == mlir::pto::kValue8 || elementBits == mlir::pto::kValue16 || elementBits == mlir::pto::kValue32;
 }
 
 static bool isVMIAnyI8I16I32Type(Type type) {
@@ -108,7 +108,7 @@ static bool isVMIAnyI8I16I32Type(Type type) {
   if (!integerType) {
     return false;
   }
-  return integerType.getWidth() == mlir::pto::kValue8 || integerType.getWidth() == 16 ||
+  return integerType.getWidth() == mlir::pto::kValue8 || integerType.getWidth() == mlir::pto::kValue16 ||
          integerType.getWidth() == mlir::pto::kValue32;
 }
 
@@ -119,7 +119,7 @@ static bool isVMII8I16I32OrF16BF16F32Type(Type type) {
 static bool isVMII16I32OrF16BF16F32Type(Type type) {
   auto intType = dyn_cast<IntegerType>(type);
   bool supportedInteger =
-      intType && (intType.getWidth() == 16 || intType.getWidth() == 32);
+      intType && (intType.getWidth() == mlir::pto::kValue16 || intType.getWidth() == mlir::pto::kValue32);
   return supportedInteger || isVMIF16BF16OrF32Type(type);
 }
 
@@ -132,7 +132,7 @@ static bool isVMISignedI8I16I32Type(Type type) {
   if (!integerType || !integerType.isSigned()) {
     return false;
   }
-  return integerType.getWidth() == mlir::pto::kValue8 || integerType.getWidth() == 16 ||
+  return integerType.getWidth() == mlir::pto::kValue8 || integerType.getWidth() == mlir::pto::kValue16 ||
          integerType.getWidth() == mlir::pto::kValue32;
 }
 
@@ -180,7 +180,7 @@ static bool matchesVMIIntSemantics(IntegerType intType,
 
 static bool isVMIIotaElementType(Type type) {
   if (auto intType = dyn_cast<IntegerType>(type)) {
-    return intType.getWidth() == mlir::pto::kValue8 || intType.getWidth() == 16 ||
+    return intType.getWidth() == mlir::pto::kValue8 || intType.getWidth() == mlir::pto::kValue16 ||
            intType.getWidth() == mlir::pto::kValue32;
   }
   return type.isF16() || type.isF32();
@@ -584,7 +584,7 @@ static bool isPackedByteGroupStore(Type memoryType, VMIVRegType dataType) {
   auto memoryIntegerType = dyn_cast<IntegerType>(memoryElementType);
   auto dataIntegerType = dyn_cast<IntegerType>(dataType.getElementType());
   return memoryIntegerType && dataIntegerType &&
-         memoryIntegerType.getWidth() == mlir::pto::kValue8 && dataIntegerType.getWidth() == 32;
+         memoryIntegerType.getWidth() == mlir::pto::kValue8 && dataIntegerType.getWidth() == mlir::pto::kValue32;
 }
 
 static LogicalResult verifyNumGroups(Operation *op, VMIVRegType type,
@@ -738,7 +738,7 @@ static LogicalResult verifyChannelSplitLayout(Operation *op,
     }
   }
   int64_t channels = results.size();
-  if (channels == mlir::pto::kValue2 || channels == 4) {
+  if (channels == mlir::pto::kValue2 || channels == mlir::pto::kValue4) {
     auto sourceLayout = cast<VMILayoutAttr>(sourceType.getLayout());
     auto expectedLayout =
         VMILayoutAttr::getDeinterleaved(op->getContext(), channels);
@@ -769,7 +769,7 @@ static LogicalResult verifyChannelMergeLayout(Operation *op,
     }
   }
   int64_t channels = inputs.size();
-  if (channels == mlir::pto::kValue2 || channels == 4) {
+  if (channels == mlir::pto::kValue2 || channels == mlir::pto::kValue4) {
     auto resultLayout = cast<VMILayoutAttr>(resultType.getLayout());
     auto expectedLayout =
         VMILayoutAttr::getDeinterleaved(op->getContext(), channels);
@@ -1118,7 +1118,7 @@ static LogicalResult verifyContiguousLayout(
 static LogicalResult verifyDeinterleavedLayout(
     function_ref<InFlightDiagnostic()> emitError, int64_t factor,
     int64_t blockElems, int64_t slots) {
-  if (factor != mlir::pto::kValue2 && factor != 4) {
+  if (factor != mlir::pto::kValue2 && factor != mlir::pto::kValue4) {
     return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
                        << "> expected factor to be 2 or 4";
   }
@@ -1137,7 +1137,7 @@ static LogicalResult verifyDeinterleavedLayout(
 static LogicalResult verifyBlockDeinterleavedLayout(
     function_ref<InFlightDiagnostic()> emitError, int64_t factor,
     int64_t blockElems, int64_t slots, int64_t laneStride) {
-  if (factor != mlir::pto::kValue2 && factor != 4) {
+  if (factor != mlir::pto::kValue2 && factor != mlir::pto::kValue4) {
     return emitError() << "#pto.vmi.layout<block_deinterleaved = " << factor
                        << "> expected factor to be 2 or 4";
   }
@@ -1571,7 +1571,7 @@ LogicalResult VMIMulIOp::verify() {
   }
   auto intType = dyn_cast<IntegerType>(lhsType.getElementType());
   bool supportedInteger =
-      intType && (intType.getWidth() == 16 || intType.getWidth() == 32);
+      intType && (intType.getWidth() == mlir::pto::kValue16 || intType.getWidth() == mlir::pto::kValue32);
   if (!supportedInteger) {
     return emitOpError("requires i16 or i32 VMI element type");
   }
@@ -1732,7 +1732,7 @@ LogicalResult VMIReluOp::verify() {
   bool supportedInteger = false;
   if (auto intType = dyn_cast<IntegerType>(elementType)) {
     supportedInteger =
-        intType.getWidth() == 32 &&
+        intType.getWidth() == mlir::pto::kValue32 &&
         matchesVMIIntSemantics(intType, VMIIntSignSemantics::Signed);
   }
   if (!supportedInteger && !isVMIF16OrF32Type(elementType)) {
@@ -1892,7 +1892,7 @@ LogicalResult VMIActivePrefixIndexOp::verify() {
     return emitOpError("requires signless integer result element type");
   }
   unsigned resultWidth = resultIntType.getWidth();
-  if (resultWidth != mlir::pto::kValue8 && resultWidth != 16 && resultWidth != 32) {
+  if (resultWidth != mlir::pto::kValue8 && resultWidth != mlir::pto::kValue16 && resultWidth != mlir::pto::kValue32) {
     return emitOpError("requires i8, i16, or i32 result element type");
   }
   return verifyMaskMatchesData(getOperation(), maskType, resultType);
@@ -2050,7 +2050,7 @@ static LogicalResult verifyGroupReduceFloatOp(OpTy op, bool requiresReassoc) {
     bool supportedSourceLayout =
         sourceLayout.isContiguous() ||
         (sourceLayout.isDenseSplit() &&
-         (sourceLayout.getFactor() == 2 || sourceLayout.getFactor() == 4));
+         (sourceLayout.getFactor() == mlir::pto::kValue2 || sourceLayout.getFactor() == mlir::pto::kValue4));
     if (!supportedSourceLayout) {
       return op.emitOpError(
           "requires layout-assigned source to use contiguous layout or "
@@ -2108,7 +2108,7 @@ static LogicalResult verifyGroupReduceIntegerOp(OpTy op) {
     bool supportedSourceLayout =
         sourceLayout.isContiguous() ||
         (sourceLayout.isDenseSplit() &&
-         (sourceLayout.getFactor() == 2 || sourceLayout.getFactor() == 4));
+         (sourceLayout.getFactor() == mlir::pto::kValue2 || sourceLayout.getFactor() == mlir::pto::kValue4));
     if (!supportedSourceLayout) {
       return op.emitOpError(
           "requires layout-assigned source to use contiguous layout or "
@@ -2225,7 +2225,7 @@ template <typename OpTy> static LogicalResult verifyVMIHistogramOp(OpTy op) {
   int64_t bins = accType.getElementCount();
   if (!accElemType || accElemType.getWidth() != mlir::pto::kValue16 ||
       !matchesVMIIntSemantics(accElemType, VMIIntSignSemantics::Unsigned) ||
-      (bins != mlir::pto::kValue128 && bins != 256)) {
+      (bins != mlir::pto::kValue128 && bins != mlir::pto::kValue256)) {
     return op.emitOpError("requires acc type to be "
                           "!pto.vmi.vreg<128x{ui16|i16}> (Bin_N0-only) or "
                           "!pto.vmi.vreg<256x{ui16|i16}>");
@@ -2763,7 +2763,7 @@ LogicalResult VMIGatherOp::verify() {
 
   auto indexElementType = dyn_cast<IntegerType>(indicesType.getElementType());
   if (!indexElementType || indexElementType.isSigned() ||
-      (indexElementType.getWidth() != mlir::pto::kValue16 && indexElementType.getWidth() != 32)) {
+      (indexElementType.getWidth() != mlir::pto::kValue16 && indexElementType.getWidth() != mlir::pto::kValue32)) {
     return emitOpError(
         "requires signless or unsigned 16-bit or 32-bit integer indices");
   }
@@ -3274,7 +3274,7 @@ LogicalResult VMIMulSOp::verify() {
   Type elementType = srcType.getElementType();
   auto intType = dyn_cast<IntegerType>(elementType);
   bool supportedInteger =
-      intType && (intType.getWidth() == 16 || intType.getWidth() == 32);
+      intType && (intType.getWidth() == mlir::pto::kValue16 || intType.getWidth() == mlir::pto::kValue32);
   if (!supportedInteger && !isVMIF16OrF32Type(elementType)) {
     return emitOpError("requires i16, i32, f16, or f32 VMI element type");
   }
@@ -3461,7 +3461,7 @@ LogicalResult VMIPgeOp::verify() {
     return emitOpError("requires pattern to start with \"PAT_VL\"");
   }
   int64_t activeLanes;
-  if (pattern.drop_front(mlir::pto::kValue6).getAsInteger(10, activeLanes)) {
+  if (pattern.drop_front(mlir::pto::kValue6).getAsInteger(mlir::pto::kValue10, activeLanes)) {
     return emitOpError("requires pattern \"PAT_VL<n>\" with integer n");
   }
   if (activeLanes <= 0) {
@@ -3734,7 +3734,7 @@ LogicalResult VMIVreluOp::verify() {
   bool supportedInteger = false;
   if (auto intType = dyn_cast<IntegerType>(elementType)) {
     supportedInteger =
-        intType.getWidth() == 32 &&
+        intType.getWidth() == mlir::pto::kValue32 &&
         matchesVMIIntSemantics(intType, VMIIntSignSemantics::Signed);
   }
   if (!supportedInteger && !isVMIF16OrF32Type(elementType)) {
@@ -4024,7 +4024,7 @@ LogicalResult VMIVgatherOp::verify() {
   auto indexElementType =
       dyn_cast<IntegerType>(offsetsType.getElementType());
   if (!indexElementType || indexElementType.isSigned() ||
-      (indexElementType.getWidth() != mlir::pto::kValue32 && indexElementType.getWidth() != 16)) {
+      (indexElementType.getWidth() != mlir::pto::kValue32 && indexElementType.getWidth() != mlir::pto::kValue16)) {
     return emitOpError(
         "requires signless or unsigned 16-bit or 32-bit integer offsets");
   }
@@ -4079,7 +4079,7 @@ LogicalResult VMIVgatherbOp::verify() {
   auto indexElementType =
       dyn_cast<IntegerType>(offsetsType.getElementType());
   if (!indexElementType || indexElementType.isSigned() ||
-      (indexElementType.getWidth() != mlir::pto::kValue32 && indexElementType.getWidth() != 16)) {
+      (indexElementType.getWidth() != mlir::pto::kValue32 && indexElementType.getWidth() != mlir::pto::kValue16)) {
     return emitOpError(
         "requires signless or unsigned 16-bit or 32-bit integer offsets");
   }
@@ -4343,7 +4343,7 @@ LogicalResult VMIVmullOp::verify() {
 
   auto isLegalElementType = [](Type type) {
     auto integerType = dyn_cast<IntegerType>(type);
-    return integerType && integerType.getWidth() == 32 &&
+    return integerType && integerType.getWidth() == mlir::pto::kValue32 &&
            (integerType.isSignless() || integerType.isUnsigned());
   };
   if (!isLegalElementType(aType.getElementType()) ||
@@ -4360,7 +4360,7 @@ LogicalResult VMIVmullOp::verify() {
   }
 
   int64_t lanes = aType.getElementCount();
-  if (lanes != mlir::pto::kValue64 && lanes != 128 && lanes != 256) {
+  if (lanes != mlir::pto::kValue64 && lanes != mlir::pto::kValue128 && lanes != mlir::pto::kValue256) {
     return emitOpError("requires logical lane count to be 64, 128, or 256");
   }
 
@@ -4563,7 +4563,7 @@ static LogicalResult verifyCvtSaturateNarrow(
     // SAT here because ui32 -> ui8 SAT clamps to [0, 255], which does NOT
     // match the expected si32 -> si8 SAT clamp to [-128, 127].
     if (dir == CvtDirection::IntNarrow && satVal == "SAT" &&
-        srcBits == 32 && dstBits == 8 &&
+        srcBits == mlir::pto::kValue32 && dstBits == mlir::pto::kValue8 &&
         isa<IntegerType>(srcElem) &&
         cast<IntegerType>(srcElem).isSigned() &&
         isa<IntegerType>(dstElem) &&
@@ -5077,7 +5077,7 @@ LogicalResult VMIVselrOp::verify() {
       pto::getPTOStorageElemBitWidth(sourceType.getElementType());
   unsigned indexBits =
       pto::getPTOStorageElemBitWidth(indexType.getElementType());
-  if (sourceBits != mlir::pto::kValue8 && sourceBits != 16 && sourceBits != 32) {
+  if (sourceBits != mlir::pto::kValue8 && sourceBits != mlir::pto::kValue16 && sourceBits != mlir::pto::kValue32) {
     return emitOpError(
         "requires source/result element storage width to be 8, 16, or 32 bits");
   }
@@ -5505,7 +5505,7 @@ FailureOr<int64_t> mlir::pto::getDataLanesPerPart(Type elementType) {
   if (elementBitWidth == 0) {
     return failure();
   }
-  constexpr int64_t kPhysicalVRegBits = 256 * 8;
+  constexpr int64_t kPhysicalVRegBits = mlir::pto::kValue256 * mlir::pto::kValue8;
   if (kPhysicalVRegBits % elementBitWidth != 0) {
     return failure();
   }
@@ -5535,7 +5535,7 @@ FailureOr<int64_t> mlir::pto::getVMILayoutBlockElems(Type type) {
   }
 
   FailureOr<int64_t> lanesPerPart = getPhysicalLanesPerPart(type);
-  constexpr int64_t kVCGBlocksPerPart = 8;
+  constexpr int64_t kVCGBlocksPerPart = mlir::pto::kValue8;
   if (failed(lanesPerPart) || *lanesPerPart <= 0 ||
       *lanesPerPart % kVCGBlocksPerPart != 0) {
     return failure();
