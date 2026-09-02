@@ -21,6 +21,8 @@ add_mlir_dialect_library(PTOIR
   VPTOMemoryDist.cpp
   VPTOScheduling.cpp
   VMI.cpp
+  VMI_helpers.cpp
+  VMI_ops.cpp
   VPTOUbOps.cpp
   PTOAttrs.cpp
   PTOSyncUtils.cpp

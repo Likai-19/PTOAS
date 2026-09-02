@@ -7,21 +7,5 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 //===- VMI.cpp - PTO VMI type and attribute support -----------------------===//
-//===----------------------------------------------------------------------===//
 
-#include <optional>
-#include <set>
-#include "mlir/IR/DialectImplementation.h"
-#include "mlir/IR/OpImplementation.h"
-#include "mlir/IR/Types.h"
-#include "llvm/ADT/SmallString.h"
-#include "llvm/ADT/StringRef.h"
-#include "llvm/Support/raw_ostream.h"
-#include "PTO/IR/PTO.h"
-#include "PTO/IR/PTOTypeUtils.h"
-#include "PTO/IR/VMIUtils.h"
-#include "PTO/Support/CodeConstants.h"
-
-
-#include "VMI_helpers.cpp"
-#include "VMI_ops.cpp"
+#include "VMIInternal.h"
