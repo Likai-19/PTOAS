@@ -664,44 +664,32 @@ static LogicalResult verifyNumGroups(Operation *op, VMIVRegType type,
   return success();
 }
 
-static LogicalResult verifyPhysicalParts(Operation *op, Type vmiType,
-                                         TypeRange physicalTypes) {
-  FailureOr<int64_t> expectedArity = getVMIPhysicalArity(vmiType);
-  if (failed(expectedArity)) {
+static LogicalResult verifyPhysicalVRegParts(Operation *op,
+                                             VMIVRegType vregType,
+                                             TypeRange physicalTypes) {
+  FailureOr<int64_t> lanesPerPart = getPhysicalLanesPerPart(vregType);
+  Type physicalElementType = getVMIPhysicalDataElementType(vregType);
+  if (failed(lanesPerPart)) {
     return op->emitOpError(
-        "requires a layout-assigned VMI type with computable physical arity");
+        "requires data element type with known physical lane count");
   }
-  if (static_cast<int64_t>(physicalTypes.size()) != *expectedArity) {
-    return op->emitOpError() << "requires " << *expectedArity
-                             << " physical parts, got " << physicalTypes.size();
-  }
-
-  if (auto vregType = dyn_cast<VMIVRegType>(vmiType)) {
-    FailureOr<int64_t> lanesPerPart =
-        getPhysicalLanesPerPart(vregType);
-    Type physicalElementType = getVMIPhysicalDataElementType(vregType);
-    if (failed(lanesPerPart)) {
+  for (Type physicalType : physicalTypes) {
+    auto partType = dyn_cast<VRegType>(physicalType);
+    if (!partType) {
+      return op->emitOpError("requires physical data parts to be !pto.vreg");
+    }
+    if (partType.getElementCount() != *lanesPerPart ||
+        partType.getElementType() != physicalElementType) {
       return op->emitOpError(
-          "requires data element type with known physical lane count");
+          "requires physical data part type to match VMI lane-map helper");
     }
-    for (Type physicalType : physicalTypes) {
-      auto partType = dyn_cast<VRegType>(physicalType);
-      if (!partType) {
-        return op->emitOpError("requires physical data parts to be !pto.vreg");
-      }
-      if (partType.getElementCount() != *lanesPerPart ||
-          partType.getElementType() != physicalElementType) {
-        return op->emitOpError(
-            "requires physical data part type to match VMI lane-map helper");
-      }
-    }
-    return success();
   }
+  return success();
+}
 
-  auto maskType = dyn_cast<VMIMaskType>(vmiType);
-  if (!maskType) {
-    return op->emitOpError("requires VMI data or mask type");
-  }
+static LogicalResult verifyPhysicalMaskParts(Operation *op,
+                                             VMIMaskType maskType,
+                                             TypeRange physicalTypes) {
   if (maskType.isPred()) {
     return op->emitOpError(
         "requires layout-assigned mask with concrete granularity");
@@ -712,7 +700,6 @@ static LogicalResult verifyPhysicalParts(Operation *op, Type vmiType,
     return op->emitOpError(
         "requires mask type with supported physical carrier granularity");
   }
-
   for (Type physicalType : physicalTypes) {
     auto partType = dyn_cast<MaskType>(physicalType);
     if (!partType) {
@@ -724,6 +711,27 @@ static LogicalResult verifyPhysicalParts(Operation *op, Type vmiType,
     }
   }
   return success();
+}
+
+static LogicalResult verifyPhysicalParts(Operation *op, Type vmiType,
+                                         TypeRange physicalTypes) {
+  FailureOr<int64_t> expectedArity = getVMIPhysicalArity(vmiType);
+  if (failed(expectedArity)) {
+    return op->emitOpError(
+        "requires a layout-assigned VMI type with computable physical arity");
+  }
+  if (static_cast<int64_t>(physicalTypes.size()) != *expectedArity) {
+    return op->emitOpError() << "requires " << *expectedArity
+                             << " physical parts, got " << physicalTypes.size();
+  }
+  if (auto vregType = dyn_cast<VMIVRegType>(vmiType)) {
+    return verifyPhysicalVRegParts(op, vregType, physicalTypes);
+  }
+  auto maskType = dyn_cast<VMIMaskType>(vmiType);
+  if (!maskType) {
+    return op->emitOpError("requires VMI data or mask type");
+  }
+  return verifyPhysicalMaskParts(op, maskType, physicalTypes);
 }
 
 static std::optional<int64_t>
@@ -771,6 +779,46 @@ static int64_t getDenseLogicalLanesInPart(int64_t elementCount, int64_t factor,
     }
   }
   return maxIndex + 1;
+}
+
+static LogicalResult verifyReductionGroupAndPmode(
+    Operation *op, VMIVRegType sourceType, VMIVRegType resultType,
+    IntegerAttr groupAttr, std::optional<StringRef> pmode) {
+  if (groupAttr) {
+    int64_t C = groupAttr.getInt();
+    if (sourceType.getElementCount() % C != 0) {
+      return op->emitOpError("group count ") << C
+                                            << " must divide source lane count "
+                                            << sourceType.getElementCount();
+    }
+    if (resultType.getElementCount() != C) {
+      return op->emitOpError("result lane count must equal group count ")
+             << C << ", got " << resultType.getElementCount();
+    }
+    if (auto resultLayout = resultType.getLayoutAttr()) {
+      if (!resultLayout.isGroupSlots() ||
+          resultLayout.getNumGroups() != C) {
+        return op->emitOpError()
+               << "layout-assigned result must use "
+                  "#pto.vmi.layout<num_groups = "
+               << C << ">";
+      }
+    }
+  } else if (resultType.getElementCount() != 1) {
+    return op->emitOpError("full reduction (no group) requires 1-lane result, got ")
+           << resultType.getElementCount();
+  }
+  if (sourceType.getElementType() != resultType.getElementType()) {
+    return op->emitOpError("source and result element types must match");
+  }
+  if (pmode) {
+    StringRef val = *pmode;
+    if (val != "zero" && val != "merge") {
+      return op->emitOpError("pmode must be \"zero\" or \"merge\", got \"")
+             << val << "\"";
+    }
+  }
+  return success();
 }
 
 } // namespace
@@ -926,6 +974,66 @@ VMILayoutAttr VMILayoutAttr::getGroupSlots(MLIRContext *context,
                             laneStride);
 }
 
+static ParseResult parseContiguousLayoutFields(AsmParser &parser,
+                                               int64_t &laneStride) {
+  while (succeeded(parser.parseOptionalComma())) {
+    StringRef field;
+    if (failed(parser.parseKeyword(&field)) || failed(parser.parseEqual()) ||
+        field != "lane_stride" || failed(parser.parseInteger(laneStride))) {
+      parser.emitError(parser.getCurrentLocation(),
+                       "expected 'lane_stride = <integer>'");
+      return failure();
+    }
+  }
+  return success();
+}
+
+static ParseResult parseDeinterleavedLayoutFields(AsmParser &parser,
+                                                  int64_t &laneStride) {
+  while (succeeded(parser.parseOptionalComma())) {
+    StringRef field;
+    if (failed(parser.parseKeyword(&field)) || failed(parser.parseEqual())) {
+      return failure();
+    }
+    if (field == "lane_stride") {
+      if (failed(parser.parseInteger(laneStride))) {
+        return failure();
+      }
+    } else {
+      parser.emitError(parser.getCurrentLocation(),
+                       "expected 'lane_stride = <integer>'");
+      return failure();
+    }
+  }
+  return success();
+}
+
+static ParseResult parseNumGroupsLayoutFields(AsmParser &parser,
+                                              int64_t &slots,
+                                              int64_t &laneStride) {
+  while (succeeded(parser.parseOptionalComma())) {
+    StringRef field;
+    if (failed(parser.parseKeyword(&field)) || failed(parser.parseEqual())) {
+      return failure();
+    }
+    if (field == "slots") {
+      if (failed(parser.parseInteger(slots))) {
+        return failure();
+      }
+    } else if (field == "lane_stride") {
+      if (failed(parser.parseInteger(laneStride))) {
+        return failure();
+      }
+    } else {
+      parser.emitError(parser.getCurrentLocation(),
+                       "expected 'slots = <integer>' or "
+                       "'lane_stride = <integer>'");
+      return failure();
+    }
+  }
+  return success();
+}
+
 Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
   SMLoc loc = parser.getCurrentLocation();
   StringRef kind;
@@ -940,61 +1048,22 @@ Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
 
   if (kind == "contiguous") {
     factor = 1;
-    while (succeeded(parser.parseOptionalComma())) {
-      StringRef field;
-      if (failed(parser.parseKeyword(&field)) || failed(parser.parseEqual()) ||
-          field != "lane_stride" || failed(parser.parseInteger(laneStride))) {
-        parser.emitError(parser.getCurrentLocation(),
-                         "expected 'lane_stride = <integer>'");
-        return {};
-      }
-    }
-  } else if (kind == "deinterleaved") {
-    if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor))) {
+    if (failed(parseContiguousLayoutFields(parser, laneStride))) {
       return {};
     }
-    while (succeeded(parser.parseOptionalComma())) {
-      StringRef field;
-      if (failed(parser.parseKeyword(&field)) || failed(parser.parseEqual())) {
-        return {};
-      }
-      if (field == "lane_stride") {
-        if (failed(parser.parseInteger(laneStride))) {
-          return {};
-        }
-      } else {
-        parser.emitError(parser.getCurrentLocation(),
-                         "expected 'lane_stride = <integer>'");
-        return {};
-      }
+  } else if (kind == "deinterleaved") {
+    if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor)) ||
+        failed(parseDeinterleavedLayoutFields(parser, laneStride))) {
+      return {};
     }
   } else if (kind == "block_deinterleaved") {
     if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor))) {
       return {};
     }
   } else if (kind == "num_groups") {
-    if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor))) {
+    if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor)) ||
+        failed(parseNumGroupsLayoutFields(parser, slots, laneStride))) {
       return {};
-    }
-    while (succeeded(parser.parseOptionalComma())) {
-      StringRef field;
-      if (failed(parser.parseKeyword(&field)) || failed(parser.parseEqual())) {
-        return {};
-      }
-      if (field == "slots") {
-        if (failed(parser.parseInteger(slots))) {
-          return {};
-        }
-      } else if (field == "lane_stride") {
-        if (failed(parser.parseInteger(laneStride))) {
-          return {};
-        }
-      } else {
-        parser.emitError(parser.getCurrentLocation(),
-                         "expected 'slots = <integer>' or "
-                         "'lane_stride = <integer>'");
-        return {};
-      }
     }
   } else {
     parser.emitError(parser.getCurrentLocation(),
@@ -1007,7 +1076,6 @@ Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
   if (failed(parser.parseGreater())) {
     return {};
   }
-
   return parser.getChecked<VMILayoutAttr>(loc, parser.getContext(), kind,
                                           factor, blockElems, slots,
                                           laneStride);
@@ -1038,6 +1106,70 @@ void VMILayoutAttr::print(AsmPrinter &printer) const {
   printer << ">";
 }
 
+static LogicalResult verifyContiguousLayout(
+    function_ref<InFlightDiagnostic()> emitError, int64_t factor,
+    int64_t blockElems, int64_t slots) {
+  if (factor != 1 || blockElems != 1 || slots != 0) {
+    return emitError()
+           << "#pto.vmi.layout<contiguous> requires factor, block_elems, "
+              "and slots to be their defaults";
+  }
+  return success();
+}
+
+static LogicalResult verifyDeinterleavedLayout(
+    function_ref<InFlightDiagnostic()> emitError, int64_t factor,
+    int64_t blockElems, int64_t slots) {
+  if (factor != mlir::pto::kValue2 && factor != mlir::pto::kValue4) {
+    return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
+                       << "> expected factor to be 2 or 4";
+  }
+  if (blockElems != 1) {
+    return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
+                       << ", block_elems = " << blockElems
+                       << "> requires block_elems to be omitted";
+  }
+  if (slots != 0) {
+    return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
+                       << "> requires slots to be omitted";
+  }
+  return success();
+}
+
+static LogicalResult verifyBlockDeinterleavedLayout(
+    function_ref<InFlightDiagnostic()> emitError, int64_t factor,
+    int64_t blockElems, int64_t slots, int64_t laneStride) {
+  if (factor != mlir::pto::kValue2 && factor != mlir::pto::kValue4) {
+    return emitError() << "#pto.vmi.layout<block_deinterleaved = " << factor
+                       << "> expected factor to be 2 or 4";
+  }
+  if (blockElems != 1 || slots != 0 || laneStride != 1) {
+    return emitError()
+           << "#pto.vmi.layout<block_deinterleaved = " << factor
+           << "> does not accept block_elems, slots, or lane_stride";
+  }
+  return success();
+}
+
+static LogicalResult verifyNumGroupsLayout(
+    function_ref<InFlightDiagnostic()> emitError, int64_t factor,
+    int64_t blockElems, int64_t slots) {
+  if (factor <= 0) {
+    return emitError() << "#pto.vmi.layout<num_groups = " << factor
+                       << "> requires num_groups to be positive";
+  }
+  if (blockElems != 1) {
+    return emitError() << "#pto.vmi.layout<num_groups = " << factor
+                       << "> requires block_elems to be omitted";
+  }
+  if (slots < 0) {
+    return emitError() << "#pto.vmi.layout<num_groups = " << factor
+                       << ", slots = " << slots
+                       << "> requires slots to be omitted or positive";
+  }
+  return success();
+}
+
 LogicalResult
 VMILayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                       StringRef kind, int64_t factor, int64_t blockElems,
@@ -1046,63 +1178,19 @@ VMILayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
     return emitError() << "#pto.vmi.layout<" << kind
                        << "> requires lane_stride to be positive";
   }
-
   if (kind == "contiguous") {
-    if (factor != 1 || blockElems != 1 || slots != 0) {
-      return emitError()
-             << "#pto.vmi.layout<contiguous> requires factor, block_elems, "
-                "and slots to be their defaults";
-    }
-    return success();
+    return verifyContiguousLayout(emitError, factor, blockElems, slots);
   }
-
   if (kind == "deinterleaved") {
-    if (factor != mlir::pto::kValue2 && factor != mlir::pto::kValue4) {
-      return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
-                         << "> expected factor to be 2 or 4";
-    }
-    if (blockElems != 1) {
-      return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
-                         << ", block_elems = " << blockElems
-                         << "> requires block_elems to be omitted";
-    }
-    if (slots != 0) {
-      return emitError() << "#pto.vmi.layout<deinterleaved = " << factor
-                         << "> requires slots to be omitted";
-    }
-    return success();
+    return verifyDeinterleavedLayout(emitError, factor, blockElems, slots);
   }
-
   if (kind == "block_deinterleaved") {
-    if (factor != mlir::pto::kValue2 && factor != mlir::pto::kValue4) {
-      return emitError() << "#pto.vmi.layout<block_deinterleaved = " << factor
-                         << "> expected factor to be 2 or 4";
-    }
-    if (blockElems != 1 || slots != 0 || laneStride != 1) {
-      return emitError()
-             << "#pto.vmi.layout<block_deinterleaved = " << factor
-             << "> does not accept block_elems, slots, or lane_stride";
-    }
-    return success();
+    return verifyBlockDeinterleavedLayout(emitError, factor, blockElems, slots,
+                                          laneStride);
   }
-
   if (kind == "num_groups") {
-    if (factor <= 0) {
-      return emitError() << "#pto.vmi.layout<num_groups = " << factor
-                         << "> requires num_groups to be positive";
-    }
-    if (blockElems != 1) {
-      return emitError() << "#pto.vmi.layout<num_groups = " << factor
-                         << "> requires block_elems to be omitted";
-    }
-    if (slots < 0) {
-      return emitError() << "#pto.vmi.layout<num_groups = " << factor
-                         << ", slots = " << slots
-                         << "> requires slots to be omitted or positive";
-    }
-    return success();
+    return verifyNumGroupsLayout(emitError, factor, blockElems, slots);
   }
-
   return emitError() << "expected VMI layout kind to be 'contiguous' or "
                         "'deinterleaved' or 'block_deinterleaved' or "
                         "'num_groups'";
@@ -2091,6 +2179,41 @@ LogicalResult VMIGroupBroadcastOp::verify() {
   return verifyNumGroups(getOperation(), resultType, numGroups);
 }
 
+template <typename OpTy>
+static LogicalResult verifyVMIHistogramLayouts(OpTy op, VMIVRegType accType,
+                                               VMIVRegType sourceType,
+                                               VMIVRegType resultType,
+                                               VMIMaskType maskType) {
+  if (auto accLayout = accType.getLayoutAttr()) {
+    if (!accLayout.isContiguous()) {
+      return op.emitOpError("requires layout-assigned acc to use contiguous "
+                            "layout");
+    }
+  }
+  if (auto sourceLayout = sourceType.getLayoutAttr()) {
+    if (!sourceLayout.isContiguous()) {
+      return op.emitOpError("requires layout-assigned source to use contiguous "
+                            "layout");
+    }
+  }
+  if (auto resultLayout = resultType.getLayoutAttr()) {
+    if (!resultLayout.isContiguous()) {
+      return op.emitOpError("requires layout-assigned result to use "
+                            "contiguous layout");
+    }
+  }
+  if (auto maskLayout = maskType.getLayoutAttr()) {
+    if (!maskLayout.isContiguous()) {
+      return op.emitOpError("requires layout-assigned mask to use contiguous "
+                            "layout");
+    }
+    if (maskType.getGranularity() != "b8") {
+      return op.emitOpError("requires layout-assigned mask granularity b8");
+    }
+  }
+  return success();
+}
+
 template <typename OpTy> static LogicalResult verifyVMIHistogramOp(OpTy op) {
   auto accType = cast<VMIVRegType>(op.getAcc().getType());
   auto sourceType = cast<VMIVRegType>(op.getSource().getType());
@@ -2128,35 +2251,8 @@ template <typename OpTy> static LogicalResult verifyVMIHistogramOp(OpTy op) {
   if (maskType.getElementCount() != sourceType.getElementCount()) {
     return op.emitOpError("requires mask logical lane count to match source");
   }
-
-  if (auto accLayout = accType.getLayoutAttr()) {
-    if (!accLayout.isContiguous()) {
-      return op.emitOpError("requires layout-assigned acc to use contiguous "
-                            "layout");
-    }
-  }
-  if (auto sourceLayout = sourceType.getLayoutAttr()) {
-    if (!sourceLayout.isContiguous()) {
-      return op.emitOpError("requires layout-assigned source to use contiguous "
-                            "layout");
-    }
-  }
-  if (auto resultLayout = resultType.getLayoutAttr()) {
-    if (!resultLayout.isContiguous()) {
-      return op.emitOpError("requires layout-assigned result to use "
-                            "contiguous layout");
-    }
-  }
-  if (auto maskLayout = maskType.getLayoutAttr()) {
-    if (!maskLayout.isContiguous()) {
-      return op.emitOpError("requires layout-assigned mask to use contiguous "
-                            "layout");
-    }
-    if (maskType.getGranularity() != "b8") {
-      return op.emitOpError("requires layout-assigned mask granularity b8");
-    }
-  }
-  return success();
+  return verifyVMIHistogramLayouts(op, accType, sourceType, resultType,
+                                   maskType);
 }
 
 LogicalResult VMIVdhistOp::verify() { return verifyVMIHistogramOp(*this); }
@@ -2196,6 +2292,42 @@ LogicalResult VMIExtFOp::verify() {
   return success();
 }
 
+static LogicalResult verifyFPToFPRoundingAndSaturate(
+    Operation *op, const std::optional<VMIFpToFpContract> &fpContract) {
+  if (auto roundingAttr = op->getAttrOfType<StringAttr>("rounding")) {
+    StringRef rounding = roundingAttr.getValue();
+    if (rounding.size() != 1) {
+      return op->emitOpError(
+          "rounding attr must be a single-character mode token");
+    }
+    StringRef allowedRndModes =
+        fpContract && !fpContract->allowedRndModes.empty()
+            ? fpContract->allowedRndModes
+            : StringRef("RAHZ");
+    if (!allowedRndModes.contains(rounding)) {
+      if (fpContract && !fpContract->allowedRndModes.empty()) {
+        return op->emitOpError("rounding attr is not valid for this fp-to-fp "
+                               "conversion type pair");
+      }
+      return op->emitOpError("rounding attr must be R, A, H, or Z");
+    }
+  }
+  auto satAttr = op->getAttrOfType<StringAttr>("saturate");
+  if (!fpContract || fpContract->requiresSat) {
+    if (!satAttr) {
+      return op->emitOpError("'saturate' attribute is required (SAT or NOSAT)");
+    }
+    StringRef satVal = satAttr.getValue();
+    if (satVal != "SAT" && satVal != "NOSAT") {
+      return op->emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
+    }
+  } else if (satAttr) {
+    return op->emitOpError("'saturate' attribute is not valid for this fp-to-fp "
+                           "narrow conversion (no saturation)");
+  }
+  return success();
+}
+
 LogicalResult VMITruncFOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
@@ -2206,72 +2338,33 @@ LogicalResult VMITruncFOp::verify() {
   if (sourceType.getElementCount() != resultType.getElementCount()) {
     return emitOpError(
         "requires source and result logical lane counts to match");
-}
+  }
   if (!isVMIFloatLikeType(sourceElementType) ||
       !isVMIFloatLikeType(resultElementType)) {
     return emitOpError(
         "requires floating-point-like source and result element types");
-}
+  }
   if (involvesBF16x2(sourceElementType, resultElementType) && !fpContract) {
     return emitOpError(
         "unsupported bf16x2 fp-to-fp conversion element type pair");
-}
+  }
   if (involvesVMIPackedFloatCarrier(sourceElementType, resultElementType) &&
       !fpContract) {
     return emitOpError(
         "unsupported packed fp-to-fp conversion element type pair");
-}
+  }
   unsigned srcBits = getVMIElementBitWidth(sourceElementType);
   unsigned dstBits = getVMIElementBitWidth(resultElementType);
   if (srcBits < dstBits) {
     return emitOpError(
         "requires result element type to be narrower than or same-width "
         "as source element type");
-}
-  if (srcBits == dstBits) {
-    // Same-width fp→fp (e.g. bf16→f16): only allowed for supported VMI
-    // fp-to-fp contract pairs.
-    if (!fpContract) {
-      return emitOpError("same-width fp-to-fp conversion is not supported "
-                         "for this type pair; see lookupVMIFpToFpContract");
-}
   }
-  if (auto roundingAttr = (*this)->getAttrOfType<StringAttr>("rounding")) {
-    StringRef rounding = roundingAttr.getValue();
-    if (rounding.size() != 1) {
-      return emitOpError(
-          "rounding attr must be a single-character mode token");
-}
-    StringRef allowedRndModes =
-        fpContract && !fpContract->allowedRndModes.empty()
-            ? fpContract->allowedRndModes
-            : StringRef("RAHZ");
-    if (!allowedRndModes.contains(rounding)) {
-      if (fpContract && !fpContract->allowedRndModes.empty()) {
-        return emitOpError("rounding attr is not valid for this fp-to-fp "
-                           "conversion type pair");
-}
-      return emitOpError("rounding attr must be R, A, H, or Z");
-    }
+  if (srcBits == dstBits && !fpContract) {
+    return emitOpError("same-width fp-to-fp conversion is not supported "
+                       "for this type pair; see lookupVMIFpToFpContract");
   }
-  auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
-  // Some fp->fp narrow paths (e.g. bf16x2 -> f4x2) do NOT saturate; consult
-  // the fp-to-fp contract when one exists instead of always requiring SAT.
-  if (!fpContract || fpContract->requiresSat) {
-    if (!satAttr) {
-      return emitOpError("'saturate' attribute is required (SAT or NOSAT)");
-    }
-    StringRef satVal = satAttr.getValue();
-    if (satVal != "SAT" && satVal != "NOSAT") {
-      return emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
-    }
-  } else {
-    if (satAttr) {
-      return emitOpError("'saturate' attribute is not valid for this fp-to-fp "
-                         "narrow conversion (no saturation)");
-    }
-  }
-  return success();
+  return verifyFPToFPRoundingAndSaturate(*this, fpContract);
 }
 
 LogicalResult VMIFPToSIOp::verify() {
@@ -2930,6 +3023,68 @@ LogicalResult VMIShuffleOp::verify() {
   return success();
 }
 
+static LogicalResult verifyChannelSplitLayout(Operation *op,
+                                              VMIVRegType sourceType,
+                                              ValueRange results) {
+  if (!isLayoutAssigned(sourceType)) {
+    return op->emitOpError("requires layout-assigned channel_split source when "
+                           "any channel result has layout");
+  }
+  for (Value result : results) {
+    auto resultType = cast<VMIVRegType>(result.getType());
+    if (!isLayoutAssigned(resultType)) {
+      return op->emitOpError("requires every channel_split result to carry "
+                             "layout when source has layout");
+    }
+    if (!cast<VMILayoutAttr>(resultType.getLayout()).isContiguous()) {
+      return op->emitOpError(
+          "requires layout-assigned channel_split results to be contiguous");
+    }
+  }
+  int64_t channels = results.size();
+  if (channels == mlir::pto::kValue2 || channels == mlir::pto::kValue4) {
+    auto sourceLayout = cast<VMILayoutAttr>(sourceType.getLayout());
+    auto expectedLayout =
+        VMILayoutAttr::getDeinterleaved(op->getContext(), channels);
+    if (!sourceLayout.isContiguous() && sourceLayout != expectedLayout) {
+      return op->emitOpError("requires layout-assigned channel_split source to "
+                             "be contiguous or deinterleaved by result count");
+    }
+  }
+  return success();
+}
+
+static LogicalResult verifyChannelMergeLayout(Operation *op,
+                                              VMIVRegType resultType,
+                                              ValueRange inputs) {
+  if (!isLayoutAssigned(resultType)) {
+    return op->emitOpError("requires layout-assigned channel_merge result when "
+                           "any channel input has layout");
+  }
+  for (Value input : inputs) {
+    auto inputType = cast<VMIVRegType>(input.getType());
+    if (!isLayoutAssigned(inputType)) {
+      return op->emitOpError("requires every channel_merge input to carry layout "
+                             "when result has layout");
+    }
+    if (!cast<VMILayoutAttr>(inputType.getLayout()).isContiguous()) {
+      return op->emitOpError(
+          "requires layout-assigned channel_merge inputs to be contiguous");
+    }
+  }
+  int64_t channels = inputs.size();
+  if (channels == mlir::pto::kValue2 || channels == mlir::pto::kValue4) {
+    auto resultLayout = cast<VMILayoutAttr>(resultType.getLayout());
+    auto expectedLayout =
+        VMILayoutAttr::getDeinterleaved(op->getContext(), channels);
+    if (!resultLayout.isContiguous() && resultLayout != expectedLayout) {
+      return op->emitOpError("requires layout-assigned channel_merge result to "
+                             "be contiguous or deinterleaved by input count");
+    }
+  }
+  return success();
+}
+
 LogicalResult VMIChannelSplitOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   if (getResults().size() < mlir::pto::kValue2) {
@@ -2950,36 +3105,11 @@ LogicalResult VMIChannelSplitOp::verify() {
                          "count and source element type");
     }
   }
-  bool anyLayout = isLayoutAssigned(sourceType);
-  for (Value result : getResults()) {
-    anyLayout |= isLayoutAssigned(cast<VMIVRegType>(result.getType()));
-  }
-  if (anyLayout) {
-    if (!isLayoutAssigned(sourceType)) {
-      return emitOpError("requires layout-assigned channel_split source when "
-                         "any channel result has layout");
-    }
-    for (Value result : getResults()) {
-      auto resultType = cast<VMIVRegType>(result.getType());
-      if (!isLayoutAssigned(resultType)) {
-        return emitOpError("requires every channel_split result to carry "
-                           "layout when source has layout");
-      }
-      if (!cast<VMILayoutAttr>(resultType.getLayout()).isContiguous()) {
-        return emitOpError(
-            "requires layout-assigned channel_split results to be contiguous");
-      }
-    }
-    int64_t channels = getResults().size();
-    if (channels == mlir::pto::kValue2 || channels == mlir::pto::kValue4) {
-      auto sourceLayout = cast<VMILayoutAttr>(sourceType.getLayout());
-      auto expectedLayout =
-          VMILayoutAttr::getDeinterleaved(getContext(), channels);
-      if (!sourceLayout.isContiguous() && sourceLayout != expectedLayout) {
-        return emitOpError("requires layout-assigned channel_split source to "
-                           "be contiguous or deinterleaved by result count");
-      }
-    }
+  if (isLayoutAssigned(sourceType) ||
+      llvm::any_of(getResults(), [](Value result) {
+        return isLayoutAssigned(cast<VMIVRegType>(result.getType()));
+      })) {
+    return verifyChannelSplitLayout(getOperation(), sourceType, getResults());
   }
   return success();
 }
@@ -3004,36 +3134,11 @@ LogicalResult VMIChannelMergeOp::verify() {
     return emitOpError(
         "requires result lane count and element type to match merged channels");
   }
-  bool anyLayout = isLayoutAssigned(resultType);
-  for (Value input : getInputs()) {
-    anyLayout |= isLayoutAssigned(cast<VMIVRegType>(input.getType()));
-  }
-  if (anyLayout) {
-    if (!isLayoutAssigned(resultType)) {
-      return emitOpError("requires layout-assigned channel_merge result when "
-                         "any channel input has layout");
-    }
-    for (Value input : getInputs()) {
-      auto inputType = cast<VMIVRegType>(input.getType());
-      if (!isLayoutAssigned(inputType)) {
-        return emitOpError("requires every channel_merge input to carry layout "
-                           "when result has layout");
-      }
-      if (!cast<VMILayoutAttr>(inputType.getLayout()).isContiguous()) {
-        return emitOpError(
-            "requires layout-assigned channel_merge inputs to be contiguous");
-      }
-    }
-    int64_t channels = getInputs().size();
-    if (channels == mlir::pto::kValue2 || channels == mlir::pto::kValue4) {
-      auto resultLayout = cast<VMILayoutAttr>(resultType.getLayout());
-      auto expectedLayout =
-          VMILayoutAttr::getDeinterleaved(getContext(), channels);
-      if (!resultLayout.isContiguous() && resultLayout != expectedLayout) {
-        return emitOpError("requires layout-assigned channel_merge result to "
-                           "be contiguous or deinterleaved by input count");
-      }
-    }
+  if (isLayoutAssigned(resultType) ||
+      llvm::any_of(getInputs(), [](Value input) {
+        return isLayoutAssigned(cast<VMIVRegType>(input.getType()));
+      })) {
+    return verifyChannelMergeLayout(getOperation(), resultType, getInputs());
   }
   return success();
 }
@@ -3913,66 +4018,21 @@ LogicalResult VMIvcaddOp::verify() {
   auto elemTy = sourceType.getElementType();
   if (failed(verifyBF16x2ComputeElementType(getOperation(), elemTy))) {
     return failure();
-}
-
-  // Element type must be integer-like or float-like
+  }
   bool isFloat = isVMIFloatLikeType(elemTy);
   bool isInt = isVMIIntegerLikeType(elemTy);
   if (!isFloat && !isInt) {
     return emitOpError("requires integer-like or floating-point-like VMI "
                        "source element type");
   }
-
-  // Floating-point vcadd MUST carry reassoc
   if (isFloat && !getReassoc()) {
     return emitOpError("floating add-reduction requires reassoc attr");
   }
-
   if (failed(verifyMaskMatchesData(getOperation(), maskType, sourceType))) {
     return failure();
   }
-
-  // Validate group vs result lane count
-  if (auto groupAttr = getGroupAttr()) {
-    int64_t C = groupAttr.getInt();
-    if (sourceType.getElementCount() % C != 0) {
-      return emitOpError("group count ") << C << " must divide source lane count "
-                                         << sourceType.getElementCount();
-    }
-    if (resultType.getElementCount() != C) {
-      return emitOpError("result lane count must equal group count ")
-             << C << ", got " << resultType.getElementCount();
-    }
-    if (auto resultLayout = resultType.getLayoutAttr()) {
-      if (!resultLayout.isGroupSlots() ||
-          resultLayout.getNumGroups() != C) {
-        return emitOpError()
-               << "layout-assigned result must use "
-                  "#pto.vmi.layout<num_groups = "
-               << C << ">";
-      }
-    }
-  } else {
-    if (resultType.getElementCount() != 1) {
-      return emitOpError("full reduction (no group) requires 1-lane result, got ")
-             << resultType.getElementCount();
-    }
-  }
-
-  // Element types must match
-  if (sourceType.getElementType() != resultType.getElementType()) {
-    return emitOpError("source and result element types must match");
-  }
-
-  // pmode must be "zero" or "merge" if set
-  if (auto pmode = getPmode()) {
-    StringRef val = *pmode;
-    if (val != "zero" && val != "merge") {
-      return emitOpError("pmode must be \"zero\" or \"merge\", got \"") << val << "\"";
-    }
-  }
-
-  return success();
+  return verifyReductionGroupAndPmode(getOperation(), sourceType, resultType,
+                                      getGroupAttr(), getPmode());
 }
 
 LogicalResult VMIvcmaxOp::verify() {
@@ -3982,57 +4042,18 @@ LogicalResult VMIvcmaxOp::verify() {
   auto elemTy = sourceType.getElementType();
   if (failed(verifyBF16x2ComputeElementType(getOperation(), elemTy))) {
     return failure();
-}
-
+  }
   bool isFloat = isVMIFloatLikeType(elemTy);
   bool isInt = isVMIIntegerLikeType(elemTy);
   if (!isFloat && !isInt) {
     return emitOpError("requires integer-like or floating-point-like VMI "
                        "source element type");
   }
-
   if (failed(verifyMaskMatchesData(getOperation(), maskType, sourceType))) {
     return failure();
   }
-
-  if (auto groupAttr = getGroupAttr()) {
-    int64_t C = groupAttr.getInt();
-    if (sourceType.getElementCount() % C != 0) {
-      return emitOpError("group count ") << C << " must divide source lane count "
-                                         << sourceType.getElementCount();
-    }
-    if (resultType.getElementCount() != C) {
-      return emitOpError("result lane count must equal group count ")
-             << C << ", got " << resultType.getElementCount();
-    }
-    if (auto resultLayout = resultType.getLayoutAttr()) {
-      if (!resultLayout.isGroupSlots() ||
-          resultLayout.getNumGroups() != C) {
-        return emitOpError()
-               << "layout-assigned result must use "
-                  "#pto.vmi.layout<num_groups = "
-               << C << ">";
-      }
-    }
-  } else {
-    if (resultType.getElementCount() != 1) {
-      return emitOpError("full reduction (no group) requires 1-lane result, got ")
-             << resultType.getElementCount();
-    }
-  }
-
-  if (sourceType.getElementType() != resultType.getElementType()) {
-    return emitOpError("source and result element types must match");
-  }
-
-  if (auto pmode = getPmode()) {
-    StringRef val = *pmode;
-    if (val != "zero" && val != "merge") {
-      return emitOpError("pmode must be \"zero\" or \"merge\", got \"") << val << "\"";
-    }
-  }
-
-  return success();
+  return verifyReductionGroupAndPmode(getOperation(), sourceType, resultType,
+                                      getGroupAttr(), getPmode());
 }
 
 LogicalResult VMIvcminOp::verify() {
@@ -4042,57 +4063,18 @@ LogicalResult VMIvcminOp::verify() {
   auto elemTy = sourceType.getElementType();
   if (failed(verifyBF16x2ComputeElementType(getOperation(), elemTy))) {
     return failure();
-}
-
+  }
   bool isFloat = isVMIFloatLikeType(elemTy);
   bool isInt = isVMIIntegerLikeType(elemTy);
   if (!isFloat && !isInt) {
     return emitOpError("requires integer-like or floating-point-like VMI "
                        "source element type");
   }
-
   if (failed(verifyMaskMatchesData(getOperation(), maskType, sourceType))) {
     return failure();
   }
-
-  if (auto groupAttr = getGroupAttr()) {
-    int64_t C = groupAttr.getInt();
-    if (sourceType.getElementCount() % C != 0) {
-      return emitOpError("group count ") << C << " must divide source lane count "
-                                         << sourceType.getElementCount();
-    }
-    if (resultType.getElementCount() != C) {
-      return emitOpError("result lane count must equal group count ")
-             << C << ", got " << resultType.getElementCount();
-    }
-    if (auto resultLayout = resultType.getLayoutAttr()) {
-      if (!resultLayout.isGroupSlots() ||
-          resultLayout.getNumGroups() != C) {
-        return emitOpError()
-               << "layout-assigned result must use "
-                  "#pto.vmi.layout<num_groups = "
-               << C << ">";
-      }
-    }
-  } else {
-    if (resultType.getElementCount() != 1) {
-      return emitOpError("full reduction (no group) requires 1-lane result, got ")
-             << resultType.getElementCount();
-    }
-  }
-
-  if (sourceType.getElementType() != resultType.getElementType()) {
-    return emitOpError("source and result element types must match");
-  }
-
-  if (auto pmode = getPmode()) {
-    StringRef val = *pmode;
-    if (val != "zero" && val != "merge") {
-      return emitOpError("pmode must be \"zero\" or \"merge\", got \"") << val << "\"";
-    }
-  }
-
-  return success();
+  return verifyReductionGroupAndPmode(getOperation(), sourceType, resultType,
+                                      getGroupAttr(), getPmode());
 }
 
 LogicalResult VMIVgatherOp::verify() {
@@ -4492,66 +4474,34 @@ LogicalResult VMIVmulaOp::verify() {
   return success();
 }
 
-LogicalResult VMICvtOp::verify() {
-  auto sourceType = cast<VMIVRegType>(getSource().getType());
-  auto resultType = cast<VMIVRegType>(getResult().getType());
-  // 1. Lane count must match.
-  if (sourceType.getElementCount() != resultType.getElementCount()) {
-    return emitOpError(
-        "requires source and result logical lane counts to match");
-}
-
-  Type srcElem = sourceType.getElementType();
-  Type dstElem = resultType.getElementType();
-  unsigned srcBits = getVMIElementBitWidth(srcElem);
-  unsigned dstBits = getVMIElementBitWidth(dstElem);
-  bool srcFp = isVMIFloatLikeType(srcElem);
-  bool dstFp = isVMIFloatLikeType(dstElem);
-  bool srcInt = isVMIIntegerLikeType(srcElem);
-  bool dstInt = isVMIIntegerLikeType(dstElem);
-  auto fpContract =
-      srcFp && dstFp ? lookupVMIFpToFpContract(srcElem, dstElem)
-                     : std::nullopt;
-
-  if (involvesBF16x2(srcElem, dstElem) && !fpContract) {
-    return emitOpError(
-        "unsupported conversion involving bf16x2 element type");
-}
-  if (srcFp && dstFp &&
-      involvesVMIPackedFloatCarrier(srcElem, dstElem) && !fpContract) {
-    return emitOpError(
-        "unsupported packed fp-to-fp conversion element type pair");
-}
-
-  // 2. Classify the conversion direction.
-  CvtDirection dir;
+static LogicalResult classifyCvtDirection(
+    VMICvtOp op, Type srcElem, Type dstElem, unsigned srcBits, unsigned dstBits,
+    bool srcFp, bool dstFp, bool srcInt, bool dstInt,
+    const std::optional<VMIFpToFpContract> &fpContract, CvtDirection &dir) {
   if (srcFp && dstFp) {
     if (dstBits > srcBits) {
       dir = CvtDirection::FpWiden;
-    }
-    else if (dstBits < srcBits) {
+    } else if (dstBits < srcBits) {
       dir = CvtDirection::FpNarrow;
-    }
-    else {
+    } else {
       // Same-width fp→fp (e.g. bf16 → f16): only allowed for VMI fp-to-fp
       // contract pairs, routed through FpNarrow (1:1 TruncF).
       if (!fpContract) {
-        return emitOpError(
+        return op.emitOpError(
             "same-width fp-to-fp conversion is not supported for this type "
             "pair; see lookupVMIFpToFpContract");
-}
+      }
       dir = CvtDirection::FpNarrow;
     }
   } else if (srcFp && dstInt) {
     if (isVMIUnsignedOrSignlessIntegerType(dstElem)) {
       dir = CvtDirection::FpToUi;
-    }
-    else {
+    } else {
       dir = CvtDirection::FpToSi;
     }
   } else if (srcInt && dstFp) {
     if (!isVMISignedIntegerType(srcElem)) {
-      return emitOpError(
+      return op.emitOpError(
           "int-to-fp conversion requires explicitly signed integer source "
           "element type");
     }
@@ -4559,144 +4509,209 @@ LogicalResult VMICvtOp::verify() {
   } else if (srcInt && dstInt) {
     if (dstBits > srcBits) {
       dir = CvtDirection::IntWiden;
-    }
-    else if (dstBits < srcBits) {
+    } else if (dstBits < srcBits) {
       dir = CvtDirection::IntNarrow;
-    }
-    else {
-      return emitOpError(
+    } else {
+      return op.emitOpError(
           "int-to-int conversion must change element bit-width");
-}
+    }
   } else {
-    return emitOpError(
+    return op.emitOpError(
         "unsupported element type combination for vcvt");
   }
+  return success();
+}
 
-  // 3. Validate attributes against the conversion direction.
-
-  // --- rounding ---
-  if (auto roundingAttr = (*this)->getAttrOfType<StringAttr>("rounding")) {
-    if (dir != CvtDirection::FpNarrow && dir != CvtDirection::FpToSi &&
-        dir != CvtDirection::FpToUi) {
-      return emitOpError("'rounding' attribute is only valid for floating-point "
-                         "narrowing or floating-point-to-integer conversions");
-    }
-    StringRef rnd = roundingAttr.getValue();
-    if (rnd.size() != 1) {
-      return emitOpError("rounding must be a single-character mode token");
-    }
-    if (dir == CvtDirection::FpNarrow) {
-      StringRef allowedRndModes =
-          fpContract && !fpContract->allowedRndModes.empty()
-              ? fpContract->allowedRndModes
-              : StringRef("RAHZ");
-      if (!allowedRndModes.contains(rnd)) {
-        if (fpContract && !fpContract->allowedRndModes.empty()) {
-          return emitOpError(
-              "rounding is not valid for this fp-to-fp conversion type pair");
-        }
-        return emitOpError("rounding must be 'R' (nearest-even), "
-                           "'A' (away-from-zero), 'H' (half-up), "
-                           "or 'Z' (toward-zero)");
-      }
-    } else if (rnd != "R" && rnd != "A" && rnd != "F" && rnd != "C" &&
-               rnd != "Z") {
-      return emitOpError("rounding must be 'R', 'A', 'F', 'C', or 'Z' for "
-                         "floating-point-to-integer conversions");
-    }
+// Validate the rounding attribute for the given conversion direction.
+static LogicalResult verifyCvtRounding(VMICvtOp op, CvtDirection dir,
+                                       Type srcElem, Type dstElem,
+                                       const std::optional<VMIFpToFpContract> &fpContract) {
+  auto roundingAttr = op->getAttrOfType<StringAttr>("rounding");
+  if (!roundingAttr) {
+    return success();
   }
+  if (dir != CvtDirection::FpNarrow && dir != CvtDirection::FpToSi &&
+      dir != CvtDirection::FpToUi) {
+    return op.emitOpError("'rounding' attribute is only valid for floating-point "
+                          "narrowing or floating-point-to-integer conversions");
+  }
+  StringRef rnd = roundingAttr.getValue();
+  if (rnd.size() != 1) {
+    return op.emitOpError("rounding must be a single-character mode token");
+  }
+  if (dir == CvtDirection::FpNarrow) {
+    StringRef allowedRndModes =
+        fpContract && !fpContract->allowedRndModes.empty()
+            ? fpContract->allowedRndModes
+            : StringRef("RAHZ");
+    if (!allowedRndModes.contains(rnd)) {
+      if (fpContract && !fpContract->allowedRndModes.empty()) {
+        return op.emitOpError(
+            "rounding is not valid for this fp-to-fp conversion type pair");
+      }
+      return op.emitOpError("rounding must be 'R' (nearest-even), "
+                            "'A' (away-from-zero), 'H' (half-up), "
+                            "or 'Z' (toward-zero)");
+    }
+  } else if (rnd != "R" && rnd != "A" && rnd != "F" && rnd != "C" &&
+             rnd != "Z") {
+    return op.emitOpError("rounding must be 'R', 'A', 'F', 'C', or 'Z' for "
+                          "floating-point-to-integer conversions");
+  }
+  return success();
+}
 
-  // --- saturate ---
-  auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
+// Validate the saturate attribute for FpToSi conversions.
+static LogicalResult verifyCvtSaturateFpToSi(VMICvtOp op, Type srcElem,
+                                             Type dstElem,
+                                             StringAttr satAttr) {
+  auto contract = lookupVMIFpToSiContract(srcElem, dstElem);
+  if (!contract) {
+    return op.emitOpError("unsupported fp-to-si conversion element type pair");
+  }
+  if (contract->requiresSat) {
+    if (!satAttr) {
+      return op.emitOpError("'saturate' attribute is required for this "
+                            "fp-to-si conversion; write 'SAT' or 'NOSAT'");
+    }
+    StringRef satVal = satAttr.getValue();
+    if (satVal != "SAT" && satVal != "NOSAT") {
+      return op.emitOpError("saturate must be 'SAT' or 'NOSAT'");
+    }
+  } else if (satAttr) {
+    return op.emitOpError("'saturate' attribute is not valid for this "
+                          "fp-to-si conversion (no overflow possible)");
+  }
+  return success();
+}
+
+// Validate the saturate attribute for FpToUi conversions.
+static LogicalResult verifyCvtSaturateFpToUi(VMICvtOp op, Type srcElem,
+                                             Type dstElem,
+                                             StringAttr satAttr) {
+  auto contract = lookupVMIFpToUIContract(srcElem, dstElem);
+  if (!contract) {
+    return op.emitOpError("unsupported fp-to-ui conversion element type pair");
+  }
+  if (contract->requiresSat) {
+    if (!satAttr) {
+      return op.emitOpError("'saturate' attribute is required for this "
+                            "fp-to-ui conversion; write 'SAT' or 'NOSAT'");
+    }
+    StringRef satVal = satAttr.getValue();
+    if (satVal != "SAT" && satVal != "NOSAT") {
+      return op.emitOpError("saturate must be 'SAT' or 'NOSAT'");
+    }
+  } else if (satAttr) {
+    return op.emitOpError("'saturate' attribute is not valid for this "
+                          "fp-to-ui conversion (no overflow possible)");
+  }
+  return success();
+}
+
+// Validate the saturate attribute for narrow (FpNarrow / IntNarrow) conversions.
+static LogicalResult verifyCvtSaturateNarrow(
+    VMICvtOp op, CvtDirection dir, unsigned srcBits, unsigned dstBits,
+    Type srcElem, Type dstElem, StringAttr satAttr,
+    const std::optional<VMIFpToFpContract> &fpContract) {
+  // Fp-narrow: default to requiring a saturate attribute, but consult the
+  // fp-to-fp contract when one exists (e.g. bf16x2->f4x2 narrows with
+  // requiresSat=false and must NOT carry saturate).
+  bool needSat = (dir == CvtDirection::IntNarrow);
+  if (dir == CvtDirection::FpNarrow) {
+    needSat = !fpContract || fpContract->requiresSat;
+  }
+  if (needSat) {
+    if (!satAttr) {
+      return op.emitOpError("'saturate' attribute is required for fp-narrow / "
+                            "int-narrow conversions; write 'SAT' or 'NOSAT'");
+    }
+    StringRef satVal = satAttr.getValue();
+    if (satVal != "SAT" && satVal != "NOSAT") {
+      return op.emitOpError("saturate must be 'SAT' or 'NOSAT'");
+    }
+    // si32 -> si8 IntNarrow has no native hardware form.  Lowering aliases
+    // it through ui32 -> ui8 (bit-pattern equal ONLY under NOSAT).  Reject
+    // SAT here because ui32 -> ui8 SAT clamps to [0, 255], which does NOT
+    // match the expected si32 -> si8 SAT clamp to [-128, 127].
+    if (dir == CvtDirection::IntNarrow && satVal == "SAT" &&
+        srcBits == mlir::pto::kValue32 && dstBits == mlir::pto::kValue8 &&
+        isa<IntegerType>(srcElem) &&
+        cast<IntegerType>(srcElem).isSigned() &&
+        isa<IntegerType>(dstElem) &&
+        cast<IntegerType>(dstElem).isSigned()) {
+      return op.emitOpError("si32 -> si8 int-narrow does not support "
+                            "saturate=\"SAT\" (no native hardware form; "
+                            "only saturate=\"NOSAT\" is allowed)");
+    }
+  } else if (satAttr && dir == CvtDirection::FpNarrow) {
+    return op.emitOpError("'saturate' attribute is not valid for this fp-to-fp "
+                          "narrow conversion (no saturation)");
+  } else if (satAttr) {
+    return op.emitOpError("'saturate' attribute is only valid for fp-narrow / "
+                          "int-narrow conversions");
+  }
+  return success();
+}
+
+// Dispatch saturate validation to the correct sub-verifier.
+static LogicalResult verifyCvtSaturate(VMICvtOp op, CvtDirection dir,
+                                       unsigned srcBits, unsigned dstBits,
+                                       Type srcElem, Type dstElem,
+                                       StringAttr satAttr,
+                                       const std::optional<VMIFpToFpContract> &fpContract) {
   if (dir == CvtDirection::FpToSi) {
-    auto contract = lookupVMIFpToSiContract(srcElem, dstElem);
-    if (!contract) {
-      return emitOpError("unsupported fp-to-si conversion element type pair");
-    }
-    if (contract->requiresSat) {
-      if (!satAttr) {
-        return emitOpError("'saturate' attribute is required for this "
-                           "fp-to-si conversion; write 'SAT' or 'NOSAT'");
-      }
-      StringRef satVal = satAttr.getValue();
-      if (satVal != "SAT" && satVal != "NOSAT") {
-        return emitOpError("saturate must be 'SAT' or 'NOSAT'");
-      }
-    } else {
-      if (satAttr) {
-        return emitOpError("'saturate' attribute is not valid for this "
-                           "fp-to-si conversion (no overflow possible)");
-      }
-    }
-  } else if (dir == CvtDirection::FpToUi) {
-    auto contract = lookupVMIFpToUIContract(srcElem, dstElem);
-    if (!contract) {
-      return emitOpError("unsupported fp-to-ui conversion element type pair");
-    }
-    if (contract->requiresSat) {
-      if (!satAttr) {
-        return emitOpError("'saturate' attribute is required for this "
-                           "fp-to-ui conversion; write 'SAT' or 'NOSAT'");
-}
-      StringRef satVal = satAttr.getValue();
-      if (satVal != "SAT" && satVal != "NOSAT") {
-        return emitOpError("saturate must be 'SAT' or 'NOSAT'");
-      }
-    } else {
-      if (satAttr) {
-        return emitOpError("'saturate' attribute is not valid for this "
-                           "fp-to-ui conversion (no overflow possible)");
-}
-    }
-  } else {
-    bool needSat = (dir == CvtDirection::IntNarrow);
-    // Fp-narrow: default to requiring a saturate attribute, but consult the
-    // fp-to-fp contract when one exists (e.g. bf16x2->f4x2 narrows with
-    // requiresSat=false and must NOT carry saturate).
-    if (dir == CvtDirection::FpNarrow) {
-      needSat = !fpContract || fpContract->requiresSat;
-    }
-    if (needSat) {
-      if (!satAttr) {
-        return emitOpError("'saturate' attribute is required for fp-narrow / "
-                           "int-narrow conversions; write 'SAT' or "
-                           "'NOSAT'");
-}
-      StringRef satVal = satAttr.getValue();
-      if (satVal != "SAT" && satVal != "NOSAT") {
-        return emitOpError("saturate must be 'SAT' or 'NOSAT'");
-      }
-      // si32 -> si8 IntNarrow has no native hardware form.  Lowering aliases
-      // it through ui32 -> ui8 (bit-pattern equal ONLY under NOSAT).  Reject
-      // SAT here because ui32 -> ui8 SAT clamps to [0, 255], which does NOT
-      // match the expected si32 -> si8 SAT clamp to [-128, 127].
-      if (dir == CvtDirection::IntNarrow && satVal == "SAT" &&
-          srcBits == mlir::pto::kValue32 && dstBits == mlir::pto::kValue8 &&
-          isa<IntegerType>(srcElem) &&
-          cast<IntegerType>(srcElem).isSigned() &&
-          isa<IntegerType>(dstElem) &&
-          cast<IntegerType>(dstElem).isSigned()) {
-        return emitOpError("si32 -> si8 int-narrow does not support "
-                           "saturate=\"SAT\" (no native hardware form; "
-                           "only saturate=\"NOSAT\" is allowed)");
-}
-    } else if (satAttr && dir == CvtDirection::FpNarrow) {
-      return emitOpError("'saturate' attribute is not valid for this fp-to-fp "
-                         "narrow conversion (no saturation)");
-    } else if (satAttr) {
-      return emitOpError("'saturate' attribute is only valid for fp-narrow / "
-                         "int-narrow conversions");
-    }
+    return verifyCvtSaturateFpToSi(op, srcElem, dstElem, satAttr);
   }
+  if (dir == CvtDirection::FpToUi) {
+    return verifyCvtSaturateFpToUi(op, srcElem, dstElem, satAttr);
+  }
+  return verifyCvtSaturateNarrow(op, dir, srcBits, dstBits, srcElem, dstElem,
+                                 satAttr, fpContract);
+}
 
-  // --- pmode ---
+LogicalResult VMICvtOp::verify() {
+  auto sourceType = cast<VMIVRegType>(getSource().getType());
+  auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (sourceType.getElementCount() != resultType.getElementCount()) {
+    return emitOpError(
+        "requires source and result logical lane counts to match");
+  }
+  Type srcElem = sourceType.getElementType();
+  Type dstElem = resultType.getElementType();
+unsigned srcBits = getVMIElementBitWidth(srcElem), dstBits = getVMIElementBitWidth(dstElem);
+bool srcFp = isVMIFloatLikeType(srcElem), dstFp = isVMIFloatLikeType(dstElem);
+bool srcInt = isVMIIntegerLikeType(srcElem), dstInt = isVMIIntegerLikeType(dstElem);
+  auto fpContract = srcFp && dstFp ? lookupVMIFpToFpContract(srcElem, dstElem)
+                                   : std::nullopt;
+  if (involvesBF16x2(srcElem, dstElem) && !fpContract) {
+    return emitOpError("unsupported conversion involving bf16x2 element type");
+  }
+  if (srcFp && dstFp && involvesVMIPackedFloatCarrier(srcElem, dstElem) &&
+      !fpContract) {
+    return emitOpError(
+        "unsupported packed fp-to-fp conversion element type pair");
+  }
+  CvtDirection dir = CvtDirection::FpNarrow;
+  if (failed(classifyCvtDirection(*this, srcElem, dstElem, srcBits, dstBits,
+                                  srcFp, dstFp, srcInt, dstInt, fpContract,
+                                  dir))) {
+    return failure();
+  }
+  if (failed(verifyCvtRounding(*this, dir, srcElem, dstElem, fpContract))) {
+    return failure();
+  }
+  auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
+  if (failed(verifyCvtSaturate(*this, dir, srcBits, dstBits, srcElem, dstElem,
+                               satAttr, fpContract))) {
+    return failure();
+  }
   if (auto pmodeAttr = (*this)->getAttrOfType<StringAttr>("pmode")) {
     StringRef pmode = pmodeAttr.getValue();
     if (pmode != "merge" && pmode != "zero") {
       return emitOpError("pmode must be 'merge' or 'zero'");
     }
   }
-
   return success();
 }
 
@@ -4731,17 +4746,15 @@ LogicalResult VMIVinterpretCastOp::verify() {
   return success();
 }
 
-ParseResult VMIvStoreOp::parse(OpAsmParser &parser, OperationState &result) {
-  SmallVector<OpAsmParser::UnresolvedOperand, mlir::pto::kValue4> preBracketOperands;
-  OpAsmParser::UnresolvedOperand operand;
-  OpAsmParser::UnresolvedOperand offsetOperand;
-  SmallVector<OpAsmParser::UnresolvedOperand, mlir::pto::kValue3> postBracketOps;
-
+// Parse pre-bracket operands: value(s) + optional [offset].
+static ParseResult parseVStorePreBracket(
+    OpAsmParser &parser, OpAsmParser::UnresolvedOperand &operand,
+    OpAsmParser::UnresolvedOperand &offsetOperand,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &preBracketOperands) {
   if (parser.parseOperand(operand)) {
     return failure();
   }
   preBracketOperands.push_back(operand);
-
   bool consumedLSquare = false;
   while (!consumedLSquare) {
     if (succeeded(parser.parseOptionalLSquare())) {
@@ -4766,61 +4779,37 @@ ParseResult VMIvStoreOp::parse(OpAsmParser &parser, OperationState &result) {
     }
     preBracketOperands.push_back(operand);
   }
+  return success();
+}
 
-  if (preBracketOperands.empty()) {
-    return parser.emitError(parser.getCurrentLocation(),
-                            "expected at least one value and one destination");
-  }
-
-  // Optional post-bracket operands: stride, block_stride, and/or mask.
-  // Up to 2, disambiguated after parsing attrs and the type list.
-  while (succeeded(parser.parseOptionalComma())) {
-    OpAsmParser::UnresolvedOperand postOp;
-    if (parser.parseOperand(postOp)) {
-      return failure();
-    }
-    postBracketOps.push_back(postOp);
-    if (postBracketOps.size() >= mlir::pto::kValue3) {
-      break;
-    }
-  }
-
-  if (parser.parseOptionalAttrDict(result.attributes)) {
-    return failure();
-  }
-
-  SmallVector<Type, mlir::pto::kValue6> types;
-  if (parser.parseColon() || parser.parseTypeList(types)) {
-    return failure();
-  }
-
-  bool hasGroup = result.attributes.get("group") != nullptr;
-  bool hasStride = false;
-  bool hasBlock = false;
-  bool hasMask = false;
-  int strideIdx = -1;
-  int blockIdx = -1;
-  int maskIdx = -1;
-  size_t nValues = preBracketOperands.size() - 1;
-  size_t nTypes = types.size();
-
+// Disambiguate post-bracket operands into stride/block/mask.
+static void disambiguateVStorePostBracket(
+    bool hasGroup, size_t numPostOps, size_t nValues, size_t nTypes,
+    bool &hasStride, bool &hasBlock, bool &hasMask,
+    int &strideIdx, int &blockIdx, int &maskIdx) {
+  hasStride = false;
+  hasBlock = false;
+  hasMask = false;
+  strideIdx = -1;
+  blockIdx = -1;
+  maskIdx = -1;
   if (hasGroup) {
     // Group mode: post-bracket ops are stride[, mask]
-    if (postBracketOps.size() >= 1) {
+    if (numPostOps >= 1) {
       hasStride = true;
       strideIdx = 0;
     }
-    if (postBracketOps.size() >= mlir::pto::kValue2) {
+    if (numPostOps >= mlir::pto::kValue2) {
       hasMask = true;
       maskIdx = 1;
     }
-  } else if (postBracketOps.size() == mlir::pto::kValue2) {
+  } else if (numPostOps == mlir::pto::kValue2) {
     // Block-stride mode with a mask: block_stride, mask.
     hasBlock = true;
     hasMask = true;
     blockIdx = 0;
     maskIdx = 1;
-  } else if (postBracketOps.size() == 1) {
+  } else if (numPostOps == 1) {
     // The type list includes mask types, but never block-stride types.
     if (nTypes == nValues + mlir::pto::kValue2) {
       hasMask = true;
@@ -4830,39 +4819,45 @@ ParseResult VMIvStoreOp::parse(OpAsmParser &parser, OperationState &result) {
       blockIdx = 0;
     }
   }
+}
 
+// Resolve all parsed operands against their types.
+static ParseResult resolveVStoreOperands(
+    OpAsmParser &parser, OperationState &result,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &preBracketOperands,
+    OpAsmParser::UnresolvedOperand offsetOperand,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &postBracketOps,
+    SmallVectorImpl<Type> &types, size_t nValues, bool hasStride,
+    bool hasBlock, bool hasMask, int strideIdx, int blockIdx,
+    int maskIdx) {
   size_t expectedTypes = nValues + 1 + (hasMask ? 1 : 0);
+  size_t nTypes = types.size();
   if (nTypes != expectedTypes) {
     return parser.emitError(parser.getCurrentLocation())
            << "expected " << expectedTypes << " types (" << nValues
            << " value(s), 1 destination" << (hasMask ? ", 1 mask" : "")
            << "), got " << nTypes;
   }
-
   for (size_t i = 0; i < nValues; ++i) {
     if (parser.resolveOperand(preBracketOperands[i], types[i], result.operands)) {
       return failure();
     }
   }
-
   Type destType = types[nValues];
   if (parser.resolveOperand(preBracketOperands[nValues], destType,
                             result.operands)) {
     return failure();
   }
-
   if (parser.resolveOperand(offsetOperand, parser.getBuilder().getIndexType(),
                             result.operands)) {
     return failure();
   }
-
   if (hasStride &&
       parser.resolveOperand(postBracketOps[strideIdx],
                             parser.getBuilder().getIndexType(),
                             result.operands)) {
     return failure();
   }
-
   if (hasBlock &&
       parser.resolveOperand(postBracketOps[blockIdx],
                             parser.getBuilder().getIntegerType(mlir::pto::kValue16),
@@ -4876,7 +4871,54 @@ ParseResult VMIvStoreOp::parse(OpAsmParser &parser, OperationState &result) {
       return failure();
     }
   }
+  return success();
+}
 
+ParseResult VMIvStoreOp::parse(OpAsmParser &parser, OperationState &result) {
+  SmallVector<OpAsmParser::UnresolvedOperand, mlir::pto::kValue4> preBracketOperands;
+  OpAsmParser::UnresolvedOperand operand, offsetOperand;
+  SmallVector<OpAsmParser::UnresolvedOperand, mlir::pto::kValue3> postBracketOps;
+  if (failed(parseVStorePreBracket(parser, operand, offsetOperand,
+                                   preBracketOperands))) {
+    return failure();
+  }
+  if (preBracketOperands.empty()) {
+    return parser.emitError(parser.getCurrentLocation(),
+                            "expected at least one value and one destination");
+  }
+  // Optional post-bracket operands: stride, block_stride, and/or mask.
+  // Up to 2, disambiguated after parsing attrs and the type list.
+  while (succeeded(parser.parseOptionalComma())) {
+    OpAsmParser::UnresolvedOperand postOp;
+    if (parser.parseOperand(postOp)) {
+      return failure();
+    }
+    postBracketOps.push_back(postOp);
+    if (postBracketOps.size() >= mlir::pto::kValue3) {
+      break;
+    }
+  }
+  if (parser.parseOptionalAttrDict(result.attributes)) {
+    return failure();
+  }
+  SmallVector<Type, mlir::pto::kValue6> types;
+  if (parser.parseColon() || parser.parseTypeList(types)) {
+    return failure();
+  }
+  bool hasGroup = result.attributes.get("group") != nullptr;
+  bool hasStride, hasBlock, hasMask;
+  int strideIdx, blockIdx, maskIdx;
+  disambiguateVStorePostBracket(hasGroup, postBracketOps.size(),
+                                preBracketOperands.size() - 1, types.size(),
+                                hasStride, hasBlock, hasMask,
+                                strideIdx, blockIdx, maskIdx);
+  size_t nValues = preBracketOperands.size() - 1;
+  if (failed(resolveVStoreOperands(parser, result, preBracketOperands,
+                                   offsetOperand, postBracketOps, types,
+                                   nValues, hasStride, hasBlock, hasMask,
+                                   strideIdx, blockIdx, maskIdx))) {
+    return failure();
+  }
   result.addAttribute("operandSegmentSizes",
                       parser.getBuilder().getDenseI32ArrayAttr(
                           {static_cast<int32_t>(nValues), 1, 1,
@@ -4915,118 +4957,135 @@ void VMIvStoreOp::print(OpAsmPrinter &p) {
   }
 }
 
-LogicalResult VMIvStoreOp::verify() {
-  // group and dist_mode are mutually exclusive
-  if (getGroup() && getDistMode()) {
-    return emitOpError("group and dist_mode are mutually exclusive");
+static LogicalResult verifyVStoreGroupAndBlockModes(
+    Operation *op, bool hasGroup, std::optional<StringRef> distMode,
+    bool hasStride, bool hasBlock, bool hasMask, int64_t numGroups,
+    size_t nValues, ValueRange values) {
+  if (hasGroup && distMode) {
+    return op->emitOpError("group and dist_mode are mutually exclusive");
   }
-  if (getGroup() && !getStride()) {
-    return emitOpError("group requires a stride operand");
+  if (hasGroup && !hasStride) {
+    return op->emitOpError("group requires a stride operand");
   }
-  if (!getGroup() && getStride()) {
-    return emitOpError("stride operand is only valid with group");
+  if (!hasGroup && hasStride) {
+    return op->emitOpError("stride operand is only valid with group");
   }
-  if (getGroup() && !getMask().empty()) {
-    return emitOpError("group mode does not support mask operand");
+  if (hasGroup && hasMask) {
+    return op->emitOpError("group mode does not support mask operand");
   }
-
-  if (getGroup()) {
-    int64_t numGroups = getGroupAttr().getInt();
+  if (hasGroup) {
     if (numGroups <= 0) {
-      return emitOpError("group must be positive, got ") << numGroups;
+      return op->emitOpError("group must be positive, got ") << numGroups;
     }
-    if (getValues().size() != 1) {
-      return emitOpError("group mode requires exactly 1 value");
+    if (nValues != 1) {
+      return op->emitOpError("group mode requires exactly 1 value");
     }
-    auto valueType = cast<VMIVRegType>(getValues()[0].getType());
-    if (failed(verifyNumGroups(getOperation(), valueType, numGroups))) {
+    auto valueType = cast<VMIVRegType>(values[0].getType());
+    if (failed(verifyNumGroups(op, valueType, numGroups))) {
       return failure();
     }
   }
-
-  // block_stride is mutually exclusive with dist_mode and group.
-  bool hasBlock = static_cast<bool>(getBlockStride());
   if (hasBlock) {
-    if (getDistMode()) {
-      return emitOpError(
+    if (distMode) {
+      return op->emitOpError(
           "block_stride and dist_mode are mutually exclusive");
     }
-    if (getGroup()) {
-      return emitOpError("block_stride and group are mutually exclusive");
+    if (hasGroup) {
+      return op->emitOpError("block_stride and group are mutually exclusive");
     }
-    if (getValues().size() != 1) {
-      return emitOpError("block-stride mode requires exactly 1 value");
+    if (nValues != 1) {
+      return op->emitOpError("block-stride mode requires exactly 1 value");
     }
   }
+  return success();
+}
 
-  auto distMode = getDistMode();
+static LogicalResult verifyVStoreDistModeAndPmode(
+    Operation *op, std::optional<StringRef> distMode, size_t nValues,
+    size_t maskCount, std::optional<StringRef> pmode) {
   if (distMode && !validStoreDistModes().count(*distMode)) {
-    return emitOpError("invalid dist-mode: \"") << *distMode << "\"";
+    return op->emitOpError("invalid dist-mode: \"") << *distMode << "\"";
   }
   bool isIntlv = distMode && *distMode == "intlv";
-  size_t nValues = getValues().size();
   if (nValues < 1) {
-    return emitOpError("requires at least 1 value");
+    return op->emitOpError("requires at least 1 value");
   }
   if (isIntlv && nValues != mlir::pto::kValue2) {
-    return emitOpError("dist-mode \"intlv\" requires exactly 2 values");
+    return op->emitOpError("dist-mode \"intlv\" requires exactly 2 values");
   }
   if (!isIntlv && nValues != 1) {
-    return emitOpError("requires exactly 1 value for dist-mode \"")
+    return op->emitOpError("requires exactly 1 value for dist-mode \"")
            << (distMode ? *distMode : "continuous") << "\"";
   }
-
-  bool hasMask = !getMask().empty();
-  if (getMask().size() > 1) {
-    return emitOpError("at most one mask allowed");
+  if (maskCount > 1) {
+    return op->emitOpError("at most one mask allowed");
   }
-
-  auto pmode = getPmode();
   if (pmode && !validPModes().count(*pmode)) {
-    return emitOpError("invalid pmode: \"") << *pmode << "\"";
+    return op->emitOpError("invalid pmode: \"") << *pmode << "\"";
   }
   if (pmode && *pmode != "zero") {
-    return emitOpError("pmode \"merge\" is not supported for stores: the "
-                       "legacy store lowering is mask-governed only and "
-                       "cannot retain prior destination contents on inactive "
-                       "lanes; omit pmode (defaults to \"zero\")");
+    return op->emitOpError("pmode \"merge\" is not supported for stores: the "
+                           "legacy store lowering is mask-governed only and "
+                           "cannot retain prior destination contents on inactive "
+                           "lanes; omit pmode (defaults to \"zero\")");
   }
+  return success();
+}
 
-  auto valueType = cast<VMIVRegType>(getValues()[0].getType());
+static LogicalResult verifyVStoreValueMaskTypes(Operation *op, bool hasGroup,
+                                                ValueRange values,
+                                                Value destination,
+                                                ValueRange mask) {
+  auto valueType = cast<VMIVRegType>(values[0].getType());
   bool isPackedGroupStore =
-      getGroup() &&
-      isPackedByteGroupStore(getDestination().getType(), valueType);
+      hasGroup &&
+      isPackedByteGroupStore(destination.getType(), valueType);
   if (!isPackedGroupStore &&
-      failed(verifyMemoryElementMatches(getOperation(),
-                                        getDestination().getType(), valueType,
-                                        "destination"))) {
+      failed(verifyMemoryElementMatches(op, destination.getType(),
+                                        valueType, "destination"))) {
     return failure();
   }
-
-  if (nValues == mlir::pto::kValue2) {
-    auto loType = cast<VMIVRegType>(getValues()[0].getType());
-    auto hiType = cast<VMIVRegType>(getValues()[1].getType());
-    if (failed(verifyAllSameVRegShapeAndLayout(getOperation(),
-                                               {loType, hiType},
-                                               /*requireSameElement=*/true))) {
+  if (values.size() == mlir::pto::kValue2) {
+    auto loType = cast<VMIVRegType>(values[0].getType());
+    auto hiType = cast<VMIVRegType>(values[1].getType());
+    if (failed(verifyAllSameVRegShapeAndLayout(
+            op, {loType, hiType}, /*requireSameElement=*/true))) {
       return failure();
     }
-    if (failed(verifyContiguousIfLayoutAssigned(getOperation(), loType,
+    if (failed(verifyContiguousIfLayoutAssigned(op, loType,
                                                 "low input")) ||
-        failed(verifyContiguousIfLayoutAssigned(getOperation(), hiType,
+        failed(verifyContiguousIfLayoutAssigned(op, hiType,
                                                 "high input"))) {
       return failure();
     }
   }
-
-  if (hasMask) {
-    auto maskType = cast<VMIMaskType>(getMask()[0].getType());
-    if (failed(verifyMaskMatchesData(getOperation(), maskType, valueType))) {
+  if (!mask.empty()) {
+    auto maskType = cast<VMIMaskType>(mask[0].getType());
+    if (failed(verifyMaskMatchesData(op, maskType, valueType))) {
       return failure();
     }
   }
-
   return success();
+}
+
+LogicalResult VMIvStoreOp::verify() {
+  bool hasGroup = static_cast<bool>(getGroup());
+  auto distMode = getDistMode();
+  bool hasStride = static_cast<bool>(getStride());
+  bool hasBlock = static_cast<bool>(getBlockStride());
+  bool hasMask = !getMask().empty();
+  size_t nValues = getValues().size();
+  if (failed(verifyVStoreGroupAndBlockModes(
+          getOperation(), hasGroup, distMode, hasStride, hasBlock, hasMask,
+          hasGroup ? getGroupAttr().getInt() : 0, nValues, getValues()))) {
+    return failure();
+  }
+  if (failed(verifyVStoreDistModeAndPmode(getOperation(), distMode, nValues,
+                                         getMask().size(), getPmode()))) {
+    return failure();
+  }
+  return verifyVStoreValueMaskTypes(getOperation(), hasGroup, getValues(),
+                                   getDestination(), getMask());
 }
 
 void VMIvStoreOp::getEffects(
@@ -5271,51 +5330,27 @@ LogicalResult VMIVcmpsOp::verify() {
 // VMICvtOp — unified elementwise type conversion
 //===----------------------------------------------------------------------===//
 // VMIvLoadOp
-ParseResult VMIvLoadOp::parse(OpAsmParser &parser, OperationState &result) {
-  OpAsmParser::UnresolvedOperand sourceOperand;
-  OpAsmParser::UnresolvedOperand offsetOperand;
-  OpAsmParser::UnresolvedOperand strideOperand;
-  OpAsmParser::UnresolvedOperand blockStrideOperand;
-
-  // Parse: %source[%offset]
-  if (parser.parseOperand(sourceOperand) || parser.parseLSquare() ||
-      parser.parseOperand(offsetOperand) || parser.parseRSquare()) {
-    return failure();
-  }
-
+static ParseResult parseVLoadOptionalPostOperand(
+    OpAsmParser &parser, OperationState &result, int &numPostBracket,
+    OpAsmParser::UnresolvedOperand &postOp1) {
   // Optional comma-separated post-bracket operands.
-  // 1 operand + group attr → stride; otherwise → block_stride.
-  int numPostBracket = 0;
-  OpAsmParser::UnresolvedOperand postOp1;
   if (succeeded(parser.parseOptionalComma())) {
     if (parser.parseOperand(postOp1)) {
       return failure();
     }
     numPostBracket = 1;
   }
+  return success();
+}
 
-  if (parser.parseOptionalAttrDict(result.attributes)) {
-    return failure();
-  }
-
-  Type sourceType;
-  if (parser.parseColonType(sourceType)) {
-    return failure();
-  }
-
-  if (parser.parseArrow()) {
-    return failure();
-  }
-
-  SmallVector<Type, mlir::pto::kValue2> resultTypes;
-  if (parser.parseTypeList(resultTypes)) {
-    return failure();
-  }
-
+static void disambiguateVLoadPostOperands(
+    OperationState &result, int numPostBracket,
+    OpAsmParser::UnresolvedOperand postOp1,
+    OpAsmParser::UnresolvedOperand &strideOperand,
+    OpAsmParser::UnresolvedOperand &blockStrideOperand, bool &hasStride,
+    bool &hasBlock) {
   // Disambiguate post-bracket operands
-  bool hasStride = false;
-  bool hasBlock = false;
-
+  // 1 operand + group attr → stride; otherwise → block_stride.
   if (numPostBracket == 1) {
     if (result.attributes.get("group")) {
       hasStride = true;
@@ -5325,7 +5360,15 @@ ParseResult VMIvLoadOp::parse(OpAsmParser &parser, OperationState &result) {
       blockStrideOperand = postOp1;
     }
   }
+}
 
+static ParseResult resolveVLoadOperandsAndFinalize(
+    OpAsmParser &parser, OperationState &result,
+    OpAsmParser::UnresolvedOperand sourceOperand,
+    OpAsmParser::UnresolvedOperand offsetOperand,
+    OpAsmParser::UnresolvedOperand strideOperand,
+    OpAsmParser::UnresolvedOperand blockStrideOperand, bool hasStride,
+    bool hasBlock, Type sourceType, ArrayRef<Type> resultTypes) {
   if (parser.resolveOperand(sourceOperand, sourceType, result.operands)) {
     return failure();
   }
@@ -5347,10 +5390,49 @@ ParseResult VMIvLoadOp::parse(OpAsmParser &parser, OperationState &result) {
   result.addAttribute("operandSegmentSizes",
                       parser.getBuilder().getDenseI32ArrayAttr(
                           {1, 1, hasStride ? 1 : 0, hasBlock ? 1 : 0}));
-
   result.addTypes(resultTypes);
   return success();
 }
+
+ParseResult VMIvLoadOp::parse(OpAsmParser &parser, OperationState &result) {
+  OpAsmParser::UnresolvedOperand sourceOperand;
+  OpAsmParser::UnresolvedOperand offsetOperand;
+  OpAsmParser::UnresolvedOperand strideOperand;
+  OpAsmParser::UnresolvedOperand blockStrideOperand;
+  // Parse: %source[%offset]
+  if (parser.parseOperand(sourceOperand) || parser.parseLSquare() ||
+      parser.parseOperand(offsetOperand) || parser.parseRSquare()) {
+    return failure();
+  }
+  int numPostBracket = 0;
+  OpAsmParser::UnresolvedOperand postOp1;
+  if (failed(parseVLoadOptionalPostOperand(parser, result, numPostBracket,
+                                           postOp1))) {
+    return failure();
+  }
+  if (parser.parseOptionalAttrDict(result.attributes)) {
+    return failure();
+  }
+  Type sourceType;
+  if (parser.parseColonType(sourceType)) {
+    return failure();
+  }
+  if (parser.parseArrow()) {
+    return failure();
+  }
+  SmallVector<Type, mlir::pto::kValue2> resultTypes;
+  if (parser.parseTypeList(resultTypes)) {
+    return failure();
+  }
+  bool hasStride = false;
+  bool hasBlock = false;
+  disambiguateVLoadPostOperands(result, numPostBracket, postOp1, strideOperand,
+                                blockStrideOperand, hasStride, hasBlock);
+  return resolveVLoadOperandsAndFinalize(
+      parser, result, sourceOperand, offsetOperand, strideOperand,
+      blockStrideOperand, hasStride, hasBlock, sourceType, resultTypes);
+}
+
 
 void VMIvLoadOp::print(OpAsmPrinter &p) {
   p << ' ' << getSource() << '[';
@@ -5368,83 +5450,110 @@ void VMIvLoadOp::print(OpAsmPrinter &p) {
   p << " : " << getSource().getType() << " -> " << getResults().getTypes();
 }
 
-LogicalResult VMIvLoadOp::verify() {
-  // group and dist_mode are mutually exclusive, except brc which supports
-  // group broadcast (one scalar per group → broadcast within each group).
-  if (getGroup() && getDistMode() && getDistMode() != "brc") {
-    return emitOpError("group and dist_mode are mutually exclusive");
+static LogicalResult verifyVLoadGroupAndBlockModes(
+    Operation *op, bool hasGroup, std::optional<StringRef> distMode,
+    bool hasStride, bool hasBlock, int64_t numGroups, size_t nResults) {
+  if (hasGroup && distMode && *distMode != "brc") {
+    return op->emitOpError("group and dist_mode are mutually exclusive");
   }
-  if (getGroup() && !getStride()) {
-    return emitOpError("group requires a stride operand");
+  if (hasGroup && !hasStride) {
+    return op->emitOpError("group requires a stride operand");
   }
-  if (!getGroup() && getStride()) {
-    return emitOpError("stride operand is only valid with group");
+  if (!hasGroup && hasStride) {
+    return op->emitOpError("stride operand is only valid with group");
   }
-
-  if (getGroup()) {
-    int64_t numGroups = getGroupAttr().getInt();
+  if (hasGroup) {
     if (numGroups <= 0) {
-      return emitOpError("group must be positive, got ") << numGroups;
+      return op->emitOpError("group must be positive, got ") << numGroups;
     }
-    if (getResults().size() != 1) {
-      return emitOpError("group mode requires exactly 1 result");
-    }
-    auto resultType = cast<VMIVRegType>(getResults()[0].getType());
-    if (failed(verifyNumGroups(getOperation(), resultType, numGroups))) {
-      return failure();
+    if (nResults != 1) {
+      return op->emitOpError("group mode requires exactly 1 result");
     }
   }
-
-  // block_stride is mutually exclusive with dist_mode and group.
-  bool hasBlock = static_cast<bool>(getBlockStride());
   if (hasBlock) {
-    if (getDistMode()) {
-      return emitOpError(
+    if (distMode) {
+      return op->emitOpError(
           "block_stride and dist_mode are mutually exclusive");
     }
-    if (getGroup()) {
-      return emitOpError("block_stride and group are mutually exclusive");
+    if (hasGroup) {
+      return op->emitOpError("block_stride and group are mutually exclusive");
     }
-    if (getResults().size() != 1) {
-      return emitOpError("block-stride mode requires exactly 1 result");
+    if (nResults != 1) {
+      return op->emitOpError("block-stride mode requires exactly 1 result");
     }
   }
+  return success();
+}
 
-  // result count vs dist-mode
-  auto distMode = getDistMode();
+static LogicalResult verifyVLoadDistModeAndPmode(
+    Operation *op, std::optional<StringRef> distMode, size_t nResults,
+    std::optional<StringRef> pmode) {
   if (distMode && !validDistModes().count(*distMode)) {
-    return emitOpError("invalid dist-mode: \"") << *distMode << "\"";
+    return op->emitOpError("invalid dist-mode: \"") << *distMode << "\"";
   }
   bool isDintlv = distMode && *distMode == "dintlv";
-  size_t nResults = getResults().size();
   if (isDintlv && nResults != mlir::pto::kValue2) {
-    return emitOpError("dist-mode \"dintlv\" requires exactly 2 results");
+    return op->emitOpError("dist-mode \"dintlv\" requires exactly 2 results");
   }
   if (!isDintlv && nResults != 1) {
-    return emitOpError("requires exactly 1 result for dist-mode \"")
+    return op->emitOpError("requires exactly 1 result for dist-mode \"")
            << (distMode ? *distMode : "continuous") << "\"";
   }
-
-  auto pmode = getPmode();
   if (pmode && !validPModes().count(*pmode)) {
-    return emitOpError("invalid pmode: \"") << *pmode << "\"";
+    return op->emitOpError("invalid pmode: \"") << *pmode << "\"";
   }
+  return success();
+}
 
-  for (auto res : getResults()) {
+static LogicalResult verifyVLoadModeAndResultCounts(
+    Operation *op, bool hasGroup, std::optional<StringRef> distMode,
+    bool hasStride, bool hasBlock, int64_t numGroups, size_t nResults,
+    std::optional<StringRef> pmode) {
+  if (failed(verifyVLoadGroupAndBlockModes(op, hasGroup, distMode, hasStride,
+                                           hasBlock, numGroups, nResults))) {
+    return failure();
+  }
+  return verifyVLoadDistModeAndPmode(op, distMode, nResults, pmode);
+}
+
+static LogicalResult verifyVLoadResultTypes(
+    Operation *op, ValueRange results, Type sourceType,
+    std::optional<StringRef> distMode) {
+  bool isDintlv = distMode && *distMode == "dintlv";
+  for (auto res : results) {
     auto resType = cast<VMIVRegType>(res.getType());
-    if (failed(verifyMemoryElementMatches(getOperation(),
-                                          getSource().getType(), resType,
+    if (failed(verifyMemoryElementMatches(op, sourceType, resType,
                                           "source"))) {
       return failure();
     }
     if (isDintlv &&
-        failed(verifyContiguousIfLayoutAssigned(getOperation(), resType,
-                                                "result"))) {
+        failed(verifyContiguousIfLayoutAssigned(op, resType, "result"))) {
       return failure();
     }
   }
-
   return success();
+}
+
+LogicalResult VMIvLoadOp::verify() {
+  bool hasGroup = static_cast<bool>(getGroup());
+  auto distMode = getDistMode();
+  bool hasStride = static_cast<bool>(getStride());
+  bool hasBlock = static_cast<bool>(getBlockStride());
+  size_t nResults = getResults().size();
+  if (failed(verifyVLoadModeAndResultCounts(
+          getOperation(), hasGroup, distMode, hasStride, hasBlock,
+          hasGroup ? getGroupAttr().getInt() : 0, nResults, getPmode()))) {
+    return failure();
+  }
+  if (hasGroup) {
+    auto resultType = cast<VMIVRegType>(getResults()[0].getType());
+    if (failed(verifyNumGroups(getOperation(), resultType,
+                               getGroupAttr().getInt()))) {
+      return failure();
+    }
+  }
+  return verifyVLoadResultTypes(getOperation(), getResults(),
+                                getSource().getType(), distMode);
 }
 
 void VMIvLoadOp::getEffects(
