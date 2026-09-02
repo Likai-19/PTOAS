@@ -16,13 +16,6 @@
 #include <memory>
 #include <optional>
 #include <utility>
-#include "PTO/IR/PTO.h"
-#include "PTO/IR/PTOMultiBuffer.h"
-#include "PTO/IR/PTOTypeUtils.h"
-#include "PTO/Support/CodeConstants.h"
-#include "PTO/Transforms/InsertSync/InsertSyncAnalysis.h"
-#include "PTO/Transforms/InsertSync/SyncCommon.h"
-#include "PTO/Transforms/SlotAffineAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
@@ -30,6 +23,13 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "PTO/IR/PTO.h"
+#include "PTO/IR/PTOMultiBuffer.h"
+#include "PTO/IR/PTOTypeUtils.h"
+#include "PTO/Support/CodeConstants.h"
+#include "PTO/Transforms/InsertSync/InsertSyncAnalysis.h"
+#include "PTO/Transforms/InsertSync/SyncCommon.h"
+#include "PTO/Transforms/SlotAffineAnalysis.h"
 
 
 #define DEBUG_TYPE "pto-insert-sync-analysis"
@@ -320,7 +320,6 @@ bool InsertSyncAnalysis::IsNoNeedToInsertSync(
     const CompoundInstanceElement *frontCompound, bool isBackwardDep) const {
   const PipelineType frontPipe = frontCompound->kPipeValue;
   const PipelineType nowPipe = nowCompound->kPipeValue;
-
   if (frontPipe == nowPipe && frontPipe == PipelineType::PIPE_S) {
     return true;
   }
@@ -650,7 +649,6 @@ void InsertSyncAnalysis::InsertSyncOperation(
     const std::optional<unsigned> &forEndIndex) {
   PipelineType nowPipe = nowCompound->kPipeValue;
   PipelineType frontPipe = frontCompound->kPipeValue;
-
   if (nowPipe == frontPipe) {
     unsigned insertBarrierId = nowCompound->GetIndex();
     auto barrierOp = std::make_unique<SyncOperation>(

@@ -20,14 +20,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "PTO/IR/PTO.h"
-#include "PTO/IR/PTOTypeUtils.h"
-#include "PTO/Transforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
+#include "PTO/IR/PTO.h"
+#include "PTO/IR/PTOTypeUtils.h"
+#include "PTO/Transforms/Passes.h"
 
 namespace mlir {
 namespace pto {

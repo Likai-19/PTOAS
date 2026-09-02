@@ -14,11 +14,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "PTO/IR/PTO.h"
-#include "PTO/IR/PTOTypeUtils.h"
-#include "PTO/IR/VPTOMemoryDist.h"
-#include "PTO/Support/CodeConstants.h"
-
+#include <algorithm>
+#include <optional>
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypeInterfaces.h"
@@ -37,9 +34,10 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-
-#include <algorithm>
-#include <optional>
+#include "PTO/IR/PTO.h"
+#include "PTO/IR/PTOTypeUtils.h"
+#include "PTO/IR/VPTOMemoryDist.h"
+#include "PTO/Support/CodeConstants.h"
 
 using namespace mlir;
 using namespace mlir::pto;
@@ -3896,14 +3894,16 @@ LogicalResult VRegType::verify(function_ref<InFlightDiagnostic()> emitError,
 
 static bool isForbiddenSynchronizationInsideVecScope(Operation *op) {
   // High-level synchronization is forbidden before and after lowering.
-  if (isa<RecordEventOp, WaitEventOp, BarrierSyncOp>(op))
+  if (isa<RecordEventOp, WaitEventOp, BarrierSyncOp>(op)) {
     return true;
+  }
 
   // Intra-core pipeline and buffer-id synchronization executes outside the
   // vector interval that it orders.
   if (isa<SetFlagOp, WaitFlagOp, SetFlagDynOp, WaitFlagDynOp, GetBufOp,
-          GetBufDynOp, RlsBufOp, RlsBufDynOp, BarrierOp>(op))
+          GetBufDynOp, RlsBufOp, RlsBufDynOp, BarrierOp>(op)) {
     return true;
+  }
 
   // Intra-block, cross-core, system, cache, and SIMT synchronization likewise
   // delimit vector intervals. MemBarOp is intentionally not in this list.
@@ -3926,15 +3926,17 @@ LogicalResult VecScopeOp::verify() {
 
   Operation *boundaryOp = nullptr;
   bodyRegion.walk([&](Operation *op) {
-    if (!isForbiddenSynchronizationInsideVecScope(op))
+    if (!isForbiddenSynchronizationInsideVecScope(op)) {
       return WalkResult::advance();
+    }
     boundaryOp = op;
     return WalkResult::interrupt();
   });
-  if (boundaryOp)
+  if (boundaryOp) {
     return boundaryOp->emitOpError()
            << "must be outside 'pto.vecscope'; synchronization operations "
               "delimit vector scopes";
+  }
 
   return success();
 }
@@ -3966,15 +3968,17 @@ LogicalResult StrictVecScopeOp::verify() {
 
   Operation *boundaryOp = nullptr;
   bodyRegion.walk([&](Operation *op) {
-    if (!isForbiddenSynchronizationInsideVecScope(op))
+    if (!isForbiddenSynchronizationInsideVecScope(op)) {
       return WalkResult::advance();
+    }
     boundaryOp = op;
     return WalkResult::interrupt();
   });
-  if (boundaryOp)
+  if (boundaryOp) {
     return boundaryOp->emitOpError()
            << "must be outside 'pto.strict_vecscope'; synchronization "
               "operations delimit vector scopes";
+  }
   return success();
 }
 
@@ -10284,29 +10288,27 @@ LogicalResult UBVorOp::verify() {
   return success();
 }
 
-#define PTO_DEFINE_UB_BINARY_VERIFY_AND_EFFECTS(OpName)                   \
-  void OpName::getEffects(                                                \
-      SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>> \
-          &effects) {                                                     \
-    effects.emplace_back(MemoryEffects::Read::get(), &getSrc0Mutable());  \
-    effects.emplace_back(MemoryEffects::Read::get(), &getSrc1Mutable());  \
-    effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable());  \
-  }                                                                       \
-  LogicalResult OpName::verify() {                                        \
-    if (!isBufferLike(getDst().getType()) ||                              \
-        !isBufferLike(getSrc0().getType()) ||                             \
-        !isBufferLike(getSrc1().getType())) {                             \
-      return emitOpError("requires pointer-like operands");               \
-    }                                                                     \
-    if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||       \
-        classifyMemoryRole(getSrc0().getType()) != MemoryRole::UB ||      \
-        classifyMemoryRole(getSrc1().getType()) != MemoryRole::UB) {      \
-      return emitOpError("requires UB-backed operands");                  \
-    }                                                                     \
-    return success();                                                     \
-  }
+void UBVaddReluOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getSrc0Mutable());
+  effects.emplace_back(MemoryEffects::Read::get(), &getSrc1Mutable());
+  effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable());
+}
 
-PTO_DEFINE_UB_BINARY_VERIFY_AND_EFFECTS(UBVaddReluOp)
+LogicalResult UBVaddReluOp::verify() {
+  if (!isBufferLike(getDst().getType()) ||
+      !isBufferLike(getSrc0().getType()) ||
+      !isBufferLike(getSrc1().getType())) {
+    return emitOpError("requires pointer-like operands");
+  }
+  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
+      classifyMemoryRole(getSrc0().getType()) != MemoryRole::UB ||
+      classifyMemoryRole(getSrc1().getType()) != MemoryRole::UB) {
+    return emitOpError("requires UB-backed operands");
+  }
+  return success();
+}
 
 //===----------------------------------------------------------------------===//
 // UBVnotOp
@@ -10374,33 +10376,131 @@ LogicalResult UBVreluOp::verify() {
   return success();
 }
 
-#define PTO_DEFINE_UB_UNARY_VERIFY_AND_EFFECTS(OpName)                    \
-  void OpName::getEffects(                                                \
-      SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>> \
-          &effects) {                                                     \
-    effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable());   \
-    effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable());  \
-  }                                                                       \
-  LogicalResult OpName::verify() {                                        \
-    if (!isBufferLike(getDst().getType()) ||                              \
-        !isBufferLike(getSrc().getType())) {                              \
-      return emitOpError("requires pointer-like operands");               \
-    }                                                                     \
-    if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||       \
-        classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {       \
-      return emitOpError("requires UB-backed operands");                  \
-    }                                                                     \
-    return success();                                                     \
+void UBVexpOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable());
+  effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable());
+}
+
+LogicalResult UBVexpOp::verify() {
+  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
+    return emitOpError("requires pointer-like operands");
   }
+  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
+      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
+    return emitOpError("requires UB-backed operands");
+  }
+  return success();
+}
 
-PTO_DEFINE_UB_UNARY_VERIFY_AND_EFFECTS(UBVexpOp)
-PTO_DEFINE_UB_UNARY_VERIFY_AND_EFFECTS(UBVlnOp)
-PTO_DEFINE_UB_UNARY_VERIFY_AND_EFFECTS(UBVsqrtOp)
-PTO_DEFINE_UB_UNARY_VERIFY_AND_EFFECTS(UBVrsqrtOp)
+void UBVlnOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable());
+  effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable());
+}
 
-PTO_DEFINE_UB_UNARY_VERIFY_AND_EFFECTS(UBVaddSOp)
-PTO_DEFINE_UB_UNARY_VERIFY_AND_EFFECTS(UBVmaxSOp)
-PTO_DEFINE_UB_UNARY_VERIFY_AND_EFFECTS(UBVminSOp)
+LogicalResult UBVlnOp::verify() {
+  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
+    return emitOpError("requires pointer-like operands");
+  }
+  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
+      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
+    return emitOpError("requires UB-backed operands");
+  }
+  return success();
+}
+
+void UBVsqrtOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable());
+  effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable());
+}
+
+LogicalResult UBVsqrtOp::verify() {
+  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
+    return emitOpError("requires pointer-like operands");
+  }
+  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
+      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
+    return emitOpError("requires UB-backed operands");
+  }
+  return success();
+}
+
+void UBVrsqrtOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable());
+  effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable());
+}
+
+LogicalResult UBVrsqrtOp::verify() {
+  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
+    return emitOpError("requires pointer-like operands");
+  }
+  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
+      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
+    return emitOpError("requires UB-backed operands");
+  }
+  return success();
+}
+
+void UBVaddSOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable());
+  effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable());
+}
+
+LogicalResult UBVaddSOp::verify() {
+  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
+    return emitOpError("requires pointer-like operands");
+  }
+  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
+      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
+    return emitOpError("requires UB-backed operands");
+  }
+  return success();
+}
+
+void UBVmaxSOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable());
+  effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable());
+}
+
+LogicalResult UBVmaxSOp::verify() {
+  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
+    return emitOpError("requires pointer-like operands");
+  }
+  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
+      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
+    return emitOpError("requires UB-backed operands");
+  }
+  return success();
+}
+
+void UBVminSOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable());
+  effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable());
+}
+
+LogicalResult UBVminSOp::verify() {
+  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
+    return emitOpError("requires pointer-like operands");
+  }
+  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
+      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
+    return emitOpError("requires UB-backed operands");
+  }
+  return success();
+}
 
 void UBVdupOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
