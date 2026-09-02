@@ -1096,8 +1096,7 @@ static FailureOr<Value> resolveStoreAlignRoot(Value value, Operation *user);
 static FailureOr<Value> resolveLoadAlignRoot(Value value, Operation *user);
 static FailureOr<Value> resolveLoadAlignRootImpl(
     Value current, llvm::SmallPtrSet<void *, mlir::pto::kValue8> visited);
-static FailureOr<Value> resolveStoreAlignForResult(Value current,
-                                                   scf::ForOp forOp);
+static FailureOr<Value> resolveAlignForResult(Value current, scf::ForOp forOp);
 
 static FailureOr<Value> resolveStoreAlignBlockArg(Value current) {
   auto blockArg = cast<BlockArgument>(current);
@@ -1135,22 +1134,13 @@ static std::optional<Value> getStoreAlignStateOpIn(Operation *def) {
 static FailureOr<Value> resolveStoreAlignRootImpl(
     Value current, llvm::SmallPtrSet<void *, mlir::pto::kValue8> visited);
 
-static FailureOr<Value> resolveLoadAlignForResult(Value current,
-                                                  scf::ForOp forOp) {
-  auto result = dyn_cast<OpResult>(current);
-  if (!result) {
-    return failure();
-  }
-  unsigned resultIdx = result.getResultNumber();
-  if (resultIdx >= forOp.getYieldedValues().size()) {
-    return failure();
-  }
-  return forOp.getYieldedValues()[resultIdx];
-}
 
-static FailureOr<Value> resolveLoadAlignIfResult(
+
+template <typename ResolveRootFn>
+static FailureOr<Value> resolveAlignIfResultImpl(
     Value current, scf::IfOp ifOp,
-    llvm::SmallPtrSet<void *, mlir::pto::kValue8> &visited) {
+    llvm::SmallPtrSet<void *, mlir::pto::kValue8> &visited,
+    ResolveRootFn resolveRoot) {
   auto result = dyn_cast<OpResult>(current);
   if (!result || !ifOp.elseBlock()) {
     return failure();
@@ -1163,13 +1153,23 @@ static FailureOr<Value> resolveLoadAlignIfResult(
     return failure();
   }
   FailureOr<Value> thenRoot =
-      resolveLoadAlignRootImpl(thenYield.getOperand(resultIdx), visited);
+      resolveRoot(thenYield.getOperand(resultIdx), visited);
   FailureOr<Value> elseRoot =
-      resolveLoadAlignRootImpl(elseYield.getOperand(resultIdx), visited);
+      resolveRoot(elseYield.getOperand(resultIdx), visited);
   if (failed(thenRoot) || failed(elseRoot) || *thenRoot != *elseRoot) {
     return failure();
   }
   return *thenRoot;
+}
+
+static FailureOr<Value> resolveLoadAlignIfResult(
+    Value current, scf::IfOp ifOp,
+    llvm::SmallPtrSet<void *, mlir::pto::kValue8> &visited) {
+  return resolveAlignIfResultImpl(
+      current, ifOp, visited,
+      [](Value v, llvm::SmallPtrSet<void *, mlir::pto::kValue8> &vis) {
+        return resolveLoadAlignRootImpl(v, vis);
+      });
 }
 
 static FailureOr<Value> resolveLoadAlignRootImpl(
@@ -1196,7 +1196,7 @@ static FailureOr<Value> resolveLoadAlignRootImpl(
       continue;
     }
     if (auto forOp = dyn_cast<scf::ForOp>(def)) {
-      auto next = resolveLoadAlignForResult(current, forOp);
+      auto next = resolveAlignForResult(current, forOp);
       if (failed(next)) {
         return failure();
       }
@@ -1211,8 +1211,7 @@ static FailureOr<Value> resolveLoadAlignRootImpl(
 }
 
 
-static FailureOr<Value> resolveStoreAlignForResult(Value current,
-                                                  scf::ForOp forOp) {
+static FailureOr<Value> resolveAlignForResult(Value current, scf::ForOp forOp) {
   auto result = dyn_cast<OpResult>(current);
   if (!result) {
     return failure();
@@ -1227,25 +1226,11 @@ static FailureOr<Value> resolveStoreAlignForResult(Value current,
 static FailureOr<Value> resolveStoreAlignIfResult(
     Value current, scf::IfOp ifOp,
     llvm::SmallPtrSet<void *, mlir::pto::kValue8> &visited) {
-  auto result = dyn_cast<OpResult>(current);
-  if (!result || !ifOp.elseBlock()) {
-    return failure();
-  }
-  unsigned resultIdx = result.getResultNumber();
-  auto thenYield = dyn_cast<scf::YieldOp>(ifOp.thenBlock()->getTerminator());
-  auto elseYield = dyn_cast<scf::YieldOp>(ifOp.elseBlock()->getTerminator());
-  if (!thenYield || !elseYield || resultIdx >= thenYield.getNumOperands() ||
-      resultIdx >= elseYield.getNumOperands()) {
-    return failure();
-  }
-  FailureOr<Value> thenRoot =
-      resolveStoreAlignRootImpl(thenYield.getOperand(resultIdx), visited);
-  FailureOr<Value> elseRoot =
-      resolveStoreAlignRootImpl(elseYield.getOperand(resultIdx), visited);
-  if (failed(thenRoot) || failed(elseRoot) || *thenRoot != *elseRoot) {
-    return failure();
-  }
-  return *thenRoot;
+  return resolveAlignIfResultImpl(
+      current, ifOp, visited,
+      [](Value v, llvm::SmallPtrSet<void *, mlir::pto::kValue8> &vis) {
+        return resolveStoreAlignRootImpl(v, vis);
+      });
 }
 
 static FailureOr<Value> resolveStoreAlignRootImpl(
@@ -1255,21 +1240,11 @@ static FailureOr<Value> resolveStoreAlignRootImpl(
       return failure();
     }
     if (auto blockArg = dyn_cast<BlockArgument>(current)) {
-      auto *owner = blockArg.getOwner();
-      auto forOp = dyn_cast<scf::ForOp>(owner->getParentOp());
-      if (!forOp) {
+      auto next = resolveStoreAlignBlockArg(current);
+      if (failed(next)) {
         return failure();
       }
-      unsigned argNumber = blockArg.getArgNumber();
-      unsigned ivCount = forOp.getNumInductionVars();
-      if (argNumber < ivCount) {
-        return failure();
-      }
-      unsigned iterIdx = argNumber - ivCount;
-      if (iterIdx >= forOp.getInitArgs().size()) {
-        return failure();
-      }
-      current = forOp.getInitArgs()[iterIdx];
+      current = *next;
       continue;
     }
     Operation *def = current.getDefiningOp();
@@ -1284,7 +1259,7 @@ static FailureOr<Value> resolveStoreAlignRootImpl(
       continue;
     }
     if (auto forOp = dyn_cast<scf::ForOp>(def)) {
-      auto next = resolveStoreAlignForResult(current, forOp);
+      auto next = resolveAlignForResult(current, forOp);
       if (failed(next)) {
         return failure();
       }
@@ -1304,8 +1279,8 @@ static FailureOr<Value> resolveStoreAlignRoot(Value value, Operation *user) {
   return resolveStoreAlignRootImpl(value, {});
 }
 
-static LogicalResult verifyStoreAlignLoopThreading(Value align, Operation *user,
-                                                   StringRef roleDescription) {
+static LogicalResult verifyAlignLoopThreading(Value align, Operation *user,
+                                               StringRef roleDescription) {
   Operation *cursor = user;
   while (auto forOp = cursor->getParentOfType<scf::ForOp>()) {
     Region *body = &forOp.getRegion();
@@ -1457,22 +1432,23 @@ static LogicalResult tryMergeAlignBranches(
          << "!pto.align value must form a single linear store-state chain";
 }
 
-static LogicalResult verifyStoreAlignLinearUses(Value value, Operation *user) {
+template <typename CollectFn>
+static LogicalResult verifyAlignLinearUsesImpl(Value value, Operation *user,
+                                               CollectFn collect) {
   llvm::SmallPtrSet<void *, mlir::pto::kValue16> visited;
   Value current = value;
   while (visited.insert(current.getAsOpaquePointer()).second) {
     SmallVector<Value> nextValues;
-    SmallVector<Operation *> terminalUsers;
     SmallVector<Operation *> branchUsers;
-    if (failed(collectStoreAlignLinearUses(current, user, nextValues,
-                                           terminalUsers, branchUsers))) {
+    size_t terminalCount = 0;
+    if (failed(collect(current, user, nextValues, branchUsers, terminalCount))) {
       return failure();
     }
     Value mergedValue;
     bool didMerge = false;
     if (failed(tryMergeAlignBranches(
-            nextValues.size() + terminalUsers.size(), branchUsers, user,
-            mergedValue, didMerge))) {
+            nextValues.size() + terminalCount, branchUsers, user, mergedValue,
+            didMerge))) {
       return failure();
     }
     if (didMerge) {
@@ -1487,6 +1463,21 @@ static LogicalResult verifyStoreAlignLinearUses(Value value, Operation *user) {
   return success();
 }
 
+static LogicalResult verifyStoreAlignLinearUses(Value value, Operation *user) {
+  return verifyAlignLinearUsesImpl(
+      value, user,
+      [](Value current, Operation *user, SmallVectorImpl<Value> &nextValues,
+         SmallVectorImpl<Operation *> &branchUsers, size_t &terminalCount) {
+        SmallVector<Operation *> terminalUsers;
+        if (failed(collectStoreAlignLinearUses(current, user, nextValues,
+                                               terminalUsers, branchUsers))) {
+          return failure();
+        }
+        terminalCount = terminalUsers.size();
+        return success();
+      });
+}
+
 
 
 static LogicalResult verifyStoreAlignChain(Value align, Operation *user,
@@ -1499,7 +1490,7 @@ static LogicalResult verifyStoreAlignChain(Value align, Operation *user,
     return failure();
   }
 
-  if (failed(verifyStoreAlignLoopThreading(align, user, roleDescription))) {
+  if (failed(verifyAlignLoopThreading(align, user, roleDescription))) {
     return failure();
   }
 
@@ -1534,24 +1525,7 @@ static FailureOr<Value> resolveLoadAlignRoot(Value value, Operation *user) {
   return resolveLoadAlignRootImpl(value, {});
 }
 
-static LogicalResult verifyLoadAlignLoopThreading(Value align, Operation *user,
-                                                  StringRef roleDescription) {
-  Operation *cursor = user;
-  while (auto forOp = cursor->getParentOfType<scf::ForOp>()) {
-    Region *body = &forOp.getRegion();
-    if (isValueOwnedByRegion(align, body)) {
-      return success();
-    }
-    if (!isValueOwnedByRegion(align, body)) {
-      return user->emitOpError()
-             << roleDescription
-             << " must be threaded through scf.for iter_args when used inside a "
-                "loop";
-    }
-    cursor = forOp;
-  }
-  return success();
-}
+
 
 
 static LogicalResult collectLoadAlignLinearUses(
@@ -1585,31 +1559,14 @@ static LogicalResult collectLoadAlignLinearUses(
 }
 
 static LogicalResult verifyLoadAlignLinearUses(Value value, Operation *user) {
-  llvm::SmallPtrSet<void *, mlir::pto::kValue16> visited;
-  Value current = value;
-  while (visited.insert(current.getAsOpaquePointer()).second) {
-    SmallVector<Value> nextValues;
-    SmallVector<Operation *> branchUsers;
-    if (failed(collectLoadAlignLinearUses(current, user, nextValues,
-                                          branchUsers))) {
-      return failure();
-    }
-    Value mergedValue;
-    bool didMerge = false;
-    if (failed(tryMergeAlignBranches(nextValues.size(), branchUsers, user,
-                                     mergedValue, didMerge))) {
-      return failure();
-    }
-    if (didMerge) {
-      current = mergedValue;
-      continue;
-    }
-    if (nextValues.empty()) {
-      return success();
-    }
-    current = nextValues.front();
-  }
-  return success();
+  return verifyAlignLinearUsesImpl(
+      value, user,
+      [](Value current, Operation *user, SmallVectorImpl<Value> &nextValues,
+         SmallVectorImpl<Operation *> &branchUsers, size_t &terminalCount) {
+        terminalCount = 0;
+        return collectLoadAlignLinearUses(current, user, nextValues,
+                                          branchUsers);
+      });
 }
 
 
@@ -1624,7 +1581,7 @@ static LogicalResult verifyLoadAlignChain(Value align, Operation *user,
     return failure();
   }
 
-  if (failed(verifyLoadAlignLoopThreading(align, user, roleDescription))) {
+  if (failed(verifyAlignLoopThreading(align, user, roleDescription))) {
     return failure();
   }
 
@@ -4278,6 +4235,18 @@ static bool isForbiddenSynchronizationInsideVecScope(Operation *op) {
              ThreadfenceBlockOp>(op);
 }
 
+static Operation *findForbiddenSyncInRegion(Region &body) {
+  Operation *boundaryOp = nullptr;
+  body.walk([&](Operation *op) {
+    if (!isForbiddenSynchronizationInsideVecScope(op)) {
+      return WalkResult::advance();
+    }
+    boundaryOp = op;
+    return WalkResult::interrupt();
+  });
+  return boundaryOp;
+}
+
 LogicalResult VecScopeOp::verify() {
   Region &bodyRegion = getBody();
   if (bodyRegion.empty()) {
@@ -4290,15 +4259,7 @@ LogicalResult VecScopeOp::verify() {
                          << body.getNumArguments();
   }
 
-  Operation *boundaryOp = nullptr;
-  bodyRegion.walk([&](Operation *op) {
-    if (!isForbiddenSynchronizationInsideVecScope(op)) {
-      return WalkResult::advance();
-    }
-    boundaryOp = op;
-    return WalkResult::interrupt();
-  });
-  if (boundaryOp) {
+  if (Operation *boundaryOp = findForbiddenSyncInRegion(bodyRegion)) {
     return boundaryOp->emitOpError()
            << "must be outside 'pto.vecscope'; synchronization operations "
               "delimit vector scopes";
@@ -4332,15 +4293,7 @@ LogicalResult StrictVecScopeOp::verify() {
     }
   }
 
-  Operation *boundaryOp = nullptr;
-  bodyRegion.walk([&](Operation *op) {
-    if (!isForbiddenSynchronizationInsideVecScope(op)) {
-      return WalkResult::advance();
-    }
-    boundaryOp = op;
-    return WalkResult::interrupt();
-  });
-  if (boundaryOp) {
+  if (Operation *boundaryOp = findForbiddenSyncInRegion(bodyRegion)) {
     return boundaryOp->emitOpError()
            << "must be outside 'pto.strict_vecscope'; synchronization "
               "operations delimit vector scopes";
@@ -10710,17 +10663,33 @@ void UBVaddOp::getEffects(
   effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable());
 }
 
-LogicalResult UBVaddOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc0().getType()) ||
-      !isBufferLike(getSrc1().getType())) {
-    return emitOpError("requires pointer-like operands");
+static LogicalResult verifyUBBinaryOperands(Operation *op, Value dst,
+                                                Value src0, Value src1) {
+  if (!isBufferLike(dst.getType()) || !isBufferLike(src0.getType()) ||
+      !isBufferLike(src1.getType())) {
+    return op->emitOpError("requires pointer-like operands");
   }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc0().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc1().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
+  if (classifyMemoryRole(dst.getType()) != MemoryRole::UB ||
+      classifyMemoryRole(src0.getType()) != MemoryRole::UB ||
+      classifyMemoryRole(src1.getType()) != MemoryRole::UB) {
+    return op->emitOpError("requires UB-backed operands");
   }
   return success();
+}
+
+static LogicalResult verifyUBUnaryOperands(Operation *op, Value dst, Value src) {
+  if (!isBufferLike(dst.getType()) || !isBufferLike(src.getType())) {
+    return op->emitOpError("requires pointer-like operands");
+  }
+  if (classifyMemoryRole(dst.getType()) != MemoryRole::UB ||
+      classifyMemoryRole(src.getType()) != MemoryRole::UB) {
+    return op->emitOpError("requires UB-backed operands");
+  }
+  return success();
+}
+
+LogicalResult UBVaddOp::verify() {
+  return verifyUBBinaryOperands(getOperation(), getDst(), getSrc0(), getSrc1());
 }
 
 //===----------------------------------------------------------------------===//
@@ -10736,16 +10705,7 @@ void UBVsubOp::getEffects(
 }
 
 LogicalResult UBVsubOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc0().getType()) ||
-      !isBufferLike(getSrc1().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc0().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc1().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBBinaryOperands(getOperation(), getDst(), getSrc0(), getSrc1());
 }
 
 //===----------------------------------------------------------------------===//
@@ -10761,16 +10721,7 @@ void UBVmulOp::getEffects(
 }
 
 LogicalResult UBVmulOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc0().getType()) ||
-      !isBufferLike(getSrc1().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc0().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc1().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBBinaryOperands(getOperation(), getDst(), getSrc0(), getSrc1());
 }
 
 //===----------------------------------------------------------------------===//
@@ -10786,16 +10737,7 @@ void UBVdivOp::getEffects(
 }
 
 LogicalResult UBVdivOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc0().getType()) ||
-      !isBufferLike(getSrc1().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc0().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc1().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBBinaryOperands(getOperation(), getDst(), getSrc0(), getSrc1());
 }
 
 //===----------------------------------------------------------------------===//
@@ -10811,16 +10753,7 @@ void UBVmaxOp::getEffects(
 }
 
 LogicalResult UBVmaxOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc0().getType()) ||
-      !isBufferLike(getSrc1().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc0().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc1().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBBinaryOperands(getOperation(), getDst(), getSrc0(), getSrc1());
 }
 
 //===----------------------------------------------------------------------===//
@@ -10836,16 +10769,7 @@ void UBVminOp::getEffects(
 }
 
 LogicalResult UBVminOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc0().getType()) ||
-      !isBufferLike(getSrc1().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc0().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc1().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBBinaryOperands(getOperation(), getDst(), getSrc0(), getSrc1());
 }
 
 //===----------------------------------------------------------------------===//
@@ -10861,16 +10785,7 @@ void UBVandOp::getEffects(
 }
 
 LogicalResult UBVandOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc0().getType()) ||
-      !isBufferLike(getSrc1().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc0().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc1().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBBinaryOperands(getOperation(), getDst(), getSrc0(), getSrc1());
 }
 
 //===----------------------------------------------------------------------===//
@@ -10886,16 +10801,7 @@ void UBVorOp::getEffects(
 }
 
 LogicalResult UBVorOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc0().getType()) ||
-      !isBufferLike(getSrc1().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc0().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc1().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBBinaryOperands(getOperation(), getDst(), getSrc0(), getSrc1());
 }
 
 void UBVaddReluOp::getEffects(
@@ -10932,14 +10838,7 @@ void UBVnotOp::getEffects(
 }
 
 LogicalResult UBVnotOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBUnaryOperands(getOperation(), getDst(), getSrc());
 }
 
 //===----------------------------------------------------------------------===//
@@ -10954,14 +10853,7 @@ void UBVabsOp::getEffects(
 }
 
 LogicalResult UBVabsOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBUnaryOperands(getOperation(), getDst(), getSrc());
 }
 
 //===----------------------------------------------------------------------===//
@@ -10976,14 +10868,7 @@ void UBVreluOp::getEffects(
 }
 
 LogicalResult UBVreluOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBUnaryOperands(getOperation(), getDst(), getSrc());
 }
 
 void UBVexpOp::getEffects(
@@ -10994,14 +10879,7 @@ void UBVexpOp::getEffects(
 }
 
 LogicalResult UBVexpOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBUnaryOperands(getOperation(), getDst(), getSrc());
 }
 
 void UBVlnOp::getEffects(
@@ -11012,14 +10890,7 @@ void UBVlnOp::getEffects(
 }
 
 LogicalResult UBVlnOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBUnaryOperands(getOperation(), getDst(), getSrc());
 }
 
 void UBVsqrtOp::getEffects(
@@ -11030,14 +10901,7 @@ void UBVsqrtOp::getEffects(
 }
 
 LogicalResult UBVsqrtOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBUnaryOperands(getOperation(), getDst(), getSrc());
 }
 
 void UBVrsqrtOp::getEffects(
@@ -11048,14 +10912,7 @@ void UBVrsqrtOp::getEffects(
 }
 
 LogicalResult UBVrsqrtOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBUnaryOperands(getOperation(), getDst(), getSrc());
 }
 
 void UBVaddSOp::getEffects(
@@ -11066,14 +10923,7 @@ void UBVaddSOp::getEffects(
 }
 
 LogicalResult UBVaddSOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBUnaryOperands(getOperation(), getDst(), getSrc());
 }
 
 void UBVmaxSOp::getEffects(
@@ -11084,14 +10934,7 @@ void UBVmaxSOp::getEffects(
 }
 
 LogicalResult UBVmaxSOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBUnaryOperands(getOperation(), getDst(), getSrc());
 }
 
 void UBVminSOp::getEffects(
@@ -11102,14 +10945,7 @@ void UBVminSOp::getEffects(
 }
 
 LogicalResult UBVminSOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBUnaryOperands(getOperation(), getDst(), getSrc());
 }
 
 void UBVdupOp::getEffects(
@@ -11165,14 +11001,7 @@ void UBVgatherOp::getEffects(
 }
 
 LogicalResult UBVgatherOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBUnaryOperands(getOperation(), getDst(), getSrc());
 }
 
 //===----------------------------------------------------------------------===//
@@ -11187,14 +11016,7 @@ void UBVshlOp::getEffects(
 }
 
 LogicalResult UBVshlOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBUnaryOperands(getOperation(), getDst(), getSrc());
 }
 
 //===----------------------------------------------------------------------===//
@@ -11209,14 +11031,7 @@ void UBVshrOp::getEffects(
 }
 
 LogicalResult UBVshrOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBUnaryOperands(getOperation(), getDst(), getSrc());
 }
 
 //===----------------------------------------------------------------------===//
@@ -11231,12 +11046,5 @@ void UBVmulSOp::getEffects(
 }
 
 LogicalResult UBVmulSOp::verify() {
-  if (!isBufferLike(getDst().getType()) || !isBufferLike(getSrc().getType())) {
-    return emitOpError("requires pointer-like operands");
-  }
-  if (classifyMemoryRole(getDst().getType()) != MemoryRole::UB ||
-      classifyMemoryRole(getSrc().getType()) != MemoryRole::UB) {
-    return emitOpError("requires UB-backed operands");
-  }
-  return success();
+  return verifyUBUnaryOperands(getOperation(), getDst(), getSrc());
 }

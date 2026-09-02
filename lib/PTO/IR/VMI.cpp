@@ -1726,10 +1726,8 @@ LogicalResult VMILnOp::verify() {
   return verifyFloatUnaryVRegOp(getOperation(), sourceType, resultType);
 }
 
-LogicalResult VMIReluOp::verify() {
-  auto sourceType = cast<VMIVRegType>(getSource().getType());
-  auto resultType = cast<VMIVRegType>(getResult().getType());
-  Type elementType = sourceType.getElementType();
+static LogicalResult verifySignedI32OrF16F32ElementType(Operation *op,
+                                                        Type elementType) {
   bool supportedInteger = false;
   if (auto intType = dyn_cast<IntegerType>(elementType)) {
     supportedInteger =
@@ -1737,7 +1735,17 @@ LogicalResult VMIReluOp::verify() {
         matchesVMIIntSemantics(intType, VMIIntSignSemantics::Signed);
   }
   if (!supportedInteger && !isVMIF16OrF32Type(elementType)) {
-    return emitOpError("requires si32, f16, or f32 VMI element type");
+    return op->emitOpError("requires si32, f16, or f32 VMI element type");
+  }
+  return success();
+}
+
+LogicalResult VMIReluOp::verify() {
+  auto sourceType = cast<VMIVRegType>(getSource().getType());
+  auto resultType = cast<VMIVRegType>(getResult().getType());
+  Type elementType = sourceType.getElementType();
+  if (failed(verifySignedI32OrF16F32ElementType(getOperation(), elementType))) {
+    return failure();
   }
   return verifyAllSameVRegShapeAndLayout(getOperation(),
                                          {sourceType, resultType},
@@ -2024,6 +2032,44 @@ LogicalResult VMIReduceMaxIOp::verify() { return verifyReduceMinMaxIOp(*this); }
 LogicalResult VMIReduceMinIOp::verify() { return verifyReduceMinMaxIOp(*this); }
 
 template <typename OpTy>
+static LogicalResult verifyGroupReduceCommon(OpTy op, VMIVRegType sourceType,
+                                             VMIVRegType resultType,
+                                             VMIMaskType maskType) {
+  int64_t numGroups = op.getNumGroupsAttr().getInt();
+  if (resultType.getElementCount() != numGroups) {
+    return op.emitOpError(
+        "requires result logical lane count to match num_groups");
+  }
+  if (sourceType.getElementType() != resultType.getElementType()) {
+    return op.emitOpError("requires source and result element types to match");
+  }
+  if (auto sourceLayout = sourceType.getLayoutAttr()) {
+    bool supportedSourceLayout =
+        sourceLayout.isContiguous() ||
+        (sourceLayout.isDenseSplit() &&
+         (sourceLayout.getFactor() == mlir::pto::kValue2 ||
+          sourceLayout.getFactor() == mlir::pto::kValue4));
+    if (!supportedSourceLayout) {
+      return op.emitOpError(
+          "requires layout-assigned source to use contiguous layout or "
+          "deinterleaved=2/4 or block_deinterleaved=2/4 layout");
+    }
+  }
+  if (auto resultLayout = resultType.getLayoutAttr()) {
+    if (!resultLayout.isGroupSlots() ||
+        resultLayout.getNumGroups() != numGroups) {
+      return op.emitOpError() << "requires layout-assigned result to use "
+                                 "#pto.vmi.layout<num_groups = "
+                              << numGroups << ">";
+    }
+  }
+  if (failed(verifyMaskMatchesData(op.getOperation(), maskType, sourceType))) {
+    return failure();
+  }
+  return verifyNumGroups(op.getOperation(), sourceType, numGroups);
+}
+
+template <typename OpTy>
 static LogicalResult verifyGroupReduceFloatOp(OpTy op, bool requiresReassoc) {
   auto sourceType = cast<VMIVRegType>(op.getSource().getType());
   auto maskType = cast<VMIMaskType>(op.getMask().getType());
@@ -2040,37 +2086,7 @@ static LogicalResult verifyGroupReduceFloatOp(OpTy op, bool requiresReassoc) {
   if (!isVMIF16OrF32Type(sourceType.getElementType())) {
     return op.emitOpError("requires f16 or f32 source element type");
   }
-  if (resultType.getElementCount() != op.getNumGroupsAttr().getInt()) {
-    return op.emitOpError(
-        "requires result logical lane count to match num_groups");
-  }
-  if (sourceType.getElementType() != resultType.getElementType()) {
-    return op.emitOpError("requires source and result element types to match");
-  }
-  if (auto sourceLayout = sourceType.getLayoutAttr()) {
-    bool supportedSourceLayout =
-        sourceLayout.isContiguous() ||
-        (sourceLayout.isDenseSplit() &&
-         (sourceLayout.getFactor() == mlir::pto::kValue2 || sourceLayout.getFactor() == mlir::pto::kValue4));
-    if (!supportedSourceLayout) {
-      return op.emitOpError(
-          "requires layout-assigned source to use contiguous layout or "
-          "deinterleaved=2/4 or block_deinterleaved=2/4 layout");
-    }
-  }
-  if (auto resultLayout = resultType.getLayoutAttr()) {
-    if (!resultLayout.isGroupSlots() ||
-        resultLayout.getNumGroups() != op.getNumGroupsAttr().getInt()) {
-      return op.emitOpError() << "requires layout-assigned result to use "
-                                 "#pto.vmi.layout<num_groups = "
-                              << op.getNumGroupsAttr().getInt() << ">";
-    }
-  }
-  if (failed(verifyMaskMatchesData(op.getOperation(), maskType, sourceType))) {
-    return failure();
-  }
-  return verifyNumGroups(op.getOperation(), sourceType,
-                         op.getNumGroupsAttr().getInt());
+  return verifyGroupReduceCommon(op, sourceType, resultType, maskType);
 }
 
 LogicalResult VMIGroupReduceAddFOp::verify() {
@@ -2098,37 +2114,7 @@ static LogicalResult verifyGroupReduceIntegerOp(OpTy op) {
     return op.emitOpError(
         "requires 8-bit, 16-bit, or 32-bit integer source element type");
   }
-  if (resultType.getElementCount() != op.getNumGroupsAttr().getInt()) {
-    return op.emitOpError(
-        "requires result logical lane count to match num_groups");
-  }
-  if (sourceType.getElementType() != resultType.getElementType()) {
-    return op.emitOpError("requires source and result element types to match");
-  }
-  if (auto sourceLayout = sourceType.getLayoutAttr()) {
-    bool supportedSourceLayout =
-        sourceLayout.isContiguous() ||
-        (sourceLayout.isDenseSplit() &&
-         (sourceLayout.getFactor() == mlir::pto::kValue2 || sourceLayout.getFactor() == mlir::pto::kValue4));
-    if (!supportedSourceLayout) {
-      return op.emitOpError(
-          "requires layout-assigned source to use contiguous layout or "
-          "deinterleaved=2/4 or block_deinterleaved=2/4 layout");
-    }
-  }
-  if (auto resultLayout = resultType.getLayoutAttr()) {
-    if (!resultLayout.isGroupSlots() ||
-        resultLayout.getNumGroups() != op.getNumGroupsAttr().getInt()) {
-      return op.emitOpError() << "requires layout-assigned result to use "
-                                 "#pto.vmi.layout<num_groups = "
-                              << op.getNumGroupsAttr().getInt() << ">";
-    }
-  }
-  if (failed(verifyMaskMatchesData(op.getOperation(), maskType, sourceType))) {
-    return failure();
-  }
-  return verifyNumGroups(op.getOperation(), sourceType,
-                         op.getNumGroupsAttr().getInt());
+  return verifyGroupReduceCommon(op, sourceType, resultType, maskType);
 }
 
 LogicalResult VMIGroupReduceAddIOp::verify() {
@@ -2752,6 +2738,20 @@ void VMIMaskedLoadOp::getEffects(
   effects.emplace_back(MemoryEffects::Read::get(), &getSourceMutable());
 }
 
+static LogicalResult verifyVMIOffsetIndexType(Operation *op,
+                                                  Type indexElementType,
+                                                  StringRef valueNoun) {
+  auto intType = dyn_cast_or_null<IntegerType>(indexElementType);
+  if (!intType || intType.isSigned() ||
+      (intType.getWidth() != mlir::pto::kValue16 &&
+       intType.getWidth() != mlir::pto::kValue32)) {
+    return op->emitOpError(
+               "requires signless or unsigned 16-bit or 32-bit integer ")
+           << valueNoun;
+  }
+  return success();
+}
+
 LogicalResult VMIGatherOp::verify() {
   auto indicesType = cast<VMIVRegType>(getIndices().getType());
   auto maskType = cast<VMIMaskType>(getMask().getType());
@@ -2767,10 +2767,9 @@ LogicalResult VMIGatherOp::verify() {
   }
 
   auto indexElementType = dyn_cast<IntegerType>(indicesType.getElementType());
-  if (!indexElementType || indexElementType.isSigned() ||
-      (indexElementType.getWidth() != mlir::pto::kValue16 && indexElementType.getWidth() != mlir::pto::kValue32)) {
-    return emitOpError(
-        "requires signless or unsigned 16-bit or 32-bit integer indices");
+  if (failed(verifyVMIOffsetIndexType(getOperation(), indexElementType,
+                                      "indices"))) {
+    return failure();
   }
 
   if (failed(verifyAllSameVRegShapeAndLayout(
@@ -3804,14 +3803,8 @@ LogicalResult VMIVreluOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
   Type elementType = sourceType.getElementType();
-  bool supportedInteger = false;
-  if (auto intType = dyn_cast<IntegerType>(elementType)) {
-    supportedInteger =
-        intType.getWidth() == mlir::pto::kValue32 &&
-        matchesVMIIntSemantics(intType, VMIIntSignSemantics::Signed);
-  }
-  if (!supportedInteger && !isVMIF16OrF32Type(elementType)) {
-    return emitOpError("requires si32, f16, or f32 VMI element type");
+  if (failed(verifySignedI32OrF16F32ElementType(getOperation(), elementType))) {
+    return failure();
   }
   if (failed(verifyAllSameVRegShapeAndLayout(
           getOperation(), {sourceType, resultType},
@@ -4011,25 +4004,35 @@ LogicalResult VMIvSelOp::verify() {
   return success();
 }
 
+static LogicalResult verifyVCReductionElementAndMask(Operation *op,
+                                                     VMIVRegType sourceType,
+                                                     VMIMaskType maskType,
+                                                     bool &isFloat) {
+  Type elemTy = sourceType.getElementType();
+  if (failed(verifyBF16x2ComputeElementType(op, elemTy))) {
+    return failure();
+  }
+  isFloat = isVMIFloatLikeType(elemTy);
+  bool isInt = isVMIIntegerLikeType(elemTy);
+  if (!isFloat && !isInt) {
+    return op->emitOpError("requires integer-like or floating-point-like VMI "
+                           "source element type");
+  }
+  return verifyMaskMatchesData(op, maskType, sourceType);
+}
+
 LogicalResult VMIvcaddOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto maskType = cast<VMIMaskType>(getMask().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
-  auto elemTy = sourceType.getElementType();
-  if (failed(verifyBF16x2ComputeElementType(getOperation(), elemTy))) {
+  bool isFloat = false;
+  if (failed(verifyVCReductionElementAndMask(getOperation(), sourceType,
+                                             maskType, isFloat))) {
     return failure();
   }
-  bool isFloat = isVMIFloatLikeType(elemTy);
-  bool isInt = isVMIIntegerLikeType(elemTy);
-  if (!isFloat && !isInt) {
-    return emitOpError("requires integer-like or floating-point-like VMI "
-                       "source element type");
-  }
+  // Floating-point vcadd MUST carry reassoc
   if (isFloat && !getReassoc()) {
     return emitOpError("floating add-reduction requires reassoc attr");
-  }
-  if (failed(verifyMaskMatchesData(getOperation(), maskType, sourceType))) {
-    return failure();
   }
   return verifyReductionGroupAndPmode(getOperation(), sourceType, resultType,
                                       getGroupAttr(), getPmode());
@@ -4039,17 +4042,9 @@ LogicalResult VMIvcmaxOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto maskType = cast<VMIMaskType>(getMask().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
-  auto elemTy = sourceType.getElementType();
-  if (failed(verifyBF16x2ComputeElementType(getOperation(), elemTy))) {
-    return failure();
-  }
-  bool isFloat = isVMIFloatLikeType(elemTy);
-  bool isInt = isVMIIntegerLikeType(elemTy);
-  if (!isFloat && !isInt) {
-    return emitOpError("requires integer-like or floating-point-like VMI "
-                       "source element type");
-  }
-  if (failed(verifyMaskMatchesData(getOperation(), maskType, sourceType))) {
+  bool isFloat = false;
+  if (failed(verifyVCReductionElementAndMask(getOperation(), sourceType,
+                                             maskType, isFloat))) {
     return failure();
   }
   return verifyReductionGroupAndPmode(getOperation(), sourceType, resultType,
@@ -4060,17 +4055,9 @@ LogicalResult VMIvcminOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto maskType = cast<VMIMaskType>(getMask().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
-  auto elemTy = sourceType.getElementType();
-  if (failed(verifyBF16x2ComputeElementType(getOperation(), elemTy))) {
-    return failure();
-  }
-  bool isFloat = isVMIFloatLikeType(elemTy);
-  bool isInt = isVMIIntegerLikeType(elemTy);
-  if (!isFloat && !isInt) {
-    return emitOpError("requires integer-like or floating-point-like VMI "
-                       "source element type");
-  }
-  if (failed(verifyMaskMatchesData(getOperation(), maskType, sourceType))) {
+  bool isFloat = false;
+  if (failed(verifyVCReductionElementAndMask(getOperation(), sourceType,
+                                             maskType, isFloat))) {
     return failure();
   }
   return verifyReductionGroupAndPmode(getOperation(), sourceType, resultType,
@@ -4094,10 +4081,9 @@ LogicalResult VMIVgatherOp::verify() {
 
   auto indexElementType =
       dyn_cast<IntegerType>(offsetsType.getElementType());
-  if (!indexElementType || indexElementType.isSigned() ||
-      (indexElementType.getWidth() != mlir::pto::kValue32 && indexElementType.getWidth() != mlir::pto::kValue16)) {
-    return emitOpError(
-        "requires signless or unsigned 16-bit or 32-bit integer offsets");
+  if (failed(verifyVMIOffsetIndexType(getOperation(), indexElementType,
+                                      "offsets"))) {
+    return failure();
   }
 
   if (failed(verifyAllSameVRegShapeAndLayout(
@@ -4151,10 +4137,9 @@ LogicalResult VMIVgatherbOp::verify() {
 
   auto indexElementType =
       dyn_cast<IntegerType>(offsetsType.getElementType());
-  if (!indexElementType || indexElementType.isSigned() ||
-      (indexElementType.getWidth() != mlir::pto::kValue32 && indexElementType.getWidth() != mlir::pto::kValue16)) {
-    return emitOpError(
-        "requires signless or unsigned 16-bit or 32-bit integer offsets");
+  if (failed(verifyVMIOffsetIndexType(getOperation(), indexElementType,
+                                      "offsets"))) {
+    return failure();
   }
 
   if (failed(verifyMaskMatchesData(getOperation(), maskType, resultType))) {
@@ -4957,6 +4942,21 @@ void VMIvStoreOp::print(OpAsmPrinter &p) {
   }
 }
 
+static LogicalResult verifyBlockStrideExclusions(
+    Operation *op, bool hasBlock, std::optional<StringRef> distMode,
+    bool hasGroup) {
+  if (hasBlock) {
+    if (distMode) {
+      return op->emitOpError(
+          "block_stride and dist_mode are mutually exclusive");
+    }
+    if (hasGroup) {
+      return op->emitOpError("block_stride and group are mutually exclusive");
+    }
+  }
+  return success();
+}
+
 static LogicalResult verifyVStoreGroupAndBlockModes(
     Operation *op, bool hasGroup, std::optional<StringRef> distMode,
     bool hasStride, bool hasBlock, bool hasMask, int64_t numGroups,
@@ -4985,17 +4985,11 @@ static LogicalResult verifyVStoreGroupAndBlockModes(
       return failure();
     }
   }
-  if (hasBlock) {
-    if (distMode) {
-      return op->emitOpError(
-          "block_stride and dist_mode are mutually exclusive");
-    }
-    if (hasGroup) {
-      return op->emitOpError("block_stride and group are mutually exclusive");
-    }
-    if (nValues != 1) {
-      return op->emitOpError("block-stride mode requires exactly 1 value");
-    }
+  if (failed(verifyBlockStrideExclusions(op, hasBlock, distMode, hasGroup))) {
+    return failure();
+  }
+  if (hasBlock && nValues != 1) {
+    return op->emitOpError("block-stride mode requires exactly 1 value");
   }
   return success();
 }
@@ -5470,17 +5464,11 @@ static LogicalResult verifyVLoadGroupAndBlockModes(
       return op->emitOpError("group mode requires exactly 1 result");
     }
   }
-  if (hasBlock) {
-    if (distMode) {
-      return op->emitOpError(
-          "block_stride and dist_mode are mutually exclusive");
-    }
-    if (hasGroup) {
-      return op->emitOpError("block_stride and group are mutually exclusive");
-    }
-    if (nResults != 1) {
-      return op->emitOpError("block-stride mode requires exactly 1 result");
-    }
+  if (failed(verifyBlockStrideExclusions(op, hasBlock, distMode, hasGroup))) {
+    return failure();
+  }
+  if (hasBlock && nResults != 1) {
+    return op->emitOpError("block-stride mode requires exactly 1 result");
   }
   return success();
 }
