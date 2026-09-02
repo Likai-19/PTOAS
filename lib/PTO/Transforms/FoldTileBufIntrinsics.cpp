@@ -862,8 +862,11 @@ struct FoldTileBufIntrinsicsPass
                     "handle has no valid_row operand");
                 return failure();
               }
-              assert(replacement.getType() == rowsOp.getResult().getType() &&
-                     "tile_valid_rows fold: type mismatch with handle valid_row");
+              if (replacement.getType() != rowsOp.getResult().getType()) {
+                rowsOp.emitError(
+                    "tile_valid_rows fold: type mismatch with handle valid_row");
+                return failure();
+              }
             }
             rowsOp.getResult().replaceAllUsesWith(replacement);
             rowsOp.erase();
@@ -901,8 +904,11 @@ struct FoldTileBufIntrinsicsPass
                     "handle has no valid_col operand");
                 return failure();
               }
-              assert(replacement.getType() == colsOp.getResult().getType() &&
-                     "tile_valid_cols fold: type mismatch with handle valid_col");
+              if (replacement.getType() != colsOp.getResult().getType()) {
+                colsOp.emitError(
+                    "tile_valid_cols fold: type mismatch with handle valid_col");
+                return failure();
+              }
             }
             colsOp.getResult().replaceAllUsesWith(replacement);
             colsOp.erase();
@@ -1080,17 +1086,17 @@ struct FoldTileBufIntrinsicsPass
     for (auto castOp : llvm::reverse(deadCasts)) {
       castOp.erase();
     }
-    while (true) {
+    bool hasDeadMemrefOps = true;
+    while (hasDeadMemrefOps) {
+      hasDeadMemrefOps = false;
       SmallVector<Operation *, mlir::pto::kValue8> deadMemrefOps;
       func.walk([&](Operation *op) {
         if ((isa<memref::SubViewOp>(op) || isa<memref::ReinterpretCastOp>(op)) &&
             op->use_empty()) {
           deadMemrefOps.push_back(op);
+          hasDeadMemrefOps = true;
         }
       });
-      if (deadMemrefOps.empty()) {
-        break;
-      }
       for (auto *op : llvm::reverse(deadMemrefOps)) {
         op->erase();
       }
