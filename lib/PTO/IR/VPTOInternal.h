@@ -136,4 +136,18 @@ enum class MemoryRole {
 }
 
 
+
+LogicalResult verifyMaskTypeLike(Operation *op, Type type, StringRef roleDescription);
+LogicalResult verifyMaskTypeWithGranularityLike(Operation *op, Type type,
+                                                StringRef roleDescription,
+                                                StringRef granularity);
+std::optional<StringRef> normalizeRoundModeToken(StringRef token);
+std::optional<StringRef> normalizeSaturationToken(StringRef token);
+ParseResult normalizeNamedStringAttr(
+    OpAsmParser &parser, NamedAttrList &attrs, StringRef sourceName,
+    StringRef canonicalName,
+    std::optional<StringRef> (*normalizeFn)(StringRef));
+
+
+std::optional<StringRef> normalizeEvenOddPartToken(StringRef token);
 #endif // PTO_IR_VPTO_INTERNAL_H

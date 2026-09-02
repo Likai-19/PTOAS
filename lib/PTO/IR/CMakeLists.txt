@@ -27,6 +27,7 @@ add_mlir_dialect_library(PTOIR
   VPTOVecScope.cpp
   VPTOUBV.cpp
   VPTOAlign.cpp
+  VPTOVcvt.cpp
   PTOAttrs.cpp
   PTOSyncUtils.cpp
   PTOTypeDefs.cpp
