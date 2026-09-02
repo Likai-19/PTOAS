@@ -23,5 +23,5 @@
 #include "PTO/Support/CodeConstants.h"
 
 
-#include "VMI_helpers.inc"
-#include "VMI_ops.inc"
+#include "VMI_helpers.cpp"
+#include "VMI_ops.cpp"
