@@ -31,6 +31,14 @@
 #include "PTO/Transforms/InsertSync/SyncCommon.h"
 #include "PTO/Transforms/SlotAffineAnalysis.h"
 
+#include "PTO/IR/PTO.h"
+#include "PTO/IR/PTOMultiBuffer.h"
+#include "PTO/IR/PTOTypeUtils.h"
+#include "PTO/Support/CodeConstants.h"
+#include "PTO/Transforms/InsertSync/InsertSyncAnalysis.h"
+#include "PTO/Transforms/InsertSync/SyncCommon.h"
+#include "PTO/Transforms/SlotAffineAnalysis.h"
+
 
 #define DEBUG_TYPE "pto-insert-sync-analysis"
 
@@ -542,6 +550,18 @@ void InsertSyncAnalysis::MemAnalyze(
   UpdateSyncRecordInfo(frontCompound, syncRecordList);
 }
 
+
+static void collectAccReadReadDependencies(DepBaseMemInfoPairVec &rrDepVec,
+                                           DepBaseMemInfoPairVec &out,
+                                           bool &hasDependency) {
+  for (auto &pair : rrDepVec) {
+    if (pair.first && pair.first->scope == pto::AddressSpace::ACC) {
+      out.push_back(pair);
+      hasDependency = true;
+    }
+  }
+}
+
 bool InsertSyncAnalysis::IsMemInfoHasDependency(
     CompoundInstanceElement *nowCompound,
     CompoundInstanceElement *frontCompound,
@@ -555,7 +575,6 @@ bool InsertSyncAnalysis::IsMemInfoHasDependency(
     hasDependency |= memAnalyzer_.DepBetween(nowCompound->defVec, frontCompound->defVec,
                                             depBaseMemInfosVec);
   }
-
   // Special hazard: ACC (L0C) read/read cross-pipe ordering.
   //
   // Some PTO-ISA sequences have semantically "read/read" patterns on ACC, but
@@ -564,19 +583,10 @@ bool InsertSyncAnalysis::IsMemInfoHasDependency(
     DepBaseMemInfoPairVec rrDepVec;
     if (memAnalyzer_.DepBetween(nowCompound->useVec, frontCompound->useVec,
                                rrDepVec)) {
-      for (auto &pair : rrDepVec) {
-        if (!pair.first) {
-          continue;
-        }
-        if (pair.first->scope != pto::AddressSpace::ACC) {
-          continue;
-        }
-        depBaseMemInfosVec.push_back(pair);
-        hasDependency = true;
-      }
+      collectAccReadReadDependencies(rrDepVec, depBaseMemInfosVec,
+                                      hasDependency);
     }
   }
-
   return hasDependency;
 }
 
@@ -595,7 +605,6 @@ bool InsertSyncAnalysis::CanPrunePipeVBarrier(
       frontCompound->kPipeValue != PipelineType::PIPE_V) {
     return false;
   }
-
   // The same-access fast path only applies to a producer output consumed by
   // the next op. A read/write non-DPS operand is scratch state; pruning its
   // WAW dependency would allow two vector instructions to use it concurrently.
@@ -605,7 +614,6 @@ bool InsertSyncAnalysis::CanPrunePipeVBarrier(
                                     depBaseMemInfosVec)) {
     return false;
   }
-
   // PIPE_V has a hardware-safe same-access chain case: exact same-access
   // dependencies from the producer result to the consumer source do not require
   // a vector-pipe barrier once the producer repeat is large enough. Keep the
@@ -616,7 +624,6 @@ bool InsertSyncAnalysis::CanPrunePipeVBarrier(
     if (!isSameExactAccess(pair.first, pair.second)) {
       return false;
     }
-
     if (containsExactAccess(nowCompound->useVec, pair.first) &&
         containsExactAccess(frontCompound->defVec, pair.second)) {
       if (!llvm::is_contained(producerAccesses, pair.second)) {
@@ -629,7 +636,6 @@ bool InsertSyncAnalysis::CanPrunePipeVBarrier(
   if (producerAccesses.empty()) {
     return false;
   }
-
   // The caller is analyzing this specific front->now dependency. Do not look
   // for a later text-order writer here; it may belong to a different branch
   // path or a zero-trip loop body.
@@ -639,8 +645,55 @@ bool InsertSyncAnalysis::CanPrunePipeVBarrier(
       return false;
     }
   }
-
   return true;
+}
+
+// Resolve one unambiguous producer/consumer slot SSA pair for the whole
+// dependency group and configure a dynamic set/wait pair with it. Returns the
+// effective event-id count: when the group decomposes into a single slot
+// expression per side, slotSSAExpr/slotCount are filled and `eventIdNum` is
+// kept; otherwise a single static event id is used for the whole group.
+static int configureDynEventSlots(
+    SyncOperation *setOp, SyncOperation *waitOp,
+    const DepBaseMemInfoPairVec &depBaseMemInfosVec, int eventIdNum) {
+  if (eventIdNum <= 1) {
+    return eventIdNum;
+  }
+  Value producerSlot;
+  Value consumerSlot;
+  bool hasAmbiguousSlot = false;
+  for (auto &pair : depBaseMemInfosVec) {
+    Value pairProducerSlot;
+    Value pairConsumerSlot;
+    if (pair.second && pair.second->baseBuffer) {
+      pairProducerSlot = findMultiTileSlotExpr(pair.second->baseBuffer);
+    }
+    if (pair.first && pair.first->baseBuffer) {
+      pairConsumerSlot = findMultiTileSlotExpr(pair.first->baseBuffer);
+    }
+    if (!pairProducerSlot || !pairConsumerSlot) {
+      hasAmbiguousSlot = true;
+      break;
+    }
+    if ((producerSlot && producerSlot != pairProducerSlot) ||
+        (consumerSlot && consumerSlot != pairConsumerSlot)) {
+      hasAmbiguousSlot = true;
+      break;
+    }
+    producerSlot = pairProducerSlot;
+    consumerSlot = pairConsumerSlot;
+  }
+  if (hasAmbiguousSlot || !producerSlot || !consumerSlot) {
+    // Missing or ambiguous slot SSA -- fall back to a single event id. This
+    // also keeps non-multi-buffer codepaths untouched if their baseAddresses
+    // have multiple entries for another reason.
+    return 1;
+  }
+  setOp->slotSSAExpr = producerSlot;
+  setOp->slotCount = static_cast<uint32_t>(eventIdNum);
+  waitOp->slotSSAExpr = consumerSlot;
+  waitOp->slotCount = static_cast<uint32_t>(eventIdNum);
+  return eventIdNum;
 }
 
 void InsertSyncAnalysis::InsertSyncOperation(
@@ -674,54 +727,13 @@ void InsertSyncAnalysis::InsertSyncOperation(
     setOp->SetDepSyncIRIndex(frontCompound->GetIndex());
     waitOp->SetDepSyncIRIndex(frontCompound->GetIndex());
 
-    // Back-edge dependencies may require multi-buffer event IDs. When N
-    // dyn event IDs are warranted, also plumb the per-side slot SSA so
-    // codegen can lower into `pto.set_flag_dyn` / `pto.wait_flag_dyn`.
+    // Back-edge dependencies may require multi-buffer event IDs. When N dyn
+    // event IDs are warranted, also plumb the per-side slot SSA so codegen can
+    // lower into `pto.set_flag_dyn` / `pto.wait_flag_dyn`.
     if (forEndIndex.has_value()) {
-      int eventIdNum = GetEventIdNum(depBaseMemInfosVec);
-      if (eventIdNum > 1) {
-        // Each dep pair has (now=consumer, front=producer). The producer's
-        // slot SSA gates the `set_flag_dyn`; the consumer's gates the
-        // `wait_flag_dyn`. A single dynamic event pair can represent only one
-        // slot expression on each side. If the dependency group contains
-        // multiple expressions, fall back to a static event that guards the
-        // whole group instead of silently synchronizing just the first one.
-        Value producerSlot;
-        Value consumerSlot;
-        bool hasAmbiguousSlot = false;
-        for (auto &pair : depBaseMemInfosVec) {
-          Value pairProducerSlot;
-          Value pairConsumerSlot;
-          if (pair.second && pair.second->baseBuffer) {
-            pairProducerSlot = findMultiTileSlotExpr(pair.second->baseBuffer);
-          }
-          if (pair.first && pair.first->baseBuffer) {
-            pairConsumerSlot = findMultiTileSlotExpr(pair.first->baseBuffer);
-          }
-          if (!pairProducerSlot || !pairConsumerSlot) {
-            hasAmbiguousSlot = true;
-            break;
-          }
-          if ((producerSlot && producerSlot != pairProducerSlot) ||
-              (consumerSlot && consumerSlot != pairConsumerSlot)) {
-            hasAmbiguousSlot = true;
-            break;
-          }
-          producerSlot = pairProducerSlot;
-          consumerSlot = pairConsumerSlot;
-        }
-        if (hasAmbiguousSlot || !producerSlot || !consumerSlot) {
-          // Missing or ambiguous slot SSA -- fall back to a single event id.
-          // This also keeps non-multi-buffer codepaths untouched if their
-          // baseAddresses have multiple entries for another reason.
-          eventIdNum = 1;
-        } else {
-          setOp->slotSSAExpr = producerSlot;
-          setOp->slotCount = static_cast<uint32_t>(eventIdNum);
-          waitOp->slotSSAExpr = consumerSlot;
-          waitOp->slotCount = static_cast<uint32_t>(eventIdNum);
-        }
-      }
+      int eventIdNum = configureDynEventSlots(
+          setOp.get(), waitOp.get(), depBaseMemInfosVec,
+          GetEventIdNum(depBaseMemInfosVec));
       setOp->eventIdNum = eventIdNum;
       waitOp->eventIdNum = eventIdNum;
     }
@@ -734,7 +746,6 @@ void InsertSyncAnalysis::InsertSyncOperation(
     newSync.emplace_back(std::move(waitOp));
     syncOperations_.emplace_back(std::move(newSync));
   }
-
   syncIndex_++;
   assert(syncOperations_.size() == syncIndex_);
 }
