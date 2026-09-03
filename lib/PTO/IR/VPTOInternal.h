@@ -151,6 +151,10 @@ ParseResult normalizeNamedStringAttr(
 
 std::optional<StringRef> normalizeEvenOddPartToken(StringRef token);
 
+// Batch1: RawFill 对齐常量
+constexpr uint64_t kRawFillByteOffsetAlignment = 32;
+constexpr uint64_t kRawFillControlFieldMax = 32767;
+
 // Batch1: 由 VPTO.cpp 上移的文件局部类型(StructuredAccStore/CubeBridge 域共用)
 
 struct StructuredAccStoreAsmState {
@@ -187,9 +191,21 @@ struct CubeBridgeLoadAsmOperand {
   bool present = false;
 };
 
-// Batch1: 跨文件共享函数声明(定义分布在 VPTO/VPTOMte/VPTOMteAsm/VPTODma/VPTOCubeBridge/VPTOStructuredAcc/VPTOMad)
+// Batch1: 跨文件共享函数声明(定义分布在 VPTO/VPTOMte/VPTOMteAsm/VPTODma/VPTOCubeBridge/VPTOStructuredAcc/VPTOVecOp/VPTOMemOp)
+LogicalResult verifyIntegerVRegTypeLike(Operation *op, Type type, StringRef roleDescription);
+LogicalResult checkConstAlignment(Operation *op, Value value, StringRef name, uint64_t alignment);
+LogicalResult checkConstMax(Operation *op, Value value, StringRef name, uint64_t max);
+std::string formatVRegType(int64_t elementCount, Type elementType);
+StringRef getAddressSpaceDiagnosticName(pto::AddressSpace space);
+unsigned getIntOrFloatBitWidth(Type type);
+std::optional<int64_t> getVRegStorageBitWidth(Type type);
+bool isInsideSimtExecutionScope(Operation *op);
+bool isIntegerOrFloatLike(Type type);
 bool isMxElementType(Type type);
 bool isSupportedMovPadScalarType(Type type);
+bool isSupportedPostMode(StringRef mode);
+bool isSupportedPredicatePattern(StringRef pattern);
+bool isVector2Of(Type type, llvm::function_ref<bool(Type)> elementPred);
 ParseResult parseCubeBridgeOptionalOperands( OpAsmParser &parser, ArrayRef<StringRef> shapeNames, ArrayRef<StringRef> fullNames, SmallVectorImpl<OpAsmParser::UnresolvedOperand> &legacyOperands, SmallVectorImpl<CubeBridgeLoadAsmOperand> &namedOperands, SmallVectorImpl<unsigned> &namedOperandOrder, bool &usesNamedOperands);
 ParseResult parseCubeBridgeOptionalTypes( OpAsmParser &parser, bool usesNamedOperands, SmallVectorImpl<unsigned> &namedOperandOrder, SmallVectorImpl<CubeBridgeLoadAsmOperand> &namedOperands, SmallVectorImpl<OpAsmParser::UnresolvedOperand> &legacyOperands, SmallVectorImpl<Type> &legacyTypes);
 FailureOr<CubeLoadFracMode> parseCubeLoadFracModeKeyword(StringRef keyword);
@@ -246,6 +262,9 @@ LogicalResult verifyDmaLoadStoreLoopGroups(Operation *op, ValueRange loopCounts,
 ParseResult verifyDmaLoopGroupConsistency( OpAsmParser &parser, size_t countOperands, size_t srcStrideOperands, size_t dstStrideOperands, size_t countTypes, size_t srcStrideTypes, size_t dstStrideTypes);
 LogicalResult verifyMxLoadAlignment(Operation *op, Value source, Value destination);
 LogicalResult verifyMxLoadOperands(Operation *op, ArrayRef<Value> shapeOperands, ArrayRef<StringRef> shapeNames, ArrayRef<Value> fullOperands);
+LogicalResult verifyNestedInVecScope(Operation *op, StringRef opNameForDiag);
+LogicalResult verifyNonLowPrecisionVRegElementTypeLike( Operation *op, Type type, StringRef roleDescription);
+LogicalResult verifyNotNestedInVecScope(Operation *op, StringRef opNameForDiag);
 LogicalResult verifyStructuredAccStoreLike( Operation *op, Type srcType, Type dstType, Value preQuant, Value preRelu, Value clipValue, Value split, Value loop0SrcStride, Value loop3Count, Value loop3SrcStride, Value loop3DstStride, std::optional<AccStoreUnitFlagCtrl> unitFlag, std::optional<AccStoreQuantPreMode> preQuantMode, std::optional<ReluPreMode> preReluMode, std::optional<AccStoreMode> mode, std::optional<AccStoreAtomicType> atomicType, std::optional<AccStoreAtomicOp> atomicOp, bool allowAtomic);
 
 // Batch1: VPTO.cpp/MTE/DMA 共用小函数
