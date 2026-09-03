@@ -187,7 +187,8 @@ struct CubeBridgeLoadAsmOperand {
   bool present = false;
 };
 
-// Batch1: 跨文件共享函数声明(定义分布在 VPTO/VPTOMte/VPTOMteAsm/VPTODma/VPTOCubeBridge/VPTOStructuredAcc)
+// Batch1: 跨文件共享函数声明(定义分布在 VPTO/VPTOMte/VPTOMteAsm/VPTODma/VPTOCubeBridge/VPTOStructuredAcc/VPTOMad)
+bool isMxElementType(Type type);
 bool isSupportedMovPadScalarType(Type type);
 ParseResult parseCubeBridgeOptionalOperands( OpAsmParser &parser, ArrayRef<StringRef> shapeNames, ArrayRef<StringRef> fullNames, SmallVectorImpl<OpAsmParser::UnresolvedOperand> &legacyOperands, SmallVectorImpl<CubeBridgeLoadAsmOperand> &namedOperands, SmallVectorImpl<unsigned> &namedOperandOrder, bool &usesNamedOperands);
 ParseResult parseCubeBridgeOptionalTypes( OpAsmParser &parser, bool usesNamedOperands, SmallVectorImpl<unsigned> &namedOperandOrder, SmallVectorImpl<CubeBridgeLoadAsmOperand> &namedOperands, SmallVectorImpl<OpAsmParser::UnresolvedOperand> &legacyOperands, SmallVectorImpl<Type> &legacyTypes);
