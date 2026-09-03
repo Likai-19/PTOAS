@@ -8,6 +8,15 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
+# CANN_3RD_LIB_PATH is normally provided by the caller (server workflows point
+# it at a prepared cache directory). Default to a build-tree-local directory
+# so CI/plain configure runs can fetch the pinned cann/cmake modules without
+# root privileges.
+if(NOT CANN_3RD_LIB_PATH)
+    set(CANN_3RD_LIB_PATH "${CMAKE_BINARY_DIR}/cann_3rd")
+    message(STATUS "CANN_3RD_LIB_PATH not set; defaulting to ${CANN_3RD_LIB_PATH}")
+endif()
+
 if(NOT PROJECT_SOURCE_DIR)
     # Temporary test pin for cann/cmake MR !277. Revert this URL/ref pair
     # after validation and switch to the released cann/cmake tag once MR !277
