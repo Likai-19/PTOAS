@@ -12,6 +12,9 @@
 #ifndef PTO_IR_VMI_INTERNAL_H
 #define PTO_IR_VMI_INTERNAL_H
 
+// Batch6: 由 VMI_ops.cpp 上移的类型
+enum class CvtDirection { FpWiden, FpNarrow, FpToSi, FpToUi, SiToFp, IntWiden, IntNarrow };
+
 #include <optional>
 #include <set>
 #include "mlir/IR/DialectImplementation.h"
@@ -832,4 +835,14 @@ mapDensePartIndexToLogicalLane(int64_t elementCount, int64_t factor,
 
 } // namespace
 
+// Batch6: VMI_ops 拆分跨文件声明(定义分布在 VMI_ops/VMI_ops_mem/VMI_ops_cvt/VMI_ops_group)
+LogicalResult verifyChannelMergeLayout(Operation *op, VMIVRegType resultType, ValueRange inputs);
+LogicalResult verifyChannelSplitLayout(Operation *op, VMIVRegType sourceType, ValueRange results);
+LogicalResult verifyVCReductionElementAndMask(Operation *op, VMIVRegType sourceType, VMIMaskType maskType, bool &isFloat);
+
+// Batch6 补充
+LogicalResult verifyVMIVariadicPmodeMask(Operation *op, ValueRange maskParts, VMIVRegType dataType, std::optional<StringRef> pmode);
+LogicalResult verifySignedI32OrF16F32ElementType(Operation *op, Type elementType);
+
+LogicalResult verifyVMIPmodeMask(Operation *op, VMIMaskType maskType, VMIVRegType dataType, std::optional<StringRef> pmode);
 #endif // PTO_IR_VMI_INTERNAL_H

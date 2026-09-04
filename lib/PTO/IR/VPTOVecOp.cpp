@@ -276,7 +276,7 @@ bool isSupportedPostMode(StringRef mode) {
   return mode == "NO_POST_UPDATE" || mode == "POST_UPDATE";
 }
 
-static bool isCompatibleScalarForSemanticType(Type semanticType,
+bool isCompatibleScalarForSemanticType(Type semanticType,
                                               Type scalarType) {
   if (semanticType == scalarType) {
     return true;

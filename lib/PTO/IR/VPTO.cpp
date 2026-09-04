@@ -471,7 +471,7 @@ std::optional<StringRef> normalizeRoundModeToken(StringRef token) {
   return std::nullopt;
 }
 
-std::optional<StringRef> normalizeSaturationToken(StringRef token) {
+[[maybe_unused]] static std::optional<StringRef> normalizeSaturationToken(StringRef token) {
   if (token == "SAT" || token == "RS_ENABLE") {
     return StringRef("SAT");
   }
@@ -677,7 +677,7 @@ LogicalResult InitAlignOp::verify() {
 }
 
 
-ParseResult normalizeNamedStringAttr(
+[[maybe_unused]] static ParseResult normalizeNamedStringAttr(
     OpAsmParser &parser, NamedAttrList &attrs, StringRef sourceName,
     StringRef canonicalName,
     std::optional<StringRef> (*normalizeFn)(StringRef)) {
