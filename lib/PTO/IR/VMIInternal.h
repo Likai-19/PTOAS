@@ -217,6 +217,9 @@ enum class VMIIntSignSemantics { Unsigned, Signed, Any };
 }
 
 [[maybe_unused]] static int64_t divideCeilNonNegative(int64_t value, int64_t divisor) {
+  if (divisor <= 0) {
+    return 0;
+  }
   return value == 0 ? 0 : (value + divisor - 1) / divisor;
 }
 

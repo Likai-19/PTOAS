@@ -235,7 +235,8 @@ ParseResult parseDmaLoopOperandGroups(
     SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopCountOperands,
     SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopSrcStrideOperands,
     SmallVectorImpl<OpAsmParser::UnresolvedOperand> &loopDstStrideOperands) {
-  while (true) {
+  bool hasMore = true;
+  while (hasMore) {
     StringRef parsedKeyword;
     SmallVector<OpAsmParser::UnresolvedOperand, mlir::pto::kValue3> loopGroupOperands;
     if (parseOptionalDmaTripleGroupAlias(parser, {"loop", "loop1", "loop2"},
@@ -243,7 +244,8 @@ ParseResult parseDmaLoopOperandGroups(
       return failure();
     }
     if (parsedKeyword.empty()) {
-      break;
+      hasMore = false;
+      continue;
     }
     loopCountOperands.push_back(loopGroupOperands[0]);
     loopSrcStrideOperands.push_back(loopGroupOperands[1]);

@@ -62,9 +62,11 @@ void MteGmUbOp::build(OpBuilder &builder, OperationState &state, Value source,
     state.addOperands(loop.dstStride);
   }
   bool hasPadCounts = pad && pad->leftCount && pad->rightCount;
-  assert((!pad || static_cast<bool>(pad->leftCount) ==
-                       static_cast<bool>(pad->rightCount)) &&
-         "mte_gm_ub pad config must provide both left and right counts, or omit both");
+  if (pad && static_cast<bool>(pad->leftCount) !=
+                  static_cast<bool>(pad->rightCount)) {
+    llvm::report_fatal_error(
+        "mte_gm_ub pad config must provide both left and right counts, or omit both");
+  }
   if (pad) {
     state.addOperands(pad->value);
     if (hasPadCounts) {

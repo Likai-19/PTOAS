@@ -797,17 +797,20 @@ ParseResult parseStructuredAccStoreClauses(
     OpAsmParser &parser, StructuredAccStoreAsmState &state) {
   int lastClause = -1;
   bool seenClause = false;
-  while (true) {
+  bool hasMore = true;
+  while (hasMore) {
     if (seenClause) {
       if (failed(parser.parseOptionalComma())) {
-        return success();
+        hasMore = false;
+        continue;
       }
     }
     StringRef keyword;
     OptionalParseResult optParseResult = parser.parseOptionalKeyword(&keyword);
     if (!optParseResult.has_value() || failed(*optParseResult)) {
       if (!seenClause) {
-        return success();
+        hasMore = false;
+        continue;
       }
       return parser.emitError(parser.getCurrentLocation(), "expected valid keyword");
     }
@@ -833,6 +836,7 @@ ParseResult parseStructuredAccStoreClauses(
       return failure();
     }
   }
+  return success();
 }
 
 

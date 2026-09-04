@@ -835,6 +835,9 @@ LogicalResult VMIGroupBroadcastOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
   int64_t numGroups = getNumGroupsAttr().getInt();
+  if (numGroups <= 0) {
+    return emitOpError("requires num_groups to be positive");
+  }
   if (sourceType.getElementCount() != numGroups) {
     return emitOpError(
         "requires source logical lane count to match num_groups");
