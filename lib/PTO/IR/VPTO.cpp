@@ -471,7 +471,7 @@ std::optional<StringRef> normalizeRoundModeToken(StringRef token) {
   return std::nullopt;
 }
 
-[[maybe_unused]] static std::optional<StringRef> normalizeSaturationToken(StringRef token) {
+std::optional<StringRef> normalizeSaturationToken(StringRef token) {
   if (token == "SAT" || token == "RS_ENABLE") {
     return StringRef("SAT");
   }
@@ -677,7 +677,7 @@ LogicalResult InitAlignOp::verify() {
 }
 
 
-[[maybe_unused]] static ParseResult normalizeNamedStringAttr(
+ParseResult normalizeNamedStringAttr(
     OpAsmParser &parser, NamedAttrList &attrs, StringRef sourceName,
     StringRef canonicalName,
     std::optional<StringRef> (*normalizeFn)(StringRef)) {
@@ -842,4 +842,85 @@ LogicalResult verifyMxLoadAlignment(Operation *op, Value source,
   }
   return verifyMxPointerAlignment(op, destination, "destination",
                                   kMxDestinationAddressUnitBytes);
+}
+
+MemoryRole classifyMemoryRole(Type type) {
+  auto memrefType = dyn_cast<BaseMemRefType>(type);
+  if (!memrefType) {
+    if (auto ptrType = dyn_cast<pto::PtrType>(type)) {
+      switch (ptrType.getMemorySpace().getAddressSpace()) {
+      case pto::AddressSpace::GM:
+      case pto::AddressSpace::Zero:
+        return MemoryRole::GM;
+      case pto::AddressSpace::VEC:
+        return MemoryRole::UB;
+      default:
+        return MemoryRole::Other;
+      }
+    }
+    return MemoryRole::Other;
+  }
+
+  Attribute memorySpace = memrefType.getMemorySpace();
+  if (!memorySpace) {
+    return MemoryRole::Unknown;
+  }
+
+  if (auto addrSpace = dyn_cast<pto::AddressSpaceAttr>(memorySpace)) {
+    switch (addrSpace.getAddressSpace()) {
+    case pto::AddressSpace::GM:
+    case pto::AddressSpace::Zero:
+      return MemoryRole::GM;
+    case pto::AddressSpace::VEC:
+      return MemoryRole::UB;
+    default:
+      return MemoryRole::Other;
+    }
+  }
+
+  if (auto intAttr = dyn_cast<IntegerAttr>(memorySpace)) {
+    switch (intAttr.getInt()) {
+    case static_cast<int64_t>(pto::AddressSpace::GM):
+    case static_cast<int64_t>(pto::AddressSpace::Zero):
+      return MemoryRole::GM;
+    case static_cast<int64_t>(pto::AddressSpace::VEC):
+      return MemoryRole::UB;
+    default:
+      return MemoryRole::Other;
+    }
+  }
+
+  return MemoryRole::Other;
+}
+
+bool isForbiddenSynchronizationInsideVecScope(Operation *op) {
+  // High-level synchronization is forbidden before and after lowering.
+  if (isa<RecordEventOp, WaitEventOp, BarrierSyncOp>(op)) {
+    return true;
+  }
+
+  // Intra-core pipeline and buffer-id synchronization executes outside the
+  // vector interval that it orders.
+  if (isa<SetFlagOp, WaitFlagOp, SetFlagDynOp, WaitFlagDynOp, GetBufOp,
+          GetBufDynOp, RlsBufOp, RlsBufDynOp, BarrierOp>(op)) {
+    return true;
+  }
+
+  // Intra-block, cross-core, system, cache, and SIMT synchronization likewise
+  // delimit vector intervals. MemBarOp is intentionally not in this list.
+  return isa<SyncSetOp, SyncWaitOp, CmoCacheInvalidOp, FenceBarrierAllOp,
+             TSyncOp, SyncAllOp, DsbOp, DcciOp, SyncthreadsOp, ThreadfenceOp,
+             ThreadfenceBlockOp>(op);
+}
+
+Operation *findForbiddenSyncInRegion(Region &body) {
+  Operation *boundaryOp = nullptr;
+  body.walk([&](Operation *op) {
+    if (!isForbiddenSynchronizationInsideVecScope(op)) {
+      return WalkResult::advance();
+    }
+    boundaryOp = op;
+    return WalkResult::interrupt();
+  });
+  return boundaryOp;
 }

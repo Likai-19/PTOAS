@@ -35,7 +35,7 @@ LogicalResult VMIGroupIotaOp::verify() {
     return emitOpError("requires result element type to be integer 8/16/32 "
                        "or f16/f32");
   }
-  if (!isCompatibleScalarForSemanticType(elementType, getBase().getType())) {
+  if (!isCompatibleVMIScalarForSemanticType(elementType, getBase().getType())) {
     return emitOpError("requires base type to match result element type");
   }
   if (std::optional<StringRef> order = getOrder()) {

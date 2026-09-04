@@ -160,7 +160,7 @@ static ParseResult parseCubeBridgeNamedOperand(
   return success();
 }
 
-[[maybe_unused]] static ParseResult parseCubeBridgeOptionalOperands(
+ParseResult parseCubeBridgeOptionalOperands(
     OpAsmParser &parser, ArrayRef<StringRef> shapeNames,
     ArrayRef<StringRef> fullNames,
     SmallVectorImpl<OpAsmParser::UnresolvedOperand> &legacyOperands,
@@ -201,7 +201,7 @@ static ParseResult parseCubeBridgeNamedOperand(
   return success();
 }
 
-[[maybe_unused]] static ParseResult parseCubeBridgeOptionalTypes(
+ParseResult parseCubeBridgeOptionalTypes(
     OpAsmParser &parser, bool usesNamedOperands,
     SmallVectorImpl<unsigned> &namedOperandOrder,
     SmallVectorImpl<CubeBridgeLoadAsmOperand> &namedOperands,
@@ -227,7 +227,7 @@ static ParseResult parseCubeBridgeNamedOperand(
   return success();
 }
 
-[[maybe_unused]] static ParseResult resolveCubeBridgeOperands(
+ParseResult resolveCubeBridgeOperands(
     OpAsmParser &parser, OperationState &result, bool usesNamedOperands,
     OpAsmParser::UnresolvedOperand source, Type sourceType,
     OpAsmParser::UnresolvedOperand destination, Type destinationType,
