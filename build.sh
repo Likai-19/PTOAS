@@ -33,20 +33,12 @@ export PACKAGE_STAGE_PATH="${BUILD_PATH}/package_runtime"
 export PTOAS_PRESMOKE_SKIP_RUNOP_MARKER="${BUILD_PATH}/.skip-presmoke-runop"
 export LLVM_SOURCE_VERSION="19.1.7"
 export PTOAS_GLIBCXX_ABI="${PTOAS_GLIBCXX_ABI:-0}"
-# The PTOAS tree is built against the vpto-dev LLVM/MLIR 19 "feature-vpto"
-# branch (source of custom calling conventions such as SimtEntry). Source it
-# from GitHub by default; override with LLVM_GIT_URL / LLVM_GIT_REF when a
-# mirror must be used.
-export LLVM_GIT_URL="${LLVM_GIT_URL:-https://github.com/vpto-dev/llvm-project.git}"
-export LLVM_GIT_REF="${LLVM_GIT_REF:-feature-vpto}"
-# The vpto calling conventions (SimtEntry, float8) can also be produced by
-# applying the feature-vpto patch to the upstream llvmorg-19.1.7 source that
-# the CI cache (ASCEND_3RD_LIB_PATH) and cann-cmake download. When the cached
-# source lacks SimtEntry we fetch the patch from the gitcode release asset and
-# apply it with patch -p1, matching the PATCH_COMMAND added to cann-cmake's
-# third_party/llvm.cmake.
-export LLVM_VPTO_PATCH_URL="${LLVM_VPTO_PATCH_URL:-https://gitcode.com/cann-src-third-party/llvm/releases/download/19.1.7-h0/feature-vpto-last3.patch}"
-export LLVM_VPTO_PATCH_SHA256="${LLVM_VPTO_PATCH_SHA256:-a49c1d3dd8ab78e93264712bc0d46deb536196a54abb2c2ee02abd914cd385e2}"
+# The LLVM 19 source (upstream llvmorg-19.1.7 tarball + feature-vpto patch)
+# is fetched by cann-cmake's third_party/llvm.cmake via ExternalProject_Add.
+# ensure_llvm_source() drives a minimal CMake project that includes the module
+# and builds the third_party_llvm target, so the download+patch runs at build
+# time. cann-cmake itself (providing llvm.cmake) is pulled by
+# cmake/fetch_cann_cmake.cmake. See ensure_cann_cmake / ensure_llvm_source.
 # Prefer ASCEND_3RD_LIB_PATH when it points to a valid LLVM source cache
 # (CI images set this to /home/jenkins/opensource). Fall back to the in-tree
 # third_party directory for local builds where it is unset.
@@ -56,7 +48,6 @@ else
     CANN_3RD_LIB_PATH="${BASE_PATH}/third_party"
 fi
 HARDENING_CACHE_FILE="${BASE_PATH}/cmake/LinuxHardeningCache.cmake"
-LLVM_PROJECT_URL="${LLVM_GIT_URL}"
 # Only enable the CentOS7 devtoolset-7 sysroot + gcc-toolchain when the
 # toolchain is actually present AND the host glibc is newer than CentOS7.
 # On a CentOS7 CI image the host glibc is already 2.17, so linking against the
@@ -249,77 +240,122 @@ llvm_has_simt_entry() {
     && grep -q "SimtEntry" "${LLVM_SOURCE_DIR}/llvm/include/llvm/IR/CallingConv.h"
 }
 
-# Download the feature-vpto patch and apply it to the upstream LLVM source so
-# the tree gains the vpto calling conventions. The patch is a git-format-patch
-# series rooted at llvm/, so patch -p1 is the correct strip level (the same
-# PATCH_COMMAND used by cann-cmake's third_party/llvm.cmake).
-apply_vpto_patch() {
+# Ensure cann-cmake (the CANN CMake infrastructure repo providing
+# third_party/llvm.cmake) is present under ${CANN_3RD_LIB_PATH}/cann-cmake.
+# fetch_cann_cmake.cmake runs in cmake script mode and uses git clone, so it
+# works without a project() declaration.
+ensure_cann_cmake() {
+  if [ -d "${CANN_3RD_LIB_PATH}/cann-cmake/third_party/llvm.cmake" ]; then
+    return 0
+  fi
   echo "${dotted_line}"
-  echo "Applying feature-vpto patch to upstream LLVM source"
-  local patch_file="${CANN_3RD_LIB_PATH}/pkg/feature-vpto-last3.patch"
+  echo "Fetching cann-cmake (CANN CMake infrastructure)"
+  mkdir -p "${CANN_3RD_LIB_PATH}"
+  cmake -DPROJECT_SOURCE_DIR="" -DCANN_3RD_LIB_PATH="${CANN_3RD_LIB_PATH}" \
+    -P "${BASE_PATH}/cmake/fetch_cann_cmake.cmake" || {
+      echo "ERROR: failed to fetch cann-cmake" >&2
+      exit 1
+    }
+}
+
+# Ensure the LLVM 19 source tree is present under ${LLVM_SOURCE_DIR}. A cached
+# tree carrying SimtEntry is reused as-is. Otherwise the source is fetched via
+# cann-cmake's third_party/llvm.cmake: a minimal CMake project includes the
+# module, declaring an ExternalProject_Add target (third_party_llvm) that
+# downloads the llvmorg-19.1.7 tarball, applies the feature-vpto patch, and
+# extracts to ${LLVM_SOURCE_DIR}. The download+patch runs at build time, not
+# configure time, matching the cann-cmake integration pattern used across CANN
+# repos (add_cann_third_party + cmake --build --target <name>).
+# Apply the feature-vpto patch in place to an existing (unpatched) LLVM
+# source tree. CI images pre-seed the third-party cache with the pristine
+# llvmorg-19.1.7 source; deleting and re-fetching the tree (as an earlier
+# revision did) invalidates the pre-seeded LLVM build cache and forces a full
+# LLVM rebuild that exceeds the smoke job time limit. Patching in place keeps
+# the untouched files' build cache entries valid. The patch source and hash
+# mirror cann-cmake third_party/llvm.cmake (LLVM_VPTO_PATCH_FILE logic).
+apply_vpto_patch_inplace() {
+  echo "${dotted_line}"
+  echo "Cached LLVM source lacks SimtEntry; applying feature-vpto patch in place"
+  local patch_file=""
   if [ -f "${CANN_3RD_LIB_PATH}/feature-vpto-last3.patch" ]; then
     patch_file="${CANN_3RD_LIB_PATH}/feature-vpto-last3.patch"
   elif [ -f "${CANN_3RD_LIB_PATH}/pkg/feature-vpto-last3.patch" ]; then
     patch_file="${CANN_3RD_LIB_PATH}/pkg/feature-vpto-last3.patch"
   else
     mkdir -p "${CANN_3RD_LIB_PATH}/pkg"
-    echo "Downloading vpto patch from ${LLVM_VPTO_PATCH_URL}"
-    curl -fL --retry 3 -o "${patch_file}" "${LLVM_VPTO_PATCH_URL}" || {
-      echo "ERROR: failed to download vpto patch" >&2
-      exit 1
-    }
+    patch_file="${CANN_3RD_LIB_PATH}/pkg/feature-vpto-last3.patch"
+    echo "Downloading vpto patch from https://gitcode.com/cann-src-third-party/llvm/releases/download/19.1.7-h0/feature-vpto-last3.patch"
+    curl -fL --retry 3 -o "${patch_file}"       "https://gitcode.com/cann-src-third-party/llvm/releases/download/19.1.7-h0/feature-vpto-last3.patch" || {
+        echo "ERROR: failed to download vpto patch" >&2
+        exit 1
+      }
     local actual_sha
-    actual_sha="$(sha256sum "${patch_file}" | cut -d' ' -f1)"
-    if [ "${actual_sha}" != "${LLVM_VPTO_PATCH_SHA256}" ]; then
+    actual_sha="$(sha256sum "${patch_file}" | cut -d ' ' -f1)"
+    if [ "${actual_sha}" != "a49c1d3dd8ab78e93264712bc0d46deb536196a54abb2c2ee02abd914cd385e2" ]; then
       echo "ERROR: vpto patch SHA256 mismatch: ${actual_sha}" >&2
       exit 1
     fi
   fi
-
   (cd "${LLVM_SOURCE_DIR}" && patch -p1 < "${patch_file}") || {
     echo "ERROR: failed to apply vpto patch to ${LLVM_SOURCE_DIR}" >&2
     exit 1
   }
-  echo "Applied vpto patch: ${patch_file}"
+  if ! llvm_has_simt_entry; then
+    echo "ERROR: LLVM source still lacks SimtEntry after patching" >&2
+    exit 1
+  fi
+  echo "Applied vpto patch in place: ${patch_file}"
 }
 
-# Ensure the LLVM 19 source (vpto "feature-vpto" branch) is present under
-# ${LLVM_SOURCE_DIR}. Accepts an already-populated source tree (the usual CI
-# cache layout where llvm-19/llvm holds the top-level CMakeLists.txt) or
-# clones the vpto branch from ${LLVM_GIT_URL}. When the cached source is the
-# upstream (unpatched) snapshot, apply the vpto patch so SimtEntry/float8
-# resolve during the PTOAS build.
 ensure_llvm_source() {
   if [ -f "${LLVM_SOURCE_DIR}/llvm/CMakeLists.txt" ]; then
-    # Git checkout layout: the project root is ${LLVM_SOURCE_DIR}/llvm.
     export LLVM_CMAKE_SOURCE_DIR="${LLVM_SOURCE_DIR}/llvm"
     if ! llvm_has_simt_entry; then
-      echo "${dotted_line}"
-      echo "Cached LLVM source lacks SimtEntry; applying feature-vpto patch"
-      apply_vpto_patch
+      apply_vpto_patch_inplace
     fi
     return 0
   fi
   if [ -f "${LLVM_SOURCE_DIR}/CMakeLists.txt" ]; then
     export LLVM_CMAKE_SOURCE_DIR="${LLVM_SOURCE_DIR}"
     if ! llvm_has_simt_entry; then
-      echo "${dotted_line}"
-      echo "Cached LLVM source lacks SimtEntry; applying feature-vpto patch"
-      apply_vpto_patch
+      apply_vpto_patch_inplace
     fi
     return 0
   fi
 
+  ensure_cann_cmake
+
   echo "${dotted_line}"
-  echo "Cloning LLVM ${LLVM_SOURCE_VERSION} source (${LLVM_GIT_REF})"
-  mkdir -p "${CANN_3RD_LIB_PATH}"
-  git clone --depth 1 --single-branch \
-    --branch "${LLVM_GIT_REF}" \
-    "${LLVM_GIT_URL}" "${LLVM_SOURCE_DIR}"
+  echo "Fetching LLVM ${LLVM_SOURCE_VERSION} source via cann-cmake third_party/llvm.cmake"
+  local llvm_fetch_dir="${BUILD_PATH}/llvm_fetch"
+  rm -rf "${llvm_fetch_dir}"
+  mkdir -p "${llvm_fetch_dir}"
+  cat > "${llvm_fetch_dir}/CMakeLists.txt" <<EOF
+cmake_minimum_required(VERSION 3.20.0)
+project(ptoas_llvm_fetch NONE)
+set(CANN_3RD_LIB_PATH "${CANN_3RD_LIB_PATH}" CACHE PATH "")
+include("${CANN_3RD_LIB_PATH}/cann-cmake/third_party/llvm.cmake")
+EOF
+  cmake -S "${llvm_fetch_dir}" -B "${llvm_fetch_dir}/build" || {
+    echo "ERROR: cmake configure of LLVM fetch project failed" >&2
+    exit 1
+  }
+  cmake --build "${llvm_fetch_dir}/build" --target third_party_llvm || {
+    echo "ERROR: failed to fetch LLVM source via cann-cmake" >&2
+    exit 1
+  }
+
   if [ -f "${LLVM_SOURCE_DIR}/llvm/CMakeLists.txt" ]; then
     export LLVM_CMAKE_SOURCE_DIR="${LLVM_SOURCE_DIR}/llvm"
-  else
+  elif [ -f "${LLVM_SOURCE_DIR}/CMakeLists.txt" ]; then
     export LLVM_CMAKE_SOURCE_DIR="${LLVM_SOURCE_DIR}"
+  else
+    echo "ERROR: LLVM source not found at ${LLVM_SOURCE_DIR} after fetch" >&2
+    exit 1
+  fi
+  if ! llvm_has_simt_entry; then
+    echo "ERROR: fetched LLVM source still lacks SimtEntry; patch may have failed" >&2
+    exit 1
   fi
 }
 

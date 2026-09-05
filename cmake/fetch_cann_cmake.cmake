@@ -9,19 +9,26 @@
 # -----------------------------------------------------------------------------------------------------------
 
 if(NOT PROJECT_SOURCE_DIR)
-    # Temporary test pin for cann/cmake MR !277. Revert this URL/ref pair
-    # after validation and switch to the released cann/cmake tag once MR !277
-    # is merged.
+    # Entrypoints that do not run build.sh (quick_install.sh, pip wheel /
+    # editable installs through scikit-build, GitHub mirror build checks)
+    # configure CMake without CANN_3RD_LIB_PATH. Fall back to a directory
+    # inside the writable CMake binary tree so SOURCE_DIR below does not
+    # expand to a root-level /cann-cmake path and the source tree stays
+    # pristine. Script mode has no CMAKE_BINARY_DIR and keeps requiring the
+    # explicit path from build.sh.
+    if(NOT CANN_3RD_LIB_PATH AND CMAKE_BINARY_DIR)
+        set(CANN_3RD_LIB_PATH "${CMAKE_BINARY_DIR}/cann-3rd-lib")
+    endif()
     if(CANN_3RD_LIB_PATH AND IS_DIRECTORY "${CANN_3RD_LIB_PATH}/cann-cmake")
         include("${CANN_3RD_LIB_PATH}/cann-cmake/function/prepare.cmake")
     else()
         set(CANN_CMAKE_GIT_URL "$ENV{CANN_CMAKE_GIT_URL}" CACHE STRING "CANN cmake repository URL")
         set(CANN_CMAKE_GIT_REF "$ENV{CANN_CMAKE_GIT_REF}" CACHE STRING "CANN cmake repository ref")
         if(NOT CANN_CMAKE_GIT_URL)
-            set(CANN_CMAKE_GIT_URL "https://gitcode.com/zoujiangjiang/cmake.git")
+            set(CANN_CMAKE_GIT_URL "https://gitcode.com/cann/cmake.git")
         endif()
         if(NOT CANN_CMAKE_GIT_REF)
-            set(CANN_CMAKE_GIT_REF "fe/llvm-vpto-patch")
+            set(CANN_CMAKE_GIT_REF "master-055")
         endif()
         if(CMAKE_SCRIPT_MODE_FILE)
             if(NOT CANN_3RD_LIB_PATH)
@@ -46,7 +53,7 @@ if(NOT PROJECT_SOURCE_DIR)
 
         include(FetchContent)
 
-        set(CANN_CMAKE_TAG "pr277")
+        set(CANN_CMAKE_TAG "master-055")
         if(CANN_3RD_LIB_PATH AND EXISTS "${CANN_3RD_LIB_PATH}/cmake-${CANN_CMAKE_TAG}.tar.gz")
             FetchContent_Declare(
                 cann-cmake
