@@ -311,14 +311,13 @@ three mutually exclusive mode families.
 | `values` | `VRegType` or `(VRegType, VRegType)` | One VMI vector for normal forms, or an `(even, odd)` pair for `dist_mode="intlv"` |
 | `destination` | `PtrType` (ub) | UB destination pointer |
 | `offset` | `IndexLike` | Element offset into the destination buffer |
-| `pmode` | `str` or `None` | Optional inactive-lane mode: `"zero"` stores 0 to masked-off lanes; `"merge"` skips the write for masked-off lanes |
+| `pmode` | `str` or `None` | Optional inactive-lane mode: only `"zero"` is supported, it stores 0 to masked-off lanes |
 
 **About `pmode` on `vstore`.**
 
-- `pmode="zero"` is the default store behavior. When a `mask` is present,
-  inactive lanes are written as zero.
-- `pmode="merge"` preserves destination contents on inactive lanes by skipping
-  those writes.
+- `pmode="zero"` is the default and only supported store behavior. When a
+  `mask` is present, inactive lanes are written as zero.
+- `pmode="merge"` is **not supported**
 - `pmode` only matters on store forms that actually use a `mask`. Group-mode
   store does not take a mask operand, so there are no inactive lanes to define
   there.
@@ -611,7 +610,7 @@ and are unchanged.
 
 The following are **PTODSL syntax sugar** — convenience wrappers provided by the
 PTODSL authoring layer. They have **no corresponding VMI instruction**; PTODSL lowers
-each to an equivalent `pto.vmi.*` form (e.g., `pto.vsubs` lowers to `pto.vmi.vadds` with a
+each to an equivalent physical `pto.*` form (e.g., `pto.vsubs` lowers to `pto.vadds` with a
 negated scalar). Users may freely use these spellings in PTODSL programs, but tooling and
 the VMI v0.1 spec only recognize the formal `pto.vmi.*` ops listed above.
 

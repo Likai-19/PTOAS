@@ -62,22 +62,21 @@
 
 ---
 
-## Appendix C: MERGE Mode Emulation (A5)
+## Appendix C: MERGE Mode on A5
 
 On A5, the hardware predicates only in **ZEROING** mode (inactive lanes → 0).
-MERGE mode is emulated by `pto.as`:
+MERGE mode is **not implemented yet**:
+
+Until emulated or native MERGE support lands, write the merge explicitly with
+`vsel` against the old destination value:
 
 ```mlir
-// MERGE emulation on A5:  dst = Pg ? op(...) : dst_old
-%npg   = pto.vmi.vnot %pg                         // complement predicate
-%new_z = pto.vmi.<op> %a, %b, %pg                 // ZEROING: inactive → 0
-%old_z = pto.vmi.vand %dst_old, %npg             // keep old on inactive lanes
-%dst   = pto.vmi.vor %new_z, %old_z               // disjoint OR → merged
+// Explicit merge:  dst = Pg ? op(a, b) : dst_old
+%new = pto.vmi.<op> %a, %b, %pg           // ZEROING: inactive lanes → 0
+%dst = pto.vmi.vsel %pg, %new, %dst_old   // keep old value on inactive lanes
 ```
 
-Alternatively, a single `vsel %pg, %new, %dst_old` can replace the `vand`+`vor`
-pair.
-
-**MERGE cost on A5:** `+1 vnot` (once per distinct `Pg`) + `+K vsel`/`vor`.
-On A6, merge-capable ops take the mode natively — the `vnot`+`vor` emulation
-collapses to the single predicated op.
+Once emulation is implemented, the compiler is expected to expand MERGE as
+`vnot` + zeroing op + `vand`/`vor` (cost: `+1 vnot` per distinct `Pg`, plus
+`+K vsel`/`vor`); on A6, merge-capable ops are expected to take the mode
+natively and collapse to the single predicated op.
