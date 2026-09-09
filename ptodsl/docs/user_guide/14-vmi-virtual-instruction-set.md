@@ -775,7 +775,7 @@ out = pto.vmi.vselr(src, idx)
 Reduction instructions collapse a logical vector along its lane dimension,
 producing a smaller logical result.
 
-### `pto.vmi.vcadd(source, mask, *, group=None, pmode=None) -> VRegType`
+### `pto.vmi.vcadd(source, mask, *, group=None, reassoc, pmode=None) -> VRegType`
 ### `pto.vmi.vcmax(source, mask, *, group=None, pmode=None) -> VRegType`
 ### `pto.vmi.vcmin(source, mask, *, group=None, pmode=None) -> VRegType`
 
@@ -793,6 +793,7 @@ performed per group.
 | `source` | `VRegType` | Input vector |
 | `mask` | VMI mask | **Required.** Predicate mask gating lane participation |
 | `group` | `int` or `None` | Number of groups for per-group reduction. `None` means full-vector reduction |
+| `reassoc` | `bool` | For `vcadd` on floating-point data only: must be spelled explicitly as `True`; `False` is rejected. On integer `vcadd`, `True` is accepted but the attribute is ignored |
 | `pmode` | `str` or `None` | Optional predicate mode: `"merge"` keeps predicate-inactive lanes at their prior value; `"zero"` writes 0 |
 
 **Returns**:
@@ -804,7 +805,7 @@ performed per group.
 **Example** — full-vector reduction:
 
 ```python
-total = pto.vmi.vcadd(src, mask)
+total = pto.vmi.vcadd(src, mask, reassoc=True)
 peak = pto.vmi.vcmax(src, mask)
 ```
 
@@ -823,6 +824,13 @@ group_max = pto.vmi.vcmax(
 - PTODSL infers the result type automatically: full-vector reduction returns
   `!pto.vmi.vreg<1xT>`, and grouped reduction returns `!pto.vmi.vreg<GxT>`,
   where `T` is the source element type and `G` is `group`.
+- `reassoc` is only meaningful for `vcadd` on floating-point data.
+  On integer `vcadd`, `True` is accepted but the attribute is ignored.
+- Floating-point `vcadd` must spell `reassoc=True` explicitly at the PTODSL
+  surface.
+- `reassoc=False` is explicitly rejected: the VMI op encoding is
+  presence-based, so a disabled flag cannot be represented — only
+  `reassoc=True` is currently supported.
 
 ---
 

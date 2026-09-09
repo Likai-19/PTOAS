@@ -39,6 +39,14 @@ from ._types import (
 )
 
 
+class _UnspecifiedArgument:
+    def __repr__(self) -> str:
+        return "UNSPECIFIED"
+
+
+_UNSPECIFIED = _UnspecifiedArgument()
+
+
 def _missing_vmi_support_error(op_name: str) -> NotImplementedError:
     return NotImplementedError(
         f"{op_name} is not available in the current PTO Python bindings or "
@@ -691,15 +699,25 @@ def _emit_reduce(
     pmode=None,
     loc=None,
     ip=None,
+    reassoc=_UNSPECIFIED,
 ):
     context = f"pto.vmi.{op_name}(...)"
-    kwargs = {"group": group, "pmode": pmode, "loc": loc, "ip": ip}
     if op_name == "vcadd":
         source_elem_type = _vmi_element_type(_type_of(source), context=context)
-        if _is_vmi_float_element_type(source_elem_type):
-            # The VMI op encoding is presence-based: floating-point vcadd
-            # always carries the reassoc attribute.
-            kwargs["reassoc"] = UnitAttr.get()
+        if reassoc is _UNSPECIFIED:
+            if _is_vmi_float_element_type(source_elem_type):
+                raise TypeError(
+                    f"{context} on floating-point vectors requires an explicit reassoc "
+                    "argument; spell out reassoc=True"
+                )
+        elif reassoc is not True:
+            raise TypeError(
+                f"{context} currently supports only reassoc=True; "
+                f"received {reassoc!r}"
+            )
+    kwargs = {"group": group, "pmode": pmode, "loc": loc, "ip": ip}
+    if reassoc is not _UNSPECIFIED:
+        kwargs["reassoc"] = UnitAttr.get()
     return _call_value(
         op_name,
         _derive_vmi_reduce_result_type(source, group, context=context),
@@ -1023,7 +1041,7 @@ class _VMINamespace:
             )
         return _call_value("vbrc", result_type, raw_value, group=group, loc=loc, ip=ip)
 
-    vcadd = staticmethod(lambda source, mask, *, group=1, pmode=None, loc=None, ip=None: _emit_reduce("vcadd", source, mask, group=1 if group is None else group, pmode=pmode, loc=loc, ip=ip))
+    vcadd = staticmethod(lambda source, mask, *, group=1, pmode=None, reassoc=_UNSPECIFIED, loc=None, ip=None: _emit_reduce("vcadd", source, mask, group=1 if group is None else group, pmode=pmode, reassoc=reassoc, loc=loc, ip=ip))
     vcmax = staticmethod(lambda source, mask, *, group=1, pmode=None, loc=None, ip=None: _emit_reduce("vcmax", source, mask, group=1 if group is None else group, pmode=pmode, loc=loc, ip=ip))
     vcmin = staticmethod(lambda source, mask, *, group=1, pmode=None, loc=None, ip=None: _emit_reduce("vcmin", source, mask, group=1 if group is None else group, pmode=pmode, loc=loc, ip=ip))
 
