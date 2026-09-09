@@ -33,7 +33,7 @@ static void addDmaLoopConfigOperands(OperationState &state,
   }
 }
 
-void MteGmUbOp::build(OpBuilder &builder, OperationState &state, Value source,
+void MteGmUbOp::build(OpBuilder &odsBuilder, OperationState &state, Value source,
                       Value destination, Value l2CacheCtl, Value lenBurst,
                       pto::DmaLoopConfig nburst,
                       llvm::ArrayRef<pto::DmaLoopConfig> loops,
@@ -56,7 +56,7 @@ void MteGmUbOp::build(OpBuilder &builder, OperationState &state, Value source,
 
   state.addAttribute(
       getOperandSegmentSizeAttr(),
-      builder.getDenseI32ArrayAttr(
+      odsBuilder.getDenseI32ArrayAttr(
           {1, 1, 1, 1, 1, 1, 1,
            static_cast<int32_t>(loops.size()),
            static_cast<int32_t>(loops.size()),
@@ -64,7 +64,7 @@ void MteGmUbOp::build(OpBuilder &builder, OperationState &state, Value source,
            pad ? 1 : 0, hasPadCounts ? 1 : 0, hasPadCounts ? 1 : 0}));
 }
 
-void MteGmUbOp::build(OpBuilder &builder, OperationState &state, Value source,
+void MteGmUbOp::build(OpBuilder &odsBuilder, OperationState &state, Value source,
                       Value destination, Value l2CacheCtl, Value lenBurst,
                       pto::DmaLoopConfig nburst,
                       std::optional<pto::DmaLoopConfig> loop1,
@@ -77,7 +77,7 @@ void MteGmUbOp::build(OpBuilder &builder, OperationState &state, Value source,
   if (loop2) {
     loops.push_back(*loop2);
   }
-  build(builder, state, source, destination, l2CacheCtl, lenBurst, nburst,
+  build(odsBuilder, state, source, destination, l2CacheCtl, lenBurst, nburst,
         loops, pad);
 }
 
@@ -131,32 +131,32 @@ ParseResult MteGmUbOp::parse(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
-void MteGmUbOp::print(OpAsmPrinter &printer) {
-  printer << " " << getSource() << ", " << getDestination() << ", "
+void MteGmUbOp::print(OpAsmPrinter &p) {
+  p << " " << getSource() << ", " << getDestination() << ", "
           << getL2CacheCtl() << ", " << getLenBurst();
-  printDmaTripleGroup(printer, "nburst", getNBurst(), getNburstSrcStride(),
+  printDmaTripleGroup(p, "nburst", getNBurst(), getNburstSrcStride(),
                       getNburstDstStride());
   for (auto [count, srcStride, dstStride] :
        llvm::zip(getLoopCounts(), getLoopSrcStrides(), getLoopDstStrides())) {
-    printDmaTripleGroup(printer, "loop", count, srcStride, dstStride);
+    printDmaTripleGroup(p, "loop", count, srcStride, dstStride);
   }
   if (getPadValue()) {
-    printDmaPadGroup(printer, getPadValue(), getLeftPaddingCount(),
+    printDmaPadGroup(p, getPadValue(), getLeftPaddingCount(),
                      getRightPaddingCount());
   }
-  printer.printOptionalAttrDict((*this)->getAttrs());
-  printer << " : " << getSource().getType() << ", " << getDestination().getType()
+  p.printOptionalAttrDict((*this)->getAttrs());
+  p << " : " << getSource().getType() << ", " << getDestination().getType()
           << ", " << getL2CacheCtl().getType() << ", " << getLenBurst().getType()
           << ", " << getNBurst().getType() << ", " << getNburstSrcStride().getType()
           << ", "
           << getNburstDstStride().getType();
   for (auto [count, srcStride, dstStride] :
        llvm::zip(getLoopCounts(), getLoopSrcStrides(), getLoopDstStrides())) {
-    printDmaTripleTypes(printer, "loop", count.getType(), srcStride.getType(),
+    printDmaTripleTypes(p, "loop", count.getType(), srcStride.getType(),
                         dstStride.getType());
   }
   if (getPadValue()) {
-    printDmaPadTypes(printer, getPadValue().getType(),
+    printDmaPadTypes(p, getPadValue().getType(),
                      getLeftPaddingCount() ? getLeftPaddingCount().getType() : Type{},
                      getRightPaddingCount() ? getRightPaddingCount().getType() : Type{});
   }
@@ -233,7 +233,7 @@ LogicalResult MteUbL1Op::verify() {
   return success();
 }
 
-void MteUbGmOp::build(OpBuilder &builder, OperationState &state, Value source,
+void MteUbGmOp::build(OpBuilder &odsBuilder, OperationState &state, Value source,
                        Value destination, Value lenBurst,
                        pto::DmaLoopConfig nburst, Value l2CacheCtl,
                        llvm::ArrayRef<pto::DmaLoopConfig> loops) {
@@ -246,14 +246,14 @@ void MteUbGmOp::build(OpBuilder &builder, OperationState &state, Value source,
 
   state.addAttribute(
       getOperandSegmentSizeAttr(),
-      builder.getDenseI32ArrayAttr(
+      odsBuilder.getDenseI32ArrayAttr(
           {1, 1, 1, 1, 1, 1, l2CacheCtl ? 1 : 0,
            static_cast<int32_t>(loops.size()),
            static_cast<int32_t>(loops.size()),
            static_cast<int32_t>(loops.size())}));
 }
 
-void MteUbGmOp::build(OpBuilder &builder, OperationState &state, Value source,
+void MteUbGmOp::build(OpBuilder &odsBuilder, OperationState &state, Value source,
                        Value destination, Value lenBurst,
                        pto::DmaLoopConfig nburst, Value l2CacheCtl,
                        std::optional<pto::DmaLoopConfig> loop1,
@@ -265,7 +265,7 @@ void MteUbGmOp::build(OpBuilder &builder, OperationState &state, Value source,
   if (loop2) {
     loops.push_back(*loop2);
   }
-  build(builder, state, source, destination, lenBurst, nburst, l2CacheCtl,
+  build(odsBuilder, state, source, destination, lenBurst, nburst, l2CacheCtl,
         loops);
 }
 
@@ -320,30 +320,30 @@ ParseResult MteUbGmOp::parse(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
-void MteUbGmOp::print(OpAsmPrinter &printer) {
-  printer << " " << getSource() << ", " << getDestination() << ", "
+void MteUbGmOp::print(OpAsmPrinter &p) {
+  p << " " << getSource() << ", " << getDestination() << ", "
           << getLenBurst();
-  printDmaTripleGroup(printer, "nburst", getNBurst(), getNburstSrcStride(),
+  printDmaTripleGroup(p, "nburst", getNBurst(), getNburstSrcStride(),
                       getNburstDstStride());
   if (Value l2CacheCtl = getL2CacheCtl()) {
-    printer << " l2_cache_ctl(" << l2CacheCtl << ")";
+    p << " l2_cache_ctl(" << l2CacheCtl << ")";
   }
   for (auto [count, srcStride, dstStride] :
        llvm::zip(getLoopCounts(), getLoopSrcStrides(), getLoopDstStrides())) {
-    printDmaTripleGroup(printer, "loop", count, srcStride, dstStride);
+    printDmaTripleGroup(p, "loop", count, srcStride, dstStride);
   }
-  printer.printOptionalAttrDict((*this)->getAttrs());
-  printer << " : " << getSource().getType() << ", " << getDestination().getType()
+  p.printOptionalAttrDict((*this)->getAttrs());
+  p << " : " << getSource().getType() << ", " << getDestination().getType()
           << ", " << getLenBurst().getType() << ", " << getNBurst().getType()
           << ", " << getNburstSrcStride().getType()
           << ", "
           << getNburstDstStride().getType();
   if (Value l2CacheCtl = getL2CacheCtl()) {
-    printer << ", " << l2CacheCtl.getType();
+    p << ", " << l2CacheCtl.getType();
   }
   for (auto [count, srcStride, dstStride] :
        llvm::zip(getLoopCounts(), getLoopSrcStrides(), getLoopDstStrides())) {
-    printDmaTripleTypes(printer, "loop", count.getType(), srcStride.getType(),
+    printDmaTripleTypes(p, "loop", count.getType(), srcStride.getType(),
                         dstStride.getType());
   }
 }
@@ -391,7 +391,7 @@ LogicalResult MteUbGmOp::verify() {
 
 // Batch6: GmL1/L1Ub 双胞胎 op 共用 build/parse/print
 template <typename OpTy>
-static void buildDmaLoopOp(OpBuilder &builder, OperationState &state,
+static void buildDmaLoopOp(OpBuilder &odsBuilder, OperationState &state,
                            Value source, Value destination, Value lenBurst,
                            pto::DmaLoopConfig nburst,
                            llvm::ArrayRef<pto::DmaLoopConfig> loops) {
@@ -401,31 +401,31 @@ static void buildDmaLoopOp(OpBuilder &builder, OperationState &state,
   addDmaLoopConfigOperands(state, loops);
   state.addAttribute(
       OpTy::getOperandSegmentSizeAttr(),
-      builder.getDenseI32ArrayAttr(
+      odsBuilder.getDenseI32ArrayAttr(
           {1, 1, 1, 1, 1, 1,
            static_cast<int32_t>(loops.size()),
            static_cast<int32_t>(loops.size()),
            static_cast<int32_t>(loops.size())}));
 }
 
-void MteGmL1Op::build(OpBuilder &builder, OperationState &state, Value source,
+void MteGmL1Op::build(OpBuilder &odsBuilder, OperationState &state, Value source,
                       Value destination, Value lenBurst,
                       pto::DmaLoopConfig nburst,
                       llvm::ArrayRef<pto::DmaLoopConfig> loops) {
-  buildDmaLoopOp<MteGmL1Op>(builder, state, source, destination, lenBurst,
+  buildDmaLoopOp<MteGmL1Op>(odsBuilder, state, source, destination, lenBurst,
                             nburst, loops);
 }
 
-void MteL1UbOp::build(OpBuilder &builder, OperationState &state, Value source,
+void MteL1UbOp::build(OpBuilder &odsBuilder, OperationState &state, Value source,
                       Value destination, Value lenBurst,
                       pto::DmaLoopConfig nburst,
                       llvm::ArrayRef<pto::DmaLoopConfig> loops) {
-  buildDmaLoopOp<MteL1UbOp>(builder, state, source, destination, lenBurst,
+  buildDmaLoopOp<MteL1UbOp>(odsBuilder, state, source, destination, lenBurst,
                             nburst, loops);
 }
 
 
-void MteGmL1FracOp::build(OpBuilder &builder, OperationState &state,
+void MteGmL1FracOp::build(OpBuilder &odsBuilder, OperationState &state,
                            Value source, Value destination,
                            pto::CubeLoadFracMode mode,
                            pto::CubeLoadFracShapeConfig shape,
@@ -443,7 +443,7 @@ void MteGmL1FracOp::build(OpBuilder &builder, OperationState &state,
   }
 
   state.addAttribute(getModeAttrName(state.name),
-                     CubeLoadFracModeAttr::get(builder.getContext(), mode));
+                     CubeLoadFracModeAttr::get(odsBuilder.getContext(), mode));
 }
 
 template <typename OpTy>
@@ -581,9 +581,9 @@ static void printDmaLoopOp(OpAsmPrinter &printer, OpTy op) {
   }
 }
 
-void MteGmL1Op::print(OpAsmPrinter &printer) { printDmaLoopOp(printer, *this); }
+void MteGmL1Op::print(OpAsmPrinter &p) { printDmaLoopOp(p, *this); }
 
-void MteL1UbOp::print(OpAsmPrinter &printer) { printDmaLoopOp(printer, *this); }
+void MteL1UbOp::print(OpAsmPrinter &p) { printDmaLoopOp(p, *this); }
 
 
 // Batch6: Bt/Fb 双胞胎 op 共用 build/parse/print
@@ -637,15 +637,17 @@ static void printDmaTripleOpFields(OpAsmPrinter &printer, OpTy op) {
           << op.getNburstDstGap().getType();
 }
 
-void MteL1BtOp::build(OpBuilder &builder, OperationState &state, Value source,
+void MteL1BtOp::build(OpBuilder &odsBuilder, OperationState &state, Value source,
                       Value destination, Value lenBurst,
                       pto::DmaLoopConfig nburst) {
+  (void)odsBuilder;
   addDmaTripleOperandList(state, source, destination, lenBurst, nburst);
 }
 
-void MteL1FbOp::build(OpBuilder &builder, OperationState &state, Value source,
+void MteL1FbOp::build(OpBuilder &odsBuilder, OperationState &state, Value source,
                       Value destination, Value lenBurst,
                       pto::DmaLoopConfig nburst) {
+  (void)odsBuilder;
   addDmaTripleOperandList(state, source, destination, lenBurst, nburst);
 }
 
@@ -657,35 +659,35 @@ ParseResult MteL1FbOp::parse(OpAsmParser &parser, OperationState &result) {
   return parseDmaTripleOp(parser, result);
 }
 
-void MteL1BtOp::print(OpAsmPrinter &printer) {
-  printDmaTripleOpFields(printer, *this);
+void MteL1BtOp::print(OpAsmPrinter &p) {
+  printDmaTripleOpFields(p, *this);
 }
 
-void MteL1FbOp::print(OpAsmPrinter &printer) {
-  printDmaTripleOpFields(printer, *this);
+void MteL1FbOp::print(OpAsmPrinter &p) {
+  printDmaTripleOpFields(p, *this);
 }
 
 
-void MteGmL1FracOp::print(OpAsmPrinter &printer) {
-  printer << " " << getSource() << ", " << getDestination() << ", "
+void MteGmL1FracOp::print(OpAsmPrinter &p) {
+  p << " " << getSource() << ", " << getDestination() << ", "
           << pto::stringifyCubeLoadFracMode(getMode());
-  printer << ", shape(" << getNValue() << ", " << getDValue() << ")";
-  printCubeLoadFracSrcLayoutGroup(printer, getSrcInnerStride(),
+  p << ", shape(" << getNValue() << ", " << getDValue() << ")";
+  printCubeLoadFracSrcLayoutGroup(p, getSrcInnerStride(),
                                   getSrcOuterStride());
-  printer << ", dst_group(" << getGroupCount() << ", " << getDstLoop2Stride()
+  p << ", dst_group(" << getGroupCount() << ", " << getDstLoop2Stride()
           << ", " << getDstLoop3Stride() << ", " << getDstLoop4Stride()
           << ")";
-  printer << ", ctrl(" << getL2CacheCtrl() << ", " << getSmallc0En() << ")";
-  printer.printOptionalAttrDict((*this)->getAttrs(),
+  p << ", ctrl(" << getL2CacheCtrl() << ", " << getSmallc0En() << ")";
+  p.printOptionalAttrDict((*this)->getAttrs(),
                                 /*elidedAttrs=*/{"operandSegmentSizes",
                                                  "mode"});
-  printer << " : " << getSource().getType() << ", " << getDestination().getType()
+  p << " : " << getSource().getType() << ", " << getDestination().getType()
           << ", " << pto::stringifyCubeLoadFracMode(getMode())
           << ", shape " << getNValue().getType() << ", " << getDValue().getType();
   printCubeLoadFracSrcLayoutTypes(
-      printer, getSrcInnerStride().getType(),
+      p, getSrcInnerStride().getType(),
       getSrcOuterStride() ? getSrcOuterStride().getType() : Type());
-  printer << ", dst_group " << getGroupCount().getType() << ", "
+  p << ", dst_group " << getGroupCount().getType() << ", "
           << getDstLoop2Stride().getType() << ", "
           << getDstLoop3Stride().getType() << ", "
           << getDstLoop4Stride().getType() << ", ctrl "
@@ -789,7 +791,7 @@ LogicalResult MteGmL1FracOp::verify() {
     return failure();
   }
 
-  auto checkNonNegativeConst = [&](Value value, StringRef name) -> LogicalResult {
+  auto checkNonNegativeConst = [this](Value value, StringRef name) -> LogicalResult {
     APInt intValue;
     if (matchPattern(value, m_ConstantInt(&intValue)) && intValue.isNegative()) {
       return emitOpError() << name << " must be non-negative";
@@ -917,15 +919,15 @@ static void printStructuredAccStoreClausesAndAttrs(OpTy op,
                                                  "sat_mode"});
 }
 
-void MteL0cL1Op::print(OpAsmPrinter &printer) {
-  printer << " " << getSource() << ", " << getDestination() << ", " << getM()
+void MteL0cL1Op::print(OpAsmPrinter &p) {
+  p << " " << getSource() << ", " << getDestination() << ", " << getM()
           << ", " << getN() << ", " << getSrcStride() << ", " << getDstStride();
-  printStructuredAccStoreClausesAndAttrs(*this, printer);
-  printer << " : " << getSource().getType() << ", " << getDestination().getType()
+  printStructuredAccStoreClausesAndAttrs(*this, p);
+  p << " : " << getSource().getType() << ", " << getDestination().getType()
           << ", " << getM().getType() << ", " << getN().getType() << ", "
           << getSrcStride().getType() << ", " << getDstStride().getType();
   printStructuredAccStoreOptionalTypes(
-      printer, getPreQuant(), getPreRelu(), getClipValue(), getSplit(),
+      p, getPreQuant(), getPreRelu(), getClipValue(), getSplit(),
       getLoop0SrcStride(), getLoop3Count(), getLoop3SrcStride(),
       getLoop3DstStride());
 }
@@ -1034,13 +1036,13 @@ ParseResult MteL1L0aOp::parse(OpAsmParser &parser, OperationState &result) {
       parser, result, kShapeNames, kFullNames);
 }
 
-void MteL1L0aOp::print(OpAsmPrinter &printer) {
+void MteL1L0aOp::print(OpAsmPrinter &p) {
   static constexpr StringRef kShapeNames[] = {
       "m", "k", "start_row", "start_col"};
   static constexpr StringRef kFullNames[] = {
       "m_start", "k_start", "m_step", "k_step", "src_stride", "dst_stride"};
   printMteL1L0OptionalOperandsOp(
-      printer, getOperation(), getSource(), getDestination(),
+      p, getOperation(), getSource(), getDestination(),
       {getM(), getK(), getStartRow(), getStartCol()}, kShapeNames,
       {getMStart(), getKStart(), getMStep(), getKStep(), getSrcStride(),
        getDstStride()},
@@ -1056,13 +1058,13 @@ ParseResult MteL1L0bOp::parse(OpAsmParser &parser, OperationState &result) {
       parser, result, kShapeNames, kFullNames);
 }
 
-void MteL1L0bOp::print(OpAsmPrinter &printer) {
+void MteL1L0bOp::print(OpAsmPrinter &p) {
   static constexpr StringRef kShapeNames[] = {
       "k", "n", "start_row", "start_col"};
   static constexpr StringRef kFullNames[] = {
       "m_start", "k_start", "m_step", "k_step", "src_stride", "dst_stride"};
   printMteL1L0OptionalOperandsOp(
-      printer, getOperation(), getSource(), getDestination(),
+      p, getOperation(), getSource(), getDestination(),
       {getK(), getN(), getStartRow(), getStartCol()}, kShapeNames,
       {getMStart(), getKStart(), getMStep(), getKStep(), getSrcStride(),
        getDstStride()},
@@ -1078,13 +1080,13 @@ ParseResult MteL1L0aMxOp::parse(OpAsmParser &parser, OperationState &result) {
       parser, result, kShapeNames, kFullNames, "MX operands");
 }
 
-void MteL1L0aMxOp::print(OpAsmPrinter &printer) {
+void MteL1L0aMxOp::print(OpAsmPrinter &p) {
   static constexpr StringRef kShapeNames[] = {
       "m", "k", "start_row", "start_col"};
   static constexpr StringRef kFullNames[] = {
       "x_start", "y_start", "x_step", "y_step", "src_stride", "dst_stride"};
   printMteL1L0OptionalOperandsOp(
-      printer, getOperation(), getSource(), getDestination(),
+      p, getOperation(), getSource(), getDestination(),
       {getM(), getK(), getStartRow(), getStartCol()}, kShapeNames,
       {getXStart(), getYStart(), getXStep(), getYStep(), getSrcStride(),
        getDstStride()},
@@ -1114,13 +1116,13 @@ ParseResult MteL1L0bMxOp::parse(OpAsmParser &parser, OperationState &result) {
       parser, result, kShapeNames, kFullNames, "MX operands");
 }
 
-void MteL1L0bMxOp::print(OpAsmPrinter &printer) {
+void MteL1L0bMxOp::print(OpAsmPrinter &p) {
   static constexpr StringRef kShapeNames[] = {
       "k", "n", "start_row", "start_col"};
   static constexpr StringRef kFullNames[] = {
       "x_start", "y_start", "x_step", "y_step", "src_stride", "dst_stride"};
   printMteL1L0OptionalOperandsOp(
-      printer, getOperation(), getSource(), getDestination(),
+      p, getOperation(), getSource(), getDestination(),
       {getK(), getN(), getStartRow(), getStartCol()}, kShapeNames,
       {getXStart(), getYStart(), getXStep(), getYStep(), getSrcStride(),
        getDstStride()},
@@ -1210,17 +1212,17 @@ ParseResult MteL0cGmOp::parse(OpAsmParser &parser, OperationState &result) {
   }
   return success();
 }
-void MteL0cGmOp::print(OpAsmPrinter &printer) {
-  printer << " " << getSource() << ", " << getDestination() << ", " << getM()
+void MteL0cGmOp::print(OpAsmPrinter &p) {
+  p << " " << getSource() << ", " << getDestination() << ", " << getM()
           << ", " << getN() << ", " << getSrcStride() << ", "
           << getDstStride() << ", " << getSid() << ", " << getL2CacheCtrl();
-  printStructuredAccStoreClausesAndAttrs(*this, printer);
-  printer << " : " << getSource().getType() << ", " << getDestination().getType()
+  printStructuredAccStoreClausesAndAttrs(*this, p);
+  p << " : " << getSource().getType() << ", " << getDestination().getType()
           << ", " << getM().getType() << ", " << getN().getType() << ", "
           << getSrcStride().getType() << ", " << getDstStride().getType()
           << ", " << getSid().getType() << ", " << getL2CacheCtrl().getType();
   printStructuredAccStoreOptionalTypes(
-      printer, getPreQuant(), getPreRelu(), getClipValue(), getSplit(),
+      p, getPreQuant(), getPreRelu(), getClipValue(), getSplit(),
       getLoop0SrcStride(), getLoop3Count(), getLoop3SrcStride(),
       getLoop3DstStride());
 }
@@ -1303,30 +1305,30 @@ ParseResult MteL0cUbOp::parse(OpAsmParser &parser, OperationState &result) {
                                  subBlockIdType, state);
 }
 
-void MteL0cUbOp::print(OpAsmPrinter &printer) {
-  printer << " " << getSource() << ", " << getDestination() << ", " << getM()
+void MteL0cUbOp::print(OpAsmPrinter &p) {
+  p << " " << getSource() << ", " << getDestination() << ", " << getM()
           << ", " << getN() << ", " << getSrcStride() << ", "
           << getDstStride() << ", dst_mode(";
   switch (getDstMode()) {
   case AccStoreUbDstMode::Single:
-    printer << getSubBlockid();
+    p << getSubBlockid();
     break;
   case AccStoreUbDstMode::SplitM:
-    printer << "split_m";
+    p << "split_m";
     break;
   case AccStoreUbDstMode::SplitN:
-    printer << "split_n";
+    p << "split_n";
     break;
   }
-  printer << ")";
-  printStructuredAccStoreClauses(printer, getUnitFlag(), getPreQuant(),
+  p << ")";
+  printStructuredAccStoreClauses(p, getUnitFlag(), getPreQuant(),
                                  getPreQuantMode(), getPreRelu(),
                                  getPreReluMode(), getClipValue(), getMode(),
                                  getSplit(), getLoop0SrcStride(),
                                  getLoop3Count(), getLoop3SrcStride(),
                                  getLoop3DstStride(), getSatMode(),
                                  std::nullopt, std::nullopt);
-  printer.printOptionalAttrDict((*this)->getAttrs(),
+  p.printOptionalAttrDict((*this)->getAttrs(),
                                 /*elidedAttrs=*/{"operandSegmentSizes",
                                                  "mode",
                                                  "unit_flag",
@@ -1334,14 +1336,14 @@ void MteL0cUbOp::print(OpAsmPrinter &printer) {
                                                  "pre_relu_mode",
                                                  "dst_mode",
                                                  "sat_mode"});
-  printer << " : " << getSource().getType() << ", " << getDestination().getType()
+  p << " : " << getSource().getType() << ", " << getDestination().getType()
           << ", " << getM().getType() << ", " << getN().getType() << ", "
           << getSrcStride().getType() << ", " << getDstStride().getType();
   if (getSubBlockid()) {
-    printer << ", " << getSubBlockid().getType();
+    p << ", " << getSubBlockid().getType();
   }
   printStructuredAccStoreOptionalTypes(
-      printer, getPreQuant(), getPreRelu(), getClipValue(), getSplit(),
+      p, getPreQuant(), getPreRelu(), getClipValue(), getSplit(),
       getLoop0SrcStride(), getLoop3Count(), getLoop3SrcStride(),
       getLoop3DstStride());
 }

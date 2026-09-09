@@ -22,7 +22,8 @@ using namespace mlir::pto;
 bool isSupportedMovPadScalarType(Type type) {
   if (auto intType = dyn_cast<IntegerType>(type)) {
     return intType.isSignless() &&
-           (intType.getWidth() == mlir::pto::kValue8 || intType.getWidth() == 16 ||
+           (intType.getWidth() == mlir::pto::kValue8 ||
+            intType.getWidth() == mlir::pto::kValue16 ||
             intType.getWidth() == mlir::pto::kValue32);
   }
   if (auto floatType = dyn_cast<FloatType>(type)) {

@@ -91,7 +91,8 @@ static bool isMaskGranularityAdjacentNarrowing(StringRef inputGranularity,
 
 static bool isSupportedShuffleValueType(Type type) {
   if (auto intType = dyn_cast<IntegerType>(type)) {
-    return intType.getWidth() == mlir::pto::kValue32 || intType.getWidth() == 64;
+    return intType.getWidth() == mlir::pto::kValue32 ||
+           intType.getWidth() == mlir::pto::kValue64;
   }
   if (auto vecType = dyn_cast<VectorType>(type)) {
     return vecType.getRank() == 1 && vecType.getDimSize(0) == mlir::pto::kValue2 &&
@@ -115,13 +116,13 @@ static LogicalResult verifyShuffleSemanticControl(Operation *op,
     return op->emitOpError()
            << "requires i32, i64, f16, f32 or vector<2xf16> value/result type";
   }
-  if (!controlType.isInteger(32)) {
+  if (!controlType.isInteger(mlir::pto::kValue32)) {
     return op->emitOpError() << "requires " << ctrlName
                              << " operand to be i32";
   }
 
   int64_t width = widthAttr.getInt();
-  if (width != mlir::pto::kValue16 && width != 32) {
+  if (width != mlir::pto::kValue16 && width != mlir::pto::kValue32) {
     return op->emitOpError() << "requires width to be 16 or 32";
   }
   return success();
@@ -297,7 +298,8 @@ static LogicalResult verifyWideningReductionVecOp(ReductionOp op,
   Type expectedResultElemType = inputElemType;
   int64_t expectedResultLanes = inputType.getElementCount();
   if (auto inputInt = dyn_cast<IntegerType>(inputElemType)) {
-    if (inputInt.getWidth() < mlir::pto::kValue8 || inputInt.getWidth() > 32) {
+    if (inputInt.getWidth() < mlir::pto::kValue8 ||
+        inputInt.getWidth() > mlir::pto::kValue32) {
       return op.emitOpError(
           "requires 8-bit, 16-bit, or 32-bit integer vector element type");
     }
@@ -360,7 +362,8 @@ LogicalResult VciOp::verify() {
   Type resultElemType = resultType.getElementType();
   bool supportedInteger = false;
   if (auto intType = dyn_cast<IntegerType>(resultElemType)) {
-    supportedInteger = intType.getWidth() == mlir::pto::kValue8 || intType.getWidth() == 16 ||
+    supportedInteger = intType.getWidth() == mlir::pto::kValue8 ||
+                       intType.getWidth() == mlir::pto::kValue16 ||
                        intType.getWidth() == mlir::pto::kValue32;
   }
   bool supportedFloat = resultElemType.isF16() || resultElemType.isF32();
@@ -940,7 +943,8 @@ static LogicalResult verifyGroupReductionVecOp(ReductionOp op) {
   auto inputType = cast<VRegType>(op.getInput().getType());
   Type elemType = inputType.getElementType();
   if (auto intType = dyn_cast<IntegerType>(elemType)) {
-    if (intType.getWidth() != mlir::pto::kValue8 && intType.getWidth() != 16 &&
+    if (intType.getWidth() != mlir::pto::kValue8 &&
+        intType.getWidth() != mlir::pto::kValue16 &&
         intType.getWidth() != mlir::pto::kValue32) {
       return op.emitOpError(
           "requires 8-bit, 16-bit, or 32-bit integer vector element type");
@@ -991,7 +995,8 @@ static LogicalResult verifyExtremaPredicateOp(ExtremaOp op) {
     return success();
   }
   auto intType = dyn_cast<IntegerType>(elemType);
-  if (!intType || (intType.getWidth() != mlir::pto::kValue8 && intType.getWidth() != 16 &&
+  if (!intType || (intType.getWidth() != mlir::pto::kValue8 &&
+                   intType.getWidth() != mlir::pto::kValue16 &&
                    intType.getWidth() != mlir::pto::kValue32)) {
     return op.emitOpError("requires i8/i16/i32/f16/f32 vector element type");
   }
@@ -1102,7 +1107,7 @@ LogicalResult VusqzOp::verify() {
     return emitOpError("requires signed integer vector element type");
   }
   unsigned width = elemType.getWidth();
-  if (width != mlir::pto::kValue8 && width != 16 && width != mlir::pto::kValue32) {
+  if (width != mlir::pto::kValue8 && width != mlir::pto::kValue16 && width != mlir::pto::kValue32) {
     return emitOpError("requires s8/s16/s32 vector element type");
   }
   return success();
@@ -1129,7 +1134,7 @@ LogicalResult VpackOp::verify() {
   }
   unsigned srcWidth = getIntOrFloatBitWidth(srcElemType);
   unsigned resultWidth = getIntOrFloatBitWidth(resultElemType);
-  if (!srcWidth || resultWidth * mlir::pto::kValue2 != srcWidth) {
+  if (srcWidth == 0 || resultWidth * mlir::pto::kValue2 != srcWidth) {
     return emitOpError(
         "requires result element width to be half the source element width");
   }
@@ -1162,13 +1167,13 @@ static LogicalResult verifyUnpackVecOp(UnpackOp op) {
     return op.emitOpError(
         "currently requires integer source and result element types");
   }
-  if (srcType.getElementCount() != resultType.getElementCount() * 2) {
+  if (srcType.getElementCount() != resultType.getElementCount() * mlir::pto::kValue2) {
     return op.emitOpError(
         "requires source element count to be twice the result element count");
   }
   unsigned srcWidth = getIntOrFloatBitWidth(srcElemType);
   unsigned resultWidth = getIntOrFloatBitWidth(resultElemType);
-  if (!srcWidth || srcWidth * mlir::pto::kValue2 != resultWidth) {
+  if (srcWidth == 0 || srcWidth * mlir::pto::kValue2 != resultWidth) {
     return op.emitOpError(
         "requires result element width to be twice the source element width");
   }
@@ -1251,14 +1256,14 @@ ParseResult VtrcOp::parse(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
-void VtrcOp::print(OpAsmPrinter &printer) {
-  printer << ' ' << getInput() << ", " << getMask() << ", ";
+void VtrcOp::print(OpAsmPrinter &p) {
+  p << ' ' << getInput() << ", " << getMask() << ", ";
   Builder builder(getContext());
   auto normalized = normalizeRoundModeToken(getRoundMode());
-  printer.printAttributeWithoutType(
+  p.printAttributeWithoutType(
       builder.getStringAttr(normalized.value_or(getRoundMode())));
-  printer.printOptionalAttrDict((*this)->getAttrs(), {"round_mode"});
-  printer << " : " << getInput().getType() << ", " << getMask().getType()
+  p.printOptionalAttrDict((*this)->getAttrs(), {"round_mode"});
+  p << " : " << getInput().getType() << ", " << getMask().getType()
           << " -> " << getResult().getType();
 }
 

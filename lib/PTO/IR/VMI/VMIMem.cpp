@@ -857,7 +857,7 @@ static LogicalResult verifyVStoreGroupAndBlockModes(
 static LogicalResult verifyVStoreDistModeAndPmode(
     Operation *op, std::optional<StringRef> distMode, size_t nValues,
     size_t maskCount, std::optional<StringRef> pmode) {
-  if (distMode && !validStoreDistModes().count(*distMode)) {
+  if (distMode && validStoreDistModes().find(*distMode) == validStoreDistModes().end()) {
     return op->emitOpError("invalid dist-mode: \"") << *distMode << "\"";
   }
   bool isIntlv = distMode && *distMode == "intlv";
@@ -874,7 +874,7 @@ static LogicalResult verifyVStoreDistModeAndPmode(
   if (maskCount > 1) {
     return op->emitOpError("at most one mask allowed");
   }
-  if (pmode && !validPModes().count(*pmode)) {
+  if (pmode && validPModes().find(*pmode) == validPModes().end()) {
     return op->emitOpError("invalid pmode: \"") << *pmode << "\"";
   }
   if (pmode && *pmode != "zero") {
@@ -958,7 +958,7 @@ LogicalResult VMIVsstbOp::verify() {
                                   "destination"))) {
     return failure();
   }
-  if (auto pmode = getPmode(); pmode && !validPModes().count(*pmode)) {
+  if (auto pmode = getPmode(); pmode && validPModes().find(*pmode) == validPModes().end()) {
     return emitOpError("invalid pmode: \"") << *pmode << "\"";
   }
   if (auto pmode = getPmode(); pmode && *pmode != "zero") {
@@ -981,7 +981,7 @@ void VMIVsstbOp::getEffects(
 //===----------------------------------------------------------------------===//
 // VMIvLoadOp
 static ParseResult parseVLoadOptionalPostOperand(
-    OpAsmParser &parser, OperationState &result, int &numPostBracket,
+    OpAsmParser &parser, int &numPostBracket,
     OpAsmParser::UnresolvedOperand &postOp1) {
   // Optional comma-separated post-bracket operands.
   if (succeeded(parser.parseOptionalComma())) {
@@ -1056,7 +1056,7 @@ ParseResult VMIvLoadOp::parse(OpAsmParser &parser, OperationState &result) {
   }
   int numPostBracket = 0;
   OpAsmParser::UnresolvedOperand postOp1;
-  if (failed(parseVLoadOptionalPostOperand(parser, result, numPostBracket,
+  if (failed(parseVLoadOptionalPostOperand(parser, numPostBracket,
                                            postOp1))) {
     return failure();
   }
@@ -1124,7 +1124,7 @@ static LogicalResult verifyVLoadGroupAndBlockModes(
 static LogicalResult verifyVLoadDistModeAndPmode(
     Operation *op, std::optional<StringRef> distMode, size_t nResults,
     std::optional<StringRef> pmode) {
-  if (distMode && !validDistModes().count(*distMode)) {
+  if (distMode && validDistModes().find(*distMode) == validDistModes().end()) {
     return op->emitOpError("invalid dist-mode: \"") << *distMode << "\"";
   }
   bool isDintlv = distMode && *distMode == "dintlv";
@@ -1135,7 +1135,7 @@ static LogicalResult verifyVLoadDistModeAndPmode(
     return op->emitOpError("requires exactly 1 result for dist-mode \"")
            << (distMode ? *distMode : "continuous") << "\"";
   }
-  if (pmode && !validPModes().count(*pmode)) {
+  if (pmode && validPModes().find(*pmode) == validPModes().end()) {
     return op->emitOpError("invalid pmode: \"") << *pmode << "\"";
   }
   return success();

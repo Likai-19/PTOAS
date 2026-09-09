@@ -13,6 +13,7 @@
 
 using namespace mlir;
 using namespace mlir::pto;
+
 LogicalResult VMIConstantOp::verify() {
   auto resultType = cast<VMIVRegType>(getResult().getType());
   auto denseAttr = dyn_cast<DenseElementsAttr>(getValue());
@@ -58,7 +59,7 @@ LogicalResult VMIBroadcastOp::verify() {
 }
 
 // Batch6: 双胞胎 op 共用校验模板(谓词/中段检查由调用方提供, 消息逐字节不变)
-bool isSupportedVCmpPredicate(llvm::StringRef cmp);
+static bool isSupportedVCmpPredicate(llvm::StringRef cmp);
 template <typename OpTy>
 static LogicalResult verifyVMIIotaLikeOp(OpTy op) {
   auto resultType = cast<VMIVRegType>(op.getResult().getType());
@@ -870,12 +871,12 @@ LogicalResult VMIShrSOp::verify() {
 
 //===----------------------------------------------------------------------===//
 
-/// Returns true if `cmpMode` is a comparison predicate supported by VCMP.
-bool isSupportedVCmpPredicate(StringRef cmpMode) {
-  return cmpMode == "eq" || cmpMode == "ne" || cmpMode == "lt" ||
-         cmpMode == "le" || cmpMode == "gt" || cmpMode == "ge" ||
-         cmpMode == "oeq" || cmpMode == "one" || cmpMode == "olt" ||
-         cmpMode == "ole" || cmpMode == "ogt" || cmpMode == "oge";
+/// Returns true if `cmp` is a comparison predicate supported by VCMP.
+static bool isSupportedVCmpPredicate(StringRef cmp) {
+  return cmp == "eq" || cmp == "ne" || cmp == "lt" ||
+         cmp == "le" || cmp == "gt" || cmp == "ge" ||
+         cmp == "oeq" || cmp == "one" || cmp == "olt" ||
+         cmp == "ole" || cmp == "ogt" || cmp == "oge";
 }
 
 //===--- Unified (new) VMI op verifiers ---===//

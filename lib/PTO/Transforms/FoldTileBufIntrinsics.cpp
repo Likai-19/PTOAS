@@ -632,12 +632,16 @@ static Value projectSCFIfViewResult(Value view, PTOViewProjectionKind kind,
       ifOp.getCondition(), true, true);
   newIf->setAttrs(ifOp->getAttrs());
   bool failed = false;
-  failed |= !cloneSCFIfProjection(ifBuilder, ifOp.thenBlock(), newIf.thenBlock(),
-                                  thenYield, resultIndex, kind, dim,
-                                  resultPtrType, user);
-  failed |= !cloneSCFIfProjection(ifBuilder, ifOp.elseBlock(), newIf.elseBlock(),
-                                  elseYield, resultIndex, kind, dim,
-                                  resultPtrType, user);
+  if (!cloneSCFIfProjection(ifBuilder, ifOp.thenBlock(), newIf.thenBlock(),
+                            thenYield, resultIndex, kind, dim,
+                            resultPtrType, user)) {
+    failed = true;
+  }
+  if (!cloneSCFIfProjection(ifBuilder, ifOp.elseBlock(), newIf.elseBlock(),
+                            elseYield, resultIndex, kind, dim,
+                            resultPtrType, user)) {
+    failed = true;
+  }
   if (failed) {
     newIf.erase();
     return {};
@@ -687,7 +691,7 @@ struct FoldTileBufIntrinsicsPass
     return ops;
   }
 
-  LogicalResult foldGetValidShapeOps(
+  const LogicalResult foldGetValidShapeOps(
       SmallVector<pto::GetValidShapeOp, mlir::pto::kValue8> &getValidShapeOps,
       OpBuilder &builder) {
     // Fold pto.get_validshape into the materialized tile handle
@@ -748,7 +752,7 @@ struct FoldTileBufIntrinsicsPass
 
   // Handle tile_buf_addr with a memref source (legacy seam): fold to identity
   // or cast the base memref to the requested pointer type.
-  LogicalResult foldTileBufAddrMemref(pto::TileBufAddrOp addrOp,
+  const LogicalResult foldTileBufAddrMemref(pto::TileBufAddrOp addrOp,
                                       OpBuilder &builder) {
     auto srcMemrefType = cast<MemRefType>(addrOp.getSrc().getType());
     if (auto resultMemrefType =
@@ -776,7 +780,7 @@ struct FoldTileBufIntrinsicsPass
 
   // Handle tile_buf_addr with a materialized tile handle: cast the explicit
   // addr operand to the requested pointer type.
-  LogicalResult foldTileBufAddrHandle(pto::TileBufAddrOp addrOp,
+  const LogicalResult foldTileBufAddrHandle(pto::TileBufAddrOp addrOp,
                                       OpBuilder &builder) {
     auto handleInfo = resolveTileHandle(addrOp.getSrc(), addrOp);
     if (!handleInfo) {
@@ -832,7 +836,7 @@ struct FoldTileBufIntrinsicsPass
     return success();
   }
 
-  LogicalResult foldTileValidRowsOps(
+  const LogicalResult foldTileValidRowsOps(
       SmallVector<pto::TileValidRowsOp, mlir::pto::kValue8> &rowsOps,
       OpBuilder &builder) {
     // Fold pto.tile_valid_rows → arith.constant (static) or the dynamic
@@ -874,7 +878,7 @@ struct FoldTileBufIntrinsicsPass
     return success();
   }
 
-  LogicalResult foldTileValidColsOps(
+  const LogicalResult foldTileValidColsOps(
       SmallVector<pto::TileValidColsOp, mlir::pto::kValue8> &colsOps,
       OpBuilder &builder) {
     // Fold pto.tile_valid_cols → arith.constant (static) or the dynamic
@@ -916,7 +920,7 @@ struct FoldTileBufIntrinsicsPass
     return success();
   }
 
-  LogicalResult foldTensorViewDimOps(
+  const LogicalResult foldTensorViewDimOps(
       SmallVector<pto::GetTensorViewDimOp, mlir::pto::kValue8> &tvDimOps,
       OpBuilder &builder) {
     for (auto dimOp : tvDimOps) {
@@ -966,7 +970,7 @@ struct FoldTileBufIntrinsicsPass
     return success();
   }
 
-  LogicalResult foldTensorViewStrideOps(
+  const LogicalResult foldTensorViewStrideOps(
       SmallVector<pto::GetTensorViewStrideOp, mlir::pto::kValue8> &tvStrideOps,
       OpBuilder &builder) {
     for (auto strideOp : tvStrideOps) {
@@ -1030,7 +1034,7 @@ struct FoldTileBufIntrinsicsPass
     return success();
   }
 
-  LogicalResult foldTensorViewAddrOps(
+  const LogicalResult foldTensorViewAddrOps(
       SmallVector<pto::TensorViewAddrOp, mlir::pto::kValue8> &tvAddrOps,
       OpBuilder &builder) {
     for (auto addrOp : tvAddrOps) {
@@ -1156,7 +1160,8 @@ struct FoldTileBufIntrinsicsPass
     }
   }
 
-  LogicalResult foldSCFCleanup(func::FuncOp func, OpBuilder &builder) {
+  const LogicalResult foldSCFCleanup(func::FuncOp func, const OpBuilder &builder) {
+    (void)builder;
     eraseDeadCastsAndMemrefViews(func);
     eraseSetValidShapeWithoutRuntimeReaders(func);
     eraseDeadTileOps(func);
@@ -1218,7 +1223,6 @@ struct FoldTileBufIntrinsicsPass
       return signalPassFailure();
     }
   }
-
 };
 
 } // namespace

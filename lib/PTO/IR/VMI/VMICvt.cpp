@@ -172,7 +172,6 @@ LogicalResult VMIFPToSIOp::verify() {
     return emitOpError("unsupported fp-to-si conversion element type pair");
   }
   return verifyCvtRoundingSat(*this, contract->requiresSat, "fp-to-si");
-  return success();
 }
 
 LogicalResult VMIFPToUIOp::verify() {
@@ -196,7 +195,6 @@ LogicalResult VMIFPToUIOp::verify() {
     return emitOpError("unsupported fp-to-ui conversion element type pair");
   }
   return verifyCvtRoundingSat(*this, contract->requiresSat, "fp-to-ui");
-  return success();
 }
 
 LogicalResult VMISIToFPOp::verify() {
@@ -393,7 +391,6 @@ static LogicalResult classifyCvtDirection(
 
 // Validate the rounding attribute for the given conversion direction.
 static LogicalResult verifyCvtRounding(VMICvtOp op, CvtDirection dir,
-                                       Type srcElem, Type dstElem,
                                        const std::optional<VMIFpToFpContract> &fpContract) {
   auto roundingAttr = op->getAttrOfType<StringAttr>("rounding");
   if (!roundingAttr) {
@@ -567,7 +564,7 @@ bool srcInt = isVMIIntegerLikeType(srcElem), dstInt = isVMIIntegerLikeType(dstEl
                                   dir))) {
     return failure();
   }
-  if (failed(verifyCvtRounding(*this, dir, srcElem, dstElem, fpContract))) {
+  if (failed(verifyCvtRounding(*this, dir, fpContract))) {
     return failure();
   }
   auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");

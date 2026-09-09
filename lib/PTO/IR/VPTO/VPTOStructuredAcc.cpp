@@ -36,7 +36,7 @@ static FailureOr<AccStoreMode> parseAccStoreModeKeyword(StringRef keyword) {
     return parser.emitError(parser.getCurrentLocation(),
                             "expected one of 'nz2nd', 'nz2dn', or 'nz2nz'");
   }
-  auto parseModeOperandWithParens = [&]() -> ParseResult {
+  auto parseModeOperandWithParens = [&parser, &modeOperands]() -> ParseResult {
     OpAsmParser::UnresolvedOperand operand;
     if (parser.parseLParen() || parser.parseOperand(operand) || parser.parseRParen()) {
       return failure();
@@ -44,7 +44,7 @@ static FailureOr<AccStoreMode> parseAccStoreModeKeyword(StringRef keyword) {
     modeOperands.push_back(operand);
     return success();
   };
-  auto parseModeOperandAfterLParen = [&]() -> ParseResult {
+  auto parseModeOperandAfterLParen = [&parser, &modeOperands]() -> ParseResult {
     OpAsmParser::UnresolvedOperand operand;
     if (parser.parseOperand(operand) || parser.parseRParen()) {
       return failure();
@@ -84,7 +84,7 @@ parseAccStoreModeTypes(OpAsmParser &parser, StringRef modeKeyword,
   if (parser.parseKeyword(modeKeyword)) {
     return failure();
   }
-  auto parseModeTypeWithParens = [&]() -> ParseResult {
+  auto parseModeTypeWithParens = [&parser, &modeTypes]() -> ParseResult {
     Type modeType;
     if (parser.parseLParen() || parser.parseType(modeType) || parser.parseRParen()) {
       return failure();
@@ -92,7 +92,7 @@ parseAccStoreModeTypes(OpAsmParser &parser, StringRef modeKeyword,
     modeTypes.push_back(modeType);
     return success();
   };
-  auto parseModeTypeAfterLParen = [&]() -> ParseResult {
+  auto parseModeTypeAfterLParen = [&parser, &modeTypes]() -> ParseResult {
     Type modeType;
     if (parser.parseType(modeType) || parser.parseRParen()) {
       return failure();
@@ -314,12 +314,12 @@ static bool isStructuredAccStoreClipSupportedElementType(Type type) {
   if (intType.isUnsignedInteger(mlir::pto::kValue8)) {
     return true;
   }
-  if (intType.isSignlessInteger(mlir::pto::kValue4) || intType.isSignlessInteger(8) ||
+  if (intType.isSignlessInteger(mlir::pto::kValue4) || intType.isSignlessInteger(mlir::pto::kValue8) ||
       intType.isSignlessInteger(mlir::pto::kValue16)) {
     return true;
   }
-  if (intType.isSignedInteger(mlir::pto::kValue4) || intType.isSignedInteger(8) ||
-      intType.isSignedInteger(16)) {
+  if (intType.isSignedInteger(mlir::pto::kValue4) || intType.isSignedInteger(mlir::pto::kValue8) ||
+      intType.isSignedInteger(mlir::pto::kValue16)) {
     return true;
   }
   return false;
@@ -475,7 +475,7 @@ getStructuredAccStorePreQuantDestinationFamily(AccStoreQuantPreMode mode) {
       {AccStoreQuantPreMode::QF322S4PreVec, StructuredAccStoreDestinationFamily::I4},
       {AccStoreQuantPreMode::QF322S4PreScalar, StructuredAccStoreDestinationFamily::I4},
   };
-  auto it = llvm::find_if(kEntries, [&](const Entry &entry) {
+  auto it = llvm::find_if(kEntries, [mode](const Entry &entry) {
     return entry.mode == mode;
   });
   return it != std::end(kEntries)
@@ -843,7 +843,8 @@ static LogicalResult verifyStructuredPreQuant(
     return op->emitOpError(
         "scalar pre_quant mode requires f16/bf16/f32 payload");
   }
-  auto emitIncompatibleQuantModeError = [&]() -> LogicalResult {
+  auto emitIncompatibleQuantModeError =
+      [op, preQuantMode, sourceElementType, destinationElementType]() -> LogicalResult {
     return op->emitOpError()
            << "pre_quant mode " << stringifyAccStoreQuantPreMode(*preQuantMode)
            << " is incompatible with source element type " << sourceElementType

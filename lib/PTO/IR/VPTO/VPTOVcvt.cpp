@@ -381,22 +381,22 @@ ParseResult VcvtOp::parse(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
-void VcvtOp::print(OpAsmPrinter &printer) {
-  printer << ' ' << getInput() << ", " << getMask();
-  printer.printOptionalAttrDict((*this)->getAttrs());
-  printer << " : " << getInput().getType() << ", " << getMask().getType()
+void VcvtOp::print(OpAsmPrinter &p) {
+  p << ' ' << getInput() << ", " << getMask();
+  p.printOptionalAttrDict((*this)->getAttrs());
+  p << " : " << getInput().getType() << ", " << getMask().getType()
           << " -> " << getResult().getType();
 }
 
 static StringRef getVcvtMaskGranularityByWidth(unsigned elemBits) {
   unsigned maskBitWidth = std::min(elemBits, 32u);
-  if (maskBitWidth == 8) {
+  if (maskBitWidth == mlir::pto::kValue8) {
     return "b8";
   }
-  if (maskBitWidth == 16) {
+  if (maskBitWidth == mlir::pto::kValue16) {
     return "b16";
   }
-  if (maskBitWidth == 32) {
+  if (maskBitWidth == mlir::pto::kValue32) {
     return "b32";
   }
   return "";

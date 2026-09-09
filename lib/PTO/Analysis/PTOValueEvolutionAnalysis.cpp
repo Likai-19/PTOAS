@@ -1395,7 +1395,7 @@ PTOValueEvolutionAnalysis::getEvolution(const PTOTypedExprRef &expression,
 }
 
 PTOAnalysisResult<PTOTypedExprRef>
-PTOValueEvolutionAnalysis::getPointExpression(
+const PTOValueEvolutionAnalysis::getPointExpression(
     const PTOTypedExprRef &expression) {
   return getPointExpressionImpl(expression);
 }
