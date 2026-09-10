@@ -73,6 +73,11 @@ using SegmentRematCache =
     llvm::DenseMap<Value, llvm::DenseMap<Operation *, Value>>;
 
 static VPTOInferenceOpClass classifyOperationForInference(Operation *op);
+static FailureOr<Operation *>
+cloneVecScopeProducerForUse(Value value, Operation *user,
+                            Operation *logicalScopeAnchor,
+                            SegmentRematCache &cache, MLIRContext *context,
+                            llvm::DenseMap<Operation *, Operation *> &clones);
 static LogicalResult
 buildResultlessScopePlan(ArrayRef<Operation *> ops, ResultlessScopePlan &plan,
                          EscapingMovedValue &escapingValue);
@@ -307,6 +312,31 @@ computeMovedOpsForResultlessScope(ArrayRef<Operation *> ops) {
   return movedOps;
 }
 
+// Clone the vector-scope-typed operands of `producer` for use at `user`,
+// filling `mapping` from original to cloned operand values.
+static LogicalResult mapVecScopeOperandsToClones(
+    Operation *producer, Operation *user, Operation *logicalScopeAnchor,
+    SegmentRematCache &cache, MLIRContext *context,
+    llvm::DenseMap<Operation *, Operation *> &clones, IRMapping &mapping) {
+  for (Value operand : producer->getOperands()) {
+    if (!isVecScopeType(operand.getType())) {
+      continue;
+    }
+
+    FailureOr<Operation *> clonedOperandProducer =
+        cloneVecScopeProducerForUse(operand, user, logicalScopeAnchor, cache,
+                                    context, clones);
+    if (failed(clonedOperandProducer)) {
+      return failure();
+    }
+
+    auto operandResult = cast<OpResult>(operand);
+    mapping.map(operand, (*clonedOperandProducer)
+                             ->getResult(operandResult.getResultNumber()));
+  }
+  return success();
+}
+
 static FailureOr<Operation *>
 cloneVecScopeProducerForUse(
     Value value, Operation *user, Operation *logicalScopeAnchor,
@@ -335,21 +365,9 @@ cloneVecScopeProducerForUse(
   }
 
   IRMapping mapping;
-  for (Value operand : producer->getOperands()) {
-    if (!isVecScopeType(operand.getType())) {
-      continue;
-    }
-
-    FailureOr<Operation *> clonedOperandProducer =
-        cloneVecScopeProducerForUse(operand, user, logicalScopeAnchor, cache,
-                                    context, clones);
-    if (failed(clonedOperandProducer)) {
-      return failure();
-    }
-
-    auto operandResult = cast<OpResult>(operand);
-    mapping.map(operand, (*clonedOperandProducer)
-                             ->getResult(operandResult.getResultNumber()));
+  if (failed(mapVecScopeOperandsToClones(producer, user, logicalScopeAnchor,
+                                         cache, context, clones, mapping))) {
+    return failure();
   }
 
   IRRewriter rewriter(context);
@@ -455,17 +473,17 @@ computeLogicalScopeAnchors(Block &block) {
   return logicalScopeAnchors;
 }
 
-static LogicalResult rematerializeEscapingValueForUserSegments(
-    Value value, const llvm::SmallPtrSetImpl<Operation *> &movedOps,
-    Block &block, SegmentRematCache &cache, MLIRContext *context) {
-  auto result = dyn_cast<OpResult>(value);
-  if (!result) {
-    return failure();
-  }
-
+// Group the external uses of `result` by their logical-scope anchor inside
+// `block`. Returns nullopt if any use cannot be anchored.
+static std::optional<llvm::DenseMap<
+    Operation *, SmallVector<OpOperand *, mlir::pto::kValue4>>>
+collectExternalUsesBySegment(
+    OpResult result, const llvm::SmallPtrSetImpl<Operation *> &movedOps,
+    Block &block) {
   llvm::DenseMap<Operation *, Operation *> logicalScopeAnchors =
       computeLogicalScopeAnchors(block);
-  llvm::DenseMap<Operation *, SmallVector<OpOperand *, mlir::pto::kValue4>> usesBySegment;
+  llvm::DenseMap<Operation *, SmallVector<OpOperand *, mlir::pto::kValue4>>
+      usesBySegment;
 
   for (OpOperand &use : result.getUses()) {
     Operation *user = use.getOwner();
@@ -475,22 +493,34 @@ static LogicalResult rematerializeEscapingValueForUserSegments(
 
     Operation *ancestor = pto::getAncestorInBlock(user, &block);
     if (!ancestor) {
-      return failure();
+      return std::nullopt;
     }
 
     auto anchorIt = logicalScopeAnchors.find(ancestor);
     if (anchorIt == logicalScopeAnchors.end()) {
-      return failure();
+      return std::nullopt;
     }
 
     usesBySegment[anchorIt->second].push_back(&use);
   }
+  return usesBySegment;
+}
 
-  if (usesBySegment.empty()) {
+static LogicalResult rematerializeEscapingValueForUserSegments(
+    Value value, const llvm::SmallPtrSetImpl<Operation *> &movedOps,
+    Block &block, SegmentRematCache &cache, MLIRContext *context) {
+  auto result = dyn_cast<OpResult>(value);
+  if (!result) {
     return failure();
   }
 
-  for (auto &entry : usesBySegment) {
+  auto usesBySegment =
+      collectExternalUsesBySegment(result, movedOps, block);
+  if (!usesBySegment || usesBySegment->empty()) {
+    return failure();
+  }
+
+  for (auto &entry : *usesBySegment) {
     Operation *logicalScopeAnchor = entry.first;
     SmallVectorImpl<OpOperand *> &uses = entry.second;
     Value replacement;
@@ -569,27 +599,26 @@ emitEscapingVectorScopeValueError(const EscapingMovedValue &escapingValue) {
   return failure();
 }
 
-// classify which operations need to be moved into a vecscope, which can be hoisted out of the
-// vecscope, and check for any vector-scope-typed values that would escape the vecscope if we were to
-// move the candidate operations into a resultless vecscope. Returns failure if the candidate cluster
-// is not suitable for vecscope inference.
-static LogicalResult
-buildResultlessScopePlan(ArrayRef<Operation *> ops, ResultlessScopePlan &plan,
-                         EscapingMovedValue &escapingValue) {
-  if (ops.empty() || !hasVectorOperation(ops)) {
-    return failure();
+// Whether any user of `op`'s results (directly or through a parent op) sits
+// inside `cluster`.
+static bool opFeedsCluster(Operation *op,
+                           const llvm::SmallPtrSetImpl<Operation *> &cluster) {
+  for (Value result : op->getResults()) {
+    for (Operation *user : result.getUsers()) {
+      if (isUserInsideCluster(user, cluster)) {
+        return true;
+      }
+    }
   }
+  return false;
+}
 
-  llvm::SmallPtrSet<Operation *, mlir::pto::kValue16> movedOps =
-      computeMovedOpsForResultlessScope(ops);
-  if (movedOps.empty()) {
-    return failure();
-  }
-
-  if (findEscapingMovedResult(movedOps, escapingValue)) {
-    return failure();
-  }
-
+// Seed the hoist set with safe-scalar ops whose results are used by moved
+// ops, then transitively pull in their safe-scalar producers.
+static llvm::SmallPtrSet<Operation *, mlir::pto::kValue16>
+computeHoistedOpsForResultlessScope(
+    ArrayRef<Operation *> ops,
+    const llvm::SmallPtrSetImpl<Operation *> &movedOps) {
   llvm::SmallPtrSet<Operation *, mlir::pto::kValue16> hoistedOps;
   for (Operation *op : ops) {
     if (movedOps.contains(op) ||
@@ -615,25 +644,38 @@ buildResultlessScopePlan(ArrayRef<Operation *> ops, ResultlessScopePlan &plan,
         continue;
       }
 
-      bool feedsHoistedOp = false;
-      for (Value result : op->getResults()) {
-        for (Operation *user : result.getUsers()) {
-          if (isUserInsideCluster(user, hoistedOps)) {
-            feedsHoistedOp = true;
-            break;
-          }
-        }
-        if (feedsHoistedOp) {
-          break;
-        }
-      }
-
-      if (feedsHoistedOp) {
+      if (opFeedsCluster(op, hoistedOps)) {
         hoistedOps.insert(op);
         changed = true;
       }
     }
   }
+  return hoistedOps;
+}
+
+// classify which operations need to be moved into a vecscope, which can be hoisted out of the
+// vecscope, and check for any vector-scope-typed values that would escape the vecscope if we were to
+// move the candidate operations into a resultless vecscope. Returns failure if the candidate cluster
+// is not suitable for vecscope inference.
+static LogicalResult
+buildResultlessScopePlan(ArrayRef<Operation *> ops, ResultlessScopePlan &plan,
+                         EscapingMovedValue &escapingValue) {
+  if (ops.empty() || !hasVectorOperation(ops)) {
+    return failure();
+  }
+
+  llvm::SmallPtrSet<Operation *, mlir::pto::kValue16> movedOps =
+      computeMovedOpsForResultlessScope(ops);
+  if (movedOps.empty()) {
+    return failure();
+  }
+
+  if (findEscapingMovedResult(movedOps, escapingValue)) {
+    return failure();
+  }
+
+  llvm::SmallPtrSet<Operation *, mlir::pto::kValue16> hoistedOps =
+      computeHoistedOpsForResultlessScope(ops, movedOps);
 
   plan.hoistOps.clear();
   plan.moveOps.clear();
@@ -722,6 +764,30 @@ static LogicalResult wrapGreedySubclusters(ArrayRef<Operation *> ops,
   return success();
 }
 
+// Try to rematerialize the recorded escaping value for the candidate
+// segment [begin, end). Returns nullopt when the candidate does not qualify
+// for a repair attempt, otherwise the repair outcome.
+static std::optional<bool>
+tryRematerializeEscapingCandidate(ArrayRef<Operation *> ops,
+                                  size_t escapingCandidateBegin,
+                                  size_t escapingCandidateEnd,
+                                  const EscapingMovedValue &escapingValue,
+                                  SegmentRematCache &cache,
+                                  MLIRContext *context) {
+  ArrayRef<Operation *> escapingCandidate =
+      ops.slice(escapingCandidateBegin,
+                escapingCandidateEnd - escapingCandidateBegin);
+  llvm::SmallPtrSet<Operation *, mlir::pto::kValue16> movedOps =
+      computeMovedOpsForResultlessScope(escapingCandidate);
+  Block *block = ops.front()->getBlock();
+  if (!block) {
+    return false;
+  }
+
+  return succeeded(rematerializeEscapingValueForUserSegments(
+      escapingValue.value, movedOps, *block, cache, context));
+}
+
 static FailureOr<bool> fixOneEscapingSubcluster(ArrayRef<Operation *> ops,
                                                 SegmentRematCache &cache,
                                                 MLIRContext *context) {
@@ -758,21 +824,10 @@ static FailureOr<bool> fixOneEscapingSubcluster(ArrayRef<Operation *> ops,
       if (classifyOperationForInference(ops[begin]) ==
               VPTOInferenceOpClass::Vector &&
           sawEscapingMovedResult && escapingValue.requiresDiagnostic) {
-        ArrayRef<Operation *> escapingCandidate =
-            ops.slice(escapingCandidateBegin,
-                      escapingCandidateEnd - escapingCandidateBegin);
-        llvm::SmallPtrSet<Operation *, mlir::pto::kValue16> movedOps =
-            computeMovedOpsForResultlessScope(escapingCandidate);
-        Block *block = ops.front()->getBlock();
-        if (!block) {
-          return false;
-        }
-
-        if (succeeded(rematerializeEscapingValueForUserSegments(
-                escapingValue.value, movedOps, *block, cache, context))) {
-          return true;
-        }
-        return false;
+        return tryRematerializeEscapingCandidate(
+            ops, escapingCandidateBegin, escapingCandidateEnd, escapingValue,
+            cache, context)
+            .value_or(false);
       }
       ++begin;
       continue;

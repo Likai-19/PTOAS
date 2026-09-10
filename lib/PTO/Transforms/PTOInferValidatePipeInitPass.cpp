@@ -8,6 +8,7 @@
 
 #include "PTO/IR/PTO.h"
 #include "PTO/Transforms/Passes.h"
+#include "Utils.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/SymbolTable.h"
@@ -41,16 +42,8 @@ constexpr int8_t kBidirectionalDirMask = 3;
 constexpr unsigned kVisitedInitReserveSize = 16;
 constexpr llvm::StringLiteral kFrontendPipeIdAttrName = "__pto.frontend_id";
 
-struct PipePeerKey {
-  std::string ownerFunc;
-  std::string reserveName;
-  int8_t dirMask = 0;
-
-  bool operator<(const PipePeerKey &other) const {
-    return std::tie(ownerFunc, reserveName, dirMask) <
-           std::tie(other.ownerFunc, other.reserveName, other.dirMask);
-  }
-};
+// PipePeerKey and buildPipeInitAdjacency are shared with the
+// reserved-buffer resolve pass through Utils.h.
 
 enum class PipeSplitUsage {
   Unknown,
@@ -169,11 +162,11 @@ static std::optional<PipePeerKey> getPipePeerKey(Value localAddr,
   return std::nullopt;
 }
 
-static LogicalResult
-resolveNoSplitComponent(ArrayRef<PipeInitInfo *> component, OpBuilder &builder) {
+// Checks the mixed-usage and conflicting-explicit-'nosplit' constraints on
+// one component, returning the resolved explicit 'nosplit' value.
+static FailureOr<std::optional<bool>>
+collectExplicitNoSplit(const ArrayRef<PipeInitInfo *> &component) {
   std::optional<bool> explicitNoSplit;
-  std::optional<bool> inferredNoSplit;
-
   for (PipeInitInfo *info : component) {
     if (info->usage == PipeSplitUsage::Mixed) {
       return info->op->emitOpError(
@@ -191,7 +184,14 @@ resolveNoSplitComponent(ArrayRef<PipeInitInfo *> component, OpBuilder &builder) 
     }
     explicitNoSplit = info->explicitNoSplit;
   }
+  return explicitNoSplit;
+}
 
+// Derives the usage-implied 'nosplit' value of a component, diagnosing
+// conflicting split usages across peers.
+static FailureOr<std::optional<bool>>
+collectInferredNoSplit(const ArrayRef<PipeInitInfo *> &component) {
+  std::optional<bool> inferredNoSplit;
   for (PipeInitInfo *info : component) {
     auto usageNoSplit = getUsageNoSplit(info->usage);
     if (!usageNoSplit) {
@@ -203,25 +203,34 @@ resolveNoSplitComponent(ArrayRef<PipeInitInfo *> component, OpBuilder &builder) 
     }
     inferredNoSplit = *usageNoSplit;
   }
+  return inferredNoSplit;
+}
 
-  if (explicitNoSplit && inferredNoSplit && *explicitNoSplit != *inferredNoSplit) {
-    for (PipeInitInfo *info : component) {
-      if (!info->explicitNoSplit || *info->explicitNoSplit == *inferredNoSplit) {
-        continue;
-      }
-      if (*info->explicitNoSplit) {
-        return info->op->emitOpError(
-            "explicit 'nosplit = true' conflicts with downstream users that "
-            "require split = 1, 2, 3, or 4");
-      }
-      return info->op->emitOpError(
-          "explicit 'nosplit = false' conflicts with downstream users that "
-          "require split = 0");
+// Diagnoses explicit 'nosplit' values that contradict the usage-implied
+// value of the component.
+static LogicalResult checkExplicitAgainstInferred(
+    const ArrayRef<PipeInitInfo *> &component, bool explicitNoSplit,
+    bool inferredNoSplit) {
+  for (PipeInitInfo *info : component) {
+    if (!info->explicitNoSplit || *info->explicitNoSplit == inferredNoSplit) {
+      continue;
     }
+    if (*info->explicitNoSplit) {
+      return info->op->emitOpError(
+          "explicit 'nosplit = true' conflicts with downstream users that "
+          "require split = 1, 2, 3, or 4");
+    }
+    return info->op->emitOpError(
+        "explicit 'nosplit = false' conflicts with downstream users that "
+        "require split = 0");
   }
+  return success();
+}
 
-  bool finalNoSplit =
-      explicitNoSplit.value_or(inferredNoSplit.value_or(false));
+// Applies the resolved 'nosplit' value to every init op that does not carry
+// an explicit one.
+static void applyNoSplitAttr(const ArrayRef<PipeInitInfo *> &component,
+                             OpBuilder &builder, bool finalNoSplit) {
   auto noSplitAttr = builder.getBoolAttr(finalNoSplit);
   for (PipeInitInfo *info : component) {
     if (auto initOp = dyn_cast<InitializeL2LPipeOp>(info->op)) {
@@ -236,8 +245,108 @@ resolveNoSplitComponent(ArrayRef<PipeInitInfo *> component, OpBuilder &builder) 
       setNoSplitAttr(initOp, noSplitAttr);
     }
   }
+}
 
+static LogicalResult
+resolveNoSplitComponent(ArrayRef<PipeInitInfo *> component, OpBuilder &builder) {
+  auto explicitOr = collectExplicitNoSplit(component);
+  if (failed(explicitOr)) {
+    return failure();
+  }
+  auto inferredOr = collectInferredNoSplit(component);
+  if (failed(inferredOr)) {
+    return failure();
+  }
+
+  const std::optional<bool> &explicitNoSplit = *explicitOr;
+  const std::optional<bool> &inferredNoSplit = *inferredOr;
+  if (explicitNoSplit && inferredNoSplit &&
+      *explicitNoSplit != *inferredNoSplit) {
+    if (failed(checkExplicitAgainstInferred(component, *explicitNoSplit,
+                                            *inferredNoSplit))) {
+      return failure();
+    }
+  }
+
+  applyNoSplitAttr(component, builder,
+                   explicitNoSplit.value_or(inferredNoSplit.value_or(false)));
   return success();
+}
+
+// Index over the collected pipe-init infos, used when forming components.
+using PipeInitGraph = llvm::DenseMap<Operation *, SmallVector<Operation *>>;
+
+// Records one init op's info and peer keys (reserved buffers or
+// global-tensor pipe identity).
+template <typename InitOpT>
+static void collectInitOp(InitOpT initOp, SmallVectorImpl<PipeInitInfo> &initInfos,
+                          PipeInitGraph &adjacency,
+                          PipeInitGroups &keyedInits) {
+  PipeInitInfo &info = initInfos.emplace_back();
+  info.op = initOp.getOperation();
+  info.funcOp = initOp->template getParentOfType<func::FuncOp>();
+  info.dirMask = initOp.getDirMask();
+  info.usage = classifyPipeUsage(getPipeResult(initOp));
+  info.explicitNoSplit = getNoSplitAttr(initOp);
+  adjacency[info.op];
+
+  auto recordAddr = [&info, &keyedInits](Value addr,
+                                         int8_t effectiveDirMask) {
+    if (!addr) {
+      return;
+    }
+    auto key = getPipePeerKey(addr, info.funcOp);
+    if (!key) {
+      return;
+    }
+    key->dirMask = effectiveDirMask;
+    keyedInits[*key].push_back(info.op);
+  };
+
+  auto recordGlobalTensor = [&info, &keyedInits](int8_t effectiveDirMask) {
+    keyedInits[getGlobalTensorPipeKey(info.op, effectiveDirMask)].push_back(
+        info.op);
+  };
+
+  if (auto l2g2l = dyn_cast<InitializeL2G2LPipeOp>(info.op)) {
+    if (!l2g2l.getLocalAddr()) {
+      if (info.dirMask == kBidirectionalDirMask) {
+        recordGlobalTensor(kBidirectionalDirMask);
+      } else {
+        recordGlobalTensor(info.dirMask);
+      }
+      return;
+    }
+  }
+
+  if (info.dirMask == kBidirectionalDirMask) {
+    recordAddr(getLocalAddrOperand(initOp), kC2VDirMask);
+    if (Value peerAddr = initOp.getPeerLocalAddr()) {
+      recordAddr(peerAddr, kV2CDirMask);
+    }
+    return;
+  }
+
+  recordAddr(getLocalAddrOperand(initOp), info.dirMask);
+}
+
+// Gathers the connected component reachable from `rootInfo.op` into
+// `component`, marking members in `visited`.
+static void collectComponent(
+    PipeInitInfo &rootInfo, const PipeInitGraph &adjacency,
+    const llvm::DenseMap<Operation *, PipeInitInfo *> &infoByOp,
+    llvm::SmallPtrSet<Operation *, kVisitedInitReserveSize> &visited,
+    SmallVectorImpl<PipeInitInfo *> &component) {
+  SmallVector<Operation *> stack{rootInfo.op};
+  while (!stack.empty()) {
+    Operation *current = stack.pop_back_val();
+    component.push_back(infoByOp.lookup(current));
+    for (Operation *neighbor : adjacency.lookup(current)) {
+      if (visited.insert(neighbor).second) {
+        stack.push_back(neighbor);
+      }
+    }
+  }
 }
 
 struct PTOInferValidatePipeInitPass
@@ -246,80 +355,17 @@ struct PTOInferValidatePipeInitPass
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
     SmallVector<PipeInitInfo> initInfos;
-    llvm::DenseMap<Operation *, SmallVector<Operation *>> adjacency;
-    std::map<PipePeerKey, SmallVector<Operation *>> keyedInits;
+    PipeInitGraph adjacency;
+    PipeInitGroups keyedInits;
 
-    auto collectInit = [&adjacency, &initInfos, &keyedInits](auto initOp) {
-      PipeInitInfo &info = initInfos.emplace_back();
-      info.op = initOp.getOperation();
-      info.funcOp = initOp->template getParentOfType<func::FuncOp>();
-      info.dirMask = initOp.getDirMask();
-      info.usage = classifyPipeUsage(getPipeResult(initOp));
-      info.explicitNoSplit = getNoSplitAttr(initOp);
-      adjacency[info.op];
+    moduleOp.walk([&](InitializeL2LPipeOp initOp) {
+      collectInitOp(initOp, initInfos, adjacency, keyedInits);
+    });
+    moduleOp.walk([&](InitializeL2G2LPipeOp initOp) {
+      collectInitOp(initOp, initInfos, adjacency, keyedInits);
+    });
 
-      auto recordAddr = [&info, &keyedInits](Value addr,
-                                              int8_t effectiveDirMask) {
-        if (!addr) {
-          return;
-        }
-        auto key = getPipePeerKey(addr, info.funcOp);
-        if (!key) {
-          return;
-        }
-        key->dirMask = effectiveDirMask;
-        keyedInits[*key].push_back(info.op);
-      };
-
-      auto recordGlobalTensor = [&info, &keyedInits](
-                                   int8_t effectiveDirMask) {
-        keyedInits[getGlobalTensorPipeKey(info.op, effectiveDirMask)].push_back(
-            info.op);
-      };
-
-      if (auto l2g2l = dyn_cast<InitializeL2G2LPipeOp>(info.op)) {
-        if (!l2g2l.getLocalAddr()) {
-          if (info.dirMask == kBidirectionalDirMask) {
-            recordGlobalTensor(kBidirectionalDirMask);
-          } else {
-            recordGlobalTensor(info.dirMask);
-          }
-          return;
-        }
-      }
-
-      if (info.dirMask == kBidirectionalDirMask) {
-        recordAddr(getLocalAddrOperand(initOp), kC2VDirMask);
-        if (Value peerAddr = initOp.getPeerLocalAddr()) {
-          recordAddr(peerAddr, kV2CDirMask);
-        }
-        return;
-      }
-
-      recordAddr(getLocalAddrOperand(initOp), info.dirMask);
-    };
-
-    moduleOp.walk([&](InitializeL2LPipeOp initOp) { collectInit(initOp); });
-    moduleOp.walk([&](InitializeL2G2LPipeOp initOp) { collectInit(initOp); });
-
-    for (const auto &it : keyedInits) {
-      SmallVector<Operation *> uniqueOps;
-      for (Operation *op : it.second) {
-        if (std::find(uniqueOps.begin(), uniqueOps.end(), op) == uniqueOps.end()) {
-          uniqueOps.push_back(op);
-        }
-      }
-      if (uniqueOps.size() < kMinPeerPipeInitCount) {
-        continue;
-      }
-
-      for (size_t i = 0; i < uniqueOps.size(); ++i) {
-        for (size_t j = i + 1; j < uniqueOps.size(); ++j) {
-          adjacency[uniqueOps[i]].push_back(uniqueOps[j]);
-          adjacency[uniqueOps[j]].push_back(uniqueOps[i]);
-        }
-      }
-    }
+    buildPipeInitAdjacency(keyedInits, adjacency, kMinPeerPipeInitCount);
 
     llvm::DenseMap<Operation *, PipeInitInfo *> infoByOp;
     for (PipeInitInfo &info : initInfos) {
@@ -333,17 +379,8 @@ struct PTOInferValidatePipeInitPass
         continue;
       }
 
-      SmallVector<Operation *> stack{rootInfo.op};
       SmallVector<PipeInitInfo *> component;
-      while (!stack.empty()) {
-        Operation *current = stack.pop_back_val();
-        component.push_back(infoByOp[current]);
-        for (Operation *neighbor : adjacency[current]) {
-          if (visited.insert(neighbor).second) {
-            stack.push_back(neighbor);
-          }
-        }
-      }
+      collectComponent(rootInfo, adjacency, infoByOp, visited, component);
 
       if (failed(resolveNoSplitComponent(component, builder))) {
         signalPassFailure();

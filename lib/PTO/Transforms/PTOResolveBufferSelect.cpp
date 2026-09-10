@@ -87,33 +87,30 @@ static Value ensureI64(Value value, IRRewriter &rewriter, Location loc) {
   return {};
 }
 
-static bool getTilePointerStrides(pto::TileBufType type, int64_t &rowStride,
-                                  int64_t &colStride) {
-  auto shape = type.getShape();
-  if (shape.size() != mlir::pto::kValue2 || llvm::is_contained(shape, ShapedType::kDynamic)) {
-    return false;
-  }
+// Strides for the non-boxed (plain row/col major) layout family: the unit
+// stride follows the storage order and the other stride spans the full
+// matrix, optionally extended by one row for compact RowPlusOne mode.
+static bool getNoneBoxPointerStrides(pto::TileBufType type,
+                                     ArrayRef<int64_t> shape, int32_t bl,
+                                     int64_t &rowStride, int64_t &colStride) {
+  bool rowPlusOne =
+      type.getCompactModeI32() ==
+      static_cast<int32_t>(pto::CompactMode::RowPlusOne);
+  rowStride = bl == kBLayoutColMajor ? 1 : shape[kDim1] + (rowPlusOne ? 1 : 0);
+  colStride =
+      bl == kBLayoutColMajor ? shape[kDim0] + (rowPlusOne ? 1 : 0) : 1;
+  return true;
+}
 
-  auto config = type.getConfigAttr();
-  int32_t bl = static_cast<int32_t>(config.getBLayout().getValue());
-  int32_t sl = static_cast<int32_t>(config.getSLayout().getValue());
-  if (sl == kSlayoutNoneBox) {
-    bool rowPlusOne =
-        type.getCompactModeI32() ==
-        static_cast<int32_t>(pto::CompactMode::RowPlusOne);
-    rowStride =
-        bl == kBLayoutColMajor ? 1 : shape[kDim1] + (rowPlusOne ? 1 : 0);
-    colStride =
-        bl == kBLayoutColMajor ? shape[kDim0] + (rowPlusOne ? 1 : 0) : 1;
-    return true;
-  }
-
-  unsigned elemBytes = pto::getPTOStorageElemByteSize(type.getElementType());
+// Fractal inner-matrix dimensions by fractal size and sub-layout. Returns
+// false for combinations the pointer arithmetic below does not model, or a
+// zero element size.
+static bool getFractalInnerDims(pto::TileBufConfigAttr config, int32_t sl,
+                                unsigned elemBytes, int64_t &innerRows,
+                                int64_t &innerCols) {
   if (elemBytes == 0) {
     return false;
   }
-  int64_t innerRows = 1;
-  int64_t innerCols = 1;
   int32_t fractal = config.getSFractalSize().getInt();
   if (fractal == kSFractal1024) {
     innerRows = kFractalInnerDimension;
@@ -128,6 +125,26 @@ static bool getTilePointerStrides(pto::TileBufType type, int64_t &rowStride,
     innerRows = kSFractal32 / elemBytes;
     innerCols = kFractalInnerDimension;
   } else {
+    return false;
+  }
+  return true;
+}
+
+// Strides for the boxed (fractal) layout family: the stride across fractal
+// blocks spans the full matrix row/column; the in-block stride follows the
+// fractal sub-layout.
+static bool getBoxedPointerStrides(pto::TileBufType type,
+                                   ArrayRef<int64_t> shape, int32_t bl,
+                                   int32_t sl, int64_t &rowStride,
+                                   int64_t &colStride) {
+  unsigned elemBytes = pto::getPTOStorageElemByteSize(type.getElementType());
+  if (elemBytes == 0) {
+    return false;
+  }
+  int64_t innerRows = 1;
+  int64_t innerCols = 1;
+  if (!getFractalInnerDims(type.getConfigAttr(), sl, elemBytes, innerRows,
+                           innerCols)) {
     return false;
   }
 
@@ -152,6 +169,23 @@ static bool getTilePointerStrides(pto::TileBufType type, int64_t &rowStride,
     colStride = innerRows;
   }
   return true;
+}
+
+static bool getTilePointerStrides(pto::TileBufType type, int64_t &rowStride,
+                                  int64_t &colStride) {
+  auto shape = type.getShape();
+  if (shape.size() != mlir::pto::kValue2 ||
+      llvm::is_contained(shape, ShapedType::kDynamic)) {
+    return false;
+  }
+
+  auto config = type.getConfigAttr();
+  int32_t bl = static_cast<int32_t>(config.getBLayout().getValue());
+  int32_t sl = static_cast<int32_t>(config.getSLayout().getValue());
+  if (sl == kSlayoutNoneBox) {
+    return getNoneBoxPointerStrides(type, shape, bl, rowStride, colStride);
+  }
+  return getBoxedPointerStrides(type, shape, bl, sl, rowStride, colStride);
 }
 
 static uint64_t getTileAddressAlignmentBytes(pto::TileBufType type) {
