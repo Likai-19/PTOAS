@@ -90,7 +90,8 @@ static bool isVector2F16OrBF16Type(Type type) {
 
 static bool isSupportedAtomicScalarType(Type type) {
   if (auto intType = dyn_cast<IntegerType>(type)) {
-    return intType.getWidth() == mlir::pto::kValue32 || intType.getWidth() == 64;
+    return intType.getWidth() == mlir::pto::kValue32 ||
+           intType.getWidth() == mlir::pto::kValue64;
   }
   return type.isF16() || type.isBF16() || type.isF32() ||
          isVector2F16OrBF16Type(type);

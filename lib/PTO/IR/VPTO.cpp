@@ -78,7 +78,8 @@ LogicalResult verifyMaskTypeWithGranularityLike(Operation *op, Type type,
 
 static bool isStandardScalarConvertType(Type type) {
   if (auto intType = dyn_cast<IntegerType>(type)) {
-    return intType.getWidth() == mlir::pto::kValue32 || intType.getWidth() == 64;
+    return intType.getWidth() == mlir::pto::kValue32 ||
+           intType.getWidth() == mlir::pto::kValue64;
   }
   return type.isF16() || type.isBF16() || type.isF32();
 }
@@ -300,7 +301,8 @@ static LogicalResult verifyIntToFloatConvert(Operation *op, Type srcType,
 static LogicalResult verifyF32ConvertTarget(Operation *op, Type dstType,
                                             pto::Rounding rounding,
                                             pto::Saturation saturation) {
-  if (dstType.isInteger(mlir::pto::kValue32) || dstType.isInteger(64)) {
+  if (dstType.isInteger(mlir::pto::kValue32) ||
+      dstType.isInteger(mlir::pto::kValue64)) {
     if (saturation != pto::Saturation::Enable) {
       return op->emitOpError()
              << "fp32-to-integer conversion requires saturation enable";

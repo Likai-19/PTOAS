@@ -91,7 +91,8 @@ static bool isMaskGranularityAdjacentNarrowing(StringRef inputGranularity,
 
 static bool isSupportedShuffleValueType(Type type) {
   if (auto intType = dyn_cast<IntegerType>(type)) {
-    return intType.getWidth() == mlir::pto::kValue32 || intType.getWidth() == 64;
+    return intType.getWidth() == mlir::pto::kValue32 ||
+           intType.getWidth() == mlir::pto::kValue64;
   }
   if (auto vecType = dyn_cast<VectorType>(type)) {
     return vecType.getRank() == 1 && vecType.getDimSize(0) == mlir::pto::kValue2 &&
