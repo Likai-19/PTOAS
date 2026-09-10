@@ -460,8 +460,8 @@ ParseResult MadOp::parse(OpAsmParser &parser, OperationState &result) {
                                          /*parseTf32ModeClause=*/true);
 }
 
-void MadOp::print(OpAsmPrinter &printer) {
-  printMadSemanticOpNoBias(printer, *this, /*allowTf32Mode=*/true);
+void MadOp::print(OpAsmPrinter &p) {
+  printMadSemanticOpNoBias(p, *this, /*allowTf32Mode=*/true);
 }
 
 bool MadOp::isMadMxFamily() { return false; }
@@ -477,8 +477,8 @@ ParseResult MadAccOp::parse(OpAsmParser &parser, OperationState &result) {
                                             /*parseTf32ModeClause=*/true);
 }
 
-void MadAccOp::print(OpAsmPrinter &printer) {
-  printMadSemanticOpNoBias(printer, *this, /*allowTf32Mode=*/true);
+void MadAccOp::print(OpAsmPrinter &p) {
+  printMadSemanticOpNoBias(p, *this, /*allowTf32Mode=*/true);
 }
 
 bool MadAccOp::isMadMxFamily() { return false; }
@@ -504,8 +504,8 @@ ParseResult MadBiasOp::parse(OpAsmParser &parser, OperationState &result) {
                                              /*parseTf32ModeClause=*/true);
 }
 
-void MadBiasOp::print(OpAsmPrinter &printer) {
-  printMadSemanticOpWithBias(printer, *this, /*allowTf32Mode=*/true);
+void MadBiasOp::print(OpAsmPrinter &p) {
+  printMadSemanticOpWithBias(p, *this, /*allowTf32Mode=*/true);
 }
 
 bool MadBiasOp::isMadMxFamily() { return false; }
@@ -530,8 +530,8 @@ ParseResult MadMxOp::parse(OpAsmParser &parser, OperationState &result) {
                                            /*parseTf32ModeClause=*/false);
 }
 
-void MadMxOp::print(OpAsmPrinter &printer) {
-  printMadSemanticOpNoBias(printer, *this, /*allowTf32Mode=*/false);
+void MadMxOp::print(OpAsmPrinter &p) {
+  printMadSemanticOpNoBias(p, *this, /*allowTf32Mode=*/false);
 }
 
 bool MadMxOp::isMadMxFamily() { return true; }
@@ -557,8 +557,8 @@ ParseResult MadMxAccOp::parse(OpAsmParser &parser, OperationState &result) {
                                               /*parseTf32ModeClause=*/false);
 }
 
-void MadMxAccOp::print(OpAsmPrinter &printer) {
-  printMadSemanticOpNoBias(printer, *this, /*allowTf32Mode=*/false);
+void MadMxAccOp::print(OpAsmPrinter &p) {
+  printMadSemanticOpNoBias(p, *this, /*allowTf32Mode=*/false);
 }
 
 bool MadMxAccOp::isMadMxFamily() { return true; }
@@ -584,8 +584,8 @@ ParseResult MadMxBiasOp::parse(OpAsmParser &parser, OperationState &result) {
                                                /*parseTf32ModeClause=*/false);
 }
 
-void MadMxBiasOp::print(OpAsmPrinter &printer) {
-  printMadSemanticOpWithBias(printer, *this, /*allowTf32Mode=*/false);
+void MadMxBiasOp::print(OpAsmPrinter &p) {
+  printMadSemanticOpWithBias(p, *this, /*allowTf32Mode=*/false);
 }
 
 bool MadMxBiasOp::isMadMxFamily() { return true; }

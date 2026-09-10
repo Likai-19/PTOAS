@@ -225,76 +225,76 @@ static ParseResult parseNumGroupsLayoutFields(AsmParser &parser,
   return success();
 }
 
-Attribute VMILayoutAttr::parse(AsmParser &parser, Type) {
-  SMLoc loc = parser.getCurrentLocation();
+Attribute VMILayoutAttr::parse(AsmParser &odsParser, Type) {
+  SMLoc loc = odsParser.getCurrentLocation();
   StringRef kind;
   int64_t factor = 1;
   int64_t blockElems = 1;
   int64_t slots = 0;
   int64_t laneStride = 1;
 
-  if (failed(parser.parseLess()) || failed(parser.parseKeyword(&kind))) {
+  if (failed(odsParser.parseLess()) || failed(odsParser.parseKeyword(&kind))) {
     return {};
   }
 
   if (kind == "contiguous") {
     factor = 1;
-    if (failed(parseContiguousLayoutFields(parser, laneStride))) {
+    if (failed(parseContiguousLayoutFields(odsParser, laneStride))) {
       return {};
     }
   } else if (kind == "deinterleaved") {
-    if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor)) ||
-        failed(parseDeinterleavedLayoutFields(parser, laneStride))) {
+    if (failed(odsParser.parseEqual()) || failed(odsParser.parseInteger(factor)) ||
+        failed(parseDeinterleavedLayoutFields(odsParser, laneStride))) {
       return {};
     }
   } else if (kind == "block_deinterleaved") {
-    if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor))) {
+    if (failed(odsParser.parseEqual()) || failed(odsParser.parseInteger(factor))) {
       return {};
     }
   } else if (kind == "num_groups") {
-    if (failed(parser.parseEqual()) || failed(parser.parseInteger(factor)) ||
-        failed(parseNumGroupsLayoutFields(parser, slots, laneStride))) {
+    if (failed(odsParser.parseEqual()) || failed(odsParser.parseInteger(factor)) ||
+        failed(parseNumGroupsLayoutFields(odsParser, slots, laneStride))) {
       return {};
     }
   } else {
-    parser.emitError(parser.getCurrentLocation(),
-                     "expected VMI layout kind 'contiguous' or "
-                     "'deinterleaved' or 'block_deinterleaved' or "
-                     "'num_groups'");
+    odsParser.emitError(odsParser.getCurrentLocation(),
+                        "expected VMI layout kind 'contiguous' or "
+                        "'deinterleaved' or 'block_deinterleaved' or "
+                        "'num_groups'");
     return {};
   }
 
-  if (failed(parser.parseGreater())) {
+  if (failed(odsParser.parseGreater())) {
     return {};
   }
-  return parser.getChecked<VMILayoutAttr>(loc, parser.getContext(), kind,
-                                          factor, blockElems, slots,
-                                          laneStride);
+  return odsParser.getChecked<VMILayoutAttr>(loc, odsParser.getContext(), kind,
+                                             factor, blockElems, slots,
+                                             laneStride);
 }
 
-void VMILayoutAttr::print(AsmPrinter &printer) const {
-  printer << "<" << getKind();
+void VMILayoutAttr::print(AsmPrinter &odsPrinter) const {
+  odsPrinter << "<" << getKind();
   if (isContiguous()) {
     if (getLaneStride() != 1) {
-      printer << ", lane_stride = " << getLaneStride();
+      odsPrinter << ", lane_stride = " << getLaneStride();
     }
   } else if (isDeinterleaved()) {
-    printer << " = " << getFactor();
+    odsPrinter << " = " << getFactor();
     if (getLaneStride() != 1) {
-      printer << ", lane_stride = " << getLaneStride();
+      odsPrinter << ", lane_stride = " << getLaneStride();
     }
   } else if (isBlockDeinterleaved()) {
-    printer << " = " << getFactor();
+    odsPrinter << " = " << getFactor();
   } else if (isGroupSlots()) {
-    printer << " = " << getFactor();
+    odsPrinter << " = " << getFactor();
     if (getSlots() != 0) {
-      printer << ", slots = " << getSlots();
+      odsPrinter << ", slots = " << getSlots();
     }
     if (getLaneStride() != 1) {
-      printer << ", lane_stride = " << getLaneStride();
+      odsPrinter << ", lane_stride = " << getLaneStride();
     }
   }
-  printer << ">";
+  odsPrinter << ">";
 }
 
 static LogicalResult verifyContiguousLayout(
@@ -387,32 +387,32 @@ VMILayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                         "'num_groups'";
 }
 
-Type VMIVRegType::parse(AsmParser &parser) {
+Type VMIVRegType::parse(AsmParser &odsParser) {
   SmallVector<int64_t, 1> shape;
   Type elementType;
   Attribute layout;
-  SMLoc loc = parser.getCurrentLocation();
+  SMLoc loc = odsParser.getCurrentLocation();
 
-  if (failed(parser.parseLess()) ||
-      failed(parser.parseDimensionList(shape, /*allowDynamic=*/false,
-                                       /*withTrailingX=*/true)) ||
-      shape.size() != 1 || failed(parser.parseType(elementType)) ||
-      failed(parseOptionalVMILayout(parser, layout)) ||
-      failed(parser.parseGreater())) {
+  if (failed(odsParser.parseLess()) ||
+      failed(odsParser.parseDimensionList(shape, /*allowDynamic=*/false,
+                                         /*withTrailingX=*/true)) ||
+      shape.size() != 1 || failed(odsParser.parseType(elementType)) ||
+      failed(parseOptionalVMILayout(odsParser, layout)) ||
+      failed(odsParser.parseGreater())) {
     return {};
   }
 
-  return parser.getChecked<VMIVRegType>(loc, parser.getContext(), shape.front(),
-                                        elementType, layout);
+  return odsParser.getChecked<VMIVRegType>(loc, odsParser.getContext(), shape.front(),
+                                           elementType, layout);
 }
 
-void VMIVRegType::print(AsmPrinter &printer) const {
-  printer << "<" << getElementCount() << "x";
-  printer.printType(getElementType());
+void VMIVRegType::print(AsmPrinter &odsPrinter) const {
+  odsPrinter << "<" << getElementCount() << "x";
+  odsPrinter.printType(getElementType());
   if (getLayout()) {
-    printer << ", " << getLayout();
+    odsPrinter << ", " << getLayout();
   }
-  printer << ">";
+  odsPrinter << ">";
 }
 
 LogicalResult VMIVRegType::verify(function_ref<InFlightDiagnostic()> emitError,
@@ -462,31 +462,31 @@ bool VMIMaskType::isConcreteGranularity(StringRef granularity) {
   return granularity == "b8" || granularity == "b16" || granularity == "b32";
 }
 
-Type VMIMaskType::parse(AsmParser &parser) {
+Type VMIMaskType::parse(AsmParser &odsParser) {
   SmallVector<int64_t, 1> shape;
   StringRef granularity;
   Attribute layout;
-  SMLoc loc = parser.getCurrentLocation();
+  SMLoc loc = odsParser.getCurrentLocation();
 
-  if (failed(parser.parseLess()) ||
-      failed(parser.parseDimensionList(shape, /*allowDynamic=*/false,
-                                       /*withTrailingX=*/true)) ||
-      shape.size() != 1 || failed(parser.parseKeyword(&granularity)) ||
-      failed(parseOptionalVMILayout(parser, layout)) ||
-      failed(parser.parseGreater())) {
+  if (failed(odsParser.parseLess()) ||
+      failed(odsParser.parseDimensionList(shape, /*allowDynamic=*/false,
+                                         /*withTrailingX=*/true)) ||
+      shape.size() != 1 || failed(odsParser.parseKeyword(&granularity)) ||
+      failed(parseOptionalVMILayout(odsParser, layout)) ||
+      failed(odsParser.parseGreater())) {
     return {};
   }
 
-  return parser.getChecked<VMIMaskType>(loc, parser.getContext(), shape.front(),
-                                        granularity, layout);
+  return odsParser.getChecked<VMIMaskType>(loc, odsParser.getContext(), shape.front(),
+                                           granularity, layout);
 }
 
-void VMIMaskType::print(AsmPrinter &printer) const {
-  printer << "<" << getElementCount() << "x" << getGranularity();
+void VMIMaskType::print(AsmPrinter &odsPrinter) const {
+  odsPrinter << "<" << getElementCount() << "x" << getGranularity();
   if (getLayout()) {
-    printer << ", " << getLayout();
+    odsPrinter << ", " << getLayout();
   }
-  printer << ">";
+  odsPrinter << ">";
 }
 
 LogicalResult VMIMaskType::verify(function_ref<InFlightDiagnostic()> emitError,

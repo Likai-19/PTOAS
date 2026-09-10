@@ -187,7 +187,7 @@ public:
   /// must prove that the result fits. Casts are expanded only when their
   /// proven source range fits the result type. Unproven source operations
   /// remain opaque SSA atoms.
-  PTOAnalysisResult<PTOTypedExprRef>
+  const PTOAnalysisResult<PTOTypedExprRef>
   getPointExpression(const PTOTypedExprRef &expression);
 
   PTOAnalysisResult<PTOFiniteRange> getRange(Value value, scf::ForOp loop);

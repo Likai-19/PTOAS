@@ -124,8 +124,9 @@ printMteL0cL1OptionalFpcType(OpAsmPrinter &printer, Type fpcType) {
     return failure();
   }
 
-  auto extractResolved = [&](SmallVectorImpl<OpAsmParser::UnresolvedOperand> &ops,
+  auto extractResolved = [&result, &resolvedOperands](SmallVectorImpl<OpAsmParser::UnresolvedOperand> &ops,
                              SmallVectorImpl<Type> &types) -> Value {
+    (void)types;
     if (ops.empty()) {
       return {};
     }
@@ -187,7 +188,7 @@ void setMteGmUbSegmentSizes(OperationState &result,
       result.getOrAddProperties<MteGmUbOp::Properties>().operandSegmentSizes;
   llvm::copy(ArrayRef<int32_t>{1, 1, 1, 1, 1, 1, 1,
                                loopGroupCount, loopGroupCount, loopGroupCount,
-                               static_cast<int32_t>(padOperandCount ? 1 : 0),
+                               static_cast<int32_t>(padOperandCount != 0 ? 1 : 0),
                                static_cast<int32_t>(padOperandCount == 3 ? 1 : 0),
                                static_cast<int32_t>(padOperandCount == 3 ? 1 : 0)},
               segments.begin());
@@ -342,11 +343,11 @@ ParseResult validateMteGmL1FracOperands(
     return parser.emitError(parser.getCurrentLocation(),
                             "src_layout requires one or two operands and types");
   }
-  if (dstGroupOps != 4 || dstGroupTypes != 4) {
+  if (dstGroupOps != mlir::pto::kValue4 || dstGroupTypes != mlir::pto::kValue4) {
     return parser.emitError(parser.getCurrentLocation(),
                             "dst_group requires exactly four operands and types");
   }
-  if (ctrlOps != 2 || ctrlTypes != 2) {
+  if (ctrlOps != mlir::pto::kValue2 || ctrlTypes != mlir::pto::kValue2) {
     return parser.emitError(parser.getCurrentLocation(),
                             "ctrl requires exactly two operands and types");
   }
@@ -494,7 +495,6 @@ void printMteL1L0OptionalOperandsOp(
     OpAsmPrinter &printer, Operation *operation, Value source, Value destination,
     ArrayRef<Value> shapeOperands, ArrayRef<StringRef> shapeNames,
     ArrayRef<Value> fullOperands, ArrayRef<StringRef> fullNames) {
-
   const bool hasShape = llvm::any_of(shapeOperands, [](Value value) {
     return static_cast<bool>(value);
   });
