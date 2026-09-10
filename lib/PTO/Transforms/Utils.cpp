@@ -24,7 +24,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ErrorHandling.h"
 
-#define DEBUG_TYPE "pto-utils"
+[[maybe_unused]] static constexpr char DEBUG_TYPE[] = "pto-utils";
 
 namespace mlir {
 namespace pto {
