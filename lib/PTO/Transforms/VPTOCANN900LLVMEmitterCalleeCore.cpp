@@ -162,7 +162,7 @@ FailureOr<StringRef> buildAtomicCalleeName(MLIRContext *context, Type ptrType, T
     space = "G";
     break;
   case pto::AddressSpace::VEC:
-    if (valueType.isInteger(64)) {
+    if (valueType.isInteger(kBits64)) {
       return failure();
     }
     space = "S";
@@ -177,13 +177,13 @@ FailureOr<StringRef> buildAtomicCalleeName(MLIRContext *context, Type ptrType, T
 FailureOr<StringRef> buildL1CacheLoadCallee(MLIRContext *context, Type resultType, pto::L1Cache l1cache) {
   std::string elem;
   if (auto intType = dyn_cast<IntegerType>(resultType)) {
-    if (intType.getWidth() == 8) {
+    if (intType.getWidth() == kBits8) {
       elem = "s8";
-    } else if (intType.getWidth() == 16) {
+    } else if (intType.getWidth() == kBits16) {
       elem = "s16";
-    } else if (intType.getWidth() == 32) {
+    } else if (intType.getWidth() == kBits32) {
       elem = "s32";
-    } else if (intType.getWidth() == 64) {
+    } else if (intType.getWidth() == kBits64) {
       elem = "s64";
     }
   } else if (resultType.isF16() || resultType.isBF16()) {
@@ -196,11 +196,11 @@ FailureOr<StringRef> buildL1CacheLoadCallee(MLIRContext *context, Type resultTyp
     elem = "s8";
   } else if (pto::isPTOPackedLdgStgVectorType(resultType)) {
     unsigned totalBits = pto::getPTOPackedLdgStgTotalBits(resultType);
-    if (totalBits == 16) {
+    if (totalBits == kBits16) {
       elem = "s16";
-    } else if (totalBits == 32) {
+    } else if (totalBits == kBits32) {
       elem = "s32";
-    } else if (totalBits == 64) {
+    } else if (totalBits == kBits64) {
       elem = "s64";
     }
   }
@@ -214,13 +214,13 @@ FailureOr<StringRef> buildL1CacheLoadCallee(MLIRContext *context, Type resultTyp
 FailureOr<StringRef> buildL1CacheStoreCallee(MLIRContext *context, Type valueType, pto::L1Cache l1cache) {
   std::string elem;
   if (auto intType = dyn_cast<IntegerType>(valueType)) {
-    if (intType.getWidth() == 8) {
+    if (intType.getWidth() == kBits8) {
       elem = "b8";
-    } else if (intType.getWidth() == 16) {
+    } else if (intType.getWidth() == kBits16) {
       elem = "b16";
-    } else if (intType.getWidth() == 32) {
+    } else if (intType.getWidth() == kBits32) {
       elem = "b32";
-    } else if (intType.getWidth() == 64) {
+    } else if (intType.getWidth() == kBits64) {
       elem = "b64";
     }
   } else if (valueType.isF16() || valueType.isBF16()) {
@@ -233,11 +233,11 @@ FailureOr<StringRef> buildL1CacheStoreCallee(MLIRContext *context, Type valueTyp
     elem = "b8";
   } else if (pto::isPTOPackedLdgStgVectorType(valueType)) {
     unsigned totalBits = pto::getPTOPackedLdgStgTotalBits(valueType);
-    if (totalBits == 16) {
+    if (totalBits == kBits16) {
       elem = "b16";
-    } else if (totalBits == 32) {
+    } else if (totalBits == kBits32) {
       elem = "b32";
-    } else if (totalBits == 64) {
+    } else if (totalBits == kBits64) {
       elem = "b64";
     }
   }
@@ -249,12 +249,12 @@ FailureOr<StringRef> buildL1CacheStoreCallee(MLIRContext *context, Type valueTyp
 }
 
 FailureOr<StringRef> buildMulhiCallee(MLIRContext *context, Type resultType, pto::Signedness signedness) {
-  if (resultType.isInteger(32)) {
+  if (resultType.isInteger(kBits32)) {
     return StringAttr::get(context,
                            signedness == pto::Signedness::Unsigned ? "llvm.hivm.mulhi.ui" : "llvm.hivm.mulhi.i")
         .getValue();
   }
-  if (resultType.isInteger(64) && signedness == pto::Signedness::Unsigned) {
+  if (resultType.isInteger(kBits64) && signedness == pto::Signedness::Unsigned) {
     return StringAttr::get(context, "llvm.hivm.mul64hi.ui").getValue();
   }
   return failure();
@@ -289,7 +289,7 @@ static std::string getVectorPairFloatFragment(Type type, StringRef f16Fragment, 
   }
 
   auto vecType = dyn_cast<VectorType>(type);
-  if (!vecType || vecType.getRank() != 1 || vecType.getDimSize(0) != 2) {
+  if (!vecType || vecType.getRank() != 1 || vecType.getDimSize(0) != kVectorPairLaneCount) {
     return {};
   }
   Type elementType = vecType.getElementType();
@@ -341,7 +341,7 @@ FailureOr<StringRef> buildFmaCallee(MLIRContext *context, Type valueType) {
 
 std::string getConvertScalarFragment(Type type, Attribute signednessAttr) {
   if (auto vecType = dyn_cast<VectorType>(type)) {
-    if (vecType.getRank() != 1 || vecType.getDimSize(0) != 2) {
+    if (vecType.getRank() != 1 || vecType.getDimSize(0) != kVectorPairLaneCount) {
       return {};
     }
     Type elementType = vecType.getElementType();
@@ -373,7 +373,7 @@ std::string getConvertScalarFragment(Type type, Attribute signednessAttr) {
     return elem;
   }
   auto intType = dyn_cast<IntegerType>(type);
-  if (!intType || (intType.getWidth() != 32 && intType.getWidth() != 64) || !signednessAttr) {
+  if (!intType || (intType.getWidth() != kBits32 && intType.getWidth() != kBits64) || !signednessAttr) {
     return {};
   }
   auto signedness = cast<pto::SignednessAttr>(signednessAttr).getValue();

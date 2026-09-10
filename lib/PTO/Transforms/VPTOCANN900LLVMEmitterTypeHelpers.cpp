@@ -16,7 +16,7 @@ namespace mlir::pto::detail {
 
 bool isMxElementType(Type ty) {
   if (auto floatType = dyn_cast<FloatType>(ty)) {
-    return floatType.getWidth() == 8;
+    return floatType.getWidth() == kBits8;
   }
   if (isa<pto::F4E1M2x2Type, pto::F4E2M1x2Type>(ty)) {
     return true;
@@ -93,13 +93,13 @@ std::string getMadRhsFragment(Type type) {
     return "hif8";
   }
   if (auto intType = dyn_cast<IntegerType>(type)) {
-    if (isSignedOrSignlessInteger(intType, 4)) {
+    if (isSignedOrSignlessInteger(intType, kBits4)) {
       return "s4";
     }
-    if (isSignedOrSignlessInteger(intType, 8)) {
+    if (isSignedOrSignlessInteger(intType, kBits8)) {
       return "s8";
     }
-    if (intType.isUnsigned() && intType.getWidth() == 2) {
+    if (intType.isUnsigned() && intType.getWidth() == kBits2) {
       return "u2";
     }
   }
@@ -346,7 +346,7 @@ std::string getAtomicElementTypeFragment(Type type, Attribute signednessAttr) {
   if (!intType) {
     return {};
   }
-  if (intType.getWidth() != 32 && intType.getWidth() != 64) {
+  if (intType.getWidth() != kBits32 && intType.getWidth() != kBits64) {
     return {};
   }
   if (signednessAttr) {
@@ -377,9 +377,9 @@ std::string getL0LoadElementFragment(Type type) {
 std::string getShuffleIntrinsicTypeFragment(Type type) {
   if (auto intType = dyn_cast<IntegerType>(type)) {
     switch (intType.getWidth()) {
-    case 32:
+    case kBits32:
       return "i32";
-    case 64:
+    case kBits64:
       return "i64";
     default:
       return {};
@@ -392,7 +392,7 @@ std::string getShuffleIntrinsicTypeFragment(Type type) {
     return "f32";
   }
   if (auto vecType = dyn_cast<VectorType>(type)) {
-    if (vecType.getRank() == 1 && vecType.getDimSize(0) == 2 && vecType.getElementType().isF16()) {
+    if (vecType.getRank() == 1 && vecType.getDimSize(0) == kVectorPairLaneCount && vecType.getElementType().isF16()) {
       return "v2f16";
     }
   }
@@ -401,7 +401,7 @@ std::string getShuffleIntrinsicTypeFragment(Type type) {
 
 std::string getReduxIntrinsicTypeFragment(Type type, Attribute signednessAttr) {
   if (auto intType = dyn_cast<IntegerType>(type)) {
-    if (intType.getWidth() != 32) {
+    if (intType.getWidth() != kBits32) {
       return {};
     }
     bool isUnsigned = false;
@@ -421,7 +421,7 @@ std::string getReduxIntrinsicTypeFragment(Type type, Attribute signednessAttr) {
 
 FailureOr<Value> normalizeVdupScalarOperand(OpBuilder &builder, Location loc, Value input, Type resultType) {
   auto intType = dyn_cast<IntegerType>(input.getType());
-  if (!intType || intType.getWidth() != 8) {
+  if (!intType || intType.getWidth() != kBits8) {
     return input;
   }
 
@@ -443,11 +443,11 @@ Value normalizeByteScalarOperandForCANN900VectorCall(OpBuilder &builder, Locatio
                                                      Type semanticElementType) {
   (void)semanticElementType;
   auto intType = dyn_cast<IntegerType>(input.getType());
-  if (!intType || intType.getWidth() != 8 || intType.isSignless()) {
+  if (!intType || intType.getWidth() != kBits8 || intType.isSignless()) {
     return input;
   }
 
-  Type signlessType = builder.getIntegerType(8);
+  Type signlessType = builder.getIntegerType(kBits8);
   return builder.create<UnrealizedConversionCastOp>(loc, TypeRange{signlessType}, input).getResult(0);
 }
 
@@ -496,11 +496,11 @@ std::string getNd2NzCopyElementFragment(Type elementType) {
   }
   if (auto intType = dyn_cast<IntegerType>(elementType)) {
     switch (intType.getWidth()) {
-    case 8:
+    case kBits8:
       return "U8";
-    case 16:
+    case kBits16:
       return "U16";
-    case 32:
+    case kBits32:
       return "U32";
     default:
       return {};
@@ -510,50 +510,15 @@ std::string getNd2NzCopyElementFragment(Type elementType) {
 }
 
 std::optional<uint64_t> parsePredicatePatternImmediate(StringRef pattern) {
-  if (pattern == "PAT_ALL") {
-    return 0;
-  }
-  if (pattern == "PAT_VL1") {
-    return 1;
-  }
-  if (pattern == "PAT_VL2") {
-    return 2;
-  }
-  if (pattern == "PAT_VL3") {
-    return 3;
-  }
-  if (pattern == "PAT_VL4") {
-    return 4;
-  }
-  if (pattern == "PAT_VL8") {
-    return 5;
-  }
-  if (pattern == "PAT_VL16") {
-    return 6;
-  }
-  if (pattern == "PAT_VL32") {
-    return 7;
-  }
-  if (pattern == "PAT_VL64") {
-    return 8;
-  }
-  if (pattern == "PAT_VL128") {
-    return 9;
-  }
-  if (pattern == "PAT_M3") {
-    return 10;
-  }
-  if (pattern == "PAT_M4") {
-    return 11;
-  }
-  if (pattern == "PAT_H") {
-    return 12;
-  }
-  if (pattern == "PAT_Q") {
-    return 13;
-  }
-  if (pattern == "PAT_ALLF") {
-    return 15;
+  static constexpr std::pair<StringRef, uint64_t> patternImmediates[] = {
+      {"PAT_ALL", 0},  {"PAT_VL1", 1},   {"PAT_VL2", 2},   {"PAT_VL3", 3},   {"PAT_VL4", 4},
+      {"PAT_VL8", 5},  {"PAT_VL16", 6},  {"PAT_VL32", 7},  {"PAT_VL64", 8},  {"PAT_VL128", 9},
+      {"PAT_M3", 10},  {"PAT_M4", 11},   {"PAT_H", 12},    {"PAT_Q", 13},    {"PAT_ALLF", 15},
+  };
+  for (const auto &[name, immediate] : patternImmediates) {
+    if (pattern == name) {
+      return immediate;
+    }
   }
   return std::nullopt;
 }
@@ -579,44 +544,15 @@ std::optional<int32_t> parsePostModeImmediate(StringRef mode) {
 }
 
 std::optional<uint64_t> parsePipeImmediate(StringRef pipe) {
-  if (pipe == "PIPE_S") {
-    return 0;
-  }
-  if (pipe == "PIPE_V") {
-    return 1;
-  }
-  if (pipe == "PIPE_M") {
-    return 2;
-  }
-  if (pipe == "PIPE_MTE1") {
-    return 3;
-  }
-  if (pipe == "PIPE_MTE2") {
-    return 4;
-  }
-  if (pipe == "PIPE_MTE3") {
-    return 5;
-  }
-  if (pipe == "PIPE_ALL") {
-    return 6;
-  }
-  if (pipe == "PIPE_MTE4") {
-    return 7;
-  }
-  if (pipe == "PIPE_MTE5") {
-    return 8;
-  }
-  if (pipe == "PIPE_V2") {
-    return 9;
-  }
-  if (pipe == "PIPE_FIX") {
-    return 10;
-  }
-  if (pipe == "VIRTUAL_PIPE_MTE2_L1A") {
-    return 11;
-  }
-  if (pipe == "VIRTUAL_PIPE_MTE2_L1B") {
-    return 12;
+  static constexpr std::pair<StringRef, uint64_t> pipeImmediates[] = {
+      {"PIPE_S", 0},    {"PIPE_V", 1},    {"PIPE_M", 2},    {"PIPE_MTE1", 3}, {"PIPE_MTE2", 4},
+      {"PIPE_MTE3", 5}, {"PIPE_ALL", 6},  {"PIPE_MTE4", 7}, {"PIPE_MTE5", 8}, {"PIPE_V2", 9},
+      {"PIPE_FIX", 10}, {"VIRTUAL_PIPE_MTE2_L1A", 11}, {"VIRTUAL_PIPE_MTE2_L1B", 12},
+  };
+  for (const auto &[name, immediate] : pipeImmediates) {
+    if (pipe == name) {
+      return immediate;
+    }
   }
   return std::nullopt;
 }
@@ -626,7 +562,7 @@ std::optional<uint64_t> parseEventImmediate(StringRef event) {
     return std::nullopt;
   }
   uint64_t value = 0;
-  if (event.getAsInteger(10, value)) {
+  if (event.getAsInteger(kRadixDecimal, value)) {
     return std::nullopt;
   }
   return value;
@@ -634,7 +570,7 @@ std::optional<uint64_t> parseEventImmediate(StringRef event) {
 
 std::optional<uint64_t> parseSprImmediate(StringRef spr) {
   if (spr == "AR") {
-    return 74;
+    return kSprArImmediate;
   }
   return std::nullopt;
 }
@@ -644,20 +580,20 @@ std::optional<unsigned> getDistElementWidth(Type type) {
     return intType.getWidth();
   }
   if (isLowpPayloadElementType(type)) {
-    return 8;
+    return kBits8;
   }
   if (type.isF16() || type.isBF16()) {
-    return 16;
+    return kBits16;
   }
   if (type.isF32()) {
-    return 32;
+    return kBits32;
   }
   if (type.isF64()) {
-    return 64;
+    return kBits64;
   }
   // bf16x2 is a 32-bit packed pair; its dist width is 32 (i32/align4 ABI).
   if (pto::isPTOBF16x2Type(type)) {
-    return 32;
+    return kBits32;
   }
   return std::nullopt;
 }
@@ -689,13 +625,13 @@ VcvtElemKind classifyVcvtElemType(Type type) {
   }
   if (auto intType = dyn_cast<IntegerType>(type)) {
     switch (intType.getWidth()) {
-    case 8:
+    case kBits8:
       return intType.isUnsigned() ? VcvtElemKind::U8 : VcvtElemKind::S8;
-    case 16:
+    case kBits16:
       return intType.isUnsigned() ? VcvtElemKind::U16 : VcvtElemKind::S16;
-    case 32:
+    case kBits32:
       return intType.isUnsigned() ? VcvtElemKind::U32 : VcvtElemKind::S32;
-    case 64:
+    case kBits64:
       return intType.isUnsigned() ? VcvtElemKind::Invalid : VcvtElemKind::S64;
     default:
       return VcvtElemKind::Invalid;

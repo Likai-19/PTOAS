@@ -68,7 +68,7 @@ Value packBlockRepeatStride(Operation *anchor, Value blockStride, Value repeatSt
     return {};
   }
 
-  auto c16 = builder.create<arith::ConstantIntOp>(anchor->getLoc(), 16, 32);
+  auto c16 = builder.create<arith::ConstantIntOp>(anchor->getLoc(), kBlockRepeatStrideBlockShift, 32);
   auto blockShifted = builder.create<arith::ShLIOp>(anchor->getLoc(), blockI32, c16);
   return builder.create<arith::OrIOp>(anchor->getLoc(), blockShifted, repeatI32).getResult();
 }
@@ -84,22 +84,22 @@ std::optional<uint64_t> parseOrderImmediate(StringRef order) {
 }
 
 FailureOr<Value> packCopyGmToUbConfig0(Operation *anchor, ValueRange operands) {
-  if (operands.size() != 11) {
+  if (operands.size() != kGmToUbConfig0OperandCount) {
     return failure();
   }
 
   SmallVector<std::pair<Value, uint64_t>, 6> fields = {
-      {operands[3], 4},
-      {operands[4], 25},
-      {operands[5], 46},
-      {operands[6], 52},
-      {operands[7], 58},
-      {operands[8], 60}};
+      {operands[3], kGmToUbBurstNumShift},
+      {operands[4], kGmToUbBurstLenShift},
+      {operands[5], kGmToUbLeftPaddingShift},
+      {operands[6], kGmToUbRightPaddingShift},
+      {operands[7], kGmToUbDataSelectShift},
+      {operands[8], kGmToUbCacheCtlShift}};
   return packShiftedFields(anchor, operands[2], fields);
 }
 
 FailureOr<Value> packCopyGmToUbConfig1(Operation *anchor, ValueRange operands) {
-  if (operands.size() != 11) {
+  if (operands.size() != kGmToUbConfig0OperandCount) {
     return failure();
   }
   return packLoopPair(anchor, operands[9], operands[10]);
@@ -108,7 +108,7 @@ FailureOr<Value> packCopyGmToUbConfig1(Operation *anchor, ValueRange operands) {
 [[maybe_unused]] FailureOr<Value> packCopyGmToUbConfig0(Operation *anchor, Value sid, Value nBurst, Value lenBurst,
                                                         Value leftPadding, Value rightPadding, Value dataSelect,
                                                         Value cacheCtl) {
-  SmallVector<Value, 11> operands(11);
+  SmallVector<Value, kGmToUbConfig0OperandCount> operands(kGmToUbConfig0OperandCount);
   operands[2] = sid;
   operands[3] = nBurst;
   operands[4] = lenBurst;
@@ -120,16 +120,17 @@ FailureOr<Value> packCopyGmToUbConfig1(Operation *anchor, ValueRange operands) {
 }
 
 FailureOr<Value> packCopyUbToGmConfig0(Operation *anchor, ValueRange operands) {
-  if (operands.size() != 8) {
+  if (operands.size() != kUbToGmConfig0OperandCount) {
     return failure();
   }
   SmallVector<std::pair<Value, uint64_t>, 3> fields = {
-      {operands[3], 4}, {operands[4], 25}, {operands[5], 60}};
+      {operands[3], kUbToGmBurstNumShift}, {operands[4], kUbToGmBurstLenShift},
+      {operands[5], kUbToGmL2CacheCtrlShift}};
   return packShiftedFields(anchor, operands[2], fields);
 }
 
 FailureOr<Value> packCopyUbToGmConfig1(Operation *anchor, ValueRange operands) {
-  if (operands.size() != 8) {
+  if (operands.size() != kUbToGmConfig0OperandCount) {
     return failure();
   }
   return packLoopPair(anchor, operands[6], operands[7]);
@@ -137,7 +138,7 @@ FailureOr<Value> packCopyUbToGmConfig1(Operation *anchor, ValueRange operands) {
 
 [[maybe_unused]] FailureOr<Value> packCopyUbToGmConfig0(Operation *anchor, Value sid, Value nBurst, Value lenBurst,
                                                         Value l2CacheCtl) {
-  SmallVector<Value, 8> operands(8);
+  SmallVector<Value, kUbToGmConfig0OperandCount> operands(kUbToGmConfig0OperandCount);
   operands[2] = sid;
   operands[3] = nBurst;
   operands[4] = lenBurst;
@@ -146,25 +147,27 @@ FailureOr<Value> packCopyUbToGmConfig1(Operation *anchor, ValueRange operands) {
 }
 
 FailureOr<Value> packCopyUbToUbConfig(Operation *anchor, ValueRange operands) {
-  if (operands.size() != 7) {
+  if (operands.size() != kUbToUbConfigOperandCount) {
     return failure();
   }
   SmallVector<std::pair<Value, uint64_t>, 3> fields = {
-      {operands[4], 16}, {operands[5], 32}, {operands[6], 48}};
+      {operands[4], kUbToUbNBurstShift}, {operands[5], kUbToUbLenBurstShift},
+      {operands[6], kUbToUbDstGapShift}};
   return packShiftedFields(anchor, operands[3], fields);
 }
 
 FailureOr<Value> packCopyCbufToUbConfig(Operation *anchor, ValueRange operands) {
-  if (operands.size() != 7) {
+  if (operands.size() != kCbufToUbConfigOperandCount) {
     return failure();
   }
   SmallVector<std::pair<Value, uint64_t>, 4> fields = {
-      {operands[3], 4}, {operands[4], 16}, {operands[5], 32}, {operands[6], 48}};
+      {operands[3], kCbufToUbNBurstShift}, {operands[4], kCbufToUbLenBurstShift},
+      {operands[5], kCbufToUbSrcGapShift}, {operands[6], kCbufToUbDstGapShift}};
   return packShiftedFields(anchor, operands[2], fields);
 }
 
 FailureOr<Value> packCopyUbToCbufConfig(Operation *anchor, ValueRange operands) {
-  if (operands.size() != 7) {
+  if (operands.size() != kCbufToUbConfigOperandCount) {
     return failure();
   }
   return packCopyCbufToUbConfig(anchor, operands);
@@ -209,8 +212,8 @@ FailureOr<Value> packCopyGmToCbufConfig0(Operation *anchor, Value nBurst, Value 
     return failure();
   }
   Value config0 = packer.i64Constant(0); // sid
-  config0 = packer.bitOr(config0, packer.shl(nBurstI64, 4));     // burst_num[24:4]
-  config0 = packer.bitOr(config0, packer.shl(lenBurstI64, 25));  // burst_len[45:25]
+  config0 = packer.bitOr(config0, packer.shl(nBurstI64, kGmToCbufBurstNumShift));     // burst_num[24:4]
+  config0 = packer.bitOr(config0, packer.shl(lenBurstI64, kGmToCbufBurstLenShift));  // burst_len[45:25]
   return config0;
 }
 
@@ -228,7 +231,7 @@ static FailureOr<Value> packSrcDstStrides(Operation *anchor, Value srcStride, Va
 
 FailureOr<Value> packCopyGmToCbufConfig1(Operation *anchor, Value srcStride, Value dstStride) {
   // config1 packs burst_src_stride[39:0] and burst_dst_stride[60:40].
-  return packSrcDstStrides(anchor, srcStride, dstStride, 40);
+  return packSrcDstStrides(anchor, srcStride, dstStride, kGmToCbufDstStrideShift);
 }
 
 FailureOr<Value> packCopyGmToCbufMultiConfig0(Operation *anchor, Value sid, Value loop1SrcStride, Value l2CacheCtl,
@@ -242,9 +245,9 @@ FailureOr<Value> packCopyGmToCbufMultiConfig0(Operation *anchor, Value sid, Valu
     return failure();
   }
   Value config0 = sidI64;
-  config0 = packer.bitOr(config0, packer.shl(loop1SrcStrideI64, 4));
-  config0 = packer.bitOr(config0, packer.shl(l2CacheCtlI64, 44));
-  config0 = packer.bitOr(config0, packer.shl(nValueI64, 48));
+  config0 = packer.bitOr(config0, packer.shl(loop1SrcStrideI64, kGmToCbufMultiLoop1SrcStrideShift));
+  config0 = packer.bitOr(config0, packer.shl(l2CacheCtlI64, kGmToCbufMultiL2CacheCtrlShift));
+  config0 = packer.bitOr(config0, packer.shl(nValueI64, kGmToCbufMultiNValueShift));
   return config0;
 }
 
@@ -257,8 +260,8 @@ FailureOr<Value> packCopyGmToCbufMultiConfig1(Operation *anchor, Value dValue, V
     return failure();
   }
   Value config1 = dValueI64;
-  config1 = packer.bitOr(config1, packer.shl(loop4SrcStrideI64, 21));
-  config1 = packer.bitOr(config1, packer.shl(smallC0EnI64, 61));
+  config1 = packer.bitOr(config1, packer.shl(loop4SrcStrideI64, kGmToCbufMultiLoop4SrcStrideShift));
+  config1 = packer.bitOr(config1, packer.shl(smallC0EnI64, kGmToCbufMultiSmallC0EnShift));
   return config1;
 }
 
@@ -267,7 +270,9 @@ FailureOr<Value> packCopyCbufToBtConfig(Operation *anchor, Value convControl, Va
   ConfigPacker packer(anchor);
   Value zero = packer.i64Constant(0);
   SmallVector<std::pair<Value, uint64_t>, 5> fields = {
-      {convControl, 3}, {nBurst, 4}, {lenBurst, 16}, {sourceGap, 32}, {dstGap, 48}};
+      {convControl, kCbufToBtConvControlShift}, {nBurst, kCbufToBtNBurstShift},
+      {lenBurst, kCbufToBtLenBurstShift}, {sourceGap, kCbufToBtSourceGapShift},
+      {dstGap, kCbufToBtDstGapShift}};
   return packShiftedFields(anchor, zero, fields);
 }
 
@@ -281,10 +286,10 @@ FailureOr<Value> packCopyCbufToFbufConfig(Operation *anchor, Value nBurst, Value
   if (!nBurstI64 || !lenBurstI64 || !sourceGapI64 || !dstGapI64) {
     return failure();
   }
-  Value config = packer.shl(nBurstI64, 4);
-  config = packer.bitOr(config, packer.shl(lenBurstI64, 16));
-  config = packer.bitOr(config, packer.shl(sourceGapI64, 32));
-  config = packer.bitOr(config, packer.shl(dstGapI64, 48));
+  Value config = packer.shl(nBurstI64, kCbufToFbufNBurstShift);
+  config = packer.bitOr(config, packer.shl(lenBurstI64, kCbufToFbufLenBurstShift));
+  config = packer.bitOr(config, packer.shl(sourceGapI64, kCbufToFbufSourceGapShift));
+  config = packer.bitOr(config, packer.shl(dstGapI64, kCbufToFbufDstGapShift));
   return config;
 }
 
@@ -301,9 +306,9 @@ static FailureOr<Value> packLoadCbufTileConfig0(Operation *anchor, Value mStart,
     return failure();
   }
   Value config0 = mStartI64;
-  config0 = packer.bitOr(config0, packer.shl(kStartI64, 16));
-  config0 = packer.bitOr(config0, packer.shl(mStepI64, 32));
-  config0 = packer.bitOr(config0, packer.shl(kStepI64, 40));
+  config0 = packer.bitOr(config0, packer.shl(kStartI64, kLoadCbufKStartShift));
+  config0 = packer.bitOr(config0, packer.shl(mStepI64, kLoadCbufMStepShift));
+  config0 = packer.bitOr(config0, packer.shl(kStepI64, kLoadCbufKStepShift));
   return config0;
 }
 
@@ -312,7 +317,7 @@ FailureOr<Value> packLoadCbufToS4Config0(Operation *anchor, Value mStart, Value 
 }
 
 FailureOr<Value> packLoadCbufToS4Config1(Operation *anchor, Value srcStride, Value dstStride) {
-  return packSrcDstStrides(anchor, srcStride, dstStride, 16);
+  return packSrcDstStrides(anchor, srcStride, dstStride, kLoadCbufDstStrideShift);
 }
 
 FailureOr<Value> packLoadCbufToCaConfig0(Operation *anchor, Value mStart, Value kStart, Value mStep, Value kStep) {
@@ -320,7 +325,7 @@ FailureOr<Value> packLoadCbufToCaConfig0(Operation *anchor, Value mStart, Value 
 }
 
 FailureOr<Value> packLoadCbufToCaConfig1(Operation *anchor, Value srcStride, Value dstStride) {
-  return packSrcDstStrides(anchor, srcStride, dstStride, 16);
+  return packSrcDstStrides(anchor, srcStride, dstStride, kLoadCbufDstStrideShift);
 }
 
 FailureOr<Value> packLoadCbufToCbConfig0(Operation *anchor, Value mStart, Value kStart, Value mStep, Value kStep) {
@@ -328,18 +333,18 @@ FailureOr<Value> packLoadCbufToCbConfig0(Operation *anchor, Value mStart, Value 
 }
 
 FailureOr<Value> packLoadCbufToCbConfig1(Operation *anchor, Value srcStride, Value dstStride) {
-  return packSrcDstStrides(anchor, srcStride, dstStride, 16);
+  return packSrcDstStrides(anchor, srcStride, dstStride, kLoadCbufDstStrideShift);
 }
 
 Value buildMadBiasDestination(Operation *anchor, ConversionPatternRewriter &rewriter, Value dst, Value bias) {
   Type i64Ty = rewriter.getI64Type();
   Value dstAddr = rewriter.create<LLVM::PtrToIntOp>(anchor->getLoc(), i64Ty, dst);
   Value biasAddr = rewriter.create<LLVM::PtrToIntOp>(anchor->getLoc(), i64Ty, bias);
-  Value lowMask = getI64Constant(rewriter, anchor->getLoc(), 0xffffffffULL);
+  Value lowMask = getI64Constant(rewriter, anchor->getLoc(), kMadBiasAddressMask);
   Value dstLow = rewriter.create<arith::AndIOp>(anchor->getLoc(), dstAddr, lowMask);
   Value biasLow = rewriter.create<arith::AndIOp>(anchor->getLoc(), biasAddr, lowMask);
   Value biasHigh =
-      rewriter.create<arith::ShLIOp>(anchor->getLoc(), biasLow, getI64Constant(rewriter, anchor->getLoc(), 32));
+      rewriter.create<arith::ShLIOp>(anchor->getLoc(), biasLow, getI64Constant(rewriter, anchor->getLoc(), kMadBiasHighWordShift));
   Value packed = rewriter.create<arith::OrIOp>(anchor->getLoc(), dstLow, biasHigh);
   return rewriter.create<LLVM::IntToPtrOp>(anchor->getLoc(), dst.getType(), packed);
 }
@@ -350,7 +355,7 @@ FailureOr<Value> packVbitsortConfig(Operation *anchor, Value repeatTimes) {
   if (!repeatI64) {
     return failure();
   }
-  return packer.shl(repeatI64, 56);
+  return packer.shl(repeatI64, kBitsortRepeatShift);
 }
 
 [[maybe_unused]] FailureOr<Value> materializeDynamicPltMask(ConversionPatternRewriter &rewriter, LoweringState &state,
@@ -370,11 +375,11 @@ FailureOr<Value> packVbitsortConfig(Operation *anchor, Value repeatTimes) {
   } else if (vectorElemType.isF16() || vectorElemType.isBF16()) {
     calleeName = StringRef("llvm.hivm.plt.b16.v300");
   } else if (auto intType = dyn_cast<IntegerType>(vectorElemType)) {
-    if (intType.getWidth() == 32) {
+    if (intType.getWidth() == kBits32) {
       calleeName = StringRef("llvm.hivm.plt.b32.v300");
-    } else if (intType.getWidth() == 16) {
+    } else if (intType.getWidth() == kBits16) {
       calleeName = StringRef("llvm.hivm.plt.b16.v300");
-    } else if (intType.getWidth() == 8) {
+    } else if (intType.getWidth() == kBits8) {
       calleeName = StringRef("llvm.hivm.plt.b8.v300");
     }
   }
@@ -382,7 +387,7 @@ FailureOr<Value> packVbitsortConfig(Operation *anchor, Value repeatTimes) {
     return failure();
   }
 
-  Type maskType = VectorType::get({256}, rewriter.getI1Type());
+  Type maskType = VectorType::get({kPltMaskVectorLength}, rewriter.getI1Type());
   auto funcType = rewriter.getFunctionType(TypeRange{i32Type}, TypeRange{maskType, i32Type});
   auto call = rewriter.create<func::CallOp>(loc, calleeName, funcType.getResults(), ValueRange{laneCountI32});
   state.plannedDecls.push_back(PlannedDecl{calleeName.str(), funcType});

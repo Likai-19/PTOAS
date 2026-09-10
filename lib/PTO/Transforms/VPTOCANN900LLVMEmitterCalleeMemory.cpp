@@ -16,7 +16,7 @@ FailureOr<StringRef> buildCopyGmToUbCallee(MLIRContext *context, Type sourceType
     return failure();
   }
   Type elementType = ptrType.getElementType();
-  if ((isa<IntegerType>(elementType) && cast<IntegerType>(elementType).getWidth() == 64) || elementType.isF64()) {
+  if ((isa<IntegerType>(elementType) && cast<IntegerType>(elementType).getWidth() == kBits64) || elementType.isF64()) {
     return StringAttr::get(context, "llvm.hivm.MOV.OUT.TO.UB.ALIGN.V2.s32.DV").getValue();
   }
   std::string elem = getCopyElementFragment(elementType);
@@ -195,7 +195,7 @@ FailureOr<StringRef> buildCopyCbufToBtCallee(pto::CopyCbufToBtOp op) {
   if (srcElem.isF32()) {
     return StringAttr::get(op.getContext(), "llvm.hivm.MOV.L1.TO.BT.f32").getValue();
   }
-  if (auto intType = dyn_cast<IntegerType>(srcElem); intType && intType.getWidth() == 32) {
+  if (auto intType = dyn_cast<IntegerType>(srcElem); intType && intType.getWidth() == kBits32) {
     return StringAttr::get(op.getContext(), "llvm.hivm.MOV.L1.TO.BT.s32").getValue();
   }
   return failure();
@@ -383,9 +383,9 @@ FailureOr<StringRef> buildVgather2Callee(MLIRContext *context, Type sourceType, 
 
   std::string vec;
   int64_t intrinsicLanes = *lanes;
-  if (pto::getPTOStorageElemBitWidth(sourceElemType) == 8) {
+  if (pto::getPTOStorageElemBitWidth(sourceElemType) == kBits8) {
     vec = getElementTypeFragment(sourceElemType);
-    intrinsicLanes *= 2;
+    intrinsicLanes *= kVgather2LaneMultiplier;
   } else {
     vec = getElementTypeFragment(resultElemType);
   }
@@ -422,7 +422,7 @@ FailureOr<Type> getVgather2OffsetsCarrierType(PatternRewriter &rewriter, Type so
   }
 
   Type carrierType = offsetsType;
-  if (pto::getPTOStorageElemBitWidth(elementType) == 16) {
+  if (pto::getPTOStorageElemBitWidth(elementType) == kBits16) {
     if (*lanes % 2 != 0) {
       return failure();
     }
@@ -463,7 +463,8 @@ FailureOr<StringRef> buildVmulscvtCallee(MLIRContext *context, Type inputType, T
   if (!inputElemType || !resultElemType || !inputLanes || !resultLanes) {
     return failure();
   }
-  if (!inputElemType.isF32() || !resultElemType.isF16() || *inputLanes != 64 || *resultLanes != 128) {
+  if (!inputElemType.isF32() || !resultElemType.isF16() || *inputLanes != kVmulscvtInputLanes ||
+      *resultLanes != kVmulscvtResultLanes) {
     return failure();
   }
   return StringAttr::get(context, "llvm.hivm.vmulscvt.v128f16").getValue();
@@ -493,10 +494,10 @@ FailureOr<StringRef> buildVexpdifCallee(MLIRContext *context, Type inputType, Ty
   if (!srcLanes) {
     return failure();
   }
-  if (inputElem.isF16() && resultElem.isF32() && *srcLanes == 128) {
+  if (inputElem.isF16() && resultElem.isF32() && *srcLanes == kVexpdifInterleaveLanes) {
     return StringAttr::get(context, "llvm.hivm.vexpdif.interleave.v128f16").getValue();
   }
-  if (inputElem.isF32() && resultElem.isF32() && *srcLanes == 64) {
+  if (inputElem.isF32() && resultElem.isF32() && *srcLanes == kVexpdifLanes) {
     return StringAttr::get(context, "llvm.hivm.vexpdif.v64f32").getValue();
   }
   return failure();
@@ -553,9 +554,9 @@ FailureOr<Value> packVmrgsort4SourceAddr(Operation *anchor, Value source0, Value
   };
 
   FailureOr<Value> low0 = packOne(source0, 0);
-  FailureOr<Value> low1 = packOne(source1, 16);
-  FailureOr<Value> low2 = packOne(source2, 32);
-  FailureOr<Value> low3 = packOne(source3, 48);
+  FailureOr<Value> low1 = packOne(source1, kVgather2PackShift16);
+  FailureOr<Value> low2 = packOne(source2, kVgather2PackShift32);
+  FailureOr<Value> low3 = packOne(source3, kVgather2PackShift48);
   if (failed(low0) || failed(low1) || failed(low2) || failed(low3)) {
     return failure();
   }
@@ -612,7 +613,7 @@ FailureOr<Value> encodeMovPadValue(Location loc, Value value, ConversionPatternR
     return failure();
   }
 
-  if (bitWidth != 8 && bitWidth != 16 && bitWidth != 32) {
+  if (bitWidth != kMovPadWidth8 && bitWidth != kMovPadWidth16 && bitWidth != kMovPadWidth32) {
     return failure();
   }
 
