@@ -21,6 +21,28 @@ if(TARGET vfsim::ir_planner)
     $<BUILD_INTERFACE:vfsim::ir_planner>)
 endif()
 
+# VMIToVPTO lowering internals are textual include units of VMIToVPTO.cpp.
+# They are listed here so LLVM per-directory source check is satisfied and
+# marked HEADER_FILE_ONLY so they are not compiled as separate translation
+# units (VMIToVPTO.cpp includes them inside its own anonymous namespace).
+set(_ptoas_vmi_split_units
+  VMIToVPTOConversionInternals.cpp
+  VMIToVPTOMemoryInternals.cpp
+  VMIToVPTOMaskInternals.cpp
+  VMIToVPTODataLayoutInternals.cpp
+  VMIToVPTOPatternInternals0.cpp
+  VMIToVPTOPatternInternals1.cpp
+  VMIToVPTOPatternInternals2.cpp
+  VMIToVPTOPatternInternals3.cpp
+  VMIToVPTOPatternInternals4.cpp
+  VMIToVPTOPatternInternals5.cpp
+  VMIToVPTOPatternInternals6.cpp
+  VMIToVPTOPatternInternals7.cpp
+  VMIToVPTOPatternInternals8.cpp
+  VMIToVPTOPatternInternals9.cpp
+)
+set_source_files_properties(${_ptoas_vmi_split_units} PROPERTIES HEADER_FILE_ONLY TRUE)
+
 add_mlir_dialect_library(PTOTransforms
   ENABLE_AGGREGATION
 
@@ -106,6 +128,7 @@ add_mlir_dialect_library(PTOTransforms
   VMILayoutRematerialize.cpp
   VMILayoutSinkMaterialization.cpp
   VMIToVPTO.cpp
+  ${_ptoas_vmi_split_units}
   VPTOStatefulStreamFusion.cpp
   PTOExpandSoftLib.cpp
   SIMTPersistentFragmentAnalysis.cpp
