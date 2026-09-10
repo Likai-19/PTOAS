@@ -764,54 +764,69 @@ int64_t getEmitCScalarByteWidth(Type elemTy) {
   return 4;
 }
 
-std::string getEmitCScalarTypeToken(Type elemTy) {
-  if (pto::isPTOFloat8E4M3LikeType(elemTy)) {
-    return "float8_e4m3_t";
-  }
-  if (pto::isPTOFloat8E5M2LikeType(elemTy)) {
-    return "float8_e5m2_t";
-  }
-  if (isF8E8M0ElemType(elemTy)) {
-    return "float8_e8m0_t";
-  }
-  if (isa<pto::HiF8Type>(elemTy)) {
-    return "hifloat8_t";
-  }
-  if (isa<pto::F4E1M2x2Type>(elemTy)) {
-    return "float4_e1m2x2_t";
-  }
-  if (isa<pto::F4E2M1x2Type>(elemTy)) {
-    return "float4_e2m1x2_t";
-  }
-  if (elemTy.isF16()) {
-    return "half";
-  }
-  if (elemTy.isBF16()) {
-    return "bfloat16_t";
-  }
-  if (elemTy.isF32()) {
-    return "float";
-  }
-  if (elemTy.isF64()) {
-    return "double";
-  }
+// Map low-precision (FP8/FP4 family) types to their EmitC scalar token.
+// Returns std::nullopt for non-low-precision types.
+static std::optional<StringRef> getLowPrecisionToken(Type elemTy) {
+  if (pto::isPTOFloat8E4M3LikeType(elemTy))
+    return StringRef("float8_e4m3_t");
+  if (pto::isPTOFloat8E5M2LikeType(elemTy))
+    return StringRef("float8_e5m2_t");
+  if (isF8E8M0ElemType(elemTy))
+    return StringRef("float8_e8m0_t");
+  if (isa<pto::HiF8Type>(elemTy))
+    return StringRef("hifloat8_t");
+  if (isa<pto::F4E1M2x2Type>(elemTy))
+    return StringRef("float4_e1m2x2_t");
+  if (isa<pto::F4E2M1x2Type>(elemTy))
+    return StringRef("float4_e2m1x2_t");
+  return std::nullopt;
+}
+
+// Map standard float types to their EmitC scalar token.
+static std::optional<StringRef> getFloatToken(Type elemTy) {
+  if (elemTy.isF16())
+    return StringRef("half");
+  if (elemTy.isBF16())
+    return StringRef("bfloat16_t");
+  if (elemTy.isF32())
+    return StringRef("float");
+  if (elemTy.isF64())
+    return StringRef("double");
+  return std::nullopt;
+}
+
+// Map integer types to their EmitC scalar token; signless and signed map to
+// signed C types, unsigned maps to unsigned C types.
+static std::optional<StringRef> getIntegerToken(Type elemTy) {
   if (elemTy.isInteger(8)) {
-    return (elemTy.isSignlessInteger(8) || elemTy.isSignedInteger(8)) ? "int8_t"
-                                                                       : "uint8_t";
+    return (elemTy.isSignlessInteger(8) || elemTy.isSignedInteger(8))
+               ? StringRef("int8_t")
+               : StringRef("uint8_t");
   }
   if (elemTy.isInteger(16)) {
     return (elemTy.isSignlessInteger(16) || elemTy.isSignedInteger(16))
-               ? "int16_t"
-               : "uint16_t";
+               ? StringRef("int16_t")
+               : StringRef("uint16_t");
   }
   if (elemTy.isInteger(32)) {
     return (elemTy.isSignlessInteger(32) || elemTy.isSignedInteger(32))
-               ? "int32_t"
-               : "uint32_t";
+               ? StringRef("int32_t")
+               : StringRef("uint32_t");
   }
   if (elemTy.isInteger(64)) {
-    return cast<IntegerType>(elemTy).isUnsigned() ? "uint64_t" : "int64_t";
+    return cast<IntegerType>(elemTy).isUnsigned() ? StringRef("uint64_t")
+                                                  : StringRef("int64_t");
   }
+  return std::nullopt;
+}
+
+std::string getEmitCScalarTypeToken(Type elemTy) {
+  if (auto lowPrec = getLowPrecisionToken(elemTy))
+    return lowPrec->str();
+  if (auto flt = getFloatToken(elemTy))
+    return flt->str();
+  if (auto intTok = getIntegerToken(elemTy))
+    return intTok->str();
   return "float";
 }
 

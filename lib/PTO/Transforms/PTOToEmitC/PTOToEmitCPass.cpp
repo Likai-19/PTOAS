@@ -1013,18 +1013,6 @@ static inline To ptoas_bitcast(From from) {
   // lowered.
   LogicalResult lowerSingleCast(UnrealizedConversionCastOp cast,
                                 TypeConverter &typeConverter) const {
-    auto isEmitCTileLikeType = [](Type ty) {
-      auto opaqueTy = dyn_cast<emitc::OpaqueType>(ty);
-      if (!opaqueTy)
-        return false;
-      StringRef value = opaqueTy.getValue();
-      return value.contains("Tile<") || value.contains("ConvTile<");
-    };
-    auto isLoweredIndexType = [](Type ty) {
-      auto opaqueTy = dyn_cast<emitc::OpaqueType>(ty);
-      return opaqueTy && opaqueTy.getValue() == "int64_t";
-    };
-
     if (cast->getNumOperands() != 1 || cast->getNumResults() != 1) {
       cast.emitError() << "unsupported unrealized_conversion_cast shape";
       return failure();
@@ -1037,15 +1025,7 @@ static inline To ptoas_bitcast(From from) {
 
     // Dead or identity/bridge casts whose input already carries the lowered
     // value: drop or fold the cast away by forwarding the input.
-    if (output.use_empty() || inTy == outTy ||
-        [&] {
-          Type convertedOutTy = typeConverter.convertType(outTy);
-          return convertedOutTy && convertedOutTy == inTy;
-        }() ||
-        (isa<IndexType>(inTy) && isLoweredIndexType(outTy)) ||
-        (isLoweredIndexType(inTy) && isa<IndexType>(outTy)) ||
-        (isEmitCPointerLikeType(inTy) && isa<BaseMemRefType>(outTy)) ||
-        (isEmitCTileLikeType(inTy) && isa<pto::TileBufType>(outTy))) {
+    if (isFoldableBridgeCast(output, inTy, outTy, typeConverter)) {
       output.replaceAllUsesWith(input);
       return success();
     }
@@ -1070,6 +1050,39 @@ static inline To ptoas_bitcast(From from) {
     cast.emitError() << "cannot lower unrealized_conversion_cast(" << inTy
                      << " -> " << outTy << ") to emitc.cast";
     return failure();
+  }
+
+  // Whether the cast result is dead or the cast is a type-conversion bridge
+  // whose input already carries the lowered value: it can simply be replaced
+  // by its input.
+  bool isFoldableBridgeCast(Value output, Type inTy, Type outTy,
+                            TypeConverter &typeConverter) const {
+    if (output.use_empty() || inTy == outTy) {
+      return true;
+    }
+    // IndexType is lowered to int64_t for EmitC; fold index<->int64 bridges.
+    if (isa<IndexType>(inTy) && isLoweredIndexType(outTy)) {
+      return true;
+    }
+    if (isLoweredIndexType(inTy) && isa<IndexType>(outTy)) {
+      return true;
+    }
+    // SCF/CFG type conversion can transiently materialize pointer->memref and
+    // tile->tile_buf bridges; the EmitC form is the value we keep.
+    if (isEmitCPointerLikeType(inTy) && isa<BaseMemRefType>(outTy)) {
+      return true;
+    }
+    if (isEmitCTileLikeType(inTy) && isa<pto::TileBufType>(outTy)) {
+      return true;
+    }
+    // The converted output type equals the input type: the cast is a no-op.
+    Type convertedOutTy = typeConverter.convertType(outTy);
+    return convertedOutTy && convertedOutTy == inTy;
+  }
+
+  static bool isLoweredIndexType(Type ty) {
+    auto opaqueTy = dyn_cast<emitc::OpaqueType>(ty);
+    return opaqueTy && opaqueTy.getValue() == "int64_t";
   }
 
   LogicalResult lowerUnrealizedCasts(ModuleOp mop,
