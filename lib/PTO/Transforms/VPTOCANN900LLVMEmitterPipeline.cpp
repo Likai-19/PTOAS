@@ -10,11 +10,18 @@
 
 namespace mlir::pto::detail {
 
-void populateVPTOOpLoweringPatterns(const VPTOTypeConverter &typeConverter, RewritePatternSet &patterns,
-                                    LoweringState &state) {
+static bool isC220Target(StringRef march) {
+  return march == "dav-c220-vec" || march == "dav-c220-cube";
+}
+
+void populateVPTOOpLoweringPatterns(VPTOTypeConverter &typeConverter, RewritePatternSet &patterns,
+                                    LoweringState &state, StringRef march) {
   populateVPTOArithmeticPatterns(typeConverter, patterns, state);
   populateVPTOVectorMemoryPatterns(typeConverter, patterns, state);
   populateVPTOScalarPatterns(typeConverter, patterns, state);
+  if (isC220Target(march)) {
+    ubuf::populateVPTOUbufPatterns(typeConverter, patterns, state, march.str());
+  }
 }
 
 void markIllegalVPTOSyncOps(ConversionTarget &target) {
@@ -84,7 +91,7 @@ void markIllegalVPTOArithmeticAndCopyOps(ConversionTarget &target) {
       pto::MadBiasRawOp, pto::MadMxRawOp, pto::MadMxBiasRawOp>();
 }
 
-void configureVPTOOpLoweringTarget(ConversionTarget &target) {
+void configureVPTOOpLoweringTarget(ConversionTarget &target, StringRef march) {
   target.addLegalOp<ModuleOp>();
   target.addLegalDialect<arith::ArithDialect, cf::ControlFlowDialect, LLVM::LLVMDialect, func::FuncDialect,
                          scf::SCFDialect>();
@@ -95,6 +102,14 @@ void configureVPTOOpLoweringTarget(ConversionTarget &target) {
   markIllegalVPTOMemoryOps(target);
   markIllegalVPTOPredicateOps(target);
   markIllegalVPTOArithmeticAndCopyOps(target);
+  if (isC220Target(march)) {
+    target.addIllegalOp<pto::UBVaddOp, pto::UBVsubOp, pto::UBVmulOp, pto::UBVdivOp, pto::UBVmaxOp, pto::UBVminOp,
+                        pto::UBVandOp, pto::UBVorOp, pto::UBVaddReluOp, pto::UBVnotOp, pto::UBVabsOp, pto::UBVreluOp,
+                        pto::UBVexpOp, pto::UBVlnOp, pto::UBVsqrtOp, pto::UBVrsqrtOp, pto::UBVshlOp, pto::UBVshrOp,
+                        pto::UBVmulSOp, pto::UBVaddSOp, pto::UBVmaxSOp, pto::UBVminSOp, pto::UBVdupOp,
+                        pto::UBVgatherbOp, pto::UBVgatherOp, pto::UBSetMaskOp, pto::UBSetMaskCountOp,
+                        pto::UBSetMaskNormOp>();
+  }
   target.markUnknownOpDynamicallyLegal([](Operation *op) { return !isa<pto::TrapOp>(op); });
 }
 
@@ -159,15 +174,15 @@ void foldVPTOTypeCasts(ModuleOp module, TypeConverter &typeConverter) {
   }
 }
 
-LogicalResult lowerVPTOOps(ModuleOp module, llvm::raw_ostream &diagOS) {
+LogicalResult lowerVPTOOps(ModuleOp module, StringRef march, llvm::raw_ostream &diagOS) {
   MLIRContext *context = module.getContext();
   VPTOTypeConverter typeConverter(context);
   ConversionTarget target(*context);
   RewritePatternSet patterns(context);
   LoweringState state;
 
-  configureVPTOOpLoweringTarget(target);
-  populateVPTOOpLoweringPatterns(typeConverter, patterns, state);
+  configureVPTOOpLoweringTarget(target, march);
+  populateVPTOOpLoweringPatterns(typeConverter, patterns, state, march);
 
   if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
     diagOS << "VPTO LLVM emission failed: VPTO op lowering failed\n";
@@ -274,6 +289,10 @@ std::optional<FunctionKernelKind> getKernelKind(ModuleOp module) {
 
 VPTOEmissionOptions makeDeviceEmissionOptions(const VPTOEmissionOptions &baseOptions, FunctionKernelKind kind) {
   VPTOEmissionOptions options = baseOptions;
+  constexpr llvm::StringLiteral kC220VecTargetFeatures =
+      "+ASAN,+ATOMIC,+AtomicForB64,+AtomicForB8 ,+FFTSBlk,+MOVX8,+MSTX,+MathOp,+SPR7bits,+dav-c220-vec";
+  constexpr llvm::StringLiteral kC220CubeTargetFeatures =
+      "+ASAN,+ATOMIC,+AtomicForB64,+AtomicForB8 ,+FFTSBlk,+MOVX8,+MSTX,+MathOp,+SPR7bits,+dav-c220-cube";
   constexpr llvm::StringLiteral kVecTargetFeatures =
       "+ATOMIC,+ArchV130,+AregRedefinable,+ArithmeticBf16,+AtomicForB8 ,"
       "+F8e4m3,+F8e5m2,+F8e8m0,+FFTSBlk,+Fp4e1m2x2,+Fp4e2m1x2,+LDExtRefine,"
@@ -282,7 +301,14 @@ VPTOEmissionOptions makeDeviceEmissionOptions(const VPTOEmissionOptions &baseOpt
       "+ATOMIC,+ArchV130,+AregRedefinable,+ArithmeticBf16,+AtomicForB8 ,"
       "+F8e4m3,+F8e5m2,+F8e8m0,+FFTSBlk,+Fp4e1m2x2,+Fp4e2m1x2,+LDExtRefine,"
       "+MOVX8,+SPR7bits,+SyncV,+dav-c310-cube";
-  if (kind == FunctionKernelKind::Vector) {
+  if (isC220Target(baseOptions.march)) {
+    const bool isVector = kind == FunctionKernelKind::Vector;
+    options.march = isVector ? "dav-c220-vec" : "dav-c220-cube";
+    options.aicoreArch = options.march;
+    options.defaultTargetCPU = options.march;
+    options.defaultTargetFeatures =
+        (isVector ? kC220VecTargetFeatures : kC220CubeTargetFeatures).str();
+  } else if (kind == FunctionKernelKind::Vector) {
     options.march = "dav-c310-vec";
     options.aicoreArch = "dav-c310-vec";
     options.defaultTargetCPU = "dav-c310-vec";
@@ -348,12 +374,26 @@ LogicalResult renameKernelFunctionsForKernelKind(ModuleOp module, llvm::raw_ostr
 struct LowerVPTOOpsPass final : public PassWrapper<LowerVPTOOpsPass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LowerVPTOOpsPass)
 
+  explicit LowerVPTOOpsPass(std::string march) : march(std::move(march)) {}
+
   void runOnOperation() override {
     materializeVecScopeCarrierLoops(getOperation());
-    if (failed(lowerVPTOOps(getOperation(), llvm::errs()))) {
+    SmallVector<pto::AllocTileOp> deadAllocs;
+    getOperation().walk([&](pto::AllocTileOp alloc) {
+      if (alloc.use_empty()) {
+        deadAllocs.push_back(alloc);
+      }
+    });
+    for (pto::AllocTileOp alloc : llvm::reverse(deadAllocs)) {
+      alloc.erase();
+    }
+    if (failed(lowerVPTOOps(getOperation(), march, llvm::errs()))) {
       signalPassFailure();
     }
   }
+
+private:
+  std::string march;
 };
 
 struct LowerVPTOTypesPass final : public PassWrapper<LowerVPTOTypesPass, OperationPass<ModuleOp>> {
@@ -426,11 +466,11 @@ void applySimtEntryCallingConvention(llvm::Module &llvmModule,
       function.addFnAttr(llvm::Attribute::NoInline);
       // Match Bisheng's C++ frontend shape for SIMT outlined bodies. The
       // exported wrapper owns the real kernel metadata, while the SIMT body is
-      // an ODR helper called with the SIMT calling convention. In CANN beta.1,
-      // leaving the SIMT body as a strong GLOBAL FUNC makes the runtime count it
-      // as an extra kernel without matching .ascend.meta, which can corrupt the
-      // selected kernel metadata. linkonce_odr lowers to a weak helper symbol
-      // and avoids that beta.1 metadata mismatch.
+      // an ODR helper called with the SIMT calling convention. Leaving the SIMT
+      // body as a strong GLOBAL FUNC makes the runtime count it as an extra
+      // kernel without matching .ascend.meta, which can corrupt the selected
+      // kernel metadata. linkonce_odr lowers to a weak helper symbol and keeps
+      // the outlined body out of the exported kernel set.
       function.setLinkage(llvm::GlobalValue::LinkOnceODRLinkage);
     }
   }
@@ -494,7 +534,8 @@ FailureOr<EmittedLLVMModule> emitDeviceLLVMModule(ModuleOp deviceModule, StringR
   return EmittedLLVMModule{std::move(llvmContext), std::move(llvmModule)};
 }
 
-template <typename EmitFn> LogicalResult runPipeline(ModuleOp module, llvm::raw_ostream &diagOS, EmitFn &&emit) {
+template <typename EmitFn>
+static LogicalResult runPipeline(ModuleOp module, StringRef march, llvm::raw_ostream &diagOS, EmitFn &&emit) {
   OwningOpRef<Operation *> clonedOp(module->clone());
   ModuleOp clonedModule = cast<ModuleOp>(*clonedOp);
 
@@ -508,7 +549,7 @@ template <typename EmitFn> LogicalResult runPipeline(ModuleOp module, llvm::raw_
   pm.enableVerifier();
   auto &kernelModulePM = pm.nest<ModuleOp>();
   kernelModulePM.addPass(std::make_unique<PrepareVPTOLLVMLoweringPass>());
-  kernelModulePM.addPass(std::make_unique<LowerVPTOOpsPass>());
+  kernelModulePM.addPass(std::make_unique<LowerVPTOOpsPass>(march.str()));
   kernelModulePM.addPass(std::make_unique<LowerVPTOTypesPass>());
   kernelModulePM.addPass(std::make_unique<NormalizeFuncSignaturesForLLVMLoweringPass>());
   kernelModulePM.addPass(arith::createArithExpandOpsPass());
@@ -537,14 +578,16 @@ template <typename EmitFn> LogicalResult runPipeline(ModuleOp module, llvm::raw_
   return emit(clonedModule);
 }
 
-LogicalResult lowerCANN900Module(ModuleOp module, const VPTOEmissionOptions &options, EmittedLLVMModule &cubeModule,
-                                 EmittedLLVMModule &vectorModule, llvm::raw_ostream &diagOS) {
+static LogicalResult lowerOfficialModule(ModuleOp module, const VPTOEmissionOptions &options,
+                                         EmittedLLVMModule &cubeModule,
+                                         EmittedLLVMModule &vectorModule,
+                                         llvm::raw_ostream &diagOS) {
   llvm::StringSet<llvm::BumpPtrAllocator> simtEntryNames = collectSimtEntryFunctionNames(module);
   cubeModule.context.reset();
   cubeModule.module.reset();
   vectorModule.context.reset();
   vectorModule.module.reset();
-  return runPipeline(module, diagOS, [&](ModuleOp loweredModule) {
+  return runPipeline(module, options.march, diagOS, [&](ModuleOp loweredModule) {
     auto vectorDeviceModule = getUniqueDeviceModuleByKernelKind(loweredModule, FunctionKernelKind::Vector, diagOS);
     if (failed(vectorDeviceModule)) {
       return failure();
@@ -574,6 +617,11 @@ LogicalResult lowerCANN900Module(ModuleOp module, const VPTOEmissionOptions &opt
     }
     return success();
   });
+}
+
+LogicalResult lowerCANN900Module(ModuleOp module, const VPTOEmissionOptions &options, EmittedLLVMModule &cubeModule,
+                                 EmittedLLVMModule &vectorModule, llvm::raw_ostream &diagOS) {
+  return lowerOfficialModule(module, options, cubeModule, vectorModule, diagOS);
 }
 
 } // namespace mlir::pto::detail

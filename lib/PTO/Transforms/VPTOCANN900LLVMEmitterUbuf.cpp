@@ -6,8 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-#include "VPTOLLVMEmitterInternal.h"
-#include "PTO/Transforms/VPTOLLVMEmitterHelper.h"
+#include "VPTOCANN900LLVMEmitterInternal.h"
 
 #include "PTO/IR/PTO.h"
 #include "PTO/IR/PTOTypeUtils.h"
@@ -16,7 +15,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 
-namespace mlir::pto {
+namespace mlir::pto::ubuf {
 namespace {
 
 static FailureOr<SmallVector<Value, 7>> castCopyGmToUbConfig0Operands(
@@ -30,7 +29,7 @@ static FailureOr<SmallVector<Value, 7>> castCopyGmToUbConfig0Operands(
 }
 
 static FailureOr<Value>
-packCopyGmToUbConfig0(Operation *anchor, ValueRange operands) {
+ubufPackCopyGmToUbConfig0(Operation *anchor, ValueRange operands) {
   OpBuilder builder(anchor);
   builder.setInsertionPoint(anchor);
   Location loc = anchor->getLoc();
@@ -47,7 +46,7 @@ packCopyGmToUbConfig0(Operation *anchor, ValueRange operands) {
 }
 
 static FailureOr<Value>
-packCopyGmToUbConfig1(Operation *anchor, ValueRange operands) {
+ubufPackCopyGmToUbConfig1(Operation *anchor, ValueRange operands) {
   if (operands.size() != 11)
   {
     return failure();
@@ -87,7 +86,7 @@ packCopyGmToUbCfgV220(Operation *anchor, ValueRange operands) {
 }
 
 static FailureOr<Value>
-packCopyUbToGmConfig0(Operation *anchor, ValueRange operands) {
+ubufPackCopyUbToGmConfig0(Operation *anchor, ValueRange operands) {
   if (operands.size() != 8)
   {
     return failure();
@@ -109,7 +108,7 @@ packCopyUbToGmConfig0(Operation *anchor, ValueRange operands) {
 }
 
 static FailureOr<Value>
-packCopyUbToGmConfig1(Operation *anchor, ValueRange operands) {
+ubufPackCopyUbToGmConfig1(Operation *anchor, ValueRange operands) {
   if (operands.size() != 8)
   {
     return failure();
@@ -253,7 +252,7 @@ struct CopyGmUbConfigs {
 };
 
 // Materializes the packed config arguments for a GM<->UBUF copy op. The c220
-// signatures take a single config while the legacy ones need two configs.
+// signatures take a single config while CANN900 GM/UB copies use two configs.
 template <typename CopyOp>
 static FailureOr<CopyGmUbConfigs>
 materializeCopyGmUbConfigs(CopyOp op, typename CopyOp::Adaptor adaptor,
@@ -271,11 +270,11 @@ materializeCopyGmUbConfigs(CopyOp op, typename CopyOp::Adaptor adaptor,
   } else if (useA3UbGm) {
     config0 = packCopyUbToGmCfgV220(op, adaptor.getOperands());
   } else if constexpr (isGmUb) {
-    config0 = packCopyGmToUbConfig0(op, adaptor.getOperands());
-    config1 = packCopyGmToUbConfig1(op, adaptor.getOperands());
+    config0 = ubufPackCopyGmToUbConfig0(op, adaptor.getOperands());
+    config1 = ubufPackCopyGmToUbConfig1(op, adaptor.getOperands());
   } else {
-    config0 = packCopyUbToGmConfig0(op, adaptor.getOperands());
-    config1 = packCopyUbToGmConfig1(op, adaptor.getOperands());
+    config0 = ubufPackCopyUbToGmConfig0(op, adaptor.getOperands());
+    config1 = ubufPackCopyUbToGmConfig1(op, adaptor.getOperands());
   }
   if (failed(config0) || (!useSingleConfig && failed(config1)))
     return failure();
@@ -448,13 +447,15 @@ public:
 
 private:
   LoweringState &state;
-  const std::string &march;
+  // Keep the target string by value. The new CANN900/C220 pipeline passes
+  // march.str(), whose temporary must outlive the conversion pattern.
+  std::string march;
 };
 
 // Packing helpers for the UBUF<->UBUF and CBUF<->UBUF copy ops. These copy
-// ops keep the old two-configuration (pre-c220) layout that was dropped when
-// the monolithic emitter was split, so the lowering is restored here.
-static FailureOr<Value> packCopyUbToUbConfig(Operation *anchor,
+// ops retain the two-configuration layout used by the CANN900 GM/UB contracts;
+// C220 uses the single-configuration v220 form where required.
+static FailureOr<Value> ubufPackCopyUbToUbConfig(Operation *anchor,
                                              ValueRange operands) {
   if (operands.size() != 7)
   {
@@ -475,7 +476,7 @@ static FailureOr<Value> packCopyUbToUbConfig(Operation *anchor,
       {{(*values)[1], 16}, {(*values)[2], 32}, {(*values)[3], 48}});
 }
 
-static FailureOr<Value> packCopyCbufToUbConfig(Operation *anchor,
+static FailureOr<Value> ubufPackCopyCbufToUbConfig(Operation *anchor,
                                                ValueRange operands) {
   if (operands.size() != 7)
   {
@@ -497,9 +498,9 @@ static FailureOr<Value> packCopyCbufToUbConfig(Operation *anchor,
        {(*values)[4], 48}});
 }
 
-static FailureOr<Value> packCopyUbToCbufConfig(Operation *anchor,
+static FailureOr<Value> ubufPackCopyUbToCbufConfig(Operation *anchor,
                                                ValueRange operands) {
-  return packCopyCbufToUbConfig(anchor, operands);
+  return ubufPackCopyCbufToUbConfig(anchor, operands);
 }
 
 static StringRef buildCopyUbToUbCallee(MLIRContext *context) {
@@ -563,13 +564,13 @@ getLocalCopyCalleeAndConfig(CopyOp op, typename CopyOp::Adaptor adaptor) {
   FailureOr<Value> config = failure();
   StringRef calleeName;
   if constexpr (std::is_same_v<CopyOp, pto::CopyUbufToUbufOp>) {
-    config = packCopyUbToUbConfig(op, adaptor.getOperands());
+    config = ubufPackCopyUbToUbConfig(op, adaptor.getOperands());
     calleeName = buildCopyUbToUbCallee(op.getContext());
   } else if constexpr (std::is_same_v<CopyOp, pto::CopyCbufToUbufOp>) {
-    config = packCopyCbufToUbConfig(op, adaptor.getOperands());
+    config = ubufPackCopyCbufToUbConfig(op, adaptor.getOperands());
     calleeName = buildCopyCbufToUbCallee(op.getContext());
   } else {
-    config = packCopyUbToCbufConfig(op, adaptor.getOperands());
+    config = ubufPackCopyUbToCbufConfig(op, adaptor.getOperands());
     calleeName = buildCopyUbToCbufCallee(op.getContext());
   }
   if (failed(config))
@@ -1001,6 +1002,115 @@ private:
   LoweringState &state;
 };
 
+class LowerUBSetMaskOpPattern final : public OpConversionPattern<pto::UBSetMaskOp> {
+public:
+  explicit LowerUBSetMaskOpPattern(TypeConverter &converter, MLIRContext *context, LoweringState &state)
+      : OpConversionPattern<pto::UBSetMaskOp>(converter, context), state(state) {}
+
+  LogicalResult matchAndRewrite(pto::UBSetMaskOp op, pto::UBSetMaskOp::Adaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    constexpr StringLiteral calleeName = "llvm.hivm.MOVEMASK";
+    Location loc = op.getLoc();
+    auto funcType = rewriter.getFunctionType({rewriter.getI64Type(), rewriter.getI64Type()}, {});
+    Value zero = rewriter.create<arith::ConstantOp>(loc, rewriter.getI64IntegerAttr(0));
+    Value one = rewriter.create<arith::ConstantOp>(loc, rewriter.getI64IntegerAttr(1));
+    rewriter.create<func::CallOp>(loc, calleeName, TypeRange{}, ValueRange{zero, adaptor.getMask0()});
+    rewriter.create<func::CallOp>(loc, calleeName, TypeRange{}, ValueRange{one, adaptor.getMask1()});
+    state.plannedDecls.push_back(PlannedDecl{calleeName.str(), funcType});
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  LoweringState &state;
+};
+
+class LowerUBSetMaskCountOpPattern final : public OpConversionPattern<pto::UBSetMaskCountOp> {
+public:
+  explicit LowerUBSetMaskCountOpPattern(TypeConverter &converter, MLIRContext *context)
+      : OpConversionPattern<pto::UBSetMaskCountOp>(converter, context) {}
+
+  LogicalResult matchAndRewrite(pto::UBSetMaskCountOp op, pto::UBSetMaskCountOp::Adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Type i64 = rewriter.getI64Type();
+    Value ctrl = rewriter.create<pto::GetCtrlOp>(loc, i64);
+    Value bit = rewriter.create<arith::ConstantOp>(loc, rewriter.getI64IntegerAttr(56));
+    Value set = rewriter.create<pto::Sbitset1Op>(loc, i64, ctrl, bit);
+    rewriter.create<pto::SetCtrlOp>(loc, set);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+class LowerUBSetMaskNormOpPattern final : public OpConversionPattern<pto::UBSetMaskNormOp> {
+public:
+  explicit LowerUBSetMaskNormOpPattern(TypeConverter &converter, MLIRContext *context)
+      : OpConversionPattern<pto::UBSetMaskNormOp>(converter, context) {}
+
+  LogicalResult matchAndRewrite(pto::UBSetMaskNormOp op, pto::UBSetMaskNormOp::Adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Type i64 = rewriter.getI64Type();
+    Value ctrl = rewriter.create<pto::GetCtrlOp>(loc, i64);
+    Value bit = rewriter.create<arith::ConstantOp>(loc, rewriter.getI64IntegerAttr(56));
+    Value reset = rewriter.create<pto::Sbitset0Op>(loc, i64, ctrl, bit);
+    rewriter.create<pto::SetCtrlOp>(loc, reset);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+class LowerUBufVdupPattern final : public OpConversionPattern<pto::UBVdupOp> {
+public:
+  explicit LowerUBufVdupPattern(TypeConverter &converter, MLIRContext *context, LoweringState &state)
+      : OpConversionPattern<pto::UBVdupOp>(converter, context), state(state) {}
+
+  LogicalResult matchAndRewrite(pto::UBVdupOp op, pto::UBVdupOp::Adaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Type elem = cast<pto::PtrType>(op.getDst().getType()).getElementType();
+    StringRef suffix;
+    if (elem.isF32() || elem.isInteger(32)) {
+      suffix = "u32";
+    } else if (elem.isF16() || elem.isInteger(16)) {
+      suffix = "u16";
+    } else {
+      return rewriter.notifyMatchFailure(op, "unsupported element type for ubuf vdup");
+    }
+    Value dst = adaptor.getDst();
+    if (!dst || !isa<LLVM::LLVMPointerType>(dst.getType())) {
+      return rewriter.notifyMatchFailure(op, "unexpected converted ubuf vdup dst type");
+    }
+    Location loc = op.getLoc();
+    Type i64 = rewriter.getI64Type();
+    auto getI64 = [&](Value value) { return castIntegerLikeTo(op, value, i64); };
+    auto byte = [&](Value value) {
+      return rewriter.create<arith::AndIOp>(
+          loc, value, rewriter.create<arith::ConstantOp>(loc, rewriter.getI64IntegerAttr(0xff)));
+    };
+    auto shift = [&](Value value, uint64_t amount) {
+      return rewriter.create<arith::ShLIOp>(
+          loc, value, rewriter.create<arith::ConstantOp>(loc, rewriter.getI64IntegerAttr(amount)));
+    };
+    Value config = rewriter.create<arith::ConstantOp>(loc, rewriter.getI64IntegerAttr(0));
+    config = rewriter.create<arith::OrIOp>(loc, config, shift(byte(getI64(adaptor.getRepeat())), 56));
+    config = rewriter.create<arith::OrIOp>(loc, config, byte(getI64(adaptor.getDstBlockStride())));
+    config = rewriter.create<arith::OrIOp>(loc, config, shift(byte(getI64(adaptor.getSrcBlockStride())), 16));
+    config = rewriter.create<arith::OrIOp>(loc, config, shift(byte(getI64(adaptor.getDstRepeatStride())), 32));
+    config = rewriter.create<arith::OrIOp>(loc, config, shift(byte(getI64(adaptor.getSrcRepeatStride())), 40));
+    Value scalar = getI64(adaptor.getScalar());
+    std::string callee = "llvm.hivm.MOVEV." + suffix.str();
+    auto functionType = rewriter.getFunctionType(TypeRange{dst.getType(), i64, i64}, TypeRange{});
+    rewriter.create<func::CallOp>(loc, callee, TypeRange{}, ValueRange{dst, scalar, config});
+    state.plannedDecls.push_back(PlannedDecl{callee, functionType});
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  LoweringState &state;
+};
+
 } // namespace
 
 static void populateVPTOUbufArithmeticPatterns(TypeConverter &typeConverter,
@@ -1046,13 +1156,14 @@ void populateVPTOUbufPatterns(TypeConverter &typeConverter,
 
   if (march == "dav-c220-vec") {
     populateVPTOUbufArithmeticPatterns(typeConverter, patterns, state);
-    populateVPTOMemoryUbufPatterns(typeConverter, patterns, state);
+    patterns.add<LowerUBufVdupPattern>(typeConverter, patterns.getContext(), state);
     patterns.add<LowerUBVgatherbOpPattern>(
         typeConverter, patterns.getContext(), state);
     patterns.add<LowerUBVgatherOpPattern>(
         typeConverter, patterns.getContext(), state);
-    populateVPTOMemoryMaskPatterns(typeConverter, patterns, state);
+    patterns.add<LowerUBSetMaskOpPattern>(typeConverter, patterns.getContext(), state);
+    patterns.add<LowerUBSetMaskCountOpPattern, LowerUBSetMaskNormOpPattern>(typeConverter, patterns.getContext());
   }
 }
 
-} // namespace mlir::pto
+} // namespace mlir::pto::ubuf

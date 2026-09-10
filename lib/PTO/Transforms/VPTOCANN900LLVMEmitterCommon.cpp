@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-#include "VPTOLLVMEmitterInternal.h"
+#include "VPTOCANN900LLVMEmitterInternal.h"
 
 #include "PTO/IR/VPTOMemoryDist.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"

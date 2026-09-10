@@ -15,7 +15,6 @@
 #include "PTO/Transforms/Passes.h"
 #include "PTO/Transforms/VPTOLLVMEmitter.h"
 #include "PTO/Transforms/VPTOLLVMEmitterHelper.h"
-#include "VPTOLLVMEmitter/VPTOLLVMEmitterInternal.h"
 
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
@@ -54,6 +53,70 @@ void materializeVecScopeCarrierLoops(ModuleOp module);
 LogicalResult applyQueriedTargetAttrs(ModuleOp module, const VPTOEmissionOptions &options, llvm::raw_ostream &diagOS);
 LogicalResult attachAIVectorScopeMetadata(llvm::Module &llvmModule, llvm::raw_ostream &diagOS);
 void attachHIVMKernelAnnotations(llvm::Module &llvmModule, ModuleOp sourceModule);
+
+struct PlannedDecl {
+  std::string name;
+  FunctionType type;
+};
+
+struct LoweringState {
+  SmallVector<PlannedDecl> plannedDecls;
+};
+
+Value getI64Constant(OpBuilder &builder, Location loc, uint64_t value);
+Value getI32Constant(OpBuilder &builder, Location loc, uint64_t value);
+Value packShiftedI64Fields(OpBuilder &builder, Location loc, Value config,
+                           ArrayRef<std::pair<Value, uint64_t>> fields);
+Value packMaskedI64Fields(OpBuilder &builder, Location loc, Value config,
+                          ArrayRef<std::pair<Value, uint64_t>> fields,
+                          uint64_t mask);
+Type convertVPTOType(Type type, Builder &builder);
+Value materializeVPTOCast(OpBuilder &builder, Type resultType, ValueRange inputs, Location loc);
+Type getLowPrecisionLLVMType(Type type, MLIRContext *context);
+bool isLLVMExtensionVectorElementType(Type type);
+Type getLLVMCompatibleVectorType(ArrayRef<int64_t> shape, Type elementType, ArrayRef<bool> scalableDims);
+Type normalizePayloadTypeForLLVMLowering(Type type, Builder &builder);
+Type normalizeGEPElementTypeForLLVMLowering(Type type, Builder &builder);
+unsigned getNaturalByteAlignment(Type type);
+bool hasVPTOConvertibleType(Type type);
+bool hasVPTOConvertibleType(TypeRange types);
+LLVM::LLVMStructType getVPTOStructStorageType(pto::StructType structType, Builder &builder);
+FailureOr<Value> getVPTOStructFieldAddress(ConversionPatternRewriter &rewriter, Location loc, Value root,
+                                           pto::StructType rootType, ArrayRef<int64_t> path);
+std::string getElementTypeFragment(Type type);
+std::string getLowPrecisionElementFragment(Type type);
+std::string getMemoryElementTypeFragment(Type type);
+std::string getCopyElementFragment(Type type);
+std::string getDn2NzCopyElementFragment(Type type);
+std::string getMadLhsFragment(Type type);
+std::string getMadDstFragment(Type type);
+Type getElementTypeFromVectorLike(Type type);
+std::optional<int64_t> getElementCountFromVectorLike(Type type);
+bool isOnePointStoreDist(StringRef dist);
+std::optional<uint64_t> parseRoundModeImmediate(StringRef roundMode);
+std::optional<uint64_t> parsePartImmediate(StringRef part);
+std::optional<uint64_t> parseVcvtPartImmediate(StringRef part);
+std::optional<uint64_t> parseSaturationImmediate(StringRef sat);
+std::optional<uint64_t> parsePredicateStoreDistImmediate(StringRef dist);
+std::optional<uint64_t> parsePredicateLoadDistImmediate(StringRef dist);
+Value castIntegerLikeTo(Operation *anchor, Value value, Type targetType);
+FailureOr<SmallVector<Value, 7>> castIntegerLikeOperands(Operation *anchor, ValueRange operands,
+                                                         ArrayRef<unsigned> indices, Type targetType);
+FailureOr<Value> reinterpretPointerToAddrSpace(Operation *anchor, Value value, unsigned targetAddressSpace);
+FailureOr<SmallVector<Value, 2>> reinterpretPointerOperands(Operation *anchor, ArrayRef<Value> values,
+                                                           ArrayRef<unsigned> addressSpaces);
+FailureOr<Value> packLoopPair(Operation *anchor, Value low, Value high);
+FailureOr<Value> packLoopSize(Operation *anchor, Value loop2, Value loop1);
+
+class VPTOTypeConverter final : public TypeConverter {
+public:
+  explicit VPTOTypeConverter(MLIRContext *context);
+};
+
+namespace ubuf {
+void populateVPTOUbufPatterns(TypeConverter &typeConverter, RewritePatternSet &patterns, LoweringState &state,
+                              const std::string &march);
+}
 
 namespace detail {
 
