@@ -200,11 +200,38 @@ private:
 
   PTOAnalysisResult<PTOLoopEvolution>
   getEvolutionImpl(Value value, scf::ForOp loop, Interpretation interpretation);
+  // getEvolutionImpl() helpers.
+  PTOAnalysisResult<PTOLoopEvolution>
+  getInvariantEvolution(Value value, Interpretation interpretation);
+  // Fills initial/step/negate for affine values; returns a result to forward
+  // directly when the value dispatches to a synthetic/dynamic sub-analysis.
+  std::optional<PTOAnalysisResult<PTOLoopEvolution>>
+  resolveAffineTerms(Value value, scf::ForOp loop, Interpretation interpretation,
+                     uint64_t tripCount, Value &initialValue, Value &stepValue,
+                     bool &negateStep);
+  PTOAnalysisResult<PTOLoopEvolution>
+  buildAffineEvolution(Value value, Value initialValue, Value stepValue,
+                       bool negateStep, uint64_t tripCount,
+                       Interpretation interpretation);
   PTOAnalysisResult<PTOLoopEvolution>
   getSyntheticEvolutionImpl(const PTOTypedExprRef &expression,
                             scf::ForOp loop,
                             Interpretation interpretation,
                             bool sourceProvesNoWrap = false);
+  // getSyntheticEvolutionImpl() per-kind helpers.
+  PTOAnalysisResult<PTOLoopEvolution>
+  getSyntheticCastEvolution(const PTOTypedExprRef &expression, scf::ForOp loop,
+                            unsigned width);
+  PTOAnalysisResult<PTOLoopEvolution>
+  getSyntheticAddSubEvolution(const PTOTypedExprRef &expression,
+                              bool sourceProvesNoWrap, bool isUnsigned,
+                              const PTOAnalysisResult<PTOLoopEvolution> &lhs,
+                              const PTOAnalysisResult<PTOLoopEvolution> &rhs);
+  PTOAnalysisResult<PTOLoopEvolution>
+  getSyntheticMulEvolution(const PTOTypedExprRef &expression,
+                           bool sourceProvesNoWrap, bool isUnsigned,
+                           const PTOAnalysisResult<PTOLoopEvolution> &lhs,
+                           const PTOAnalysisResult<PTOLoopEvolution> &rhs);
   PTOAnalysisResult<PTOTypedExprRef>
   getPointExpressionImpl(const PTOTypedExprRef &expression) const;
 

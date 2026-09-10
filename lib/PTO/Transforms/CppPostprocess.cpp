@@ -108,15 +108,9 @@ static bool parseLastUseMarkerName(llvm::StringRef markerName,
   return !lastUseArgs.empty();
 }
 
-static size_t findMarkerLparen(const std::string &cpp, size_t searchFrom) {
-  size_t lparenPos = searchFrom;
-  while (lparenPos < cpp.size() && cpp[lparenPos] != '(') {
-    ++lparenPos;
-  }
-  return lparenPos;
-}
-
-static size_t findMatchingRparen(const std::string &cpp, size_t argsBegin) {
+// Find the matching close-paren for a marker's argument list, scanning from
+// argsBegin with paren-depth tracking. Returns npos if the list is unbalanced.
+static size_t findMarkerArgsEnd(llvm::StringRef cpp, size_t argsBegin) {
   int parenDepth = 0;
   for (size_t i = argsBegin; i < cpp.size(); ++i) {
     char c = cpp[i];
@@ -135,26 +129,67 @@ static size_t findMatchingRparen(const std::string &cpp, size_t argsBegin) {
   return std::string::npos;
 }
 
-static std::string
-buildLastUseReplacement(const std::string &callee, const std::string &lastUseArgs,
-                        const llvm::SmallVectorImpl<llvm::StringRef> &args,
-                        size_t argsRefSize) {
+// Build the `[[pto::last_use(...)]] callee(args...)` replacement text.
+static std::string buildLastUseReplacement(llvm::StringRef callee,
+                                           llvm::StringRef lastUseArgs,
+                                           size_t argsRefSize,
+                                           const ParsedMarkerCall &call) {
   std::string replacement;
   replacement.reserve(callee.size() + lastUseArgs.size() + argsRefSize +
                       kLastUseReplacementReserve);
   replacement.append("[[pto::last_use(");
-  replacement.append(lastUseArgs);
+  replacement.append(lastUseArgs.str());
   replacement.append(")]] ");
-  replacement.append(callee);
+  replacement.append(callee.str());
   replacement.push_back('(');
-  for (size_t i = 0; i < args.size(); ++i) {
+  for (size_t i = 0; i < call.args.size(); ++i) {
     if (i != 0) {
       replacement.append(", ");
     }
-    replacement.append(args[i].str());
+    replacement.append(call.args[i].str());
   }
   replacement.push_back(')');
   return replacement;
+}
+
+// Rewrite the single marker starting at markerPos. On a successful rewrite,
+// mutates `cpp`, sets `changed`, and returns the resume search position; on any
+// parse failure, leaves `cpp` unchanged and returns a resume position past the
+// failure point.
+static size_t rewriteOneLastUseMarker(std::string &cpp, size_t markerPos,
+                                      llvm::StringRef prefix, bool &changed) {
+  size_t lparenPos = markerPos + prefix.size();
+  while (lparenPos < cpp.size() && cpp[lparenPos] != '(') {
+    ++lparenPos;
+  }
+  if (lparenPos >= cpp.size()) {
+    return markerPos + 1;
+  }
+
+  size_t argsBegin = lparenPos + 1;
+  size_t rparenPos = findMarkerArgsEnd(cpp, argsBegin);
+  if (rparenPos == std::string::npos) {
+    return markerPos + 1;
+  }
+
+  ParsedMarkerCall call{markerPos, rparenPos, {}};
+  llvm::StringRef argsRef(cpp.data() + argsBegin, rparenPos - argsBegin);
+  if (!parseMarkerArgs(argsRef, call.args)) {
+    return rparenPos + 1;
+  }
+
+  llvm::StringRef markerName(cpp.data() + markerPos, lparenPos - markerPos);
+  std::string callee;
+  std::string lastUseArgs;
+  if (!parseLastUseMarkerName(markerName, callee, lastUseArgs)) {
+    return rparenPos + 1;
+  }
+
+  std::string replacement =
+      buildLastUseReplacement(callee, lastUseArgs, argsRef.size(), call);
+  cpp.replace(markerPos, (rparenPos - markerPos) + 1, replacement);
+  changed = true;
+  return markerPos + replacement.size();
 }
 
 } // namespace
@@ -168,41 +203,7 @@ bool rewriteLastUseMarkersInCpp(std::string &cpp) {
     if (markerPos == std::string::npos) {
       break;
     }
-
-    size_t lparenPos = findMarkerLparen(cpp, markerPos + kPrefix.size());
-    if (lparenPos >= cpp.size()) {
-      searchPos = markerPos + 1;
-      continue;
-    }
-
-    size_t argsBegin = lparenPos + 1;
-    size_t rparenPos = findMatchingRparen(cpp, argsBegin);
-    if (rparenPos == std::string::npos) {
-      searchPos = markerPos + 1;
-      continue;
-    }
-
-    llvm::StringRef argsRef(cpp.data() + argsBegin, rparenPos - argsBegin);
-    ParsedMarkerCall call{markerPos, rparenPos, {}};
-    if (!parseMarkerArgs(argsRef, call.args)) {
-      searchPos = rparenPos + 1;
-      continue;
-    }
-
-    llvm::StringRef markerName(cpp.data() + markerPos, lparenPos - markerPos);
-    std::string callee;
-    std::string lastUseArgs;
-    if (!parseLastUseMarkerName(markerName, callee, lastUseArgs)) {
-      searchPos = rparenPos + 1;
-      continue;
-    }
-
-    std::string replacement = buildLastUseReplacement(callee, lastUseArgs,
-                                                      call.args, argsRef.size());
-
-    cpp.replace(markerPos, (rparenPos - markerPos) + 1, replacement);
-    changed = true;
-    searchPos = markerPos + replacement.size();
+    searchPos = rewriteOneLastUseMarker(cpp, markerPos, kPrefix, changed);
   }
   return changed;
 }
