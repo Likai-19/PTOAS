@@ -128,7 +128,16 @@ add_mlir_dialect_library(PTOTransforms
   LowerPTOToUBufOps.cpp
   PTOLowerToOpLibCalls.cpp
   PTOInstantiateAndInlineOpLib.cpp
-  PTOToEmitC.cpp
+  PTOToEmitC/PTOToEmitCCommon.cpp
+  PTOToEmitC/PTOToEmitCArith.cpp
+  PTOToEmitC/PTOToEmitCMemref.cpp
+  PTOToEmitC/PTOToEmitCLoadStore.cpp
+  PTOToEmitC/PTOToEmitCSyncComm.cpp
+  PTOToEmitC/PTOToEmitCScalarMisc.cpp
+  PTOToEmitC/PTOToEmitCTile.cpp
+  PTOToEmitC/PTOToEmitCTensor.cpp
+  PTOToEmitC/PTOToEmitCTensorReduce.cpp
+  PTOToEmitC/PTOToEmitCPass.cpp
   CppPostprocess.cpp
   Utils.cpp
   OptMemPlanForPipeline.cpp
@@ -223,6 +232,16 @@ target_include_directories(PTOTransforms INTERFACE
   $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
+
+# MLIR conversion patterns legitimately hide base-class virtual
+# matchAndRewrite overloads; upstream advice is to silence the warning.
+# https://discourse.llvm.org/t/matchandrewrite-hiding-virtual-functions/84933/6
+# (Replaces the per-file #pragma GCC diagnostic ignored "-Woverloaded-virtual"
+# that PTOToEmitC.cpp carried before the split.)
+if(TARGET obj.PTOTransforms)
+  target_compile_options(obj.PTOTransforms PRIVATE -Wno-overloaded-virtual)
+endif()
+target_compile_options(PTOTransforms PRIVATE -Wno-overloaded-virtual)
 
 if(TARGET vfsim::native_core AND TARGET obj.PTOTransforms)
   # Preserve the simulator target's compile usage requirements on the object
