@@ -396,10 +396,10 @@ static LogicalResult getMultiTileAddresses(pto::AllocMultiTileOp alloc,
 
 static LogicalResult resolveTileNativeMultiGets(ModuleOp module,
                                                 MLIRContext *ctx) {
-  SmallVector<pto::MultiTileGetOp, mlir::pto::kValue8> gets;
-  module.walk([&](pto::MultiTileGetOp op) { gets.push_back(op); });
+  SmallVector<pto::MultiTileGetOp, mlir::pto::kValue8> getOps;
+  module.walk([&](pto::MultiTileGetOp op) { getOps.push_back(op); });
 
-  for (pto::MultiTileGetOp op : gets) {
+  for (pto::MultiTileGetOp op : getOps) {
     auto alloc = op.getSource().getDefiningOp<pto::AllocMultiTileOp>();
     if (!alloc) {
       return op.emitError(
