@@ -1,0 +1,82 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s -o - | FileCheck %s --implicit-check-not=pto.vmi. --implicit-check-not='!pto.vmi.'
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment | FileCheck %s --check-prefix=LAYOUT
+
+// The narrow-side-compute gate anchors the narrow side so it fills exactly one
+// physical part.  For an 8-bit narrow class that is lane_stride 2 at 128 lanes
+// and lane_stride 1 at 256 lanes, and the wide side takes the reciprocal
+// deinterleave (d(2) and d(4) respectively).  The 8 -> 32 widening is the same
+// rule read the other way: the narrow source is c(ls2) and the wide result d(2).
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @si32_to_si8_large_L128(%a: !pto.ptr<si32, ub>, %b: !pto.ptr<si8, ub>) attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %v = pto.vmi.vload %a[%c0] : !pto.ptr<si32, ub> -> !pto.vmi.vreg<128xsi32>
+      %w = pto.vmi.vcvt %v {saturate = "NOSAT"} : !pto.vmi.vreg<128xsi32> -> !pto.vmi.vreg<128xsi8>
+      %m = pto.vmi.vadd %w, %w : !pto.vmi.vreg<128xsi8>, !pto.vmi.vreg<128xsi8> -> !pto.vmi.vreg<128xsi8>
+      pto.vmi.vstore %m, %b[%c0] : !pto.vmi.vreg<128xsi8>, !pto.ptr<si8, ub>
+    }
+    return
+  }
+
+  func.func @si32_to_si8_large_L256(%a: !pto.ptr<si32, ub>, %b: !pto.ptr<si8, ub>) attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %v = pto.vmi.vload %a[%c0] : !pto.ptr<si32, ub> -> !pto.vmi.vreg<256xsi32>
+      %w = pto.vmi.vcvt %v {saturate = "NOSAT"} : !pto.vmi.vreg<256xsi32> -> !pto.vmi.vreg<256xsi8>
+      %m = pto.vmi.vadd %w, %w : !pto.vmi.vreg<256xsi8>, !pto.vmi.vreg<256xsi8> -> !pto.vmi.vreg<256xsi8>
+      pto.vmi.vstore %m, %b[%c0] : !pto.vmi.vreg<256xsi8>, !pto.ptr<si8, ub>
+    }
+    return
+  }
+
+  func.func @si16_to_si8_large_L256(%a: !pto.ptr<si16, ub>, %b: !pto.ptr<si8, ub>) attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %v = pto.vmi.vload %a[%c0] : !pto.ptr<si16, ub> -> !pto.vmi.vreg<256xsi16>
+      %w = pto.vmi.vcvt %v {saturate = "NOSAT"} : !pto.vmi.vreg<256xsi16> -> !pto.vmi.vreg<256xsi8>
+      %m = pto.vmi.vadd %w, %w : !pto.vmi.vreg<256xsi8>, !pto.vmi.vreg<256xsi8> -> !pto.vmi.vreg<256xsi8>
+      pto.vmi.vstore %m, %b[%c0] : !pto.vmi.vreg<256xsi8>, !pto.ptr<si8, ub>
+    }
+    return
+  }
+
+  func.func @si8_to_si32_large_L128(%src: !pto.ptr<si8, ub>, %dst: !pto.ptr<si32, ub>) attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %v = pto.vmi.vload %src[%c0] : !pto.ptr<si8, ub> -> !pto.vmi.vreg<128xsi8>
+      %a = pto.vmi.vadd %v, %v : !pto.vmi.vreg<128xsi8>, !pto.vmi.vreg<128xsi8> -> !pto.vmi.vreg<128xsi8>
+      %w = pto.vmi.vcvt %a : !pto.vmi.vreg<128xsi8> -> !pto.vmi.vreg<128xsi32>
+      pto.vmi.vstore %w, %dst[%c0] : !pto.vmi.vreg<128xsi32>, !pto.ptr<si32, ub>
+    }
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @si32_to_si8_large_L128(
+// CHECK: pto.vsts
+// CHECK-LABEL: func.func @si32_to_si8_large_L256(
+// CHECK: pto.vsts
+// CHECK-LABEL: func.func @si16_to_si8_large_L256(
+// CHECK: pto.vsts
+// CHECK-LABEL: func.func @si8_to_si32_large_L128(
+// CHECK: pto.vsts
+
+// LAYOUT-LABEL: func.func @si32_to_si8_large_L128(
+// LAYOUT: pto.vmi.trunci {{.*}} -> !pto.vmi.vreg<128xsi8, #pto.vmi.layout<contiguous, lane_stride = 2>>
+// LAYOUT: pto.vmi.vadd {{.*}} lane_stride = 2
+// LAYOUT-LABEL: func.func @si32_to_si8_large_L256(
+// LAYOUT: pto.vmi.trunci {{.*}} -> !pto.vmi.vreg<256xsi8, #pto.vmi.layout<contiguous>>
+// LAYOUT-LABEL: func.func @si16_to_si8_large_L256(
+// LAYOUT: pto.vmi.trunci {{.*}} -> !pto.vmi.vreg<256xsi8, #pto.vmi.layout<contiguous>>
+// LAYOUT-LABEL: func.func @si8_to_si32_large_L128(
+// LAYOUT: pto.vmi.vadd {{.*}} lane_stride = 2
+// LAYOUT: pto.vmi.extsi {{.*}} -> !pto.vmi.vreg<128xsi32, #pto.vmi.layout<deinterleaved = 2>>

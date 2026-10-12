@@ -1024,10 +1024,38 @@ struct LayoutSolver {
     if (!isGatedNarrowSideComputeCast(castOp)) {
       return false;
     }
-    if (!isa<VMIVRegType>(narrowValue.getType())) {
+    auto narrowType = dyn_cast<VMIVRegType>(narrowValue.getType());
+    if (!narrowType) {
       return false;
     }
+    // Anchor the narrow class so it fills exactly one physical part.  The cast
+    // pair is the inverse of this: the wide side is deinterleaved by the number
+    // of physical parts it spans, and the narrow lane stride is the reciprocal
+    // (wideDeint * narrowLs == element width ratio).  A class that is already a
+    // full part needs no stride; a smaller one takes the stride that closes the
+    // gap, which is a pure function of the element count and the part capacity,
+    // not of the cast's direction or element width.
     VMILayoutAttr contiguous = getContiguousLayout();
+    FailureOr<int64_t> lanesPerPart =
+        getDataLanesPerPart(narrowType.getElementType());
+    int64_t narrowLanes = narrowType.getElementCount();
+    bool usableGeometry =
+        succeeded(lanesPerPart) && *lanesPerPart > 0 && narrowLanes > 0;
+    if (usableGeometry) {
+      int64_t narrowStride = *lanesPerPart / narrowLanes;
+      // Only a stride that evenly tiles the part and is a packable lane stride
+      // keeps the wide side's deinterleave an integer (wideDeint * narrowLs ==
+      // width ratio).  Anything else falls back to the unit stride.
+      bool exactFill = *lanesPerPart % narrowLanes == 0;
+      bool packableStride = narrowStride == mlir::pto::kValue2 ||
+                            narrowStride == mlir::pto::kValue4;
+      if (!exactFill || !packableStride) {
+        narrowStride = 1;
+      }
+      if (narrowStride > 1) {
+        contiguous = VMILayoutAttr::getContiguous(ctx, narrowStride);
+      }
+    }
     if (!canSeedPreferredLayout(narrowValue, contiguous)) {
       return false;
     }
@@ -1083,6 +1111,14 @@ struct LayoutSolver {
         seedNarrowSideComputeContiguous(op, castOp.getSource());
     if (failed(gated)) {
       return WalkResult::interrupt();
+    }
+    // When the preferred cast pair names a non-contiguous source (short
+    // BF16/F32 group-slot rows, lane-stride widening, spine sources), request
+    // it explicitly so the materializer inserts the ensure_layout instead of
+    // leaving the source on its producer's layout and the cast pair illegal.
+    if (fact->sourceLayout && !fact->sourceLayout.isContiguous()) {
+      requestDataUse(castOp.getSourceMutable(), fact->sourceLayout,
+                     /*late=*/false, getCastSeedPhase(*fact));
     }
     return *constraintResult(setPreferredLayout(
         castOp.getResult(), fact->resultLayout, op, getCastSeedPhase(*fact)));

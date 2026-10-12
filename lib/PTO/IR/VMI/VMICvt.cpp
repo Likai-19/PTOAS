@@ -496,19 +496,23 @@ static LogicalResult verifyCvtSaturateNarrow(
     if (satVal != "SAT" && satVal != "NOSAT") {
       return op.emitOpError("saturate must be 'SAT' or 'NOSAT'");
     }
-    // si32 -> si8 IntNarrow has no native hardware form.  Lowering aliases
-    // it through ui32 -> ui8 (bit-pattern equal ONLY under NOSAT).  Reject
-    // SAT here because ui32 -> ui8 SAT clamps to [0, 255], which does NOT
-    // match the expected si32 -> si8 SAT clamp to [-128, 127].
+    bool signedSource = isa<IntegerType>(srcElem) &&
+                        cast<IntegerType>(srcElem).isSigned();
+    bool signedResult = isa<IntegerType>(dstElem) &&
+                        cast<IntegerType>(dstElem).isSigned();
+    // Only si32 -> si16 has a native signed int-narrow conversion.  The
+    // narrower signed destinations have no native hardware form, so the
+    // lowering aliases them through the unsigned conversion, which is
+    // bit-pattern equal ONLY under NOSAT (SAT would clamp to
+    // [0, 2^dstBits - 1] instead of the signed range).
+    bool nativeSignedNarrow =
+        srcBits == mlir::pto::kValue32 && dstBits == mlir::pto::kValue16;
     if (dir == CvtDirection::IntNarrow && satVal == "SAT" &&
-        srcBits == mlir::pto::kValue32 && dstBits == mlir::pto::kValue8 &&
-        isa<IntegerType>(srcElem) &&
-        cast<IntegerType>(srcElem).isSigned() &&
-        isa<IntegerType>(dstElem) &&
-        cast<IntegerType>(dstElem).isSigned()) {
-      return op.emitOpError("si32 -> si8 int-narrow does not support "
-                            "saturate=\"SAT\" (no native hardware form; "
-                            "only saturate=\"NOSAT\" is allowed)");
+        signedSource && signedResult && !nativeSignedNarrow) {
+      return op.emitOpError(
+          "signed int-narrow to a signed destination does not support "
+          "saturate=\"SAT\" (no native hardware form; only "
+          "saturate=\"NOSAT\" is allowed)");
     }
   } else if (satAttr && dir == CvtDirection::FpNarrow) {
     return op.emitOpError("'saturate' attribute is not valid for this fp-to-fp "

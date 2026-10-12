@@ -8,8 +8,9 @@
 
 // RUN: not pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-to-vpto 2>&1 | FileCheck %s
 
-// si32 -> si8 IntNarrow has no native hardware form; lowering aliases through
-// ui32 -> ui8 which is bit-pattern equivalent ONLY under NOSAT.  saturate="SAT"
+// A signed int-narrow to a signed destination has no native hardware form
+// (only si32 -> si16 is native); lowering aliases it through the unsigned
+// conversion, which is bit-pattern equivalent ONLY under NOSAT.  saturate="SAT"
 // must be rejected by the VMI verifier (ui32->ui8 SAT would clamp to [0,255]
 // instead of the expected [-128,127]).
 
@@ -27,4 +28,4 @@ module {
   }
 }
 
-// CHECK: 'pto.vmi.vcvt' op si32 -> si8 int-narrow does not support saturate="SAT"
+// CHECK: 'pto.vmi.vcvt' op signed int-narrow to a signed destination does not support saturate="SAT"

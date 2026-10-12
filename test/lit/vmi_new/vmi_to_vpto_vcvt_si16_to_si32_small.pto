@@ -1,0 +1,75 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s -o - | FileCheck %s --implicit-check-not=pto.vmi. --implicit-check-not='!pto.vmi.'
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment | FileCheck %s --check-prefix=LAYOUT
+
+// A short integer extension whose narrow side carries elementwise compute must
+// stay lowerable.  The narrow-side-compute gate only applies when the
+// lane-stride carrier really spans several physical parts; a single-part class
+// keeps its dense lane-stride relation and reaches the group store through the
+// existing contiguous -> group-slot bridge.  Gating it instead would force a
+// deinterleaved result that has no materialization to the group store, which is
+// the failure this case pins.
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @si16_extend_store_si32_mul_L2(%src: !pto.ptr<si16, ub>, %dst: !pto.ptr<si32, ub>, %off: index) attributes {pto.kernel} {
+    %c16 = arith.constant 16 : index
+    %aoff = arith.muli %off, %c16 : index
+    pto.vecscope {
+      %v = pto.vmi.vload %src[%aoff] : !pto.ptr<si16, ub> -> !pto.vmi.vreg<2xsi16>
+      %a = pto.vmi.vmul %v, %v
+          : !pto.vmi.vreg<2xsi16>, !pto.vmi.vreg<2xsi16>
+          -> !pto.vmi.vreg<2xsi16>
+      %w = pto.vmi.vcvt %a : !pto.vmi.vreg<2xsi16> -> !pto.vmi.vreg<2xsi32>
+      pto.vmi.vstore %w, %dst[%aoff] : !pto.vmi.vreg<2xsi32>, !pto.ptr<si32, ub>
+    }
+    return
+  }
+  func.func @si16_extend_store_si32_mul_L4(%src: !pto.ptr<si16, ub>, %dst: !pto.ptr<si32, ub>, %off: index) attributes {pto.kernel} {
+    %c16 = arith.constant 16 : index
+    %aoff = arith.muli %off, %c16 : index
+    pto.vecscope {
+      %v = pto.vmi.vload %src[%aoff] : !pto.ptr<si16, ub> -> !pto.vmi.vreg<4xsi16>
+      %a = pto.vmi.vmul %v, %v
+          : !pto.vmi.vreg<4xsi16>, !pto.vmi.vreg<4xsi16>
+          -> !pto.vmi.vreg<4xsi16>
+      %w = pto.vmi.vcvt %a : !pto.vmi.vreg<4xsi16> -> !pto.vmi.vreg<4xsi32>
+      pto.vmi.vstore %w, %dst[%aoff] : !pto.vmi.vreg<4xsi32>, !pto.ptr<si32, ub>
+    }
+    return
+  }
+  func.func @si16_extend_store_si32_mul_L8(%src: !pto.ptr<si16, ub>, %dst: !pto.ptr<si32, ub>, %off: index) attributes {pto.kernel} {
+    %c16 = arith.constant 16 : index
+    %aoff = arith.muli %off, %c16 : index
+    pto.vecscope {
+      %v = pto.vmi.vload %src[%aoff] : !pto.ptr<si16, ub> -> !pto.vmi.vreg<8xsi16>
+      %a = pto.vmi.vmul %v, %v
+          : !pto.vmi.vreg<8xsi16>, !pto.vmi.vreg<8xsi16>
+          -> !pto.vmi.vreg<8xsi16>
+      %w = pto.vmi.vcvt %a : !pto.vmi.vreg<8xsi16> -> !pto.vmi.vreg<8xsi32>
+      pto.vmi.vstore %w, %dst[%aoff] : !pto.vmi.vreg<8xsi32>, !pto.ptr<si32, ub>
+    }
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @si16_extend_store_si32_mul_L2(
+// CHECK: pto.vsts
+// CHECK-LABEL: func.func @si16_extend_store_si32_mul_L4(
+// CHECK: pto.vsts
+// CHECK-LABEL: func.func @si16_extend_store_si32_mul_L8(
+// CHECK: pto.vsts
+
+// The assigned layouts: compute stays on the dense lane-stride carrier and the
+// extension hands off to the group store through a contiguous -> gs(8) bridge.
+// LAYOUT-LABEL: func.func @si16_extend_store_si32_mul_L8(
+// LAYOUT: pto.vmi.vmul {{.*}} -> !pto.vmi.vreg<8xsi16, #pto.vmi.layout<contiguous, lane_stride = 2>>
+// LAYOUT: pto.vmi.extsi {{.*}} : !pto.vmi.vreg<8xsi16, #pto.vmi.layout<contiguous, lane_stride = 2>> -> !pto.vmi.vreg<8xsi32, #pto.vmi.layout<contiguous>>
+// LAYOUT: pto.vmi.ensure_layout {{.*}} -> !pto.vmi.vreg<8xsi32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+// LAYOUT: pto.vmi.group_store

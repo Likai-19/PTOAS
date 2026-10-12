@@ -12,6 +12,7 @@
 #include "PTO/IR/PTO.h"
 #include "PTO/IR/PTOTypeUtils.h"
 #include "PTO/IR/VMIUtils.h"
+#include "PTO/Support/CodeConstants.h"
 #include "PTO/Transforms/VMILayoutPropagation.h"
 #include "PTO/Transforms/VMILayoutSpineAnalysis.h"
 
@@ -366,6 +367,56 @@ static bool narrowSideCarriesCompute(Value narrow) {
   NarrowSideComputeScan scan;
   return scan.run(narrow);
 }
+
+// The wide side of the same width-changing cast, used to derive the narrow
+// carrier's lane stride.
+static bool getWideSideOfCast(Operation *op, Value &wide) {
+  DirectionSpineLeg leg;
+  if (!getDirectionSpineLeg(op, leg)) {
+    return false;
+  }
+  wide = leg.widening ? leg.result : leg.source;
+  return true;
+}
+
+// The gate exists to stop a lane-stride narrow carrier from repeating
+// elementwise compute once per physical part.  The carrier of a width-changing
+// cast is the wide element wide, so the narrow side spans one part while
+// N * (wideBits / narrowBits) fits the carrier.  Only gate it when it does not:
+// anchoring a single-part class contiguous replaces the cast relation with one
+// the consumer may not be able to materialize (a short deinterleaved result
+// against a group store, for example).
+static bool narrowSideSpansMultipleParts(Value narrow, Value wide) {
+  auto narrowType = dyn_cast<VMIVRegType>(narrow.getType());
+  auto wideType = dyn_cast<VMIVRegType>(wide.getType());
+  bool usableTypes = narrowType && wideType && narrowType.getElementCount() > 0;
+  if (!usableTypes) {
+    return false;
+  }
+  unsigned narrowBits = getPTOStorageElemBitWidth(narrowType.getElementType());
+  unsigned wideBits = getPTOStorageElemBitWidth(wideType.getElementType());
+  bool knownWidths = narrowBits > 0 && wideBits >= narrowBits &&
+                     wideBits % narrowBits == 0;
+  if (!knownWidths) {
+    return false;
+  }
+  FailureOr<int64_t> lanesPerPart =
+      getDataLanesPerPart(narrowType.getElementType());
+  bool usableLanes = succeeded(lanesPerPart) && *lanesPerPart > 0;
+  if (!usableLanes) {
+    return false;
+  }
+  int64_t laneStride = wideBits / narrowBits;
+  if (laneStride > kValue4) {
+    laneStride = kValue4;
+  }
+  int64_t lanesAtWidestStride = *lanesPerPart / laneStride;
+  bool usableStride = lanesAtWidestStride > 0;
+  if (!usableStride) {
+    return false;
+  }
+  return narrowType.getElementCount() > lanesAtWidestStride;
+}
 } // namespace
 
 // Record every cast op that is a leg of a closed nested round trip.
@@ -432,8 +483,11 @@ void mlir::pto::collectNarrowSideCompute(
     ModuleOp module, llvm::SmallPtrSetImpl<Operation *> &narrowSideCompute) {
   module.walk([&](Operation *op) {
     Value narrow;
+    Value wide;
     bool classified = getNarrowSideOfCast(op, narrow);
-    if (classified && narrowSideCarriesCompute(narrow)) {
+    bool haveWide = classified && getWideSideOfCast(op, wide);
+    bool carriesCompute = haveWide && narrowSideCarriesCompute(narrow);
+    if (carriesCompute && narrowSideSpansMultipleParts(narrow, wide)) {
       narrowSideCompute.insert(op);
     }
   });
