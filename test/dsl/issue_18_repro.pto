@@ -1,0 +1,30 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Issue 18 repro: pto.mte_l0c_gm with pre_quant writing a bf16 GM destination
+// must not emit the f32-form FIX.L0C.TO.OUT intrinsic. The VPTO LLVM emitter
+// used to select llvm.hivm.FIX.L0C.TO.OUT.f32.EXT regardless of the
+// (source, destination) element-type pair, a silent wrong-code defect for every
+// non-f32 destination (bf16/f16/i8/u8/fp8 targets and i32 accumulators).
+
+module attributes {"pto.target_arch" = "a5", pto.kernel_kind = #pto.kernel_kind<cube>} {
+  func.func @gm_bf16_probe(%src: !pto.ptr<f32, l0c>,
+                           %dst: !pto.ptr<bf16, gm>) {
+    %c0_i64 = arith.constant 0 : i64
+    %c16_i64 = arith.constant 16 : i64
+    %c32_i64 = arith.constant 32 : i64
+    %c1_bf16 = arith.constant 1.000000e+00 : bf16
+    pto.mte_l0c_gm %src, %dst, %c16_i64, %c16_i64, %c16_i64, %c32_i64,
+      %c0_i64, %c0_i64,
+      pre_quant(%c1_bf16, mode = f32_bf16),
+      nz2nd
+      : !pto.ptr<f32, l0c>, !pto.ptr<bf16, gm>, i64, i64, i64, i64, i64, i64,
+        bf16
+    return
+  }
+}

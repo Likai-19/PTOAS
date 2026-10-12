@@ -1270,11 +1270,15 @@ public:
       return rewriter.notifyMatchFailure(op, "failed to map cc/gm pointer spaces");
     }
 
-    StringRef calleeName = buildCopyMatrixCcToGmCallee(op.getContext());
+    FailureOr<StringRef> calleeName = buildCopyMatrixCcToGmCallee(
+        op.getContext(), op.getSource().getType(), op.getDestination().getType());
+    if (failed(calleeName)) {
+      return rewriter.notifyMatchFailure(op, "unsupported copy_matrix_cc_to_gm element type");
+    }
     auto funcType =
         rewriter.getFunctionType(TypeRange{destination->getType(), source->getType(), i64Ty, i64Ty}, TypeRange{});
-    rewriter.create<func::CallOp>(op.getLoc(), calleeName, TypeRange{}, ValueRange{*destination, *source, xm, xt});
-    state.plannedDecls.push_back(PlannedDecl{calleeName.str(), funcType});
+    rewriter.create<func::CallOp>(op.getLoc(), *calleeName, TypeRange{}, ValueRange{*destination, *source, xm, xt});
+    state.plannedDecls.push_back(PlannedDecl{calleeName->str(), funcType});
     rewriter.eraseOp(op);
     return success();
   }
@@ -1315,7 +1319,8 @@ public:
     }
 
     FailureOr<StringRef> calleeName = std::is_same_v<CopyOp, pto::CopyMatrixCcToCbufOp>
-                                          ? FailureOr<StringRef>(buildCopyMatrixCcToCbufCallee(op.getContext()))
+                                          ? buildCopyMatrixCcToCbufCallee(op.getContext(), op.getSource().getType(),
+                                                                          op.getDestination().getType())
                                           : buildCopyMatrixCcToUbCallee(op.getContext(), op.getSource().getType(),
                                                                         op.getDestination().getType());
     if (failed(calleeName)) {

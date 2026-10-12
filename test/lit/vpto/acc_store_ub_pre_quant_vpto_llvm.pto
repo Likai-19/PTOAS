@@ -134,6 +134,13 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<cu
       nz2nd
       : !pto.ptr<i32, l0c>, !pto.ptr<i8, ub>, i64, i64, i64, i64, i64,
         !pto.ptr<f32, scaling>
+
+    // i32 accumulator -> ui8, vector pre_quant (req8).
+    pto.mte_l0c_ub %src_i32, %dst_ui8, %c16_i64, %c16_i64, %c16_i64, %c32_i64, dst_mode(%c0_i64),
+      pre_quant(%scale, mode = req8_vec),
+      nz2nd
+      : !pto.ptr<i32, l0c>, !pto.ptr<ui8, ub>, i64, i64, i64, i64, i64,
+        !pto.ptr<f32, scaling>
     return
   }
 }
@@ -153,9 +160,12 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<cu
 // ROUNDTRIP: pre_quant(%{{.*}}, mode = deqs32_int_vec)
 // ROUNDTRIP: pre_quant(%{{.*}}, mode = deqs32_int_vec)
 // ROUNDTRIP: pre_quant(%{{.*}}, mode = req8_vec)
+// ROUNDTRIP: pre_quant(%{{.*}}, mode = req8_vec)
 
 // EXPAND-LABEL: func.func @ub_pre_quant_probes(
 // EXPAND: pto.set_quant_pre
+// EXPAND: pto.copy_matrix_cc_to_ub
+// EXPAND: pto.set_fpc
 // EXPAND: pto.copy_matrix_cc_to_ub
 // EXPAND: pto.set_fpc
 // EXPAND: pto.copy_matrix_cc_to_ub
@@ -199,3 +209,4 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<cu
 // CHECK: llvm.call @llvm.hivm.FIX.L0C.TO.UB.s32.EXT
 // CHECK: llvm.call @llvm.hivm.FIX.L0C.TO.UB.s32.EXT
 // CHECK: llvm.call @llvm.hivm.FIX.L0C.TO.UB.s322s8.EXT
+// CHECK: llvm.call @llvm.hivm.FIX.L0C.TO.UB.s322u8.EXT

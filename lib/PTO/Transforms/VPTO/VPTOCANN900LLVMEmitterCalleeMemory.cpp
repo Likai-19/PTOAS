@@ -157,82 +157,80 @@ StringRef buildLoadCbufToCaMxCallee(MLIRContext *context) {
   return StringAttr::get(context, "llvm.hivm.LOAD.L1.TO.L0B.MX.2Dv2.v").getValue();
 }
 
-StringRef buildCopyMatrixCcToGmCallee(MLIRContext *context) {
-  return StringAttr::get(context, "llvm.hivm.FIX.L0C.TO.OUT.f32.EXT").getValue();
-}
-
-StringRef buildCopyMatrixCcToCbufCallee(MLIRContext *context) {
-  return StringAttr::get(context, "llvm.hivm.FIX.L0C.TO.L1.f32.EXT").getValue();
-}
-
 namespace {
-// Element kinds that participate in FIX.L0C.TO.UB intrinsic selection.
-enum class CopyMatrixCcToUbElemKind { F32Src, I32Src, F16, BF16, F32, HiF8, F8E4M3, F8E5M2, S8, U8, I32, Other };
+// Element kinds that participate in FIX.L0C.TO.{UB,OUT,L1} intrinsic selection.
+enum class CopyMatrixCcElemKind { F32Src, I32Src, F16, BF16, F32, HiF8, F8E4M3, F8E5M2, S8, U8, I32, Other };
 
-CopyMatrixCcToUbElemKind classifyCopyMatrixCcToUbSource(Type type) {
+CopyMatrixCcElemKind classifyCopyMatrixCcSource(Type type) {
   if (type.isF32()) {
-    return CopyMatrixCcToUbElemKind::F32Src;
+    return CopyMatrixCcElemKind::F32Src;
   }
   if (type.isSignlessInteger(mlir::pto::kValue32)) {
-    return CopyMatrixCcToUbElemKind::I32Src;
+    return CopyMatrixCcElemKind::I32Src;
   }
-  return CopyMatrixCcToUbElemKind::Other;
+  return CopyMatrixCcElemKind::Other;
 }
 
-CopyMatrixCcToUbElemKind classifyCopyMatrixCcToUbDestination(Type type) {
+CopyMatrixCcElemKind classifyCopyMatrixCcDestination(Type type) {
   if (type.isF16()) {
-    return CopyMatrixCcToUbElemKind::F16;
+    return CopyMatrixCcElemKind::F16;
   }
   if (type.isBF16()) {
-    return CopyMatrixCcToUbElemKind::BF16;
+    return CopyMatrixCcElemKind::BF16;
   }
   if (type.isF32()) {
-    return CopyMatrixCcToUbElemKind::F32;
+    return CopyMatrixCcElemKind::F32;
   }
   if (pto::isPTOHiFloat8Type(type) || pto::isPTOHiFloat8x2Type(type)) {
-    return CopyMatrixCcToUbElemKind::HiF8;
+    return CopyMatrixCcElemKind::HiF8;
   }
   if (pto::isPTOFloat8E4M3LikeType(type)) {
-    return CopyMatrixCcToUbElemKind::F8E4M3;
+    return CopyMatrixCcElemKind::F8E4M3;
   }
   if (pto::isPTOFloat8E5M2LikeType(type)) {
-    return CopyMatrixCcToUbElemKind::F8E5M2;
+    return CopyMatrixCcElemKind::F8E5M2;
   }
   auto intType = dyn_cast<IntegerType>(type);
   if (intType && intType.getWidth() == mlir::pto::kValue8) {
-    return intType.isUnsigned() ? CopyMatrixCcToUbElemKind::U8 : CopyMatrixCcToUbElemKind::S8;
+    return intType.isUnsigned() ? CopyMatrixCcElemKind::U8 : CopyMatrixCcElemKind::S8;
   }
   if (intType && intType.getWidth() == mlir::pto::kValue32) {
-    return CopyMatrixCcToUbElemKind::I32;
+    return CopyMatrixCcElemKind::I32;
   }
-  return CopyMatrixCcToUbElemKind::Other;
+  return CopyMatrixCcElemKind::Other;
 }
 
-struct CopyMatrixCcToUbCalleeEntry {
-  CopyMatrixCcToUbElemKind source;
-  CopyMatrixCcToUbElemKind destination;
-  StringRef callee;
+struct CopyMatrixCcCalleeEntry {
+  CopyMatrixCcElemKind source;
+  CopyMatrixCcElemKind destination;
+  StringRef segment;
 };
 
-constexpr CopyMatrixCcToUbCalleeEntry kCopyMatrixCcToUbCallees[] = {
-    {CopyMatrixCcToUbElemKind::F32Src, CopyMatrixCcToUbElemKind::F16, "llvm.hivm.FIX.L0C.TO.UB.f322f16.EXT"},
-    {CopyMatrixCcToUbElemKind::F32Src, CopyMatrixCcToUbElemKind::BF16, "llvm.hivm.FIX.L0C.TO.UB.f322bf16.EXT"},
-    {CopyMatrixCcToUbElemKind::F32Src, CopyMatrixCcToUbElemKind::F32, "llvm.hivm.FIX.L0C.TO.UB.f32.EXT"},
-    {CopyMatrixCcToUbElemKind::F32Src, CopyMatrixCcToUbElemKind::HiF8, "llvm.hivm.FIX.L0C.TO.UB.f322hif8.EXT"},
-    {CopyMatrixCcToUbElemKind::F32Src, CopyMatrixCcToUbElemKind::F8E4M3, "llvm.hivm.FIX.L0C.TO.UB.f322f8e4m3.EXT"},
-    {CopyMatrixCcToUbElemKind::F32Src, CopyMatrixCcToUbElemKind::F8E5M2, "llvm.hivm.FIX.L0C.TO.UB.f322f8e5m2.EXT"},
-    {CopyMatrixCcToUbElemKind::F32Src, CopyMatrixCcToUbElemKind::S8, "llvm.hivm.FIX.L0C.TO.UB.f322s8.EXT"},
-    {CopyMatrixCcToUbElemKind::F32Src, CopyMatrixCcToUbElemKind::U8, "llvm.hivm.FIX.L0C.TO.UB.f322u8.EXT"},
-    {CopyMatrixCcToUbElemKind::I32Src, CopyMatrixCcToUbElemKind::F16, "llvm.hivm.FIX.L0C.TO.UB.s322f16.EXT"},
-    {CopyMatrixCcToUbElemKind::I32Src, CopyMatrixCcToUbElemKind::BF16, "llvm.hivm.FIX.L0C.TO.UB.s322bf16.EXT"},
-    {CopyMatrixCcToUbElemKind::I32Src, CopyMatrixCcToUbElemKind::I32, "llvm.hivm.FIX.L0C.TO.UB.s32.EXT"},
-    {CopyMatrixCcToUbElemKind::I32Src, CopyMatrixCcToUbElemKind::S8, "llvm.hivm.FIX.L0C.TO.UB.s322s8.EXT"},
-    {CopyMatrixCcToUbElemKind::I32Src, CopyMatrixCcToUbElemKind::U8, "llvm.hivm.FIX.L0C.TO.UB.s322u8.EXT"},
+// The UB/OUT(GM)/L1 FIX.L0C.TO.* intrinsic families share one (source,
+// destination) -> type-segment mapping on this target; only the family stem
+// differs. Segment names were verified against the CANN 9.1.0 bisheng
+// binary's intrinsic name table (the bare-form names bisheng itself selects
+// for __builtin_cce_copy_matrix_cc_to_gm map to these segments, with
+// f32->f16's bare `f2h` having no EXT form and `f322f16.EXT` being the only
+// EXT-form f16 segment).
+constexpr CopyMatrixCcCalleeEntry kCopyMatrixCcCallees[] = {
+    {CopyMatrixCcElemKind::F32Src, CopyMatrixCcElemKind::F16, "f322f16"},
+    {CopyMatrixCcElemKind::F32Src, CopyMatrixCcElemKind::BF16, "f322bf16"},
+    {CopyMatrixCcElemKind::F32Src, CopyMatrixCcElemKind::F32, "f32"},
+    {CopyMatrixCcElemKind::F32Src, CopyMatrixCcElemKind::HiF8, "f322hif8"},
+    {CopyMatrixCcElemKind::F32Src, CopyMatrixCcElemKind::F8E4M3, "f322f8e4m3"},
+    {CopyMatrixCcElemKind::F32Src, CopyMatrixCcElemKind::F8E5M2, "f322f8e5m2"},
+    {CopyMatrixCcElemKind::F32Src, CopyMatrixCcElemKind::S8, "f322s8"},
+    {CopyMatrixCcElemKind::F32Src, CopyMatrixCcElemKind::U8, "f322u8"},
+    {CopyMatrixCcElemKind::I32Src, CopyMatrixCcElemKind::F16, "s322f16"},
+    {CopyMatrixCcElemKind::I32Src, CopyMatrixCcElemKind::BF16, "s322bf16"},
+    {CopyMatrixCcElemKind::I32Src, CopyMatrixCcElemKind::I32, "s32"},
+    {CopyMatrixCcElemKind::I32Src, CopyMatrixCcElemKind::S8, "s322s8"},
+    {CopyMatrixCcElemKind::I32Src, CopyMatrixCcElemKind::U8, "s322u8"},
 };
-} // namespace
 
-FailureOr<StringRef> buildCopyMatrixCcToUbCallee(MLIRContext *context, Type sourceType,
-                                                 Type destinationType) {
+FailureOr<StringRef> buildTypedCopyMatrixCcCallee(MLIRContext *context, Type sourceType,
+                                                  Type destinationType, StringRef family) {
   auto srcPtrType = dyn_cast<pto::PtrType>(sourceType);
   auto dstPtrType = dyn_cast<pto::PtrType>(destinationType);
   if (!srcPtrType || !dstPtrType) {
@@ -243,15 +241,32 @@ FailureOr<StringRef> buildCopyMatrixCcToUbCallee(MLIRContext *context, Type sour
   // formula itself rides in the packed config bits, so modes sharing a pair
   // (e.g. f32_bf16 and qf322bf16_pre_vec) share one callee. i16 destinations
   // have no EXT-form intrinsic on this target and stay unsupported.
-  CopyMatrixCcToUbElemKind source = classifyCopyMatrixCcToUbSource(srcPtrType.getElementType());
-  CopyMatrixCcToUbElemKind destination =
-      classifyCopyMatrixCcToUbDestination(dstPtrType.getElementType());
-  for (const CopyMatrixCcToUbCalleeEntry &entry : kCopyMatrixCcToUbCallees) {
+  CopyMatrixCcElemKind source = classifyCopyMatrixCcSource(srcPtrType.getElementType());
+  CopyMatrixCcElemKind destination = classifyCopyMatrixCcDestination(dstPtrType.getElementType());
+  for (const CopyMatrixCcCalleeEntry &entry : kCopyMatrixCcCallees) {
     if (entry.source == source && entry.destination == destination) {
-      return StringAttr::get(context, entry.callee).getValue();
+      return StringAttr::get(context, "llvm.hivm.FIX.L0C.TO." + family.str() + "." + entry.segment.str() +
+                                          ".EXT")
+          .getValue();
     }
   }
   return failure();
+}
+} // namespace
+
+FailureOr<StringRef> buildCopyMatrixCcToGmCallee(MLIRContext *context, Type sourceType,
+                                                 Type destinationType) {
+  return buildTypedCopyMatrixCcCallee(context, sourceType, destinationType, "OUT");
+}
+
+FailureOr<StringRef> buildCopyMatrixCcToCbufCallee(MLIRContext *context, Type sourceType,
+                                                   Type destinationType) {
+  return buildTypedCopyMatrixCcCallee(context, sourceType, destinationType, "L1");
+}
+
+FailureOr<StringRef> buildCopyMatrixCcToUbCallee(MLIRContext *context, Type sourceType,
+                                                 Type destinationType) {
+  return buildTypedCopyMatrixCcCallee(context, sourceType, destinationType, "UB");
 }
 
 FailureOr<StringRef> buildCopyCbufToBtCallee(pto::CopyCbufToBtOp op) {

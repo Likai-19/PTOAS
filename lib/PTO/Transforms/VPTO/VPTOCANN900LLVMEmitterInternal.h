@@ -511,8 +511,10 @@ FailureOr<StringRef> buildLoadCbufToCaS4Callee(MLIRContext *context, Type source
 FailureOr<StringRef> buildLoadCbufToCbS4Callee(MLIRContext *context, Type sourceType);
 StringRef buildLoadCbufToCaMxCallee(MLIRContext *context);
 StringRef buildLoadCbufToCbMxCallee(MLIRContext *context);
-StringRef buildCopyMatrixCcToGmCallee(MLIRContext *context);
-StringRef buildCopyMatrixCcToCbufCallee(MLIRContext *context);
+FailureOr<StringRef> buildCopyMatrixCcToGmCallee(MLIRContext *context, Type sourceType,
+                                                 Type destinationType);
+FailureOr<StringRef> buildCopyMatrixCcToCbufCallee(MLIRContext *context, Type sourceType,
+                                                   Type destinationType);
 FailureOr<StringRef> buildCopyMatrixCcToUbCallee(MLIRContext *context, Type sourceType,
                                                  Type destinationType);
 FailureOr<StringRef> buildCopyCbufToBtCallee(pto::CopyCbufToBtOp op);
