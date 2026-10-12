@@ -116,6 +116,22 @@ def issue_1558_if_value_carried_only_inside_while(limit: pto.i32):
 
 
 @pto.jit(target="a5")
+def issue_1589_nested_while_local_predicate(limit: pto.i32):
+    outer = pto.const(0, dtype=pto.i32)
+    total = pto.const(0, dtype=pto.i32)
+    if limit > 0:
+        while outer < limit:
+            inner = pto.const(0, dtype=pto.i32)
+            while inner < limit:
+                stop = inner >= 1
+                _ = stop
+                inner = inner + 1
+            total = total + inner
+            outer = outer + 1
+    _ = total
+
+
+@pto.jit(target="a5")
 def runtime_while_break_continue(limit: pto.i32):
     value = pto.const(0, dtype=pto.i32)
     while value < limit:
@@ -561,6 +577,11 @@ def _check_runtime_loop_shapes():
         assert "scf.condition" in loop_text
 
 
+def _check_issue_1589_nested_while():
+    text = issue_1589_nested_while_local_predicate.compile().mlir_text()
+    assert text.count("scf.while") == 2
+
+
 def _check_loop_carry_contract():
     # Issue #1256 regressions: loop-local temporaries must not be carried.
     # issue_1256_while_local_temp / break_flag / branch_temp all used to raise
@@ -781,6 +802,7 @@ def main():
     assert _while_iter_arg_count(text) == 2
     _check_dead_tail_exception_paths()
     _check_runtime_loop_shapes()
+    _check_issue_1589_nested_while()
     _check_loop_carry_contract()
     _check_partial_liveout()
     _check_tail_predication()

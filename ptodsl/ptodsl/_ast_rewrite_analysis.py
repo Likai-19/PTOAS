@@ -705,6 +705,18 @@ def _live_before_block(stmts, live_after) -> set[str]:
     return live
 
 
+def _live_before_while(stmt, live_after) -> set[str]:
+    """Compute the while-entry live set without carrying local temporaries."""
+    test_loads = set(_name_info(stmt.test).loads)
+    else_live = _live_before_block(stmt.orelse, live_after)
+    loop_live = set(live_after) | test_loads | else_live
+    next_live = loop_live | _live_before_block(stmt.body, loop_live)
+    while next_live != loop_live:
+        loop_live = next_live
+        next_live = loop_live | _live_before_block(stmt.body, loop_live)
+    return next_live
+
+
 def _live_before_stmt(stmt, live_after) -> set[str]:
     if isinstance(stmt, (ast.With, ast.AsyncWith)):
         context_loads = set()
@@ -734,15 +746,7 @@ def _live_before_stmt(stmt, live_after) -> set[str]:
             | _live_before_block(stmt.orelse, set())
         )
     if isinstance(stmt, ast.While):
-        test_info = _name_info(stmt.test)
-        body_info = _name_info(stmt.body)
-        loop_live = set(live_after) | set(test_info.loads) | set(body_info.loads)
-        return (
-            set(live_after)
-            | set(test_info.loads)
-            | _live_before_block(stmt.body, loop_live)
-            | _live_before_block(stmt.orelse, set(live_after))
-        )
+        return _live_before_while(stmt, live_after)
     info = _name_info(stmt)
     return (set(live_after) - info.stores) | info.loads
 
