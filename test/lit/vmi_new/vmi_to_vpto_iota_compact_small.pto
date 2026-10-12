@@ -1,0 +1,33 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
+
+module {
+  func.func @compact_f16_vl8(%base: f16, %dst: !pto.ptr<f16, ub>) {
+    %c0 = arith.constant 0 : index
+    %idx = pto.vmi.vci %base
+        : f16 -> !pto.vmi.vreg<8xf16>
+    pto.vmi.vstore %idx, %dst[%c0]
+        : !pto.vmi.vreg<8xf16>, !pto.ptr<f16, ub>
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @compact_f16_vl8(
+// The compact group_slots carrier must be materialized as a logical unit-step
+// ramp in one physical f16 vector, then stored with an 8-lane prefix mask.
+// lane_stride = 1 needs no scaling, so the ramp is vci(0) + vadds(base).
+// CHECK: %[[ZERO:.*]] = arith.constant 0.000000e+00 : f16
+// CHECK: %[[INDEX:.*]] = pto.vci %[[ZERO]] : f16 -> !pto.vreg<128xf16>
+// CHECK: %[[VALUE:.*]] = pto.vadds %[[INDEX]], %arg0
+// CHECK: pto.pset_b16 "PAT_VL8" : !pto.mask<b16>
+// CHECK: pto.vsts %[[VALUE]]
+// CHECK-NOT: pto.vmuls
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.

@@ -13,14 +13,16 @@ Use this skill before adding or relocating PTOAS tests. The goal is to put each 
 - Use `test/lit/pto` for generic PTO/EmitC/DSL-lowering lit tests that do not run the VPTO backend.
 - Use `test/lit/vpto` for lit tests whose `RUN:` line uses `--pto-backend=vpto`, `--emit-vpto`, VPTO pass dumps, or VPTO-specific diagnostics.
 - Use `test/lit/vpto/cube` for focused cube VPTO lit tests when grouping with existing cube tests is clearer.
-- Use `test/vpto` for runtime validation of VPTO-generated fatobj/kernel behavior on SIM or NPU. These tests must compile and run, generate data, and compare results.
+- Use `test/dsl-st` for PTODSL semantic ST cases: express the kernel in PTODSL and check the values it produces on the simulator. This is the default home for a new semantic runtime case, and a case module there is discovered by its `CASES` symbol.
+- Use `test/vpto` for runtime validation of VPTO-generated fatobj/kernel behavior on SIM or NPU. Keep this suite for what only it covers: the `ptoas` CLI reading a `.pto` file into a fatobj, the `launch.cpp`/`main.cpp` host ABI and `kernel.so` linking, and the `DEVICE=NPU` device path.
 - Use `test/tilelang_st` for TileLang DSL system tests that validate DSL rendering plus build/run/compare behavior through the TileLang ST harness.
 
 ## Do Not
 
 - Do not add new `.pto` tests under `test/basic`; lit does not discover that directory.
 - Do not place VPTO backend lit tests under `test/lit/pto`; put them under `test/lit/vpto`.
-- Do not add runtime/simulator expectations to lit tests. If correctness depends on executing a kernel and comparing data, use `test/vpto` or `test/tilelang_st`.
+- Do not add runtime/simulator expectations to lit tests. If correctness depends on executing a kernel and comparing data, use `test/dsl-st`, `test/vpto` or `test/tilelang_st`.
+- Do not mirror one kernel as both a `test/vpto` case and a `test/dsl-st` module. It adds no coverage and turns the VPTO suite's per-directory run into an unsliceable long tail.
 - Do not add test path or coverage notes to ISA/spec manuals. `docs/isa` and `docs/vpto-spec.md` should describe op semantics and interfaces, not test locations.
 - Do not fix unrelated compiler behavior while only moving tests. If relocation exposes stale tests, report the stale category separately before broad rewrites.
 
@@ -69,6 +71,21 @@ WORK_SPACE=/tmp/pto-vpto JOBS=64 \
 
 Required environment normally includes `ASCEND_HOME_PATH`; SIM runs may need `SIM_LIB_DIR` if auto-detection fails.
 
+## `test/dsl-st` Rules
+
+Testcases live in `test/dsl-st/<name>.py`: PTODSL kernels, a `CASES` list built with `golden_output_case(...)` or a custom `make_case`/`check` pair, and one `auto_main(globals())` line. Build one kernel per shape with `pto.jit(name=..., kernel_kind="vector", target="a5", backend="vpto", mode="explicit")` and mirror the suite's neighbours (`test/dsl-st/README.md` documents the helpers).
+
+Validation commands:
+
+```bash
+python3 test/dsl-st/__main__.py --list                 # discovery, no device
+python3 test/dsl-st/__main__.py --emit-mlir            # frontend IR, no device
+scripts/sim_dsl.sh test/dsl-st/<name>.py               # one module on the simulator
+scripts/sim_dsl.sh test/dsl-st                         # whole suite
+```
+
+`scripts/sim_dsl.sh` needs `ASCEND_HOME_PATH` and resolves the compiler from `PTOAS_BIN` (or `ptoas` on `PATH`), so point `PTOAS_BIN` at the build under test — a stale `ptoas` on `PATH` fails with its own op errors, not with a test failure.
+
 ## `test/tilelang_st` Rules
 
 Use `test/tilelang_st` when the behavior starts from TileLang DSL and must be verified through DSL-generated `.pto`, build, run, data generation, and comparison.
@@ -93,7 +110,7 @@ Use the ST harness rather than ad-hoc scripts, so CI and local validation exerci
 
 ## Finishing Checklist
 
-- The test is in the framework that matches its assertion: compile/IR, VPTO runtime, or TileLang ST runtime.
+- The test is in the framework that matches its assertion: compile/IR, VPTO runtime, PTODSL/DSL ST runtime, or TileLang ST runtime.
 - New lit tests are visible in `lit --show-tests build/test/lit`.
 - VPTO backend lit tests live under `test/lit/vpto`, not `test/lit/pto`.
 - Runtime tests are discoverable by their framework without special-case script logic.

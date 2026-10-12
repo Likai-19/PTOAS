@@ -66,6 +66,9 @@ def VMIIotaOp : VMI_Op<"iota", [Pure]> {
     Produces a continuous ramp over the full logical length L:
     `dst[i] = base + i` (ASC). For L=128 that is `base..base+127`
     (physical parts `base+0..63` then `base+64..127`).
+    Result element types are the hardware VCI types i8/i16/i32/f16/f32; bf16
+    is rejected, because the instruction reads the base as a byte index and no
+    usable bf16 form exists.
   }];
   let arguments = (ins
     AnyTypeOf<[AnyInteger, AnyFloat], "integer/float scalar">:$base,
@@ -744,6 +747,9 @@ def VMIVciOp : VMI_Op<"vci", [Pure]> {
     `iota`); identical group runs share one physical index register after
     lowering. Non-contiguous result layouts rewrite to contiguous iota +
     `ensure_layout` in unified→legacy. Lowers to `iota` preserving `{group}`.
+    Result element types are the hardware VCI types i8/i16/i32/f16/f32; bf16
+    is rejected, because the instruction reads the base as a byte index and no
+    usable bf16 form exists.
   }];
   let arguments = (ins
     AnyTypeOf<[AnyInteger, AnyFloat], "integer/float scalar">:$base,

@@ -53,12 +53,29 @@
 
 - **lowering to `pto.mi`:**
   ```
-  1 × pto.vci {ASC/DESC} per chunk
+  ASC:  1 × pto.vci {ASC} per chunk
+  DESC: pto.vci 0 {ASC} + negation + 1 × pto.vadds per chunk
   ```
-  `#mi = 1/chunk`, `dep = 1`.
+  The negation follows the element type: `i8`/`i16`/`i32` use `vneg`, and
+  `f16`/`f32` use `vmuls` by `-1`.  A compact `group_slots` carrier reuses the
+  lane-strided ramp, so its ASC form ends in a `vadds` too (`+ vmuls` by
+  `1/lane_stride` once `lane_stride ≥ 2`).
 
-- **datatypes:** `i8`/`i16`/`i32`, `f16`, `f32`. For every element type,
-  the legal lane counts `L` of the result are `1, 2, 4, 8, 64, 128, 256`.
+  The DESC ramp is never emitted through the `pto.vci` DESC mode, whose
+  `result[lane] = (index + VL - 1) - lane` ramp would not produce `base - lane`
+  (#1482).
+
+  `#mi` counts instructions per chunk and depends on the direction: `1` for the
+  full-VL contiguous ASC forms, `2` for a compact ASC carrier (`3` when
+  `lane_stride ≥ 2`), and `3` for every DESC form.  `dep = 1` in each case:
+  every `vadds` depends only on its own chunk's ramp, so the chunks stay
+  independent.
+
+- **datatypes:** `i8`/`i16`/`i32`, `f16`, `f32` are the hardware VCI element
+  types.  `bf16` is not one of them: the instruction reads the base as a byte
+  index, so it has no usable form at bf16 width, and the `vmi` and `vpto`
+  verifiers both reject it rather than synthesizing a ramp.  The legal lane
+  counts `L` of the result are `1, 2, 4, 8, 64, 128, 256`.
 
 - **example:**
   ```mlir

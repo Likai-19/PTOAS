@@ -26,9 +26,16 @@ LogicalResult VciOp::verify() {
                        intType.getWidth() == mlir::pto::kValue16 ||
                        intType.getWidth() == mlir::pto::kValue32;
   }
-  bool supportedFloat = resultElemType.isF16() || resultElemType.isBF16() || resultElemType.isF32();
+  // The hardware VCI element types are i8/i16/i32/f16/f32 (see
+  // docs/isa/micro-isa/13-dsa-sfu-ops.md).  There is no bf16 form: the
+  // instruction reads the base as a byte index, so a bf16 result would ramp the
+  // base's byte position instead of the lane index.  The iota-like VMI ops
+  // reject bf16 as well, so both layers refuse the type instead of synthesizing
+  // it; a bf16 VCI reaching this verifier is a lowering defect.
+  bool supportedFloat = resultElemType.isF16() || resultElemType.isF32();
   if (!supportedInteger && !supportedFloat) {
-    return emitOpError("result element type must be integer or f16/bf16/f32");
+    return emitOpError("result element type must be integer or f16/f32; bf16 "
+                       "has no VCI form");
   }
   if (!isCompatibleScalarForSemanticType(resultElemType, getIndex().getType())) {
     return emitOpError("index type must match result element type");

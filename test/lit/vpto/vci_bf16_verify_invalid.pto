@@ -1,0 +1,23 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not ptoas --pto-arch=a5 %s -o - 2>&1 | FileCheck %s
+
+// The hardware VCI element types are i8/i16/i32/f16/f32; bf16 has no VCI form
+// because the base scalar is read as a byte index.  The iota-like VMI ops
+// reject bf16 for the same reason, so a bf16 index vector never reaches the
+// lowering; the verifier rejects a bare bf16 `pto.vci` outright instead of
+// accepting an instruction the hardware cannot issue.
+module attributes {"pto.target_arch" = "a5"} {
+  func.func @vci_bf16_verify_invalid(%base: bf16) {
+    %ramp = pto.vci %base : bf16 -> !pto.vreg<128xbf16>
+    return
+  }
+}
+
+// CHECK: bf16 has no VCI form

@@ -29,6 +29,104 @@ module {
     return %p0, %p1 : !pto.vreg<64xi32>, !pto.vreg<64xi32>
   }
 
+  // Regression for #1482: full-VL contiguous DESC must not use a bare
+  // `vci(base, DESC)` — the hardware VCI DESC ramp is `(base + VL - 1) - i`
+  // (camodel-measured: f16 VL=128, base=7 → 134..7), not the contract
+  // base-i.  Float DESC builds the ramp as vmuls(vci(0), -1) + vadds(base).
+  func.func @vmi_to_vpto_iota_f16_vl128_desc(%base: f16)
+      -> !pto.vreg<128xf16> {
+    %value = pto.vmi.vci %base {order = "DESC"}
+        : f16 -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
+    %part = "pto.vmi.unpack"(%value)
+        : (!pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>)
+        -> !pto.vreg<128xf16>
+    return %part : !pto.vreg<128xf16>
+  }
+
+  // Regression for #1482: i8 DESC uses vneg — RV_VMULS has no S8 dtype.
+  func.func @vmi_to_vpto_iota_i8_vl256_desc(%base: i8)
+      -> !pto.vreg<256xi8> {
+    %value = pto.vmi.vci %base {order = "DESC"}
+        : i8 -> !pto.vmi.vreg<256xi8, #pto.vmi.layout<contiguous>>
+    %part = "pto.vmi.unpack"(%value)
+        : (!pto.vmi.vreg<256xi8, #pto.vmi.layout<contiguous>>)
+        -> !pto.vreg<256xi8>
+    return %part : !pto.vreg<256xi8>
+  }
+
+  // Regression for #1482: f32 DESC float ramp (scale -1.0).
+  func.func @vmi_to_vpto_iota_f32_vl64_desc(%base: f32)
+      -> !pto.vreg<64xf32> {
+    %value = pto.vmi.vci %base {order = "DESC"}
+        : f32 -> !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
+    %part = "pto.vmi.unpack"(%value)
+        : (!pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>)
+        -> !pto.vreg<64xf32>
+    return %part : !pto.vreg<64xf32>
+  }
+
+  // Group-slot packet iota: a compact small-group store (VL ∈ {2,4,8}, one
+  // logical lane per group) carries a single-carrier packet layout
+  // (num_groups = VL, slots = 8) assigned by the layout solver.  The iota
+  // pattern materializes one physical vector whose lane
+  // (g % slots) * lane_stride holds group g's value base±g — the same
+  // contract as the ramp (lane i*stride = base±i).  Before the group_slots
+  // branch existed these shapes failed with VMI-RESIDUAL-OP.
+  func.func @vmi_to_vpto_iota_f16_vl8_gs8_asc(%base: f16)
+      -> !pto.vreg<128xf16> {
+    %value = pto.vmi.vci %base
+        : f16 -> !pto.vmi.vreg<8xf16, #pto.vmi.layout<num_groups = 8, slots = 8>>
+    %part = "pto.vmi.unpack"(%value)
+        : (!pto.vmi.vreg<8xf16, #pto.vmi.layout<num_groups = 8, slots = 8>>)
+        -> !pto.vreg<128xf16>
+    return %part : !pto.vreg<128xf16>
+  }
+
+  // DESC group-slot packet: vmuls(-1) ramp, no bare DESC vci (#1482).
+  func.func @vmi_to_vpto_iota_f16_vl8_gs8_desc(%base: f16)
+      -> !pto.vreg<128xf16> {
+    %value = pto.vmi.vci %base {order = "DESC"}
+        : f16 -> !pto.vmi.vreg<8xf16, #pto.vmi.layout<num_groups = 8, slots = 8>>
+    %part = "pto.vmi.unpack"(%value)
+        : (!pto.vmi.vreg<8xf16, #pto.vmi.layout<num_groups = 8, slots = 8>>)
+        -> !pto.vreg<128xf16>
+    return %part : !pto.vreg<128xf16>
+  }
+
+  // Integer packet: vci(0) + vadds, no vmuls (int ramp, shift 0).
+  func.func @vmi_to_vpto_iota_i8_vl8_gs8_asc(%base: i8)
+      -> !pto.vreg<256xi8> {
+    %value = pto.vmi.vci %base
+        : i8 -> !pto.vmi.vreg<8xi8, #pto.vmi.layout<num_groups = 8, slots = 8>>
+    %part = "pto.vmi.unpack"(%value)
+        : (!pto.vmi.vreg<8xi8, #pto.vmi.layout<num_groups = 8, slots = 8>>)
+        -> !pto.vreg<256xi8>
+    return %part : !pto.vreg<256xi8>
+  }
+
+  // num_groups (4) < slots (8): group g maps to lane g % 8.
+  func.func @vmi_to_vpto_iota_f16_vl4_gs4_s8_asc(%base: f16)
+      -> !pto.vreg<128xf16> {
+    %value = pto.vmi.vci %base
+        : f16 -> !pto.vmi.vreg<4xf16, #pto.vmi.layout<num_groups = 4, slots = 8>>
+    %part = "pto.vmi.unpack"(%value)
+        : (!pto.vmi.vreg<4xf16, #pto.vmi.layout<num_groups = 4, slots = 8>>)
+        -> !pto.vreg<128xf16>
+    return %part : !pto.vreg<128xf16>
+  }
+
+  // lane_stride=2 packet variant (compact stores accept stride 1/2/4):
+  // group g sits at lane 2g, so the ramp scales by 0.5.
+  func.func @vmi_to_vpto_iota_f16_vl4_gs4_s8_lane_stride2(%base: f16)
+      -> !pto.vreg<128xf16> {
+    %value = pto.vmi.vci %base
+        : f16 -> !pto.vmi.vreg<4xf16, #pto.vmi.layout<num_groups = 4, slots = 8, lane_stride = 2>>
+    %part = "pto.vmi.unpack"(%value)
+        : (!pto.vmi.vreg<4xf16, #pto.vmi.layout<num_groups = 4, slots = 8, lane_stride = 2>>)
+        -> !pto.vreg<128xf16>
+    return %part : !pto.vreg<128xf16>
+  }
+
   func.func @vmi_to_vpto_iota_i32_deint2_asc(%base: i32)
       -> (!pto.vreg<64xi32>, !pto.vreg<64xi32>) {
     %value = pto.vmi.vci %base
@@ -63,17 +161,6 @@ module {
         : (!pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous, lane_stride = 2>>)
         -> !pto.vreg<128xf16>
     return %part : !pto.vreg<128xf16>
-  }
-
-  // Regression for #1411: bf16 also takes the lane_stride=2 fp path.
-  func.func @vmi_to_vpto_iota_bf16_lane_stride2(%base: bf16)
-      -> !pto.vreg<128xbf16> {
-    %value = pto.vmi.vci %base
-        : bf16 -> !pto.vmi.vreg<64xbf16, #pto.vmi.layout<contiguous, lane_stride = 2>>
-    %part = "pto.vmi.unpack"(%value)
-        : (!pto.vmi.vreg<64xbf16, #pto.vmi.layout<contiguous, lane_stride = 2>>)
-        -> !pto.vreg<128xbf16>
-    return %part : !pto.vreg<128xbf16>
   }
 
   func.func @vmi_to_vpto_iota_f16_deint2_asc(%base: f16)
@@ -184,14 +271,106 @@ module {
 // CHECK-NOT: unrealized_conversion_cast
 
 // CHECK-LABEL: func.func @vmi_to_vpto_iota_i32_desc(
+// Regression for #1482: DESC chunks must not use a bare `vci(base, DESC)`
+// (its ramp is `(base + VL - 1) - i`).  Each chunk is the
+// vci(0,ASC) + vneg + vadds(chunkBase) ramp instead.
+// Chunk 0: vci(0) + vneg + vadds(base).
 // CHECK: arith.constant 64 : i32
-// CHECK: %[[P0:.*]] = pto.vci %arg0 {order = "DESC"} : i32 -> !pto.vreg<64xi32>
+// CHECK: arith.constant 0 : i32
+// CHECK: %[[IDX0:.*]] = pto.vci {{.*}} : i32 -> !pto.vreg<64xi32>
+// CHECK: %[[NEG0:.*]] = pto.vneg %[[IDX0]]
+// CHECK: %[[P0:.*]] = pto.vadds %[[NEG0]], %arg0
+// Chunk 1: same ramp on chunkBase = base−64 (laneOffset=64).
+// CHECK: %[[IDX1:.*]] = pto.vci {{.*}} : i32 -> !pto.vreg<64xi32>
 // CHECK: arith.subi %arg0
-// CHECK: %[[P1:.*]] = pto.vci {{.*}} {order = "DESC"}
+// CHECK: %[[NEG1:.*]] = pto.vneg %[[IDX1]]
+// CHECK: %[[P1:.*]] = pto.vadds %[[NEG1]]
 // CHECK: return %[[P0]], %[[P1]]
+// CHECK-NOT: pto.vmuls
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
 // CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: order = "DESC"
+
+// CHECK-LABEL: func.func @vmi_to_vpto_iota_f16_vl128_desc(
+// CHECK: %[[CM1:.*]] = arith.constant -1.000000e+00 : f16
+// CHECK: %[[C0:.*]] = arith.constant 0.000000e+00 : f16
+// CHECK: %[[IDX:.*]] = pto.vci %[[C0]] : f16 -> !pto.vreg<128xf16>
+// CHECK: %[[SCALED:.*]] = pto.vmuls %[[IDX]], %[[CM1]]
+// CHECK: %[[RESULT:.*]] = pto.vadds %[[SCALED]], %arg0
+// CHECK: return %[[RESULT]]
+// CHECK-NOT: pto.vneg
+// CHECK-NOT: pto.vdup
+// CHECK-NOT: pto.vsub
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: order = "DESC"
+
+// CHECK-LABEL: func.func @vmi_to_vpto_iota_i8_vl256_desc(
+// CHECK: %[[C0_8:.*]] = arith.constant 0 : i8
+// CHECK: %[[IDX8:.*]] = pto.vci %[[C0_8]] : i8 -> !pto.vreg<256xi8>
+// CHECK: %[[NEG8:.*]] = pto.vneg %[[IDX8]]
+// CHECK: %[[RESULT8:.*]] = pto.vadds %[[NEG8]], %arg0
+// CHECK: return %[[RESULT8]]
+// CHECK-NOT: pto.vmuls
+// CHECK-NOT: pto.vshrs
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: order = "DESC"
+
+// CHECK-LABEL: func.func @vmi_to_vpto_iota_f32_vl64_desc(
+// CHECK: %[[CM1F:.*]] = arith.constant -1.000000e+00 : f32
+// CHECK: %[[C0F:.*]] = arith.constant 0.000000e+00 : f32
+// CHECK: %[[IDXF:.*]] = pto.vci %[[C0F]] : f32 -> !pto.vreg<64xf32>
+// CHECK: %[[SCALEDF:.*]] = pto.vmuls %[[IDXF]], %[[CM1F]]
+// CHECK: %[[RESULTF:.*]] = pto.vadds %[[SCALEDF]], %arg0
+// CHECK: return %[[RESULTF]]
+// CHECK-NOT: pto.vneg
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: order = "DESC"
+
+// CHECK-LABEL: func.func @vmi_to_vpto_iota_f16_vl8_gs8_asc(
+// lane_stride = 1 ASC needs no scaling, so no vmuls is emitted.
+// CHECK: %[[ZERO:.*]] = arith.constant 0.000000e+00 : f16
+// CHECK: %[[IDX:.*]] = pto.vci %[[ZERO]] : f16 -> !pto.vreg<128xf16>
+// CHECK: %[[RESULT:.*]] = pto.vadds %[[IDX]], %arg0
+// CHECK: return %[[RESULT]]
+// CHECK-NOT: pto.vmuls
+// CHECK-NOT: pto.vmi.
+
+// CHECK-LABEL: func.func @vmi_to_vpto_iota_f16_vl8_gs8_desc(
+// CHECK: %[[NEG:.*]] = arith.constant -1.000000e+00 : f16
+// CHECK: %[[ZEROD:.*]] = arith.constant 0.000000e+00 : f16
+// CHECK: %[[IDXD:.*]] = pto.vci %[[ZEROD]] : f16 -> !pto.vreg<128xf16>
+// CHECK: %[[RAMPD:.*]] = pto.vmuls %[[IDXD]], %[[NEG]]
+// CHECK: %[[RESULTD:.*]] = pto.vadds %[[RAMPD]], %arg0
+// CHECK: return %[[RESULTD]]
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: order = "DESC"
+
+// CHECK-LABEL: func.func @vmi_to_vpto_iota_i8_vl8_gs8_asc(
+// CHECK: %[[ZERO8:.*]] = arith.constant 0 : i8
+// CHECK: %[[IDX8:.*]] = pto.vci %[[ZERO8]] : i8 -> !pto.vreg<256xi8>
+// CHECK: %[[RESULT8:.*]] = pto.vadds %[[IDX8]], %arg0
+// CHECK: return %[[RESULT8]]
+// CHECK-NOT: pto.vmuls
+// CHECK-NOT: pto.vshrs
+// CHECK-NOT: pto.vmi.
+
+// CHECK-LABEL: func.func @vmi_to_vpto_iota_f16_vl4_gs4_s8_asc(
+// CHECK: %[[ZERO4:.*]] = arith.constant 0.000000e+00 : f16
+// CHECK: %[[IDX4:.*]] = pto.vci %[[ZERO4]] : f16 -> !pto.vreg<128xf16>
+// CHECK: %[[RESULT4:.*]] = pto.vadds %[[IDX4]], %arg0
+// CHECK: return %[[RESULT4]]
+// CHECK-NOT: pto.vmuls
+// CHECK-NOT: pto.vmi.
+
+// CHECK-LABEL: func.func @vmi_to_vpto_iota_f16_vl4_gs4_s8_lane_stride2(
+// CHECK: %[[HALF:.*]] = arith.constant 5.000000e-01 : f16
+// CHECK: %[[ZEROST:.*]] = arith.constant 0.000000e+00 : f16
+// CHECK: %[[IDXST:.*]] = pto.vci %[[ZEROST]] : f16 -> !pto.vreg<128xf16>
+// CHECK: %[[RAMPST:.*]] = pto.vmuls %[[IDXST]], %[[HALF]]
+// CHECK: %[[RESULTST:.*]] = pto.vadds %[[RAMPST]], %arg0
+// CHECK: return %[[RESULTST]]
+// CHECK-NOT: pto.vmi.
 
 // CHECK-LABEL: func.func @vmi_to_vpto_iota_i32_deint2_asc(
 // CHECK: arith.constant 1 : i32
@@ -223,27 +402,6 @@ module {
 // CHECK: return %[[RESULT]]
 // CHECK-NOT: pto.vdup
 // CHECK-NOT: pto.vsub
-// CHECK-NOT: pto.vmi.
-
-// bf16 lane_stride=2: the float ramp (vmuls ×0.5) is not usable for bf16 —
-// vmuls.v128bf16 crashes the bisheng backend, and vci.v128bf16 produces
-// S8-dtype byte indices in the simulator.  Build the ramp on an i16 register
-// (vci → vbitcast → vshrs) and convert numerically to bf16 with
-// vcvt s16→f16 → f16→bf16, then add the base.
-// CHECK-LABEL: func.func @vmi_to_vpto_iota_bf16_lane_stride2(
-// CHECK: arith.constant 1 : i16
-// CHECK: arith.constant 0 : i16
-// CHECK: %[[IDX_BF:.*]] = pto.vci {{.*}} : i16 -> !pto.vreg<128xi16>
-// CHECK: %[[IDX_U:.*]] = pto.vbitcast %[[IDX_BF]] : !pto.vreg<128xi16> -> !pto.vreg<128xui16>
-// CHECK: %[[SHR:.*]] = pto.vshrs %[[IDX_U]]
-// CHECK: %[[SHR_I:.*]] = pto.vbitcast %[[SHR]] : !pto.vreg<128xui16> -> !pto.vreg<128xi16>
-// CHECK: %[[AS_F16:.*]] = pto.vcvt %[[SHR_I]]{{.*}} : !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<128xf16>
-// CHECK: %[[AS_BF:.*]] = pto.vcvt %[[AS_F16]]{{.*}} : !pto.vreg<128xf16>, !pto.mask<b16> -> !pto.vreg<128xbf16>
-// CHECK: %[[RESULT_BF:.*]] = pto.vadds %[[AS_BF]], %arg0
-// CHECK: return %[[RESULT_BF]]
-// CHECK-NOT: pto.vdup
-// CHECK-NOT: pto.vsub
-// CHECK-NOT: pto.vmuls
 // CHECK-NOT: pto.vmi.
 
 // CHECK-LABEL: func.func @vmi_to_vpto_iota_f16_deint2_asc(

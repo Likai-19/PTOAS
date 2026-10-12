@@ -172,12 +172,17 @@ namespace {
 // Width / kind / mlir::IntegerType-cast checks stay inline at each callsite;
 // only the sign-semantics decision is centralized here.
 // ---------------------------------------------------------------------------
+/// Element types an index-generation op (`pto.vmi.iota`, `pto.vmi.vci`,
+/// `pto.vmi.group_iota`) accepts.  These are the hardware VCI element types.
+/// bf16 is deliberately absent: it has no VCI form, and the two verifiers plus
+/// the VPTO one reject it so the synthesized-ramp question stays out of this
+/// interface (see docs/isa/vmi-isa/02-index-gen.md).
 [[maybe_unused]] inline bool isVMIIotaElementType(mlir::Type type) {
   if (auto intType = mlir::dyn_cast<mlir::IntegerType>(type)) {
     return intType.getWidth() == mlir::pto::kValue8 || intType.getWidth() == mlir::pto::kValue16 ||
            intType.getWidth() == mlir::pto::kValue32;
   }
-  return type.isF16() || type.isBF16() || type.isF32();
+  return type.isF16() || type.isF32();
 }
 
 

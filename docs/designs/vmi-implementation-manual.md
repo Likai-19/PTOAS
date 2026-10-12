@@ -2873,7 +2873,26 @@ pto.vmi.iota:
   contiguous full-chunk direct path:
     for each physical chunk c:
       chunk_base = base +/- c * lanes_per_part
-      emit pto.vci chunk_base {order = ASC|DESC}
+      ASC:  emit pto.vci chunk_base {order = ASC}
+      DESC: emit the ramp built from pto.vci 0 {order = ASC} (see below)
+  The hardware pto.vci DESC mode must not be used for the DESC ramp: it anchors
+  the ramp on the scalar's upper end, `result[lane] = (index + VL - 1) - lane`,
+  so `pto.vci chunk_base {order = DESC}` yields `chunk_base + VL - 1 - lane`
+  instead of `chunk_base - lane` (#1482).
+  The contiguous DESC ramp is therefore materialized arithmetically, reusing the
+  laneStride = 1 form of the lane-strided ramp below:
+    indices = pto.vci 0 {order = ASC}
+    integer 8/16/32: result = pto.vadds pto.vneg indices, chunk_base
+    f16/f32:         result = pto.vadds pto.vmuls indices, -1.0, chunk_base
+  (bf16 is not among the iota element types: the iota-like VMI verifiers reject
+  it, and the VPTO `pto.vci` verifier rejects a bf16 result as well, because the
+  instruction reads the base as a byte index.)
+  The ramp is shared across chunks; each further chunk only adds one pto.vadds
+  with its own chunk_base.
+  group_slots carriers with one logical lane per group (num_groups = L, the
+  compact single-carrier shape) use the same ramp: lane `(g % slots) * stride`
+  holds group g's value, which for lane_stride = 1 coincides with the
+  contiguous ramp.
   deinterleaved layout requires strided index materialization because physical part p contains logical lanes:
     p, p + factor, p + 2 * factor, ...
   The required formula is:

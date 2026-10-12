@@ -36,7 +36,7 @@ LogicalResult VMIGroupIotaOp::verify() {
   Type elementType = resultType.getElementType();
   if (!isVMIIotaElementType(elementType)) {
     return emitOpError("requires result element type to be integer 8/16/32 "
-                       "or f16/bf16/f32");
+                       "or f16/f32; bf16 has no VCI form");
   }
   if (!isCompatibleVMIScalarForSemanticType(elementType, getBase().getType())) {
     return emitOpError("requires base type to match result element type");

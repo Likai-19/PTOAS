@@ -241,14 +241,24 @@ private:
       return rewriter.notifyMatchFailure(
           op, "failed to materialize shuffle vselr index base");
     }
-    StringAttr orderAttr =
-        plan.descending ? rewriter.getStringAttr("DESC") : StringAttr{};
-    Value indexVector =
-        rewriter.create<VciOp>(op.getLoc(), indexType, *base, orderAttr)
-            .getResult();
+    // The index vector is the same contiguous iota ramp as pto.vmi.iota, so it
+    // goes through the same helper: ASC is a direct `vci(baseLane)`, while DESC
+    // must avoid the `pto.vci` DESC mode, whose ramp is
+    // `(baseLane + VL - 1) - lane` and would index past the source chunk
+    // instead of reversing it (#1482).
+    IotaMaterializationContext context{
+        op.getLoc(), *base,
+        plan.descending ? rewriter.getStringAttr("DESC") : StringAttr{},
+        rewriter};
+    FailureOr<Value> indexVector =
+        createIotaContiguousChunk(context, indexType, /*laneOffset=*/0);
+    if (failed(indexVector)) {
+      return rewriter.notifyMatchFailure(
+          op, "failed to materialize shuffle vselr index vector");
+    }
     return rewriter
         .create<VselrOp>(op.getLoc(), resultType,
-                         sourceParts[plan.sourceFlatIndex], indexVector)
+                         sourceParts[plan.sourceFlatIndex], *indexVector)
         .getResult();
   }
 

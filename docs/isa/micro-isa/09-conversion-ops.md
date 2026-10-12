@@ -30,20 +30,27 @@ Cycle-accurate simulator **popped→retire** latency (cycles). Only representati
 ## `pto.vci`
 
 - **syntax:** `%result = pto.vci %index {order = "ASC|DESC"} : T -> !pto.vreg<NxT>`
-- **semantics:** Generate a lane-index vector from a scalar base value.
+- **semantics:** Generate a lane-index vector from a scalar base value: `ASC`
+  produces `base + lane_id`, and `DESC` ramps down from the scalar's upper end,
+  `(base + N - 1) - lane_id`.
 - **inputs:**
   `%index` is the scalar base value. Supported scalar types are `i8/i16/i32`,
   `f16`, and `f32`.
 - **outputs:**
   `%result` is the generated index vector.
 - **constraints and limitations:**
-  This is an index-generation family, not a numeric conversion. `order` and
-  the result element type together determine whether lanes are generated as
-  `base + lane_id` or `base - lane_id`. Supported result types are
+  This is an index-generation family, not a numeric conversion. `order` selects
+  the ramp described above; the `DESC` form is the measured hardware behavior —
+  on the A5 camodel, `f16` with `N = 128` and `base = 7` produces `134..7` — and
+  is *not* `base - lane_id`, which is the contract of the VMI-level
+  `pto.vmi.vci` (that op materializes `DESC` as `pto.vci 0 {ASC}` plus a
+  negation and one `vadds` per chunk). Supported result types are
   `!pto.vreg<256xsi8>`, `!pto.vreg<128xsi16>`, `!pto.vreg<64xsi32>`,
-  `!pto.vreg<128xf16>`, and `!pto.vreg<64xf32>`. `%index` must use the
-  matching scalar type for `f16`/`f32`; for integer results, `%index` must use
-  the same bit width and may be signless or signed.
+  `!pto.vreg<128xf16>`, and `!pto.vreg<64xf32>`; these are the hardware VCI
+  element types, so there is no `bf16` form and both verifiers reject one.
+  `%index` must use the matching scalar type for `f16`/`f32`; for integer
+  results, `%index` must use the same bit width and may be signless or signed.
+  See `13-dsa-sfu-ops.md` for the same entry with its per-direction notes.
 
 ---
 

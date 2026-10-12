@@ -198,11 +198,13 @@ for (int i = 0; i < N; i++)
 ### `pto.vci`
 
 - **syntax:** `%result = pto.vci %index {order = "ASC|DESC"} : T -> !pto.vreg<NxT>`
-- **semantics:** Generate a lane index vector from a scalar base value.
+- **semantics:** Generate a lane index vector from a scalar base value.  The
+  scalar names the ramp's *upper* end in `DESC`, so the descending form is the
+  hardware ramp `(base_index + N - 1) - i`, not `base_index - i`.
 
 ```c
 for (int i = 0; i < N; i++)
-    dst[i] = (order == ASC) ? (base_index + i) : (base_index - i);
+    dst[i] = (order == ASC) ? (base_index + i) : (base_index + N - 1 - i);
 ```
 
 **Use case:** Generate indices for gather/scatter, argsort, etc.
@@ -215,7 +217,18 @@ for (int i = 0; i < N; i++)
   `!pto.vreg<256xsi8>`, `!pto.vreg<128xsi16>`, `!pto.vreg<64xsi32>`,
   `!pto.vreg<128xf16>`, and `!pto.vreg<64xf32>`. `%index` must use the
   matching scalar type for `f16`/`f32`; for integer results, `%index` must use
-  the same bit width and may be signless or signed.
+  the same bit width and may be signless or signed.  These are the hardware VCI
+  element types; there is no `bf16` form, and the VMI index-generation ops and
+  this verifier both reject it, because the instruction reads the base as a byte
+  index and would therefore ramp the base's byte position instead of the lane
+  index.
+- **difference from `pto.vmi.vci`:** the ramp above is the measured hardware
+  behavior — on the A5 camodel, `f16` with `N = 128` and `base_index = 7` in
+  `DESC` produces `134..7`.  The VMI-level `pto.vmi.vci` op keeps the different
+  contract `dst[i] = base ∓ i` instead, and materializes its `DESC` form as
+  `pto.vci 0 {ASC}` plus a negation and one `vadds` per chunk (see
+  `docs/isa/vmi-isa/02-index-gen.md`).  A caller moving an expression from the
+  VMI level must therefore not reuse `base_index - i` here.
 
 ---
 

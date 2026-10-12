@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not ptoas --emit-pto-ir %s 2>&1 | FileCheck %s
+
+// See `vmi_iota_bf16_rejected.pto` for why bf16 is rejected and why each op has
+// its own file.
+module {
+  func.func @vmi_group_iota_bf16_rejected(%base: bf16) {
+    %value = pto.vmi.group_iota %base {order = "ASC", group = 2}
+        : bf16 -> !pto.vmi.vreg<128xbf16>
+    return
+  }
+}
+
+// CHECK: 'pto.vmi.group_iota' op requires result element type to be integer 8/16/32 or f16/f32; bf16 has no VCI form
