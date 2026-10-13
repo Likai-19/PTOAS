@@ -25,6 +25,7 @@ MAX_TEXT_FILE_SIZE = 2 * 1024 * 1024
 LICENSE_MARKER = "Copyright (c)"
 DELIVERY_MARKERS = ("TO" + "DO", "T" + "BD", "FIX" + "ME")
 DELIVERY_MARKER_PATTERN = re.compile(r"\b(?:" + "|".join(DELIVERY_MARKERS) + r")\b")
+SUBPROCESS_PATTERN = re.compile(r"\bsubprocess\b")
 TEST_DIRECTORY_NAMES = frozenset({"test", "tests", "unittest", "unittests"})
 LICENSED_LANGUAGES = frozenset({"cpp", "python", "shell", "cmake"})
 
@@ -96,6 +97,8 @@ TEXT_RULES = (
              "invoke a validated argument vector without a command shell"),
     TextRule(PYTHON, re.compile(r"\btempfile\.mktemp\s*\("), "error", "G.FIO.03",
              "use a secure tempfile context manager"),
+    TextRule(PYTHON, re.compile(r"\btempfile\.mkdtemp\s*\("), "error", "G.FIO.04",
+             "delete the mkdtemp directory after use, or use TemporaryDirectory"),
     TextRule(PYTHON, re.compile(r"\b(?:pickle|_pickle)\.load\s*\("), "error", "G.SER.01",
              "do not deserialize untrusted pickle data"),
     TextRule(PYTHON, re.compile(r"\byaml\.load\s*\("), "error", "G.SER.03",
@@ -110,6 +113,8 @@ TEXT_RULES = (
              "do not evaluate a constructed command"),
     TextRule(SHELL, re.compile(r"\b(?:bash|sh)\s+-c(?:\s|$)"), "warning", "G.EDV.02",
              "prefer direct argument-vector execution"),
+    TextRule(SHELL, re.compile(r"\bmktemp\s+-[A-Za-z]*d"), "error", "G.FIO.04",
+             "delete the staged directory after use, or create it under a managed root"),
     TextRule(SHELL, re.compile(r"\brm\s+-[A-Za-z]*[rf][A-Za-z]*\s+[^\n]*[*?]"), "error",
              "G.EDV.03", "do not combine recursive deletion with an unresolved wildcard"),
     TextRule(CMAKE, re.compile(r"(?<!\w)-fpermissive\b"), "error", "G.C&C++.LANG.04",
@@ -256,9 +261,13 @@ def scan_changed_lines(lines: list[ChangedLine]) -> list[Finding]:
             severity = "warning" if is_test_path(changed.path) else "error"
             findings.append(Finding(changed.path, changed.number, severity, "G.CMT.05",
                                     "remove unfinished-work marker from delivery code"))
+        if language == "python" and is_test_path(changed.path) and SUBPROCESS_PATTERN.search(changed.text):
+            findings.append(Finding(changed.path, changed.number, "error", "G.EDV.02/G.EDV.05",
+                                    "do not start child processes from a Python test; use a shell test"))
         for rule in TEXT_RULES:
-            if language in rule.languages and rule.expression.search(changed.text):
-                findings.append(Finding(changed.path, changed.number, rule.severity, rule.rule, rule.message))
+            if language not in rule.languages or not rule.expression.search(changed.text):
+                continue
+            findings.append(Finding(changed.path, changed.number, rule.severity, rule.rule, rule.message))
     return findings
 
 

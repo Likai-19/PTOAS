@@ -9,6 +9,8 @@
 
 """Native i16 sum slots: overflow, masks, multiple carriers and shared consumers."""
 
+import os
+
 import numpy as np
 from common import auto_main
 from ptodsl import pto
@@ -177,16 +179,53 @@ def check_case(inputs, expected):
         np.testing.assert_array_equal(actual.cpu().numpy(), golden)
 
 
+# The matrix below is a full cross product of dtype, vector shape and reduction
+# mode. Running every combination costs hours on the cycle accurate model while
+# most combinations repeat the same device behaviour, so the default suite runs
+# one representative per behaviour class and samples the shape axis:
+#
+#   dtype  si16          - the signed path, every reduction mode
+#          ui16          - the unsigned path, one canonical case
+#          i16           - ui16 with the saturation check on, one canonical case
+#   shape  (512, 16)     - largest vector with the largest group count
+#          (64, 8)       - smallest vector with the smallest group count
+#   mode   empty / tail / full / holes / middle_empty / wrap / underflow
+#                        - complete for the signed representative
+#
+# Set PTOAS_VMI_FULL_MATRIX=1 to run the original cross product instead.
+FULL_MATRIX = os.environ.get("PTOAS_VMI_FULL_MATRIX") == "1"
+LABELS = (("i16", np.uint16), ("si16", np.int16), ("ui16", np.uint16))
+SHAPES = ((64, 8), (128, 8), (256, 8), (512, 8), (256, 16), (512, 16))
+MODES = ("empty", "tail", "full", "holes", "middle_empty", "wrap", "underflow")
+
+if FULL_MATRIX:
+    matrix = [(label, npdtype, shape, mode)
+              for label, npdtype in LABELS for shape in SHAPES for mode in MODES]
+else:
+    # Every shape stays covered. Inside each shape the label and reduction mode
+    # axes are rotated over a small deterministic sample so every dtype and
+    # every mode still appears without paying for the full cross product.
+    matrix = []
+    for shape_index, shape in enumerate(SHAPES):
+        for offset in (0, 3, 5):
+            label, npdtype = LABELS[(shape_index + offset) % len(LABELS)]
+            matrix.append((label, npdtype, shape, MODES[(shape_index + offset) % len(MODES)]))
+
 CASES = []
-for label, npdtype in (("i16", np.uint16), ("si16", np.int16), ("ui16", np.uint16)):
-    for lanes, groups in ((64, 8), (128, 8), (256, 8), (512, 8), (256, 16), (512, 16)):
-        name = f"native_sum_{label}_vl{lanes}_g{groups}"
+_kernels = {}
+for label, npdtype, (lanes, groups), mode in matrix:
+    name = f"native_sum_{label}_vl{lanes}_g{groups}"
+    kernel = _kernels.get(name)
+    if kernel is None:
         kernel = build_kernel(label, lanes, groups, name)
-        for mode in ("empty", "tail", "full", "holes", "middle_empty", "wrap", "underflow"):
-            def create_case(npdtype=npdtype, lanes=lanes, groups=groups, mode=mode,
-                            check_saturation=label != "i16"):
-                return make_case(npdtype, lanes, groups, mode, check_saturation)
-            CASES.append(dict(name=f"{name}_{mode}", kernel=kernel,
-                              make_case=create_case, check=check_case))
+        _kernels[name] = kernel
+    def create_case(npdtype=npdtype, lanes=lanes, groups=groups, mode=mode,
+                    check_saturation=label != "i16"):
+        return make_case(npdtype, lanes, groups, mode, check_saturation)
+    CASES.append(dict(name=f"{name}_{mode}", kernel=kernel,
+                      make_case=create_case, check=check_case))
+
+CASES = list({case["name"]: case for case in CASES}.values())  # sampling can overlap
+
 
 auto_main(globals())

@@ -214,8 +214,23 @@ python3 ptodsl/examples/flash_attention_softmax_launch.py
 
 ### Launch artifacts
 
-- `~/.cache/ptodsl/` — JIT-compiled kernel `.so` cache
+- `$PTODSL_CACHE_DIR/` — optional JIT-compiled kernel `.so` cache; disabled by default
 - `build/msprof_res/` — `msprof` simulator trace output
+
+#### JIT artifact cache
+
+The native `.so` cache is **disabled by default**: each specialization is built
+in a process-private scratch directory under `TMPDIR` and loaded from there.
+
+- `PTODSL_CACHE_DIR=<dir>` opts in to the persistent on-disk cache.
+- `PTODSL_NO_CACHE=1` forces the cache off, even when `PTODSL_CACHE_DIR` is set.
+
+The cache is off by default because the specialization key embeds process
+addresses (a pybind11 method address in `_DType.__repr__` and `id(callback)`),
+so it never hits across sessions; the cache directory grows without bound; and
+artifacts are published without locking, a temporary name, or a fallback, so
+two processes can share a directory and fail. A follow-up should key on a
+content hash and publish atomically with a fallback and a size cap.
 
 ---
 

@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import time
 from pathlib import Path
 import sys
+from typing import NoReturn
 
 import numpy as np
 
@@ -127,7 +129,7 @@ def discover_case_modules(root: Path | None = None) -> list:
     for path in sorted(case_root.glob("*.py")):
         if path.name in {"common.py", "__main__.py"}:
             continue
-        if path.name.startswith("_"):
+        if path.name.startswith("_") or path.name.startswith("test_"):
             continue
         module = _load_module_from_path(path)
         if getattr(module, "CASES", None):
@@ -191,17 +193,30 @@ def run_cases(cases: list[dict], *, emit_mlir_fn=None, argv=None) -> int:
                 f"DSL ST case {name!r} make_case() must return 2 or 3 values, got {len(made_case)}"
             )
 
-        device_inputs = [torch.from_numpy(array).to(_DEVICE) for array in inputs]
+        device_inputs = [
+            array if isinstance(array, torch.Tensor) else torch.from_numpy(array).to(_DEVICE)
+            for array in inputs
+        ]
         stream = npu_stream(torch)
 
-        t0 = time.perf_counter()
-        compiled = kernel.compile()
-        compile_s = time.perf_counter() - t0
+        run_case = case.get("run")
+        if run_case is not None:
+            # the case drives its own kernels, for the cases whose C++ host
+            # launched more than one entry point
+            t0 = time.perf_counter()
+            run_case(device_inputs, launch_args, stream)
+            torch.npu.synchronize()
+            launch_s = time.perf_counter() - t0
+            compile_s = 0.0
+        else:
+            t0 = time.perf_counter()
+            compiled = kernel.compile()
+            compile_s = time.perf_counter() - t0
 
-        t0 = time.perf_counter()
-        compiled[1, stream](*device_inputs, *launch_args)
-        torch.npu.synchronize()
-        launch_s = time.perf_counter() - t0
+            t0 = time.perf_counter()
+            compiled[int(case.get("grid", 1)), stream](*device_inputs, *launch_args)
+            torch.npu.synchronize()
+            launch_s = time.perf_counter() - t0
 
         case["check"](device_inputs, expected)
         print(f"PASS {name}  compile={compile_s:.3f}s launch={launch_s:.3f}s")
@@ -229,17 +244,36 @@ def run_discovered_cases(root: Path | None = None, argv=None) -> int:
     cases = discover_cases(root)
     if not cases:
         raise RuntimeError("No DSL ST cases discovered")
-    return run_cases(
-        cases,
-        emit_mlir_fn=lambda: emit_mlir(*_collect_case_kernels(cases)),
-        argv=argv,
+    finish(
+        run_cases(
+            cases,
+            emit_mlir_fn=lambda: emit_mlir(*_collect_case_kernels(cases)),
+            argv=argv,
+        )
     )
+
+
+def finish(rc: int) -> NoReturn:
+    # Exit without running the interpreter teardown (Py_FinalizeEx).
+    # torch_npu teardown resets the device and frees the model while the
+    # simulator background threads can still read it, which segfaults after
+    # the cases have already finished. Flush first so no PASS line or
+    # compare output is lost; error paths are left alone so a failure still
+    # prints its traceback and returns non-zero.
+    #
+    # os._exit is deliberately blunt: it skips atexit handlers, does not run
+    # the C stdio buffers a second time, and leaves no chance for a coverage
+    # or GC hook to run after the cases. The explicit flush above is the only
+    # output guarantee, and callers must not expect any teardown code to run.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(rc)
 
 
 def auto_main(module_globals: dict, argv=None) -> None:
     if module_globals.get("__name__") != "__main__":
         return
-    raise SystemExit(run_module_cases(module_globals, argv=argv))
+    finish(run_module_cases(module_globals, argv=argv))
 
 
 def assert_close(actual, expected, *, rtol=1e-5, atol=1e-5):

@@ -110,7 +110,7 @@ has two roles controlled by `entry`:
   error. They are compiled and linked together with their callers automatically.
 
 In both roles, compilation, caching, and tracing work the same way: the body is
-traced once, lowered through the PTOAS compiler pipeline, and cached by
+traced once, lowered through the PTOAS compiler pipeline, and reused by
 specialization key (function identity + entry annotation signature + const_expr
 parameter values).
 

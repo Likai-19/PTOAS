@@ -143,7 +143,7 @@ Once the kernel is defined, you compile it and then launch it:
 
 <!-- ptodsl-doc-test: {"mode":"launch_fragment","fixture":"launch.blocked_copy_compile_and_launch","symbol":"blocked_copy"} -->
 ```python
-# Compile once, cache the result.
+# Compile once; the handle keeps the launch artifacts.
 compiled = blocked_copy.compile(BLOCK=128)
 
 # Allocate or obtain input/output tensors (NumPy, torch-npu, ...).
@@ -155,7 +155,7 @@ O = np.empty_like(A)
 compiled[1, None](A.ctypes.data, O.ctypes.data, 4, 128)
 ```
 
-- `.compile(**constexprs)` traces the kernel body, lowers it through the PTOAS pipeline, and returns a compiled handle. Repeated calls with the same tensor ABI contract and constexpr configuration hit the cache.
+- `.compile(**constexprs)` traces the kernel body, lowers it through the PTOAS pipeline, and returns a compiled handle. Repeated calls with the same tensor ABI contract and constexpr configuration reuse the in-process launch artifacts. The on-disk `.so` cache is disabled by default and enabled with `PTODSL_CACHE_DIR`.
 - `compiled[grid, stream](args...)` launches the compiled kernel. `grid` is the number of SPMD blocks; `stream` is the NPU stream (or `None` for the default).
 
 ## 2.4 SPMD launch

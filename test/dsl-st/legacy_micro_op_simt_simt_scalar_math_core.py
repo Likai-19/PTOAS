@@ -1,0 +1,523 @@
+#!/usr/bin/env python3
+# coding=utf-8
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+"""Migrated from test/vpto/cases/micro-op/simt/simt-scalar-math-core."""
+
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+import numpy as np
+
+from common import auto_main
+from ptodsl import pto
+
+KERNEL_SOURCE = (
+    'module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {\n  func.func @simt_'
+    'scalar_math_core_kernel(%arg0: !pto.ptr<i32, gm>) attributes {pto.aicore} {\n    %c0_i64 = arith.constant 0 '
+    ': i64\n    %c128_i64 = arith.constant 128 : i64\n    %c32_i64 = arith.constant 32 : i64\n    %dim_z = arith.'
+    'constant 1 : i32\n    %dim_y = arith.constant 1 : i32\n    %dim_x = arith.constant 32 : i32\n\n    %ub_out ='
+    ' pto.castptr %c0_i64 : i64 -> !pto.ptr<i32, ub>\n    pto.simt_launch @simt_scalar_math_core_body<<<%dim_x, %'
+    'dim_y, %dim_z>>>(%ub_out) : (!pto.ptr<i32, ub>) -> ()\n\n    pto.set_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"'
+    ']\n    pto.wait_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]\n    pto.mte_ub_gm %ub_out, %arg0, %c128_i64\n     '
+    ' nburst(%c32_i64, %c128_i64, %c128_i64)\n      : !pto.ptr<i32, ub>, !pto.ptr<i32, gm>, i64, i64, i64, i64\n '
+    '   pto.barrier #pto.pipe<PIPE_ALL>\n    return\n  }\n\n  func.func @simt_scalar_math_core_body(%dst: !pto.pt'
+    'r<i32, ub>) attributes {pto.simt_entry} {\n    %c0 = arith.constant 0 : index\n    %c1 = arith.constant 1 : '
+    'index\n    %c2 = arith.constant 2 : index\n    %c3 = arith.constant 3 : index\n    %c4 = arith.constant 4 : '
+    'index\n    %c5 = arith.constant 5 : index\n    %c6 = arith.constant 6 : index\n    %c7 = arith.constant 7 : '
+    'index\n    %c8 = arith.constant 8 : index\n    %c9 = arith.constant 9 : index\n    %c10 = arith.constant 10 '
+    ': index\n    %c11 = arith.constant 11 : index\n    %c12 = arith.constant 12 : index\n    %c13 = arith.consta'
+    'nt 13 : index\n    %shift32 = arith.constant 32 : i64\n\n    %a = arith.constant -2000000000 : i32\n    %b ='
+    ' arith.constant 3 : i32\n    %ua = arith.constant -268435456 : i32\n    %ub = arith.constant 16 : i32\n    %'
+    'x64 = arith.constant -1 : i64\n    %y64 = arith.constant 2 : i64\n    %prmt_a = arith.constant 287454020 : i'
+    '32\n    %prmt_b = arith.constant -1430532899 : i32\n    %sel_3210 = arith.constant 12816 : i32\n    %sel_765'
+    '4 = arith.constant 30292 : i32\n    %sel_89ab = arith.constant 35243 : i32\n    %sel_ffff = arith.constant 6'
+    '5535 : i32\n\n    %mulhi_s = pto.mulhi %a, %b signed : i32, i32 -> i32\n    %mulhi_u = pto.mulhi %ua, %ub un'
+    'signed : i32, i32 -> i32\n    %wide_s = pto.mul_i32toi64 %a, %b signed : i32, i32 -> i64\n    %wide_u = pto.'
+    'mul_i32toi64 %ua, %ub unsigned : i32, i32 -> i64\n    %hi64_u = pto.mulhi %x64, %y64 unsigned : i64, i64 -> '
+    'i64\n    %hi64_s = pto.mulhi %x64, %y64 signed : i64, i64 -> i64\n    %wide_s_lo = arith.trunci %wide_s : i6'
+    '4 to i32\n    %wide_s_shr = arith.shrsi %wide_s, %shift32 : i64\n    %wide_s_hi = arith.trunci %wide_s_shr :'
+    ' i64 to i32\n    %wide_u_lo = arith.trunci %wide_u : i64 to i32\n    %wide_u_shr = arith.shrui %wide_u, %shi'
+    'ft32 : i64\n    %wide_u_hi = arith.trunci %wide_u_shr : i64 to i32\n    %hi64_u_lo = arith.trunci %hi64_u : '
+    'i64 to i32\n    %hi64_u_shr = arith.shrui %hi64_u, %shift32 : i64\n    %hi64_u_hi = arith.trunci %hi64_u_shr'
+    ' : i64 to i32\n    %hi64_s_lo = arith.trunci %hi64_s : i64 to i32\n    %hi64_s_shr = arith.shrui %hi64_s, %s'
+    'hift32 : i64\n    %hi64_s_hi = arith.trunci %hi64_s_shr : i64 to i32\n    %prmt_3210 = pto.prmt %prmt_a, %pr'
+    'mt_b, %sel_3210 : i32, i32, i32 -> i32\n    %prmt_7654 = pto.prmt %prmt_a, %prmt_b, %sel_7654 : i32, i32, i3'
+    '2 -> i32\n    %prmt_89ab = pto.prmt %prmt_a, %prmt_b, %sel_89ab : i32, i32, i32 -> i32\n    %prmt_ffff = pto'
+    '.prmt %prmt_a, %prmt_b, %sel_ffff : i32, i32, i32 -> i32\n\n    pto.store %mulhi_s, %dst[%c0] : !pto.ptr<i32'
+    ', ub>, i32\n    pto.store %mulhi_u, %dst[%c1] : !pto.ptr<i32, ub>, i32\n    pto.store %wide_s_lo, %dst[%c2] '
+    ': !pto.ptr<i32, ub>, i32\n    pto.store %wide_s_hi, %dst[%c3] : !pto.ptr<i32, ub>, i32\n    pto.store %wide_'
+    'u_lo, %dst[%c4] : !pto.ptr<i32, ub>, i32\n    pto.store %wide_u_hi, %dst[%c5] : !pto.ptr<i32, ub>, i32\n    '
+    'pto.store %hi64_u_lo, %dst[%c6] : !pto.ptr<i32, ub>, i32\n    pto.store %hi64_u_hi, %dst[%c7] : !pto.ptr<i32'
+    ', ub>, i32\n    pto.store %prmt_3210, %dst[%c8] : !pto.ptr<i32, ub>, i32\n    pto.store %prmt_7654, %dst[%c9'
+    '] : !pto.ptr<i32, ub>, i32\n    pto.store %prmt_89ab, %dst[%c10] : !pto.ptr<i32, ub>, i32\n    pto.store %pr'
+    'mt_ffff, %dst[%c11] : !pto.ptr<i32, ub>, i32\n    pto.store %hi64_s_lo, %dst[%c12] : !pto.ptr<i32, ub>, i32'
+    '\n    pto.store %hi64_s_hi, %dst[%c13] : !pto.ptr<i32, ub>, i32\n    return\n  }\n}\n'
+)
+
+def _golden_scope():
+    _files = {}
+
+    output_dir = None
+
+    # Copyright (c) 2026 Huawei Technologies Co., Ltd.
+    # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+    # CANN Open Software License Agreement Version 2.0 (the "License").
+    # Please refer to the License for details. You may not use this file except in compliance with the License.
+    # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+    # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+    # See LICENSE in the root of the software repository for the full text of the License.
+
+    import argparse
+    from pathlib import Path
+
+    import numpy as np
+
+    ELEMS = 1024
+
+
+    def i32(value: int) -> np.int32:
+        value &= 0xFFFFFFFF
+        if value >= 0x80000000:
+            value -= 0x100000000
+        return np.int32(value)
+
+
+    def split_i64(value: int) -> tuple[np.int32, np.int32]:
+        value &= 0xFFFFFFFFFFFFFFFF
+        return i32(value), i32(value >> 32)
+
+
+    def prmt(a: int, b: int, selector: int) -> np.int32:
+        a &= 0xFFFFFFFF
+        b &= 0xFFFFFFFF
+        src = [(b >> (8 * i)) & 0xFF for i in range(4)]
+        src += [(a >> (8 * i)) & 0xFF for i in range(4)]
+        out = 0
+        for pos in range(4):
+            nibble = (selector >> (4 * pos)) & 0xF
+            out |= src[nibble & 0x7] << (8 * pos)
+        return i32(out)
+
+
+    def _generate(seed: int) -> dict:
+        v1 = np.full(ELEMS, -1, dtype=np.int32)
+        golden_v1 = np.zeros(ELEMS, dtype=np.int32)
+
+        a = -2_000_000_000
+        b = 3
+        ua = 0xF0000000
+        ub = 16
+        x64 = 0xFFFFFFFFFFFFFFFF
+        y64 = 2
+        signed_prod = a * b
+        unsigned_prod = ua * ub
+        hi64_u = (x64 * y64) >> 64
+        sx64 = -1
+        sy64 = 2
+        hi64_s = (sx64 * sy64) >> 64
+
+        wide_s_lo, wide_s_hi = split_i64(signed_prod)
+        wide_u_lo, wide_u_hi = split_i64(unsigned_prod)
+        hi64_u_lo, hi64_u_hi = split_i64(hi64_u)
+        hi64_s_lo, hi64_s_hi = split_i64(hi64_s)
+        prmt_a = 0x11223344
+        prmt_b = 0xAABBCCDD
+
+        golden_v1[:14] = np.array(
+            [
+                i32(signed_prod >> 32),
+                i32(unsigned_prod >> 32),
+                wide_s_lo,
+                wide_s_hi,
+                wide_u_lo,
+                wide_u_hi,
+                hi64_u_lo,
+                hi64_u_hi,
+                prmt(prmt_a, prmt_b, 0x3210),
+                prmt(prmt_a, prmt_b, 0x7654),
+                prmt(prmt_a, prmt_b, 0x89AB),
+                prmt(prmt_a, prmt_b, 0xFFFF),
+                hi64_s_lo,
+                hi64_s_hi,
+            ],
+            dtype=np.int32,
+        )
+        _files["v1.bin"] = v1
+        _files["golden_v1.bin"] = golden_v1
+
+
+    def main():
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--output-dir", type=Path, default=Path("."))
+        args = parser.parse_args()
+        generate(args.output_dir)
+
+
+    return locals()
+
+def _compare_scope():
+    # Copyright (c) 2026 Huawei Technologies Co., Ltd.
+    # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+    # CANN Open Software License Agreement Version 2.0 (the "License").
+    # Please refer to the License for details. You may not use this file except in compliance with the License.
+    # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+    # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+    # See LICENSE in the root of the software repository for the full text of the License.
+
+    import os
+    import sys
+
+    import numpy as np
+
+
+    def main():
+        strict = os.getenv("COMPARE_STRICT", "1") != "0"
+        golden = np.fromfile("golden_v1.bin", dtype=np.int32)
+        out = np.fromfile("v1.bin", dtype=np.int32)
+        ok = golden.shape == out.shape and np.array_equal(golden, out)
+        if not ok:
+            idxs = np.nonzero(golden != out)[0]
+            idx = int(idxs[0]) if idxs.size else 0
+            print(
+                f"[ERROR] mismatch at idx={idx}, golden={int(golden[idx])}, out={int(out[idx])}"
+            )
+            if strict:
+                sys.exit(2)
+        print("[INFO] compare passed" if ok else "[WARN] compare failed (non-gating)")
+
+
+    return locals()
+
+HELPERS = {}
+SEED_EXPR = None
+COMPARE_PAIRS = []
+
+NUMPY_DTYPE = {
+    'i8': 'int8',
+    'i16': 'int16',
+    'i32': 'int32',
+    'i64': 'int64',
+    'si8': 'int8',
+    'si16': 'int16',
+    'si32': 'int32',
+    'si64': 'int64',
+    'ui8': 'uint8',
+    'ui16': 'uint16',
+    'ui32': 'uint32',
+    'ui64': 'uint64',
+    'f16': 'float16',
+    'f32': 'float32',
+    'f64': 'float64',
+    'bf16': 'uint16',
+    'hif8': 'uint8',
+    'f8E4M3FN': 'uint8',
+    'f8E5M2': 'uint8',
+    'f8e4m3': 'uint8',
+    'f8e5m2': 'uint8',
+    'f8e8m0': 'uint8',
+    'f8E8M0FNU': 'uint8',
+    'f4E2M1x2': 'uint8',
+    'f4E1M2x2': 'uint8',
+    'hif8x2': 'uint16',
+    'f8e4m3x2': 'uint16',
+    'f8e5m2x2': 'uint16',
+    'f8e4m3x4': 'uint32',
+    'f8e4m3x8': 'uint64',
+    'f8e5m2x4': 'uint32',
+    'f8e5m2x8': 'uint64',
+    'f16x2': 'uint32',
+    'bf16x2': 'uint32',
+    'i8x2': 'uint16',
+    'i16x2': 'uint32',
+    'i32x2': 'uint64',
+    'f32x2': 'uint64'
+}
+
+
+def _as_buffer_array(value, numpy_dtype):
+    """Match a golden array to the raw bytes a kernel element type expects.
+
+    A golden may build its array with ml_dtypes types (bfloat16) while the
+    kernel argument is a plain numpy type (uint16); torch.from_numpy rejects
+    the former, so reinterpret the bytes when the element widths agree.
+    """
+    array = np.asarray(value)
+    want = np.dtype(numpy_dtype)
+    if array.dtype == want:
+        return array
+    # The golden bytes are the device buffer; reinterpret them whenever the
+    # byte count divides evenly so a narrow golden (for example uint8 init or
+    # an f16 source) still fills the element type the kernel argument expects
+    # instead of shrinking or doubling the buffer through astype.
+    flat = np.ascontiguousarray(array).reshape(-1)
+    if flat.nbytes % want.itemsize == 0:
+        return flat.view(want)
+    return array.astype(want)
+
+BUFFERS = [
+    (
+        'v1',
+        'i32',
+        'arg0'
+    )
+]
+SCALARS = []
+SCALAR_SOURCES = []
+SCALAR_DTYPES = []
+
+
+@pto.jit(
+    name='simt_scalar_math_core_kernel',
+    target="a5",
+    backend="vpto",
+    mode="explicit",
+    source=KERNEL_SOURCE,
+)
+def kernel(
+    arg0: pto.ptr(pto.i32, "gm"),
+):
+    pass
+
+
+class _TrackedArray(np.ndarray):
+    """An array that records the positions written through __setitem__."""
+
+    def __new__(cls, array):
+        obj = np.asarray(array).view(cls)
+        obj._write_mask = np.zeros(obj.shape, dtype=bool)
+        return obj
+
+    def __array_finalize__(self, source):
+        if source is None:
+            return
+        self._write_mask = getattr(source, "_write_mask", None)
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        mask = getattr(self, "_write_mask", None)
+        if mask is None or mask.shape != self.shape:
+            mask = np.zeros(self.shape, dtype=bool)
+            self._write_mask = mask
+        mask[key] = True
+
+
+def _materialize():
+    """Run the case's own golden generator in memory; no .bin files.
+
+    The golden's output buffers are created through the numpy constructors and
+    then filled in place, so wrapping those constructors records exactly which
+    positions the golden defines; the rest are don't care for the compare.
+    """
+    trackers = {name: getattr(np, name) for name in ("zeros", "full", "empty", "ones")}
+
+    building = [False]
+
+    def _track(name):
+        original = trackers[name]
+
+        def wrapped(*args, **kwargs):
+            if building[0]:
+                return original(*args, **kwargs)
+            building[0] = True
+            try:
+                tracked = _TrackedArray(original(*args, **kwargs))
+                if name != "empty":
+                    # zeros/full/ones initialize every element, so the whole
+                    # buffer is defined and compared; only np.empty leaves
+                    # elements undefined, where the __setitem__ trace defines
+                    # the valid mask.
+                    tracked._write_mask = np.ones(tracked.shape, dtype=bool)
+                return tracked
+            finally:
+                building[0] = False
+
+        return wrapped
+
+    for name in trackers:
+        setattr(np, name, _track(name))
+    try:
+        namespace = _golden_scope()
+        if "_generate" in namespace:
+            seed = namespace[SEED_EXPR] if SEED_EXPR else 0
+            namespace["_generate"](seed)
+        else:
+            sys.argv = ["golden.py"]
+            namespace["main"]()
+    finally:
+        for name, original in trackers.items():
+            setattr(np, name, original)
+    produced = namespace["_files"]
+    masks = {}
+    for key, value in produced.items():
+        if not key.startswith("golden_"):
+            continue
+        mask = getattr(value, "_write_mask", None)
+        if mask is not None and np.asarray(mask).size and bool(np.asarray(mask).any()):
+            masks[key] = np.asarray(mask).reshape(-1).copy()
+        else:
+            # a computed output defines every element; there is no partial
+            # in-place write to record, so the whole file is compared.
+            masks[key] = np.ones(np.asarray(value).size, dtype=bool)
+    if masks:
+        produced["@write_mask"] = masks
+    return produced
+
+
+def _apply_write_masks(files, produced):
+    """Restrict each golden/output comparison to the golden's written set."""
+    masks = produced.get("@write_mask") if hasattr(produced, "get") else None
+    if not masks:
+        return
+    for golden_key, mask in masks.items():
+        if not golden_key.startswith("golden_"):
+            continue
+        output_key = golden_key[len("golden_"):]
+        if golden_key not in files or output_key not in files:
+            continue
+        golden = np.asarray(files[golden_key])
+        output = np.asarray(files[output_key]).reshape(-1)
+        flat = golden.reshape(-1)
+        written = np.asarray(mask, dtype=bool).reshape(-1)
+        size = min(flat.size, output.size, written.size)
+        if size == 0 or not written[:size].any():
+            continue
+        adjusted = flat.copy()
+        donotcare = ~written[:size]
+        if output.dtype != flat.dtype and output.dtype.itemsize == flat.dtype.itemsize:
+            # Same byte width but a different element type (for example the
+            # kernel typed the buffer f16 while the golden built uint16): copy
+            # the raw bytes so the donot-care fill stays bit-exact instead of
+            # rounding through a numeric cast such as f16(-1.0) -> 0xffff.
+            output = np.ascontiguousarray(output).view(flat.dtype)
+        adjusted[:size][donotcare] = output[:size][donotcare]
+        files[golden_key] = adjusted.reshape(golden.shape)
+
+
+def _run_compare(files):
+    """Run the case's own compare.py against in-memory arrays."""
+    with tempfile.TemporaryDirectory(
+            prefix="legacy-helpers-", dir=os.environ.get("TMPDIR")) as _helpers:
+        _run_compare_in(files, Path(_helpers))
+
+
+def _run_compare_in(files, helper_dir):
+    for name, text in HELPERS.items():
+        (helper_dir / name).write_text(text)
+
+    real_fromfile, real_exists, real_argv = np.fromfile, os.path.exists, sys.argv
+    real_exists_path = Path.exists
+    real_environ, real_path = dict(os.environ), list(sys.path)
+
+    def _fromfile(path, dtype=None, count=-1, offset=0, *args, **kwargs):
+        name = os.path.basename(str(path))
+        if name not in files:
+            raise FileNotFoundError(name)
+        # The legacy compare read the raw .bin bytes; reinterpret the stored
+        # array's bytes instead of casting, so a deep-merged buffer written
+        # through one element type still reads back as the type compare asks
+        # for. count/offset mirror np.fromfile's element prefix semantics.
+        array = np.asarray(files[name])
+        data = array.tobytes()
+        if offset:
+            data = data[int(offset):]
+        if dtype is None:
+            dtype = array.dtype
+        itemsize = np.dtype(dtype).itemsize
+        available = len(data) // itemsize
+        if count is None or int(count) < 0 or int(count) > available:
+            count = available
+        return np.frombuffer(data, dtype=dtype, count=count)
+
+    np.fromfile = _fromfile
+    os.path.exists = lambda p: os.path.basename(str(p)) in files or real_exists(p)
+    Path.exists = lambda self: os.path.basename(str(self)) in files or real_exists_path(self)
+    sys.argv = ["compare.py"]
+    sys.path.insert(0, str(helper_dir))
+    os.environ["COMPARE_STRICT"] = "1"
+    try:
+        namespace = _compare_scope()
+        if "main" in namespace:
+            namespace["main"]()
+    except SystemExit as exc:
+        if exc.code not in (0, None):
+            raise AssertionError("compare.py exited with %r" % (exc.code,))
+    finally:
+        np.fromfile, os.path.exists, Path.exists, sys.argv = (
+            real_fromfile, real_exists, real_exists_path, real_argv)
+        os.environ.clear()
+        os.environ.update(real_environ)
+        sys.path[:] = real_path
+
+
+def make_case():
+    import torch
+    produced = _materialize()
+    output_to_golden = {out: gold for gold, out in COMPARE_PAIRS}
+    arrays = []
+    for name, ty, _slot in BUFFERS:
+        if name.startswith("@same:"):
+            arrays.append(np.asarray(produced["%s.bin" % name[len("@same:"):]]))
+            continue
+        if name.startswith("@scratch:"):
+            arrays.append(np.empty_like(np.asarray(produced["%s.bin" % name[len("@scratch:"):]]),
+                                        dtype=np.dtype(NUMPY_DTYPE[ty])))
+            continue
+        key = "%s.bin" % name
+        if key in produced:
+            arrays.append(_as_buffer_array(produced[key], NUMPY_DTYPE[ty]))
+            continue
+        golden_key = output_to_golden.get(key)
+        if golden_key is None or golden_key not in produced:
+            raise RuntimeError("golden did not produce %s" % key)
+        arrays.append(np.zeros_like(np.asarray(produced[golden_key]),
+                                    dtype=np.dtype(NUMPY_DTYPE[ty])))
+    values = list(SCALARS)
+    for _source, _ty in zip(SCALAR_SOURCES, SCALAR_DTYPES):
+        _array = np.asarray(produced["%s.bin" % _source]).reshape(-1)
+        values.append(float(_array[0]) if _ty == "f32" else int(_array[0]))
+    if GRID_FROM_VALUES is not None:
+        CASES[0]["grid"] = GRID_FROM_VALUES(values)
+    return arrays, produced, values
+
+
+def check_case(device_inputs, produced):
+    if COMPARE_PAIRS:
+        files = {gold: np.asarray(produced[gold]) for gold, _out in COMPARE_PAIRS if gold in produced}
+    else:
+        # no explicit pairs: the case compares whole files, so expose every
+        # array the golden built (its .tofile names became dictionary keys).
+        files = {name: np.asarray(value) for name, value in produced.items()
+                 if not name.startswith("@")}
+    if not files:
+        raise AssertionError("golden.py produced no golden output")
+    for _source in SCALAR_SOURCES:
+        _key = "%s.bin" % _source
+        if _key in produced:
+            files[_key] = np.asarray(produced[_key])
+    for (name, _ty, _slot), tensor in zip(BUFFERS, device_inputs):
+        if not name.startswith("@"):
+            files["%s.bin" % name] = tensor.cpu().numpy()
+    _apply_write_masks(files, produced)
+    _run_compare(files)
+
+
+GRID_FROM_VALUES = None
+
+
+CASES = [dict(
+    name='legacy_micro_op_simt_simt_scalar_math_core',
+    grid=1,
+    kernel=kernel,
+    make_case=make_case,
+    check=check_case,
+)]
+
+auto_main(globals())

@@ -30,6 +30,19 @@ function(add_ptodsl_python_test test_name script_path)
   )
 endfunction()
 
+# Shell-level regressions live next to the Python ones and follow the same
+# naming convention, so one ctest label covers both.
+function(add_ptodsl_shell_test test_name script_path)
+  add_test(
+    NAME ${test_name}
+    COMMAND bash "${CMAKE_SOURCE_DIR}/${script_path}"
+  )
+  set_tests_properties(${test_name} PROPERTIES
+    LABELS "PTODSL"
+    ENVIRONMENT "${_pto_python_test_env}"
+  )
+endfunction()
+
 # Auto-discover PTODSL Python regressions by filename convention:
 #   - ptodsl/tests/test_*.py
 file(
@@ -52,6 +65,22 @@ foreach(test_file IN LISTS _ptodsl_test_files)
   endif()
 
   add_ptodsl_python_test("${test_name}" "${rel_path}")
+endforeach()
+
+# Shell regressions under the same convention: ptodsl/tests/test_*.sh
+file(
+  GLOB _ptodsl_shell_test_files
+  CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/test_*.sh"
+)
+
+list(SORT _ptodsl_shell_test_files)
+
+foreach(test_file IN LISTS _ptodsl_shell_test_files)
+  file(RELATIVE_PATH rel_path "${CMAKE_SOURCE_DIR}" "${test_file}")
+  get_filename_component(stem "${test_file}" NAME_WE)
+  string(REGEX REPLACE "^test_" "" stem_suffix "${stem}")
+  add_ptodsl_shell_test("ptodsl_${stem_suffix}" "${rel_path}")
 endforeach()
 
 if(NOT TARGET check-dsl)

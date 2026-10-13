@@ -1,0 +1,527 @@
+#!/usr/bin/env python3
+# coding=utf-8
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+"""Migrated from test/vpto/cases/micro-op/simt/simt-packed-math-core."""
+
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+import numpy as np
+
+from common import auto_main
+from ptodsl import pto
+
+KERNEL_SOURCE = (
+    'module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {\n  func.func @simt_'
+    'packed_math_core_kernel(%arg0: !pto.ptr<i32, gm>) attributes {pto.aicore} {\n    %c0_i64 = arith.constant 0 '
+    ': i64\n    %c1_i64 = arith.constant 1 : i64\n    %c128_i64 = arith.constant 128 : i64\n    %dim_z = arith.co'
+    'nstant 1 : i32\n    %dim_y = arith.constant 1 : i32\n    %dim_x = arith.constant 1 : i32\n\n    %ub_i32 = pt'
+    'o.castptr %c0_i64 : i64 -> !pto.ptr<i32, ub>\n    %ub_i64 = pto.castptr %c0_i64 : i64 -> !pto.ptr<i64, ub>\n'
+    '    pto.simt_launch @simt_packed_math_core_body<<<%dim_x, %dim_y, %dim_z>>>(%ub_i32, %ub_i64) : (!pto.ptr<i3'
+    '2, ub>, !pto.ptr<i64, ub>) -> ()\n    pto.set_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]\n    pto.wait_flag["P'
+    'IPE_V", "PIPE_MTE3", "EVENT_ID0"]\n    pto.mte_ub_gm %ub_i32, %arg0, %c128_i64\n      nburst(%c1_i64, %c128_'
+    'i64, %c128_i64)\n      : !pto.ptr<i32, ub>, !pto.ptr<i32, gm>, i64, i64, i64, i64\n    pto.barrier #pto.pipe'
+    '<PIPE_ALL>\n    return\n  }\n\n  func.func @simt_packed_math_core_body(%ub_i32: !pto.ptr<i32, ub>, %ub_i64: '
+    '!pto.ptr<i64, ub>) attributes {pto.simt_entry} {\n    %c0 = arith.constant 0 : index\n    %c1 = arith.consta'
+    'nt 1 : index\n    %c2 = arith.constant 2 : index\n    %c3 = arith.constant 3 : index\n    %c4 = arith.consta'
+    'nt 4 : index\n    %c5 = arith.constant 5 : index\n    %c6 = arith.constant 6 : index\n    %c7 = arith.consta'
+    'nt 7 : index\n    %c8 = arith.constant 8 : index\n    %c9 = arith.constant 9 : index\n    %c10 = arith.const'
+    'ant 10 : index\n    %c11 = arith.constant 11 : index\n    %c12 = arith.constant 12 : index\n    %c13 = arith'
+    '.constant 13 : index\n    %c14 = arith.constant 14 : index\n    %c15 = arith.constant 15 : index\n    %c26 ='
+    ' arith.constant 26 : index\n    %c27 = arith.constant 27 : index\n    %f2_off0 = arith.constant 8 : index\n '
+    '   %f2_off1 = arith.constant 9 : index\n    %f2_off2 = arith.constant 10 : index\n    %f2_off3 = arith.const'
+    'ant 11 : index\n    %f2_off4 = arith.constant 12 : index\n    %c0_i64 = arith.constant 0 : i64\n    %shfl_id'
+    'x = arith.constant 0 : i32\n\n    %h2_zero = arith.constant dense<0.000000e+00> : vector<2xf16>\n    %h2_one'
+    ' = arith.constant dense<1.000000e+00> : vector<2xf16>\n    %h2_two = arith.constant dense<2.000000e+00> : ve'
+    'ctor<2xf16>\n    %h2_four = arith.constant dense<4.000000e+00> : vector<2xf16>\n    %h2_neg = arith.constant'
+    ' dense<[-1.000000e+00, -2.000000e+00]> : vector<2xf16>\n    %h2_12 = arith.constant dense<[1.000000e+00, 2.0'
+    '00000e+00]> : vector<2xf16>\n    %h2_21 = arith.constant dense<[2.000000e+00, 1.000000e+00]> : vector<2xf16>'
+    '\n    %b2_one = arith.constant dense<1.000000e+00> : vector<2xbf16>\n    %b2_two = arith.constant dense<2.00'
+    '0000e+00> : vector<2xbf16>\n    %b2_neg = arith.constant dense<[-1.000000e+00, -2.000000e+00]> : vector<2xbf'
+    '16>\n    %b2_12 = arith.constant dense<[1.000000e+00, 2.000000e+00]> : vector<2xbf16>\n    %b2_21 = arith.co'
+    'nstant dense<[2.000000e+00, 1.000000e+00]> : vector<2xbf16>\n    %f2_12 = arith.constant dense<[1.000000e+00'
+    ', 2.000000e+00]> : vector<2xf32>\n\n    %shfl = pto.shuffle_idx %h2_one, %shfl_idx {width = 16 : i32} : vect'
+    'or<2xf16>, i32 -> vector<2xf16>\n    %sqrt_h2 = pto.sqrt %h2_four : vector<2xf16> -> vector<2xf16>\n    %abs'
+    '_h2 = pto.absf %h2_neg : vector<2xf16>\n    %exp_h2 = pto.exp %h2_zero : vector<2xf16> -> vector<2xf16>\n   '
+    ' %log_h2 = pto.log %h2_one : vector<2xf16> -> vector<2xf16>\n    %min_h2 = pto.minf %h2_12, %h2_21 : vector<'
+    '2xf16>\n    %pow_h2 = pto.pow %h2_two, %h2_two : vector<2xf16>, vector<2xf16> -> vector<2xf16>\n    %fma_h2 '
+    '= pto.fma %h2_one, %h2_two, %h2_one : vector<2xf16>, vector<2xf16>, vector<2xf16> -> vector<2xf16>\n    %f32'
+    '_to_h2 = pto.ftof %f2_12 round(r) : vector<2xf32> -> vector<2xf16>\n    %abs_b2 = pto.absf %b2_neg : vector<'
+    '2xbf16>\n    %max_b2 = pto.maxf %b2_12, %b2_21 : vector<2xbf16>\n    %fma_b2 = pto.fma %b2_one, %b2_two, %b2'
+    '_one : vector<2xbf16>, vector<2xbf16>, vector<2xbf16> -> vector<2xbf16>\n    %f32_to_b2 = pto.ftof %f2_12 ro'
+    'und(r) : vector<2xf32> -> vector<2xbf16>\n    %h2_to_f32 = pto.ftof %h2_12 round(r) : vector<2xf16> -> vecto'
+    'r<2xf32>\n    %b2_to_f32 = pto.ftof %b2_12 round(r) : vector<2xbf16> -> vector<2xf32>\n    %f32_to_f8e4 = pt'
+    'o.ftof %f2_12 round(r) : vector<2xf32> -> vector<2xf8E4M3FN>\n    %f32_to_f8e5 = pto.ftof %f2_12 round(r) : '
+    'vector<2xf32> -> vector<2xf8E5M2>\n    %f32_to_hif8 = pto.ftof %f2_12 round(a) : vector<2xf32> -> !pto.hif8x'
+    '2\n    %f8e4_to_f32 = pto.ftof %f32_to_f8e4 round(r) : vector<2xf8E4M3FN> -> vector<2xf32>\n    %f8e5_to_f32'
+    ' = pto.ftof %f32_to_f8e5 round(r) : vector<2xf8E5M2> -> vector<2xf32>\n    %hif8_to_f32 = pto.ftof %f32_to_h'
+    'if8 round(a) : !pto.hif8x2 -> vector<2xf32>\n\n    %shfl_bits = llvm.bitcast %shfl : vector<2xf16> to i32\n '
+    '   %sqrt_h2_bits = llvm.bitcast %sqrt_h2 : vector<2xf16> to i32\n    %abs_h2_bits = llvm.bitcast %abs_h2 : v'
+    'ector<2xf16> to i32\n    %exp_h2_bits = llvm.bitcast %exp_h2 : vector<2xf16> to i32\n    %log_h2_bits = llvm'
+    '.bitcast %log_h2 : vector<2xf16> to i32\n    %min_h2_bits = llvm.bitcast %min_h2 : vector<2xf16> to i32\n   '
+    ' %pow_h2_bits = llvm.bitcast %pow_h2 : vector<2xf16> to i32\n    %fma_h2_bits = llvm.bitcast %fma_h2 : vecto'
+    'r<2xf16> to i32\n    %f32_to_h2_bits = llvm.bitcast %f32_to_h2 : vector<2xf16> to i32\n    %abs_b2_bits = ll'
+    'vm.bitcast %abs_b2 : vector<2xbf16> to i32\n    %max_b2_bits = llvm.bitcast %max_b2 : vector<2xbf16> to i32'
+    '\n    %fma_b2_bits = llvm.bitcast %fma_b2 : vector<2xbf16> to i32\n    %f32_to_b2_bits = llvm.bitcast %f32_t'
+    'o_b2 : vector<2xbf16> to i32\n    %h2_to_f32_bits = llvm.bitcast %h2_to_f32 : vector<2xf32> to i64\n    %b2_'
+    'to_f32_bits = llvm.bitcast %b2_to_f32 : vector<2xf32> to i64\n    %ub_f8e4 = pto.castptr %c0_i64 : i64 -> !p'
+    'to.ptr<vector<2xf8E4M3FN>, ub>\n    %ub_f8e5 = pto.castptr %c0_i64 : i64 -> !pto.ptr<vector<2xf8E5M2>, ub>\n'
+    '    %ub_hif8 = pto.castptr %c0_i64 : i64 -> !pto.ptr<!pto.hif8x2, ub>\n    %ub_i16 = pto.castptr %c0_i64 : i'
+    '64 -> !pto.ptr<i16, ub>\n    pto.store %f32_to_f8e4, %ub_f8e4[%c26] : !pto.ptr<vector<2xf8E4M3FN>, ub>, vect'
+    'or<2xf8E4M3FN>\n    pto.store %f32_to_f8e5, %ub_f8e5[%c27] : !pto.ptr<vector<2xf8E5M2>, ub>, vector<2xf8E5M2'
+    '>\n    pto.store %f32_to_hif8, %ub_hif8[%c15] : !pto.ptr<!pto.hif8x2, ub>, !pto.hif8x2\n    %f8e4_bits16 = p'
+    'to.load %ub_i16[%c26] : !pto.ptr<i16, ub> -> i16\n    %f8e5_bits16 = pto.load %ub_i16[%c27] : !pto.ptr<i16, '
+    'ub> -> i16\n    %hif8_bits16 = pto.load %ub_i16[%c15] : !pto.ptr<i16, ub> -> i16\n    %f8e4_bits = arith.ext'
+    'ui %f8e4_bits16 : i16 to i32\n    %f8e5_bits = arith.extui %f8e5_bits16 : i16 to i32\n    %hif8_bits = arith'
+    '.extui %hif8_bits16 : i16 to i32\n    %f8e4_to_f32_bits = llvm.bitcast %f8e4_to_f32 : vector<2xf32> to i64\n'
+    '    %f8e5_to_f32_bits = llvm.bitcast %f8e5_to_f32 : vector<2xf32> to i64\n    %hif8_to_f32_bits = llvm.bitca'
+    'st %hif8_to_f32 : vector<2xf32> to i64\n\n    pto.store %shfl_bits, %ub_i32[%c0] : !pto.ptr<i32, ub>, i32\n '
+    '   pto.store %sqrt_h2_bits, %ub_i32[%c1] : !pto.ptr<i32, ub>, i32\n    pto.store %abs_h2_bits, %ub_i32[%c2] '
+    ': !pto.ptr<i32, ub>, i32\n    pto.store %exp_h2_bits, %ub_i32[%c3] : !pto.ptr<i32, ub>, i32\n    pto.store %'
+    'log_h2_bits, %ub_i32[%c4] : !pto.ptr<i32, ub>, i32\n    pto.store %min_h2_bits, %ub_i32[%c5] : !pto.ptr<i32,'
+    ' ub>, i32\n    pto.store %pow_h2_bits, %ub_i32[%c6] : !pto.ptr<i32, ub>, i32\n    pto.store %fma_h2_bits, %u'
+    'b_i32[%c7] : !pto.ptr<i32, ub>, i32\n    pto.store %f32_to_h2_bits, %ub_i32[%c8] : !pto.ptr<i32, ub>, i32\n '
+    '   pto.store %abs_b2_bits, %ub_i32[%c9] : !pto.ptr<i32, ub>, i32\n    pto.store %max_b2_bits, %ub_i32[%c10] '
+    ': !pto.ptr<i32, ub>, i32\n    pto.store %fma_b2_bits, %ub_i32[%c11] : !pto.ptr<i32, ub>, i32\n    pto.store '
+    '%f32_to_b2_bits, %ub_i32[%c12] : !pto.ptr<i32, ub>, i32\n    pto.store %f8e4_bits, %ub_i32[%c13] : !pto.ptr<'
+    'i32, ub>, i32\n    pto.store %f8e5_bits, %ub_i32[%c14] : !pto.ptr<i32, ub>, i32\n    pto.store %hif8_bits, %'
+    'ub_i32[%c15] : !pto.ptr<i32, ub>, i32\n    pto.store %h2_to_f32_bits, %ub_i64[%f2_off0] : !pto.ptr<i64, ub>,'
+    ' i64\n    pto.store %b2_to_f32_bits, %ub_i64[%f2_off1] : !pto.ptr<i64, ub>, i64\n    pto.store %f8e4_to_f32_'
+    'bits, %ub_i64[%f2_off2] : !pto.ptr<i64, ub>, i64\n    pto.store %f8e5_to_f32_bits, %ub_i64[%f2_off3] : !pto.'
+    'ptr<i64, ub>, i64\n    pto.store %hif8_to_f32_bits, %ub_i64[%f2_off4] : !pto.ptr<i64, ub>, i64\n    return\n'
+    '  }\n}\n'
+)
+
+def _golden_scope():
+    _files = {}
+
+    output_dir = None
+
+    # Copyright (c) 2026 Huawei Technologies Co., Ltd.
+    # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+    # CANN Open Software License Agreement Version 2.0 (the "License").
+    # Please refer to the License for details. You may not use this file except in compliance with the License.
+    # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+    # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+    # See LICENSE in the root of the software repository for the full text of the License.
+
+    import argparse
+    from pathlib import Path
+
+    import numpy as np
+
+    ELEMS = 32
+
+
+    def pack_u16_pair(lo: int, hi: int) -> np.uint32:
+        return np.uint32((hi << 16) | lo)
+
+
+    def _generate(seed: int) -> dict:
+        initial = np.zeros(ELEMS, dtype=np.uint32)
+        golden = np.zeros(ELEMS, dtype=np.uint32)
+
+        golden[0] = pack_u16_pair(0x3C00, 0x3C00)   # shuffle: f16x2 (1, 1)
+        golden[1] = pack_u16_pair(0x4000, 0x4000)   # sqrt: f16x2 (2, 2)
+        golden[2] = pack_u16_pair(0x3C00, 0x4000)   # abs: f16x2 (1, 2)
+        golden[3] = pack_u16_pair(0x3C00, 0x3C00)   # exp(0): f16x2 (1, 1)
+        golden[4] = pack_u16_pair(0x0000, 0x0000)   # log(1): f16x2 (0, 0)
+        golden[5] = pack_u16_pair(0x3C00, 0x3C00)   # min: f16x2 (1, 1)
+        golden[6] = pack_u16_pair(0x4400, 0x4400)   # pow(2, 2): f16x2 (4, 4)
+        golden[7] = pack_u16_pair(0x4200, 0x4200)   # fma: f16x2 (3, 3)
+        golden[8] = pack_u16_pair(0x3C00, 0x4000)   # f32x2 -> f16x2 (1, 2)
+        golden[9] = pack_u16_pair(0x3F80, 0x4000)   # abs: bf16x2 (1, 2)
+        golden[10] = pack_u16_pair(0x4000, 0x4000)  # max: bf16x2 (2, 2)
+        golden[11] = pack_u16_pair(0x4040, 0x4040)  # fma: bf16x2 (3, 3)
+        golden[12] = pack_u16_pair(0x3F80, 0x4000)  # f32x2 -> bf16x2 (1, 2)
+        golden[13] = np.uint32(0x4038)              # f32x2 -> f8e4m3x2 (1, 2)
+        golden[14] = np.uint32(0x403C)              # f32x2 -> f8e5m2x2 (1, 2)
+        golden[15] = np.uint32(0x1008)              # f32x2 -> hif8x2 (1, 2)
+        golden[16] = np.uint32(0x3F800000)          # f16x2 -> f32x2 lane 0
+        golden[17] = np.uint32(0x40000000)          # f16x2 -> f32x2 lane 1
+        golden[18] = np.uint32(0x3F800000)          # bf16x2 -> f32x2 lane 0
+        golden[19] = np.uint32(0x40000000)          # bf16x2 -> f32x2 lane 1
+        golden[20] = np.uint32(0x3F800000)          # f8e4m3x2 -> f32x2 lane 0
+        golden[21] = np.uint32(0x40000000)          # f8e4m3x2 -> f32x2 lane 1
+        golden[22] = np.uint32(0x3F800000)          # f8e5m2x2 -> f32x2 lane 0
+        golden[23] = np.uint32(0x40000000)          # f8e5m2x2 -> f32x2 lane 1
+        golden[24] = np.uint32(0x3F800000)          # hif8x2 -> f32x2 lane 0
+        golden[25] = np.uint32(0x40000000)          # hif8x2 -> f32x2 lane 1
+
+        _files["v1.bin"] = initial
+        _files["golden_v1.bin"] = golden
+
+
+    def main():
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--output-dir", type=Path, default=Path("."))
+        args = parser.parse_args()
+        generate(args.output_dir)
+
+
+    return locals()
+
+def _compare_scope():
+    # Copyright (c) 2026 Huawei Technologies Co., Ltd.
+    # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+    # CANN Open Software License Agreement Version 2.0 (the "License").
+    # Please refer to the License for details. You may not use this file except in compliance with the License.
+    # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+    # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+    # See LICENSE in the root of the software repository for the full text of the License.
+
+    import sys
+
+    import numpy as np
+
+
+    def main():
+        golden = np.fromfile("golden_v1.bin", dtype=np.uint32)
+        out = np.fromfile("v1.bin", dtype=np.uint32)
+        ok = golden.shape == out.shape and np.array_equal(golden, out)
+        if not ok:
+            idxs = np.nonzero(golden != out)[0]
+            idx = int(idxs[0]) if idxs.size else 0
+            print(
+                f"[ERROR] mismatch at idx={idx}, "
+                f"golden=0x{int(golden[idx]):08x}, out=0x{int(out[idx]):08x}"
+            )
+            sys.exit(2)
+        print("[INFO] compare passed")
+
+
+    return locals()
+
+HELPERS = {}
+SEED_EXPR = None
+COMPARE_PAIRS = []
+
+NUMPY_DTYPE = {
+    'i8': 'int8',
+    'i16': 'int16',
+    'i32': 'int32',
+    'i64': 'int64',
+    'si8': 'int8',
+    'si16': 'int16',
+    'si32': 'int32',
+    'si64': 'int64',
+    'ui8': 'uint8',
+    'ui16': 'uint16',
+    'ui32': 'uint32',
+    'ui64': 'uint64',
+    'f16': 'float16',
+    'f32': 'float32',
+    'f64': 'float64',
+    'bf16': 'uint16',
+    'hif8': 'uint8',
+    'f8E4M3FN': 'uint8',
+    'f8E5M2': 'uint8',
+    'f8e4m3': 'uint8',
+    'f8e5m2': 'uint8',
+    'f8e8m0': 'uint8',
+    'f8E8M0FNU': 'uint8',
+    'f4E2M1x2': 'uint8',
+    'f4E1M2x2': 'uint8',
+    'hif8x2': 'uint16',
+    'f8e4m3x2': 'uint16',
+    'f8e5m2x2': 'uint16',
+    'f8e4m3x4': 'uint32',
+    'f8e4m3x8': 'uint64',
+    'f8e5m2x4': 'uint32',
+    'f8e5m2x8': 'uint64',
+    'f16x2': 'uint32',
+    'bf16x2': 'uint32',
+    'i8x2': 'uint16',
+    'i16x2': 'uint32',
+    'i32x2': 'uint64',
+    'f32x2': 'uint64'
+}
+
+
+def _as_buffer_array(value, numpy_dtype):
+    """Match a golden array to the raw bytes a kernel element type expects.
+
+    A golden may build its array with ml_dtypes types (bfloat16) while the
+    kernel argument is a plain numpy type (uint16); torch.from_numpy rejects
+    the former, so reinterpret the bytes when the element widths agree.
+    """
+    array = np.asarray(value)
+    want = np.dtype(numpy_dtype)
+    if array.dtype == want:
+        return array
+    # The golden bytes are the device buffer; reinterpret them whenever the
+    # byte count divides evenly so a narrow golden (for example uint8 init or
+    # an f16 source) still fills the element type the kernel argument expects
+    # instead of shrinking or doubling the buffer through astype.
+    flat = np.ascontiguousarray(array).reshape(-1)
+    if flat.nbytes % want.itemsize == 0:
+        return flat.view(want)
+    return array.astype(want)
+
+BUFFERS = [
+    (
+        'v1',
+        'i32',
+        'arg0'
+    )
+]
+SCALARS = []
+SCALAR_SOURCES = []
+SCALAR_DTYPES = []
+
+
+@pto.jit(
+    name='simt_packed_math_core_kernel',
+    target="a5",
+    backend="vpto",
+    mode="explicit",
+    source=KERNEL_SOURCE,
+)
+def kernel(
+    arg0: pto.ptr(pto.i32, "gm"),
+):
+    pass
+
+
+class _TrackedArray(np.ndarray):
+    """An array that records the positions written through __setitem__."""
+
+    def __new__(cls, array):
+        obj = np.asarray(array).view(cls)
+        obj._write_mask = np.zeros(obj.shape, dtype=bool)
+        return obj
+
+    def __array_finalize__(self, source):
+        if source is None:
+            return
+        self._write_mask = getattr(source, "_write_mask", None)
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        mask = getattr(self, "_write_mask", None)
+        if mask is None or mask.shape != self.shape:
+            mask = np.zeros(self.shape, dtype=bool)
+            self._write_mask = mask
+        mask[key] = True
+
+
+def _materialize():
+    """Run the case's own golden generator in memory; no .bin files.
+
+    The golden's output buffers are created through the numpy constructors and
+    then filled in place, so wrapping those constructors records exactly which
+    positions the golden defines; the rest are don't care for the compare.
+    """
+    trackers = {name: getattr(np, name) for name in ("zeros", "full", "empty", "ones")}
+
+    building = [False]
+
+    def _track(name):
+        original = trackers[name]
+
+        def wrapped(*args, **kwargs):
+            if building[0]:
+                return original(*args, **kwargs)
+            building[0] = True
+            try:
+                tracked = _TrackedArray(original(*args, **kwargs))
+                if name != "empty":
+                    # zeros/full/ones initialize every element, so the whole
+                    # buffer is defined and compared; only np.empty leaves
+                    # elements undefined, where the __setitem__ trace defines
+                    # the valid mask.
+                    tracked._write_mask = np.ones(tracked.shape, dtype=bool)
+                return tracked
+            finally:
+                building[0] = False
+
+        return wrapped
+
+    for name in trackers:
+        setattr(np, name, _track(name))
+    try:
+        namespace = _golden_scope()
+        if "_generate" in namespace:
+            seed = namespace[SEED_EXPR] if SEED_EXPR else 0
+            namespace["_generate"](seed)
+        else:
+            sys.argv = ["golden.py"]
+            namespace["main"]()
+    finally:
+        for name, original in trackers.items():
+            setattr(np, name, original)
+    produced = namespace["_files"]
+    masks = {}
+    for key, value in produced.items():
+        if not key.startswith("golden_"):
+            continue
+        mask = getattr(value, "_write_mask", None)
+        if mask is not None and np.asarray(mask).size and bool(np.asarray(mask).any()):
+            masks[key] = np.asarray(mask).reshape(-1).copy()
+        else:
+            # a computed output defines every element; there is no partial
+            # in-place write to record, so the whole file is compared.
+            masks[key] = np.ones(np.asarray(value).size, dtype=bool)
+    if masks:
+        produced["@write_mask"] = masks
+    return produced
+
+
+def _apply_write_masks(files, produced):
+    """Restrict each golden/output comparison to the golden's written set."""
+    masks = produced.get("@write_mask") if hasattr(produced, "get") else None
+    if not masks:
+        return
+    for golden_key, mask in masks.items():
+        if not golden_key.startswith("golden_"):
+            continue
+        output_key = golden_key[len("golden_"):]
+        if golden_key not in files or output_key not in files:
+            continue
+        golden = np.asarray(files[golden_key])
+        output = np.asarray(files[output_key]).reshape(-1)
+        flat = golden.reshape(-1)
+        written = np.asarray(mask, dtype=bool).reshape(-1)
+        size = min(flat.size, output.size, written.size)
+        if size == 0 or not written[:size].any():
+            continue
+        adjusted = flat.copy()
+        donotcare = ~written[:size]
+        if output.dtype != flat.dtype and output.dtype.itemsize == flat.dtype.itemsize:
+            # Same byte width but a different element type (for example the
+            # kernel typed the buffer f16 while the golden built uint16): copy
+            # the raw bytes so the donot-care fill stays bit-exact instead of
+            # rounding through a numeric cast such as f16(-1.0) -> 0xffff.
+            output = np.ascontiguousarray(output).view(flat.dtype)
+        adjusted[:size][donotcare] = output[:size][donotcare]
+        files[golden_key] = adjusted.reshape(golden.shape)
+
+
+def _run_compare(files):
+    """Run the case's own compare.py against in-memory arrays."""
+    with tempfile.TemporaryDirectory(
+            prefix="legacy-helpers-", dir=os.environ.get("TMPDIR")) as _helpers:
+        _run_compare_in(files, Path(_helpers))
+
+
+def _run_compare_in(files, helper_dir):
+    for name, text in HELPERS.items():
+        (helper_dir / name).write_text(text)
+
+    real_fromfile, real_exists, real_argv = np.fromfile, os.path.exists, sys.argv
+    real_exists_path = Path.exists
+    real_environ, real_path = dict(os.environ), list(sys.path)
+
+    def _fromfile(path, dtype=None, count=-1, offset=0, *args, **kwargs):
+        name = os.path.basename(str(path))
+        if name not in files:
+            raise FileNotFoundError(name)
+        # The legacy compare read the raw .bin bytes; reinterpret the stored
+        # array's bytes instead of casting, so a deep-merged buffer written
+        # through one element type still reads back as the type compare asks
+        # for. count/offset mirror np.fromfile's element prefix semantics.
+        array = np.asarray(files[name])
+        data = array.tobytes()
+        if offset:
+            data = data[int(offset):]
+        if dtype is None:
+            dtype = array.dtype
+        itemsize = np.dtype(dtype).itemsize
+        available = len(data) // itemsize
+        if count is None or int(count) < 0 or int(count) > available:
+            count = available
+        return np.frombuffer(data, dtype=dtype, count=count)
+
+    np.fromfile = _fromfile
+    os.path.exists = lambda p: os.path.basename(str(p)) in files or real_exists(p)
+    Path.exists = lambda self: os.path.basename(str(self)) in files or real_exists_path(self)
+    sys.argv = ["compare.py"]
+    sys.path.insert(0, str(helper_dir))
+    os.environ["COMPARE_STRICT"] = "1"
+    try:
+        namespace = _compare_scope()
+        if "main" in namespace:
+            namespace["main"]()
+    except SystemExit as exc:
+        if exc.code not in (0, None):
+            raise AssertionError("compare.py exited with %r" % (exc.code,))
+    finally:
+        np.fromfile, os.path.exists, Path.exists, sys.argv = (
+            real_fromfile, real_exists, real_exists_path, real_argv)
+        os.environ.clear()
+        os.environ.update(real_environ)
+        sys.path[:] = real_path
+
+
+def make_case():
+    import torch
+    produced = _materialize()
+    output_to_golden = {out: gold for gold, out in COMPARE_PAIRS}
+    arrays = []
+    for name, ty, _slot in BUFFERS:
+        if name.startswith("@same:"):
+            arrays.append(np.asarray(produced["%s.bin" % name[len("@same:"):]]))
+            continue
+        if name.startswith("@scratch:"):
+            arrays.append(np.empty_like(np.asarray(produced["%s.bin" % name[len("@scratch:"):]]),
+                                        dtype=np.dtype(NUMPY_DTYPE[ty])))
+            continue
+        key = "%s.bin" % name
+        if key in produced:
+            arrays.append(_as_buffer_array(produced[key], NUMPY_DTYPE[ty]))
+            continue
+        golden_key = output_to_golden.get(key)
+        if golden_key is None or golden_key not in produced:
+            raise RuntimeError("golden did not produce %s" % key)
+        arrays.append(np.zeros_like(np.asarray(produced[golden_key]),
+                                    dtype=np.dtype(NUMPY_DTYPE[ty])))
+    values = list(SCALARS)
+    for _source, _ty in zip(SCALAR_SOURCES, SCALAR_DTYPES):
+        _array = np.asarray(produced["%s.bin" % _source]).reshape(-1)
+        values.append(float(_array[0]) if _ty == "f32" else int(_array[0]))
+    if GRID_FROM_VALUES is not None:
+        CASES[0]["grid"] = GRID_FROM_VALUES(values)
+    return arrays, produced, values
+
+
+def check_case(device_inputs, produced):
+    if COMPARE_PAIRS:
+        files = {gold: np.asarray(produced[gold]) for gold, _out in COMPARE_PAIRS if gold in produced}
+    else:
+        # no explicit pairs: the case compares whole files, so expose every
+        # array the golden built (its .tofile names became dictionary keys).
+        files = {name: np.asarray(value) for name, value in produced.items()
+                 if not name.startswith("@")}
+    if not files:
+        raise AssertionError("golden.py produced no golden output")
+    for _source in SCALAR_SOURCES:
+        _key = "%s.bin" % _source
+        if _key in produced:
+            files[_key] = np.asarray(produced[_key])
+    for (name, _ty, _slot), tensor in zip(BUFFERS, device_inputs):
+        if not name.startswith("@"):
+            files["%s.bin" % name] = tensor.cpu().numpy()
+    _apply_write_masks(files, produced)
+    _run_compare(files)
+
+
+GRID_FROM_VALUES = None
+
+
+CASES = [dict(
+    name='legacy_micro_op_simt_simt_packed_math_core',
+    grid=1,
+    kernel=kernel,
+    make_case=make_case,
+    check=check_case,
+)]
+
+auto_main(globals())

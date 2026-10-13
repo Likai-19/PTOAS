@@ -41,6 +41,7 @@ class CompiledKernelHandle(ModuleArtifact):
         self._constexpr_bindings = dict(constexpr_bindings)
         self._module_spec = module_spec
         self._kernel_signature = kernel_signature
+        self._native_library = None
 
     @property
     def specialization_key(self):
@@ -64,6 +65,26 @@ class CompiledKernelHandle(ModuleArtifact):
             raise kernel_module_launch_error(self._py_name)
         grid, stream = parse_launch_spec(launch_spec)
         return LaunchHandle(self, grid, stream)
+
+    def native_library(self):
+        """Build this specialization once and reuse the loaded library.
+
+        The persistent artifact cache is optional, but within one process a
+        build must not repeat for every launch handle: ``compiled[grid,
+        stream]`` returns a fresh LaunchHandle, so the loaded ctypes.CDLL has
+        to live on the compiled handle for all of them to share it.
+        """
+        if self._native_library is None:
+            from ._runtime.native_build import build_native_library
+
+            self._native_library = build_native_library(
+                py_name=self._py_name,
+                module_spec=self._module_spec,
+                kernel_signature=self._kernel_signature,
+                mlir_text=self.mlir_text(),
+                specialization_key=self._specialization_key,
+            )
+        return self._native_library
 
 
 class KernelCompiler:

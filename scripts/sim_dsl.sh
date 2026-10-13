@@ -11,6 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+PTOAS_SIM_MODEL="${PTOAS_SIM_MODEL:-ca}"
 
 usage() {
   cat <<'EOF'
@@ -27,6 +28,14 @@ Options:
   -h, --help            Show this help.
 
 Environment:
+  PTOAS_SIM_MODEL        Simulator model: ca (default) or pv. pv builds a
+                         private CANN symlink tree that shadows the four
+                         CA simulator libraries with their PV counterparts.
+                         An explicit pv never falls back to ca: when the tree
+                         cannot be built or a PV library is missing, the run
+                         fails and prints the reason.
+  PTOAS_SIM_MODEL_ROOT   Root of that private tree (default:
+                         $HOME/.cache/ptoas/sim-pv-<soc>).
   PTOAS_MSPROF_PRIVATE_ROOT
                         Private root used for the actual `msprof --output`.
                         Defaults to `$XDG_RUNTIME_DIR/ptoas-msprof` when available,
@@ -86,6 +95,158 @@ ensure_private_dir() {
   umask 077
   mkdir -p "${dir}"
   chmod 700 "${dir}"
+}
+
+# --- PV model shadow tree -------------------------------------------------
+#
+# `msprof op simulator` hard codes the CA simulator libraries, so the only way
+# to run the PV model is a private CANN tree whose simulator lib directory
+# shadows the four CA names with their PV counterparts:
+#   libruntime_camodel.so -> libruntime_cmodel.so
+#   libnpu_drv_camodel.so -> libnpu_drv_pvmodel.so
+#   libmodel_top.so       -> libmodel_top_pv.so
+#   libstars.so           -> libstars_pv.so
+# libascend_hal.so must NOT be shadowed: msprof itself links it, and the PV
+# build leaves drvDeviceStatus undefined there. Everything else is symlinked
+# back to the real CANN so torch_npu and the ptoas tools keep working, and
+# bin/setenv.bash is a shim that sources the real setenv and then points
+# ASCEND_HOME_PATH back at the private root.
+pv_shadow_lib() {
+  case "$1" in
+    libmodel_top.so) printf "%s\n" "libmodel_top_pv.so" ;;
+    libstars.so) printf "%s\n" "libstars_pv.so" ;;
+    libnpu_drv_camodel.so) printf "%s\n" "libnpu_drv_pvmodel.so" ;;
+    libruntime_camodel.so) printf "%s\n" "libruntime_cmodel.so" ;;
+    *) printf "%s\n" "" ;;
+  esac
+}
+
+pv_tree_valid() {
+  local root="$1" soc="$2" real="$3" name
+  [[ -f "${root}/.ptoas-sim-pv" ]] || return 1
+  [[ "$(< "${root}/.ptoas-sim-pv")" == "${real}" ]] || return 1
+  for name in libmodel_top.so libstars.so libnpu_drv_camodel.so libruntime_camodel.so; do
+    [[ -e "${root}/tools/simulator/${soc}/lib/${name}" ]] || return 1
+  done
+  return 0
+}
+
+pv_tree_fail() {
+  PV_TREE_ERROR="$1"
+  return 1
+}
+
+build_pv_tree() {
+  local root="$1" soc="$2" real="$3"
+  local real_sim="${real}/x86_64-linux/simulator"
+  local real_soc
+  real_soc="$(readlink -f "${real_sim}/${soc}" 2>/dev/null || true)"
+  if [[ -z "${real_soc}" || ! -d "${real_soc}/lib" ]]; then
+    pv_tree_fail "no simulator lib directory at ${real_sim}/${soc}/lib"
+    return 1
+  fi
+  local real_lib="${real_soc}/lib" name missing=()
+  for name in libmodel_top_pv.so libstars_pv.so libnpu_drv_pvmodel.so libruntime_cmodel.so; do
+    [[ -f "${real_lib}/${name}" ]] || missing+=("${name}")
+  done
+  if (( ${#missing[@]} > 0 )); then
+    pv_tree_fail "the CANN simulator at ${real_lib} does not ship the PV libraries: ${missing[*]}"
+    return 1
+  fi
+
+  # The mutating part runs in a subshell. errexit is deliberately NOT trusted:
+  # the caller invokes this function as an if-condition, a context where bash
+  # suppresses errexit even inside the subshell. Every fallible command is
+  # therefore checked explicitly, the lock failure stops immediately, and the
+  # staging tree is verified and only then published. The caller reports the
+  # failure and exits instead of degrading to ca. The flock is released when the
+  # subshell exits.
+  if ! (
+    set -e
+    mkdir -p -- "$(dirname -- "${root}")" || exit 1
+    exec 9>"${root}.lock" || exit 1
+    flock -w 600 9 || exit 1
+    if pv_tree_valid "${root}" "${soc}" "${real}"; then
+      exit 0
+    fi
+
+    staging="${root}.build.$$"
+    # Any failure below leaves only this private staging tree; remove it.
+    trap 'rm -rf -- "${staging:-}"' EXIT
+    rm -rf -- "${staging}" || exit 1
+    mkdir -p -- "${staging}/bin" "${staging}/tools" "${staging}/x86_64-linux/simulator" || exit 1
+
+    for entry in "${real}"/*; do
+      entry_name="$(basename -- "${entry}")"
+      case "${entry_name}" in bin | tools | x86_64-linux) continue ;; esac
+      ln -s -- "${entry}" "${staging}/${entry_name}" || exit 1
+    done
+    for entry in "${real}/bin"/*; do
+      entry_name="$(basename -- "${entry}")"
+      [[ "${entry_name}" == "setenv.bash" ]] && continue
+      ln -s -- "${entry}" "${staging}/bin/${entry_name}" || exit 1
+    done
+    {
+      printf "source %s/bin/setenv.bash\n" "${real}"
+      printf "export ASCEND_HOME_PATH=%s\n" "${root}"
+    } > "${staging}/bin/setenv.bash" || exit 1
+    for entry in "${real}/tools"/*; do
+      entry_name="$(basename -- "${entry}")"
+      [[ "${entry_name}" == "simulator" ]] && continue
+      ln -s -- "${entry}" "${staging}/tools/${entry_name}" || exit 1
+    done
+    ln -s -- ../x86_64-linux/simulator "${staging}/tools/simulator" || exit 1
+    for entry in "${real}/x86_64-linux"/*; do
+      entry_name="$(basename -- "${entry}")"
+      [[ "${entry_name}" == "simulator" ]] && continue
+      ln -s -- "${entry}" "${staging}/x86_64-linux/${entry_name}" || exit 1
+    done
+
+    sim="${staging}/x86_64-linux/simulator"
+    for entry in "${real_sim}"/*; do
+      entry_name="$(basename -- "${entry}")"
+      if [[ "$(readlink -f "${entry}" 2>/dev/null || true)" != "${real_soc}" ]]; then
+        ln -s -- "${entry}" "${sim}/${entry_name}" || exit 1
+        continue
+      fi
+      if [[ "${entry_name}" != "${soc}" ]]; then
+        ln -s -- "${soc}" "${sim}/${entry_name}" || exit 1
+        continue
+      fi
+      soc_dir="${sim}/${entry_name}"
+      mkdir -p -- "${soc_dir}/lib" || exit 1
+      for sub in "${real_soc}"/*; do
+        sub_name="$(basename -- "${sub}")"
+        [[ "${sub_name}" == "lib" ]] && continue
+        ln -s -- "${sub}" "${soc_dir}/${sub_name}" || exit 1
+      done
+      for libf in "${real_lib}"/*; do
+        lib_name="$(basename -- "${libf}")"
+        shadow="$(pv_shadow_lib "${lib_name}")"
+        if [[ -n "${shadow}" ]]; then
+          ln -s -- "${real_lib}/${shadow}" "${soc_dir}/lib/${lib_name}" || exit 1
+        else
+          ln -s -- "${libf}" "${soc_dir}/lib/${lib_name}" || exit 1
+        fi
+      done
+    done
+
+    # Write the marker into staging and verify the complete tree there before
+    # it replaces the shared root, so an incomplete build can never be
+    # published. The EXIT trap removes the private staging tree on any failure.
+    printf "%s\n" "${real}" > "${staging}/.ptoas-sim-pv" || exit 1
+    pv_tree_valid "${staging}" "${soc}" "${real}" || exit 1
+    rm -rf -- "${root}" || exit 1
+    mv -- "${staging}" "${root}" || exit 1
+  ); then
+    pv_tree_fail "failed to build the private PV shadow tree at ${root}"
+    return 1
+  fi
+  if ! pv_tree_valid "${root}" "${soc}" "${real}"; then
+    pv_tree_fail "the private PV shadow tree at ${root} is incomplete after the build"
+    return 1
+  fi
+  return 0
 }
 
 sync_msprof_output() {
@@ -197,6 +358,36 @@ if [[ -z "${ASCEND_HOME_PATH:-}" ]]; then
   die "ASCEND_HOME_PATH is not set; source CANN setenv or export it first"
 fi
 
+# Model selection. ca leaves the real CANN in place. pv swaps in the private
+# shadow tree; an explicit pv never degrades to ca, so a missing _pv library
+# or a broken tree fails the run with the concrete reason.
+case "${PTOAS_SIM_MODEL}" in
+  ca)
+    log "model: ca"
+    ;;
+  pv)
+    if [[ -f "${ASCEND_HOME_PATH}/.ptoas-sim-pv" ]]; then
+      log "model: pv (root=${ASCEND_HOME_PATH})"
+    else
+      PV_MODEL_ROOT="${PTOAS_SIM_MODEL_ROOT:-${HOME}/.cache/ptoas/sim-pv-${SOC_VERSION}}"
+      REAL_ASCEND_HOME="${ASCEND_HOME_PATH}"
+      PV_TREE_ERROR=""
+      if ! build_pv_tree "${PV_MODEL_ROOT}" "${SOC_VERSION}" "${REAL_ASCEND_HOME}"; then
+        die "PTOAS_SIM_MODEL=pv is not available: ${PV_TREE_ERROR:-unknown reason};" \
+          "private tree root ${PV_MODEL_ROOT}, CANN ${REAL_ASCEND_HOME}." \
+          "Provide the PV libraries, fix that path/permissions, or run the" \
+          "CA model explicitly with PTOAS_SIM_MODEL=ca"
+      fi
+      ASCEND_HOME_PATH="${PV_MODEL_ROOT}"
+      export ASCEND_HOME_PATH
+      log "model: pv (root=${ASCEND_HOME_PATH})"
+    fi
+    ;;
+  *)
+    die "PTOAS_SIM_MODEL must be ca or pv, got: ${PTOAS_SIM_MODEL}"
+    ;;
+esac
+
 if [[ -z "${OUTPUT_DIR}" ]]; then
   EXAMPLE_STEM="$(basename -- "${EXAMPLE_PATH}" .py)"
   OUTPUT_DIR="${REPO_ROOT}/build/msprof_res/${EXAMPLE_STEM}"
@@ -209,7 +400,11 @@ SIM_LIB_DIR="${ASCEND_HOME_PATH}/tools/simulator/${SOC_VERSION}/lib"
 
 PRIVATE_ROOT="${PTOAS_MSPROF_PRIVATE_ROOT:-${XDG_RUNTIME_DIR:-${HOME}/.cache}/ptoas/msprof}"
 ensure_private_dir "${PRIVATE_ROOT}"
-RUNTIME_OUTPUT_DIR="$(mktemp -d "${PRIVATE_ROOT}/${EXAMPLE_STEM}.XXXXXX")"
+# A unique staging directory under PRIVATE_ROOT. It is not a bare mktemp:
+# the run exits through the cleanup below, which removes this tree with
+# rm -rf "${RUNTIME_OUTPUT_DIR}" unless --keep-output was requested.
+RUNTIME_OUTPUT_DIR="${PRIVATE_ROOT}/${EXAMPLE_STEM}.$$.${RANDOM}"
+mkdir -p "${RUNTIME_OUTPUT_DIR}"
 chmod 700 "${RUNTIME_OUTPUT_DIR}"
 MSPROF_STDIO_LOG="${RUNTIME_OUTPUT_DIR}/msprof.stdout.log"
 EXAMPLE_EXIT_CODE_FILE="${RUNTIME_OUTPUT_DIR}/example.exitcode"
@@ -232,7 +427,8 @@ if [[ -n "${RESOLVED_PTOAS_BIN:-}" ]]; then
   export PTOAS_BIN="${RESOLVED_PTOAS_BIN}"
 fi
 if ! python_can_import_ptodsl "${RESOLVED_PYTHON_BIN}"; then
-  die "active Python environment cannot import ptodsl/ptoas.mlir.ir; install the PTOAS wheel or use a preconfigured environment"
+  die "active Python environment cannot import ptodsl/ptoas.mlir.ir;" \
+      "install the PTOAS wheel or use a preconfigured environment"
 fi
 if ! command -v ptoas >/dev/null 2>&1; then
   die "ptoas is not available on PATH; install the PTOAS wheel or export PTOAS_BIN"

@@ -14,15 +14,32 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 
-def _default_cache_root() -> Path:
+def _default_cache_root() -> Path | None:
+    """Return the persistent artifact cache root, or None when disabled.
+
+    The on-disk cache is off by default.  The specialization key embeds
+    process addresses (a pybind11 method address in _DType.__repr__ and
+    id(callback)), so it never hits across sessions; the directory grows
+    without bound; and artifacts are published without locking, a temporary
+    name, or a fallback, so concurrent writers can share a directory and fail.
+    Set PTODSL_CACHE_DIR to opt back in; PTODSL_NO_CACHE wins over it.
+    """
+    if os.environ.get("PTODSL_NO_CACHE"):
+        return None
     override = os.environ.get("PTODSL_CACHE_DIR")
     if override:
         return Path(override)
-    return Path.home() / ".cache" / "ptodsl"
+    return None
+
+
+def cache_enabled() -> bool:
+    """Whether a persistent on-disk artifact cache is in use."""
+    return _default_cache_root() is not None
 
 
 def _specialization_digest(specialization_key) -> str:
@@ -46,11 +63,27 @@ class NativeBuildArtifacts:
     manifest_path: Path
 
 
-def artifact_paths(py_name: str, ir_function_name: str, specialization_key) -> NativeBuildArtifacts:
-    """Return stable artifact paths for one compiled specialization."""
+def artifact_paths(
+    py_name: str,
+    ir_function_name: str,
+    specialization_key,
+    cache_root: Path | None = None,
+) -> NativeBuildArtifacts:
+    """Return stable artifact paths for one compiled specialization.
+
+    ``cache_root`` carries the directory to build in when the persistent cache
+    is disabled; callers pass the ``tempfile.TemporaryDirectory`` they manage so
+    its standard cleanup owns the artifact lifetime.
+    """
     digest = _specialization_digest(specialization_key)
     safe_name = py_name.replace("/", "_")
-    cache_dir = _default_cache_root() / f"{safe_name}_{digest}"
+    root = Path(cache_root) if cache_root is not None else _default_cache_root()
+    if root is None:
+        # A direct caller with the cache disabled still receives a stable path
+        # under the standard temporary directory; build_native_library always
+        # passes its own TemporaryDirectory so those artifacts are removed.
+        root = Path(tempfile.gettempdir())
+    cache_dir = root / f"{safe_name}_{digest}"
     lib_name = f"lib{ir_function_name}.so"
     return NativeBuildArtifacts(
         cache_dir=cache_dir,
@@ -123,6 +156,7 @@ def is_native_build_current(
 __all__ = [
     "NativeBuildArtifacts",
     "artifact_paths",
+    "cache_enabled",
     "_content_digest",
     "is_native_build_current",
     "read_manifest",

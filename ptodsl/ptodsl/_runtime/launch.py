@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 
 from .._kernel_signature import DeviceParameterSpec, RuntimeScalarParameterSpec
 from .._types import _resolve
-from .native_build import build_native_library
 
 from ptoas.mlir.ir import BF16Type, Context, F16Type, F32Type, IndexType, IntegerType
 
@@ -126,14 +125,10 @@ class LaunchHandle:
         if self._launch_fn is not None:
             return
 
-        lib_path, launch_symbol = build_native_library(
-            py_name=self._compiled._py_name,
-            module_spec=self._compiled._module_spec,
-            kernel_signature=self._compiled._kernel_signature,
-            mlir_text=self._compiled.mlir_text(),
-            specialization_key=self._compiled.specialization_key,
-        )
-        lib = ctypes.CDLL(str(lib_path))
+        # The compiled handle owns the loaded library: every launch handle for
+        # one specialization shares a single build, even with the optional
+        # persistent cache disabled (CompiledKernelHandle.native_library).
+        lib, launch_symbol = self._compiled.native_library()
         fn = getattr(lib, launch_symbol)
         fn.argtypes = _launch_argtypes(self._compiled._kernel_signature)
         fn.restype = None

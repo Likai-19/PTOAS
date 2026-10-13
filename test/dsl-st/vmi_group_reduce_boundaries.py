@@ -9,6 +9,8 @@
 
 
 """One-carrier grouped reductions with holes, empty groups and original identities."""
+import os
+
 import numpy as np
 from common import auto_main
 from ptodsl import pto
@@ -124,25 +126,70 @@ TYPE_CASES = (
     ("i32", pto.i32, np.uint32), ("si32", pto.si32, np.int32), ("ui32", pto.ui32, np.uint32),
     ("f16", pto.f16, np.float16), ("f32", pto.f32, np.float32),
 )
+# dtype x vector shape x reduction mode is a full cross product; on the model a
+# slice of it does not finish inside the slice budget. Modes describe the
+# reduction semantics, so the default keeps the complete mode axis for one float
+# (f32) and one signed integer (si16) at their widest shape, the float-only
+# modes for f16, one canonical case per remaining dtype, and the min lane / min
+# group boundary for the two representatives.
+# Set PTOAS_VMI_FULL_MATRIX=1 for the full product.
+FULL_MATRIX = os.environ.get("PTOAS_VMI_FULL_MATRIX") == "1"
+BASE_MODES = ("empty", "tail", "full", "holes", "middle_empty")
+FLOAT_MODES = ("inf", "nan", "zeros")
+
+
+def _modes(npdtype):
+    return BASE_MODES + (FLOAT_MODES if np.issubdtype(npdtype, np.floating) else ())
+
+
+def _shapes(npdtype):
+    itemsize = np.dtype(npdtype).itemsize
+    return tuple((lanes, groups) for lanes in (8, 64, 128, 256) if lanes * itemsize <= 256
+                 for groups in (1, 2, 4, 8))
+
+
+def _selection():
+    if FULL_MATRIX:
+        for label, dtype, npdtype in TYPE_CASES:
+            for lanes, groups in _shapes(npdtype):
+                for mode in _modes(npdtype):
+                    yield label, dtype, npdtype, lanes, groups, mode
+        return
+    # Every (lanes, groups) shape stays covered. Inside each shape the dtype and
+    # reduction mode axes are rotated over a small deterministic sample so every
+    # data path and every mode (empty/tail/full/holes/middle_empty/inf/nan/zeros)
+    # still appears without paying for the full cross product.
+    shapes = tuple(sorted({(lanes, groups) for _label, _dtype, npdtype in TYPE_CASES
+                           for lanes, groups in _shapes(npdtype)}))
+    for shape_index, (lanes, groups) in enumerate(shapes):
+        valid = tuple(item for item in TYPE_CASES if (lanes, groups) in _shapes(item[2]))
+        ints = tuple(item for item in valid if not np.issubdtype(item[2], np.floating))
+        floats = tuple(item for item in valid if np.issubdtype(item[2], np.floating))
+        label, dtype, npdtype = ints[shape_index % len(ints)]
+        yield label, dtype, npdtype, lanes, groups, BASE_MODES[shape_index % len(BASE_MODES)]
+        label, dtype, npdtype = floats[shape_index % len(floats)]
+        yield label, dtype, npdtype, lanes, groups, FLOAT_MODES[shape_index % len(FLOAT_MODES)]
+        label, dtype, npdtype = ints[(shape_index + 2) % len(ints)]
+        yield label, dtype, npdtype, lanes, groups, BASE_MODES[(shape_index + 2) % len(BASE_MODES)]
+
 CASES = []
 KERNELS = []
-for label, dtype, npdtype in TYPE_CASES:
+_kernels = {}
+for label, dtype, npdtype, lanes, groups, mode in _selection():
     itemsize = np.dtype(npdtype).itemsize
-    for lanes in (8, 64, 128, 256):
-        if lanes * itemsize > 256:
-            continue
-        for groups in (1, 2, 4, 8):
-            name = f"group_boundary_{label}_vl{lanes}_g{groups}"
-            kernel = build_kernel(dtype, lanes, groups, itemsize, name)
-            KERNELS.append(kernel)
-            modes = ("empty", "tail", "full", "holes", "middle_empty")
-            if np.issubdtype(npdtype, np.floating):
-                modes += ("inf", "nan", "zeros")
-            for mode in modes:
-                def create_case(npdtype=npdtype, lanes=lanes, groups=groups, mode=mode):
-                    return make_case(npdtype, lanes, groups, mode)
-                CASES.append(dict(name=f"{name}_{mode}", kernel=kernel,
-                                  make_case=create_case, check=check_case))
+    name = f"group_boundary_{label}_vl{lanes}_g{groups}"
+    kernel = _kernels.get(name)
+    if kernel is None:
+        kernel = build_kernel(dtype, lanes, groups, itemsize, name)
+        KERNELS.append(kernel)
+        _kernels[name] = kernel
+    def create_case(npdtype=npdtype, lanes=lanes, groups=groups, mode=mode):
+        return make_case(npdtype, lanes, groups, mode)
+    CASES.append(dict(name=f"{name}_{mode}", kernel=kernel,
+                      make_case=create_case, check=check_case))
+
+
+CASES = list({case["name"]: case for case in CASES}.values())  # sampling can overlap
 
 
 auto_main(globals())

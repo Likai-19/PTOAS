@@ -14,7 +14,7 @@
 
 两个套件都吃纯 MLIR，但调度粒度和覆盖面不同，用例不要互相镜像：
 
-- **语义用例放这里**（本目录）。目录级 runner 会把每个模块按用例切片（默认 ≤50 例/片）后并发执行，每片一次
+- **语义用例放这里**（本目录）。目录级 runner 会把每个模块按用例切片（默认 10 例/片）后并发执行，每片一次
   `msprof op simulator`、每片独立超时；一个模块里的用例越多，越应该待在这里而不是别处。
 - **`test/vpto/cases/` 只保留它独有的覆盖面**：`ptoas` CLI 读 `.pto` 文件出 fatobj、
   `launch.cpp`/`main.cpp` 的 C++ 宿主 ABI 与 `kernel.so` 链接、以及 `DEVICE=NPU` 的真机路径。
@@ -53,7 +53,7 @@ python3 -c "import ptodsl; from ptodsl import pto; print(ptodsl.__file__)"
 
 ## 推荐写法
 
-当前目录下推荐使用 [common.py](/home/zhangzhendong/ptoas-workspace/PTOAS/test/dsl-st/common.py) 里的两个 helper：
+当前目录下推荐使用 [common.py](common.py) 里的两个 helper：
 
 - `golden_output_case(...)`
 - `auto_main(globals())`
@@ -165,8 +165,8 @@ auto_main(globals())
 
 可以直接参考：
 
-- [predicate_pack.py](/home/zhangzhendong/ptoas-workspace/PTOAS/test/dsl-st/predicate_pack.py)
-- [cube_matrix_pipeline.py](/home/zhangzhendong/ptoas-workspace/PTOAS/test/dsl-st/cube_matrix_pipeline.py)
+- [predicate_pack.py](predicate_pack.py)
+- [cube_matrix_pipeline.py](cube_matrix_pipeline.py)
 
 它演示了：
 
@@ -228,6 +228,7 @@ python3 ptodsl/tests/test_jit_compile.py
 - `common.py`
 - `__main__.py`
 - 以下划线开头的辅助模块
+- 以 `test_` 开头的测试文件（unittest/pytest，不是用例模块）
 
 每个被发现的模块都需要定义非空 `CASES` 列表，且所有 case name 在目录内必须唯一。
 
@@ -250,3 +251,83 @@ python3 ptodsl/tests/test_vmi_histogram_scatter_lanes.py
 长度不匹配的负向用例。非法 logical lane 在 PTODSL 报错；active prefix
 不受七值白名单限制。输入分配为短读取保留最小 32B，64/128 ui8 的
 VMI load 仍分别只请求 64/128B。
+
+## 并行门禁与 PV 模拟模型
+
+`.gitcode/scripts/run_ptodsl_cases_parallel.sh` 把一个模块切成 unit（大模块按用例切块、
+轻量单例模块装箱），每个 unit 一次 `msprof op simulator`，用 `xargs` 动态并发；
+`.gitcode/scripts/sim_validation.sh` 的 PTODSL 步骤调用它。每个 unit 都带 discovery
+得到的用例数，只有 PASS 行数与之一致才算通过，总数不一致也会让步骤变红。
+
+### 环境变量
+
+| 变量 | 默认 | 作用 |
+| --- | --- | --- |
+| `PTOAS_SIM_MODEL` | `ca`（PR 门禁的 PTODSL 步骤默认 `pv`） | `ca` 用 CANN 自带 CA 模型；`pv` 用私有软链树加载 PV 模型 |
+| `PTOAS_SIM_MODEL_ROOT` | `$HOME/.cache/ptoas/sim-pv-<soc>` | pv 私有树的位置 |
+| `PTODSL_CASE_JOBS` | `24` | 并发 unit 数 |
+| `PTODSL_CASE_BLOCK_SIZE` | `10` | 一个大模块每个 unit 的最大用例数 |
+| `PTODSL_CASE_TIMEOUT` | `1800` | 单个 unit 的超时（秒） |
+| `PTODSL_CASE_KILL_AFTER` | `60` | 超时后再等多久发 SIGKILL |
+| `PTOAS_DSL_PACK_SIZE` | `16` | 每包装几个轻量单例模块；`1` 关闭装箱 |
+| `PTOAS_DSL_HEAVY_PATTERN` | cube/cv_mixed/cast_spine/simt/binary_vector/vmi_new_kernels | 命中的单例模块各自独占会话；空或 `-` 表示不设重型家族 |
+| `PTOAS_DSL_BIG` | 未设 | cast-spine/quant 类用例放大输入（见对应模块注释） |
+| `PTOAS_VMI_FULL_MATRIX` | 未设 | VMI group/histogram 类用例跑完整笛卡尔积（见对应模块注释） |
+
+### 门禁 vs daily
+
+- **PR 门禁**（`.gitcode/scripts/sim_validation.sh` 的 PTODSL 步骤）：`PTOAS_SIM_MODEL=pv`、
+  `PTODSL_CASE_JOBS=24`、`PTOAS_DSL_PACK_SIZE=16`。
+- **其它步骤 / daily / 手工复现**：默认 `PTOAS_SIM_MODEL=ca`；要用 pv 就显式
+  `PTOAS_SIM_MODEL=pv`。所有变量都能用环境覆盖。
+
+### pv 的性质与 CANN 版本锁定
+
+`msprof op simulator` 硬编码 CA 模型，`LD_PRELOAD` 覆盖不掉：`sim_dsl.sh` 的 pv 路径在
+私有软链树里把四个 CA 库名影子成 PV 库（`libruntime_camodel.so -> libruntime_cmodel.so` 等），
+再让 `ASCEND_HOME_PATH` 指过去。这是对 CANN 内部布局的 hack，需要注意：
+
+- 影子映射依赖具体 CANN 版本的库名（本仓库在 `cann-9.1.0` 上验证）；
+- 显式 `PTOAS_SIM_MODEL=pv` **不做退化**：私有树构建失败或缺少 `_pv` 库时 `sim_dsl.sh`
+  直接非 0 退出、打印缺失的路径/库；pv 不可用即失败，不会被 ca 掩盖；只有显式
+  `PTOAS_SIM_MODEL=ca`（或未设置时的默认值）才走 ca；
+- 更换 CANN 版本后要重新确认这四个 `_pv`/`_cmodel` 库仍存在。
+
+## 迁移覆盖说明
+
+`test/vpto/cases/` 里原本由 VPTO runner 逐用例驱动的老用例已随本次迁移删除，改用
+`test/dsl-st/` 的 in-memory 模块（kernel MLIR 内嵌，golden/compare 在内存里跑）。有意的例外：
+
+- `onboard-only/simt-keep-resume`：**故意排除、不迁移**。它依赖 `pto.keep` / `pto.resume`
+  的持久 SIMT 寄存器语义，模拟器不建模这条路径，而且它本来就是板端（onboard）探针而不是
+  simulator 用例。原有覆盖由同目录保留的 `onboard-only/simt-keep-resume-register-swap`
+  在板端承担；simulator 侧没有等价模块。
+- `test/vpto/cases/` 其余目录只保留 VPTO 独有的覆盖面（`.pto` 文件、C++ 宿主 ABI、`DEVICE=NPU`
+  真机路径），不与 `test/dsl-st/` 镜像。
+
+迁移模块开头的 `"""Migrated from test/vpto/cases/...` 出处注释在原目录删除后仍作为历史出处
+记录保留，与其余迁移模块一致。
+
+### SIGSEGV 重试（临时兜底，issue #17）
+
+CANN 仿真器有一处已知缺陷（D2H 把设备 VA 当宿主指针），会让随机某个 unit 偶发
+`rc=139`（约 1 次 / ~1000 会话）。驱动对此加了**一次性**重试：
+
+- **只对 `rc=139`（SIGSEGV）生效**；超时 `rc=124/137`、compare 失败 `rc=1`、覆盖率
+  不符、以及任何其它退出码都**不重试**；
+- 只重跑该 unit，最多一次；重跑过的 unit 在 result/汇总里标 `RETRIED`，汇总打印
+  `retried=N`；第一次崩溃的日志保存在 `<unit>.sigsegv.log`；
+- 重跑后的 unit 仍要满足 `passed == expected` 覆盖率断言；
+- 这是**临时兜底**：根因已提单 `cann/pto-as#17`，CANN 修复后必须删除该重试块（驱动里
+  `run_once` 之后的 `rc == 139` 分支）。
+
+## Write-mask 审计
+
+迁移模块的 golden 缓冲只有在 `np.empty`（元素确实未定义）时才保留部分 write mask；
+用 `zeros`/`full`/`ones` 创建、只写其中一部分的缓冲一律整 buffer 比较。
+
+- 全量审计结论：golden 条目 `456`、保留部分 mask `107`、整 buffer 比较 `349`、
+  golden 无法在内存复现 `materialize_failures=4`。部分 mask 的判据都是 golden 用
+  `np.empty`（元素确实未定义）创建后再写入；用 `zeros`/`full`/`ones` 创建的缓冲一律整 buffer。
+- 规则回归（`np.empty` 保留 mask、已定义缓冲整 buffer、don't-care 写错必须失败）：
+  [`test_write_mask_policy.py`](test_write_mask_policy.py)

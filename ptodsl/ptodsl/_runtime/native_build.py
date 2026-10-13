@@ -11,14 +11,17 @@
 
 from __future__ import annotations
 
+import ctypes
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 from .cache import (
     _content_digest,
     NativeBuildArtifacts,
     artifact_paths,
+    cache_enabled,
     is_native_build_current,
     write_manifest,
 )
@@ -272,37 +275,32 @@ def _write_native_manifest(
     )
 
 
-def build_native_library(
+def _materialize_native_library(
+    artifacts: NativeBuildArtifacts,
     *,
-    py_name: str,
     module_spec,
     kernel_signature,
     mlir_text: str,
-    specialization_key,
-) -> tuple[Path, str]:
-    """Build or reuse the shared library for one compiled specialization."""
+    persistent_cache: bool,
+) -> Path:
+    """Build (or reuse) the shared library for one compiled specialization."""
     ir_function_name = module_spec.function_name
-    artifacts = artifact_paths(py_name, ir_function_name, specialization_key)
     launch_symbol = launch_symbol_name(ir_function_name)
     launch_cpp_text = generate_launch_cpp(
         ir_function_name=ir_function_name,
         kernel_signature=kernel_signature,
     )
     build_config = _native_build_config(module_spec)
-    effective_insert_sync = build_config["insert_sync"]
-    effective_pto_level = build_config["pto_level"]
-    ptoas_overrides = build_config["ptoas_overrides"]
     compile_config_text = build_config["compile_config"]
     link_config_text = build_config["link_config"]
-
-    if is_native_build_current(
+    if persistent_cache and is_native_build_current(
         artifacts,
         mlir_text=mlir_text,
         launch_cpp_text=launch_cpp_text,
         compile_config_text=compile_config_text,
         link_config_text=link_config_text,
     ):
-        return artifacts.shared_library, launch_symbol
+        return artifacts.shared_library
 
     artifacts.cache_dir.mkdir(parents=True, exist_ok=True)
     artifacts.mlir_path.write_text(mlir_text, encoding="utf-8")
@@ -311,20 +309,60 @@ def build_native_library(
     _compile_native_artifacts(
         artifacts,
         module_spec,
-        effective_insert_sync=effective_insert_sync,
-        effective_pto_level=effective_pto_level,
-        ptoas_overrides=ptoas_overrides,
+        effective_insert_sync=build_config["insert_sync"],
+        effective_pto_level=build_config["pto_level"],
+        ptoas_overrides=build_config["ptoas_overrides"],
     )
-    _write_native_manifest(
-        artifacts,
-        ir_function_name=ir_function_name,
-        launch_symbol=launch_symbol,
-        mlir_text=mlir_text,
-        launch_cpp_text=launch_cpp_text,
-        compile_config_text=compile_config_text,
-        link_config_text=link_config_text,
-    )
-    return artifacts.shared_library, launch_symbol
+    if persistent_cache:
+        _write_native_manifest(
+            artifacts,
+            ir_function_name=ir_function_name,
+            launch_symbol=launch_symbol,
+            mlir_text=mlir_text,
+            launch_cpp_text=launch_cpp_text,
+            compile_config_text=compile_config_text,
+            link_config_text=link_config_text,
+        )
+    return artifacts.shared_library
+
+
+def build_native_library(
+    *,
+    py_name: str,
+    module_spec,
+    kernel_signature,
+    mlir_text: str,
+    specialization_key,
+) -> tuple[ctypes.CDLL, str]:
+    """Build, load and return the shared library for one specialization.
+
+    With the cache disabled the build happens inside a standard
+    tempfile.TemporaryDirectory and the library is loaded while that directory
+    still exists; the cleanup removes the tree after the library is mapped.
+    """
+    ir_function_name = module_spec.function_name
+    launch_symbol = launch_symbol_name(ir_function_name)
+    scratch = None
+    if not cache_enabled():
+        scratch = tempfile.TemporaryDirectory(prefix="ptodsl-", dir=os.environ.get("TMPDIR"))
+    try:
+        artifacts = artifact_paths(
+            py_name,
+            ir_function_name,
+            specialization_key,
+            cache_root=scratch.name if scratch else None,
+        )
+        library = _materialize_native_library(
+            artifacts,
+            module_spec=module_spec,
+            kernel_signature=kernel_signature,
+            mlir_text=mlir_text,
+            persistent_cache=scratch is None,
+        )
+        return ctypes.CDLL(str(library)), launch_symbol
+    finally:
+        if scratch is not None:
+            scratch.cleanup()
 
 
 __all__ = [

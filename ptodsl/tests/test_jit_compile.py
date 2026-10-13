@@ -6281,12 +6281,13 @@ def main() -> None:
     )
     native_build_observations = []
     launch_target_arches = []
+    fake_native_library = object()
 
     with TemporaryDirectory() as tmpdir:
         build_root = Path(tmpdir)
 
-        def fake_artifacts(py_name, ir_function_name, specialization_key):
-            cache_dir = build_root / f"{py_name}_{ir_function_name}"
+        def fake_artifacts(py_name, ir_function_name, specialization_key, cache_root=None):
+            cache_dir = Path(cache_root or build_root) / f"{py_name}_{ir_function_name}"
             return NativeBuildArtifacts(
                 cache_dir=cache_dir,
                 mlir_path=cache_dir / "kernel.mlir",
@@ -6342,17 +6343,18 @@ def main() -> None:
             native_build_runtime, "_compile_launch_cpp", side_effect=fake_compile_launch_cpp
         ), mock.patch.object(
             native_build_runtime, "_link_shared_library", side_effect=fake_link_shared_library
-        ), mock.patch.object(native_build_runtime, "runtime_library_flags", return_value=("-laclrt",)):
+        ), mock.patch.object(native_build_runtime, "runtime_library_flags", return_value=("-laclrt",)), \
+                mock.patch.object(native_build_runtime.ctypes, "CDLL", return_value=fake_native_library):
             for label, compiled, module_spec_override in native_build_variants:
                 module_spec = module_spec_override or compiled._module_spec
-                lib_path, launch_symbol = native_build_runtime.build_native_library(
+                lib, launch_symbol = native_build_runtime.build_native_library(
                     py_name=compiled._py_name,
                     module_spec=module_spec,
                     kernel_signature=compiled._kernel_signature,
                     mlir_text=compiled.mlir_text(),
                     specialization_key=compiled.specialization_key,
                 )
-                expect(lib_path.is_file(), f"{label} native build should materialize the shared library artifact")
+                expect(lib is fake_native_library, f"{label} native build should load the built shared library")
                 expect(
                     launch_symbol.startswith("ptodsl_launch_"),
                     f"{label} native build should preserve PTODSL launch wrapper naming",

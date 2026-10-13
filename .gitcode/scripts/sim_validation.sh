@@ -29,11 +29,11 @@ WORKSPACE="${1:-${WORKSPACE:-$(pwd)}}"
 WORKSPACE="$(cd "${WORKSPACE}" && pwd)"
 BUILD_ROOT="${BUILD_ROOT:-${WORKSPACE}/.work/gitcode-vpto-sim}"
 CANN_HOME="${CANN_HOME:-${ASCEND_HOME_PATH:-}}"
-# CI images ship a prebuilt LLVM/MLIR cache alongside the CANN installation; the
-# same root is used by .gitcode/scripts/build_and_test.sh and compile.sh. It is
-# only accepted when it really contains llvm-19 (see the BUILD_ARGS selection
-# below), so an image without the cache keeps building LLVM from source.
-ASCEND_3RD_LIB_PATH="${ASCEND_3RD_LIB_PATH:-/home/jenkins/opensource}"
+# A prebuilt LLVM/MLIR cache may be shipped alongside the CANN installation (the
+# shared compile image does). The simulator runner passes that root through
+# ASCEND_3RD_LIB_PATH; when it is not set the cache is not used and the build
+# falls back to building LLVM from source (see the BUILD_ARGS selection below).
+ASCEND_3RD_LIB_PATH="${ASCEND_3RD_LIB_PATH:-}"
 SIM_LIB_DIR="${SIM_LIB_DIR:-}"
 CASE_PREFIX="${VPTO_SIM_CASE_PREFIX:-}"
 # The runner confines jobs to its own service cgroup, so the limits that matter
@@ -88,24 +88,29 @@ SIM_MEMORY_BUDGET_GIB="${SIM_MEMORY_BUDGET_GIB:-16}"
 VPTO_CASE_JOBS="${VPTO_SIM_JOBS:-32}"
 TILELIB_BUILD_JOBS="${TILELIB_BUILD_JOBS:-32}"
 TILELIB_CASE_JOBS="${TILELIB_CASE_JOBS:-64}"
-# PTODSL/DSL ST has no parallelism of its own: scripts/sim_dsl.sh runs the whole
-# suite as one simulator process that reports nothing until every case is done,
-# so one slow case stretches the step without any progress to read (observed: 37
-# minutes and still running). The CI side therefore splits the suite into case
-# slices (see .gitcode/scripts/run_ptodsl_cases_parallel.sh). A slice costs about
-# 2.3 cores, so half of the cores is the useful fan-out, and the memory budget
-# below can lower it further.
-PTODSL_DEFAULT_CASE_JOBS="$(( CPU_COUNT / 2 ))"
-(( PTODSL_DEFAULT_CASE_JOBS < 1 )) && PTODSL_DEFAULT_CASE_JOBS=1
-PTODSL_CASE_JOBS="${PTODSL_CASE_JOBS:-${PTODSL_DEFAULT_CASE_JOBS}}"
-# Cases per slice. Measured on a runner at full fan-out, one case costs about ten
-# seconds of simulator launch, so 50 cases keep a slice near nine minutes while
-# still splitting the long pole of a 700 case module across the fan-out.
-PTODSL_CASE_SHARD_SIZE="${PTODSL_CASE_SHARD_SIZE:-50}"
-# Upper bound for one slice, about twice its measured time. A slice that hangs
-# used to hold the whole step until the job deadline; bounding it here turns that
-# into one failing slice.
-PTODSL_CASE_TIMEOUT="${PTODSL_CASE_TIMEOUT:-1200}"
+# PTODSL/DSL ST has no parallelism of its own: scripts/sim_dsl.sh runs a whole
+# module as one simulator process that reports nothing until every case is done.
+# The CI side therefore runs one module per session (see
+# .gitcode/scripts/run_ptodsl_cases_parallel.sh) through a fixed size pool, and
+# the memory budget below can lower that pool further.
+PTODSL_CASE_JOBS="${PTODSL_CASE_JOBS:-24}"
+# Cases per unit of a many-case module. Running a whole module in one session
+# makes a heavy module (up to 104 cases) the unit that blows the timeout, so a
+# module with more cases than this is cut into blocks of this size.
+PTODSL_CASE_BLOCK_SIZE="${PTODSL_CASE_BLOCK_SIZE:-10}"
+# Light single case modules packed into one session (PTOAS_DSL_PACK_SIZE=1 turns
+# packing off). PTOAS_DSL_HEAVY_PATTERN is passed straight through to the
+# driver, which keeps its own default when the variable is unset and packs
+# every single case module when it is empty or "-".
+PTOAS_DSL_PACK_SIZE="${PTOAS_DSL_PACK_SIZE:-16}"
+# The PR gate runs the PTODSL suite on the PV simulator model: it is the
+# model the product ships towards and it is faster than the CA fallback.
+# Only this step opts in; the other suites and the daily/manual full runs
+# keep the default ca. Set PTOAS_SIM_MODEL=ca to turn it off.
+PTOAS_SIM_MODEL="${PTOAS_SIM_MODEL:-pv}"
+# Upper bound for one unit. A unit that hangs used to hold the whole step until
+# the job deadline; bounding it here turns that into one failing unit.
+PTODSL_CASE_TIMEOUT="${PTODSL_CASE_TIMEOUT:-1800}"
 # One PTODSL slice is much lighter than one VPTO case: the largest module measured
 # 1.93 GiB resident and a five way run peaked at 7.3 GiB in total, so the 16 GiB
 # per process budget would cap this suite at five processes and leave half of a
@@ -134,33 +139,6 @@ SIM_SUITE="${SIM_SUITE:-all}"
 mkdir -p "${BUILD_ROOT}"
 exec > >(tee "${BUILD_ROOT}/vpto-sim.log") 2>&1
 
-# Observation phase: this gate records no verdict yet and can never fail the job
-# it runs in. A pull request pipeline executes the workflow of the *default*
-# branch while the scripts come from the PR checkout, so the first real run of
-# this script happens on somebody else's merge request: an unfinished runner or
-# a failing migrated DSL ST suite must not block that merge request while the
-# gate is still being proven. The announcement below lands in the main log
-# through the redirection above; the remaining artifacts are the ones the
-# workflow uploads from an always() step, and obs-upload is not known to
-# tolerate a missing path, so every one of them has to exist even though nothing
-# ran. Delete this block to turn the simulator gate on; the workflow's prepare
-# step already fails hard when the runner environment itself is incomplete, so
-# this block only covers the validation verdict.
-OBSERVATION_NOTE="Observation phase: the GitCode simulator gate does not enforce yet; no validation was executed."
-echo "${OBSERVATION_NOTE}"
-mkdir -p "${BUILD_ROOT}/cases"
-for placeholder in \
-  "${BUILD_ROOT}/tilelib-st.log" \
-  "${BUILD_ROOT}/ptodsl-dsl-st.log" \
-  "${BUILD_ROOT}/pypto-observation.log" \
-  "${BUILD_ROOT}/cases/parallel-runner.log" \
-  "${BUILD_ROOT}/cases/parallel-summary.tsv"
-do
-  printf '%s\n' "${OBSERVATION_NOTE}" > "${placeholder}"
-done
-echo "Placeholder artifacts written under ${BUILD_ROOT}; nothing was validated."
-exit 0
-
 skip_simulator() {
   echo "::warning::Skipping ${SIM_SUITE} simulator validation: $1"
   echo "Simulator environment is unavailable; no validation was executed."
@@ -172,6 +150,9 @@ skip_simulator() {
 # self-hosted runner whose CANN tree lives elsewhere, typically /usr/local.
 resolve_ascend_home() {
   local candidate
+  # CANN_HOME (set by the image or the runner) is tried first; the /usr/local
+  # entries cover the usual system and toolkit locations (resolved in order,
+  # first existing setenv wins).
   for candidate in \
     "${CANN_HOME}" \
     "${ASCEND_HOME_PATH:-}" \
@@ -180,8 +161,7 @@ resolve_ascend_home() {
     /usr/local/Ascend/ascend-toolkit/latest \
     /usr/local/CANN/cann \
     /usr/local/CANN/cann-* \
-    /usr/local/CANN/ascend-toolkit/latest \
-    /home/jenkins/Ascend/cann-*
+    /usr/local/CANN/ascend-toolkit/latest
   do
     [[ -n "${candidate}" && -d "${candidate}" ]] || continue
     [[ -f "${candidate}/bin/setenv.bash" || -f "${candidate}/set_env.sh" ]] || continue
@@ -474,9 +454,17 @@ MEMORY_JOBS="$(( MEMORY_AVAIL_KIB / (SIM_MEMORY_BUDGET_GIB * 1048576) ))"
   echo "ERROR: PTODSL_CASE_TIMEOUT must be a positive integer, got: ${PTODSL_CASE_TIMEOUT}" >&2
   exit 2
 }
-[[ "${PTODSL_CASE_SHARD_SIZE}" =~ ^[0-9]+$ ]] || {
-  echo "ERROR: PTODSL_CASE_SHARD_SIZE must be a non-negative integer," \
-    "got: ${PTODSL_CASE_SHARD_SIZE}" >&2
+[[ "${PTODSL_CASE_BLOCK_SIZE}" =~ ^[0-9]+$ && "${PTODSL_CASE_BLOCK_SIZE}" -ge 1 ]] || {
+  echo "ERROR: PTODSL_CASE_BLOCK_SIZE must be a positive integer," \
+    "got: ${PTODSL_CASE_BLOCK_SIZE}" >&2
+  exit 2
+}
+[[ "${PTOAS_DSL_PACK_SIZE}" =~ ^[0-9]+$ && "${PTOAS_DSL_PACK_SIZE}" -ge 1 ]] || {
+  echo "ERROR: PTOAS_DSL_PACK_SIZE must be a positive integer, got: ${PTOAS_DSL_PACK_SIZE}" >&2
+  exit 2
+}
+[[ "${PTOAS_SIM_MODEL}" == "ca" || "${PTOAS_SIM_MODEL}" == "pv" ]] || {
+  echo "ERROR: PTOAS_SIM_MODEL must be ca or pv, got: ${PTOAS_SIM_MODEL}" >&2
   exit 2
 }
 [[ "${PTODSL_MEMORY_BUDGET_GIB}" =~ ^[0-9]+$ && "${PTODSL_MEMORY_BUDGET_GIB}" -ge 1 ]] || {
@@ -493,8 +481,10 @@ echo "Memory budget: ${MEMORY_AVAIL_GIB} GiB available," \
   "${SIM_MEMORY_BUDGET_GIB} GiB per process -> at most ${MEMORY_JOBS} parallel"
 echo "VPTO case concurrency: ${VPTO_CASE_JOBS}"
 echo "TileLib concurrency: build=${TILELIB_BUILD_JOBS} cases=${TILELIB_CASE_JOBS}"
-echo "PTODSL concurrency: ${PTODSL_CASE_JOBS} slices of ${PTODSL_CASE_SHARD_SIZE} cases," \
-  "slice timeout ${PTODSL_CASE_TIMEOUT}s, ${PTODSL_MEMORY_BUDGET_GIB} GiB per slice"
+echo "PTODSL concurrency: ${PTODSL_CASE_JOBS} sessions, block ${PTODSL_CASE_BLOCK_SIZE} cases," \
+  "pack ${PTOAS_DSL_PACK_SIZE} single case modules, unit timeout ${PTODSL_CASE_TIMEOUT}s," \
+  "${PTODSL_MEMORY_BUDGET_GIB} GiB per session"
+echo "PTODSL simulator model: ${PTOAS_SIM_MODEL}"
 
 # The thread count below is a camodel-only concern, so it is derived only on the
 # fallback path. Every camodel instance starts its own ESL worker pool, and the
@@ -644,7 +634,9 @@ run_ptodsl_st() {
   ASCEND_HOME_PATH="${ASCEND_HOME_PATH}" PTOAS_BIN="${PTOAS_BIN}" \
     PYTHON_BIN="${PYTHON_BIN:-python3}" WORKSPACE="${WORKSPACE}" BUILD_ROOT="${BUILD_ROOT}" \
     PTODSL_CASE_JOBS="${PTODSL_CASE_JOBS}" PTODSL_CASE_TIMEOUT="${PTODSL_CASE_TIMEOUT}" \
-    PTODSL_CASE_SHARD_SIZE="${PTODSL_CASE_SHARD_SIZE}" \
+    PTODSL_CASE_BLOCK_SIZE="${PTODSL_CASE_BLOCK_SIZE}" \
+    PTOAS_DSL_PACK_SIZE="${PTOAS_DSL_PACK_SIZE}" \
+    PTOAS_SIM_MODEL="${PTOAS_SIM_MODEL}" \
     bash "${WORKSPACE}/.gitcode/scripts/run_ptodsl_cases_parallel.sh" \
       2>&1 | tee "${BUILD_ROOT}/ptodsl-dsl-st.log"
 }
