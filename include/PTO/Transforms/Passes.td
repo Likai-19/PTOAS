@@ -1306,7 +1306,7 @@ def VMILowerUnifiedToLegacy : Pass<"vmi-lower-unified-to-legacy", "ModuleOp"> {
       C6: vcadd/vcmax/vcmin  →  legacy reduce variants
 
     Ops NOT lowered (no legacy equivalent — require direct VMIToVPTO 1:N patterns):
-      plt, vadds, vmuls, vmaxs, vmins, vshls, vshrs, vhist, vintlv, vdintlv, vselr,
+      plt, vadds, vmuls, vmaxs, vmins, vshls, vshrs, vhist, standalone vintlv/vdintlv, vselr,
       vgather, vgatherb, vscatter,
       vexpdif, vaxpy, vlrelu, vprelu, vmull, vmula
   }];

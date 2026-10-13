@@ -14,9 +14,20 @@ module {
       -> (!pto.vreg<128xf16>, !pto.vreg<128xf16>) {
     %c16 = arith.constant 16 : index
     %aligned_offset = arith.muli %offset, %c16 : index
-    %lo, %hi = pto.vmi.vload %src[%aligned_offset] {dist_mode = "dintlv"}
-        : !pto.ptr<f16, ub>
-        -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>, !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
+    %c128 = arith.constant 128 : index
+    %second_offset = arith.addi %aligned_offset, %c128 : index
+    %first = pto.vmi.vload %src[%aligned_offset]
+        : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
+    %second = pto.vmi.vload %src[%second_offset]
+        : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
+    %mask = pto.vmi.pset "PAT_ALL"
+        : !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+    %lo, %hi = pto.vmi.vdintlv %first, %second, %mask
+        : !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>,
+           !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
     %p0 = "pto.vmi.unpack"(%lo)
         : (!pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>) -> !pto.vreg<128xf16>
     %p1 = "pto.vmi.unpack"(%hi)
@@ -29,9 +40,21 @@ module {
       %hi: !pto.vmi.vreg<256xi8, #pto.vmi.layout<contiguous>>,
       %dst: !pto.ptr<i8, ub>, %offset: index) {
     %c32 = arith.constant 32 : index
+    %c256 = arith.constant 256 : index
     %aligned_offset = arith.muli %offset, %c32 : index
-    pto.vmi.vstore %lo, %hi, %dst[%aligned_offset] {dist_mode = "intlv"}
-        : !pto.vmi.vreg<256xi8, #pto.vmi.layout<contiguous>>, !pto.vmi.vreg<256xi8, #pto.vmi.layout<contiguous>>, !pto.ptr<i8, ub>
+    %second_offset = arith.addi %aligned_offset, %c256 : index
+    %mask = pto.vmi.pset "PAT_ALL"
+        : !pto.vmi.mask<256xb8, #pto.vmi.layout<contiguous>>
+    %first, %second = pto.vmi.vintlv %lo, %hi, %mask
+        : !pto.vmi.vreg<256xi8, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.vreg<256xi8, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.mask<256xb8, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<256xi8, #pto.vmi.layout<contiguous>>,
+           !pto.vmi.vreg<256xi8, #pto.vmi.layout<contiguous>>
+    pto.vmi.vstore %first, %dst[%aligned_offset]
+        : !pto.vmi.vreg<256xi8, #pto.vmi.layout<contiguous>>, !pto.ptr<i8, ub>
+    pto.vmi.vstore %second, %dst[%second_offset]
+        : !pto.vmi.vreg<256xi8, #pto.vmi.layout<contiguous>>, !pto.ptr<i8, ub>
     return
   }
 }

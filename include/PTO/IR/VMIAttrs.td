@@ -59,23 +59,6 @@ def VMILayoutAttr : PTO_Attr<"VMILayout", "vmi.layout"> {
 }
 
 //===----------------------------------------------------------------------===//
-// VMI Distribution Mode — {dist-mode}
-// Controls the data-layout interpretation of load/store operations.
-//===----------------------------------------------------------------------===//
-
-def VMI_DistMode_Continuous : I32EnumAttrCase<"Continuous", 0, "continuous">;
-def VMI_DistMode_Dintlv     : I32EnumAttrCase<"Dintlv",     2, "dintlv">;
-def VMI_DistMode_Intlv      : I32EnumAttrCase<"Intlv",      3, "intlv">;
-def VMI_DistMode_Brc        : I32EnumAttrCase<"Brc",        4, "brc">;
-def VMIDistMode : I32EnumAttr<"DistMode",
-    "VMI distribution mode for load/store", [
-  VMI_DistMode_Continuous, VMI_DistMode_Dintlv,
-  VMI_DistMode_Intlv, VMI_DistMode_Brc
-]> {
-  let cppNamespace = "::mlir::pto";
-}
-
-//===----------------------------------------------------------------------===//
 // VMI Rounding Mode — {rnd=}
 // Controls the rounding direction for narrowing convert operations.
 //===----------------------------------------------------------------------===//

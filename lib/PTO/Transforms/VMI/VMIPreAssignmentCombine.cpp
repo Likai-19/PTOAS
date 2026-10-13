@@ -10,13 +10,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "PTO/IR/PTO.h"
+#include "VMIInternal.h"
 #include "VMIIndexUtils.h"
 #include "PTO/Transforms/Passes.h"
 
+#include "mlir/Analysis/AliasAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -106,11 +109,174 @@ static LogicalResult fuseGroupSlotBroadcastLoads(ModuleOp module) {
   return success();
 }
 
+static bool canMoveLoadPastInterveningOps(Operation *load,
+                                          Operation *broadcast,
+                                          Value loadSource,
+                                          AliasAnalysis &aliasAnalysis) {
+  bool isInSameBlock = load->getBlock() == broadcast->getBlock();
+  if (!isInSameBlock) {
+    return false;
+  }
+
+  for (Operation *op = load->getNextNode(); op && op != broadcast;
+       op = op->getNextNode()) {
+    if (isPure(op)) {
+      continue;
+    }
+
+    auto effects = getEffectsRecursively(op);
+    if (!effects) {
+      return false;
+    }
+    for (const auto &effect : *effects) {
+      bool usesUnsupportedResource =
+          effect.getResource() != SideEffects::DefaultResource::get();
+      bool affectsFullRegion = effect.getEffectOnFullRegion();
+      if (usesUnsupportedResource || affectsFullRegion) {
+        return false;
+      }
+
+      if (isa<MemoryEffects::Read>(effect.getEffect())) {
+        continue;
+      }
+      if (!isa<MemoryEffects::Write>(effect.getEffect())) {
+        return false;
+      }
+
+      Value writtenSource = effect.getValue();
+      if (!writtenSource ||
+          !aliasAnalysis.alias(loadSource, writtenSource).isNo()) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+static LogicalResult fuseVMISingleLaneLoadBroadcasts(
+    ModuleOp module, AliasAnalysis &aliasAnalysis) {
+  SmallVector<VMIBroadcastOp> broadcasts;
+  module.walk([&](VMIBroadcastOp broadcast) {
+    auto load = broadcast.getValue().getDefiningOp<VMILoadOp>();
+    if (!load) {
+      return;
+    }
+
+    bool loadHasSingleUse = load.getResult().hasOneUse();
+    bool canReorderLoad = canMoveLoadPastInterveningOps(
+        load, broadcast, load.getSource(), aliasAnalysis);
+    if (!loadHasSingleUse || !canReorderLoad) {
+      return;
+    }
+
+    auto loadType = dyn_cast<VMIVRegType>(load.getResult().getType());
+    bool isSingleLaneLoad = loadType && loadType.getElementCount() == 1;
+    bool hasVectorResult =
+        isa<VMIVRegType>(broadcast.getResult().getType());
+    if (!isSingleLaneLoad || !hasVectorResult) {
+      return;
+    }
+    broadcasts.push_back(broadcast);
+  });
+
+  OpBuilder builder(module.getContext());
+  for (VMIBroadcastOp broadcast : broadcasts) {
+    auto load = broadcast.getValue().getDefiningOp<VMILoadOp>();
+    if (!load) {
+      continue;
+    }
+
+    builder.setInsertionPoint(broadcast);
+    Value zeroStride = builder.create<arith::ConstantOp>(
+        broadcast.getLoc(), builder.getIndexType(), builder.getIndexAttr(0));
+    auto fused = builder.create<VMIGroupBroadcastLoadOp>(
+        broadcast.getLoc(), broadcast.getResult().getType(), load.getSource(),
+        load.getOffset(), zeroStride, builder.getI64IntegerAttr(1));
+    broadcast.getResult().replaceAllUsesWith(fused.getResult());
+    broadcast.erase();
+    if (load->use_empty()) {
+      load.erase();
+    }
+  }
+  return success();
+}
+
+static PTOLoadOp getFusablePTOScalarUBLoad(VMIBroadcastOp broadcast,
+                                           AliasAnalysis &aliasAnalysis) {
+  auto load = broadcast.getValue().getDefiningOp<PTOLoadOp>();
+  if (!load) {
+    return {};
+  }
+
+  bool hasSingleUse = load.getValue().hasOneUse();
+  bool canReorderLoad = canMoveLoadPastInterveningOps(
+      load, broadcast, load.getPtr(), aliasAnalysis);
+  if (!hasSingleUse || !canReorderLoad) {
+    return {};
+  }
+
+  auto resultType = dyn_cast<VMIVRegType>(broadcast.getResult().getType());
+  if (!resultType) {
+    return {};
+  }
+
+  Type sourceType = load.getPtr().getType();
+  Type elementType = resultType.getElementType();
+  bool sourceIsUB = isUBBackedMemoryType(sourceType);
+  bool sourceElementMatches =
+      getMemoryElementType(sourceType) == load.getValue().getType();
+  bool resultElementMatches = load.getValue().getType() == elementType;
+  if (!sourceIsUB || !sourceElementMatches || !resultElementMatches) {
+    return {};
+  }
+
+  unsigned bitWidth = getVMIElementBitWidth(elementType);
+  if (bitWidth != kValue8 && bitWidth != kValue16 &&
+      bitWidth != kValue32) {
+    return {};
+  }
+  return load;
+}
+
+static LogicalResult fusePTOScalarUBLoadBroadcasts(
+    ModuleOp module, AliasAnalysis &aliasAnalysis) {
+  SmallVector<VMIBroadcastOp> broadcasts;
+  module.walk([&](VMIBroadcastOp broadcast) {
+    if (getFusablePTOScalarUBLoad(broadcast, aliasAnalysis)) {
+      broadcasts.push_back(broadcast);
+    }
+  });
+
+  OpBuilder builder(module.getContext());
+  for (VMIBroadcastOp broadcast : broadcasts) {
+    auto load = getFusablePTOScalarUBLoad(broadcast, aliasAnalysis);
+    if (!load) {
+      continue;
+    }
+
+    builder.setInsertionPoint(broadcast);
+    Value zeroStride = builder.create<arith::ConstantOp>(
+        broadcast.getLoc(), builder.getIndexType(), builder.getIndexAttr(0));
+    auto fused = builder.create<VMIGroupBroadcastLoadOp>(
+        broadcast.getLoc(), broadcast.getResult().getType(), load.getPtr(),
+        load.getOffset(), zeroStride, builder.getI64IntegerAttr(1));
+    broadcast.getResult().replaceAllUsesWith(fused.getResult());
+    broadcast.erase();
+    if (load->use_empty()) {
+      load.erase();
+    }
+  }
+  return success();
+}
+
 struct VMIPreAssignmentCombinePass
     : pto::impl::VMIPreAssignmentCombineBase<VMIPreAssignmentCombinePass> {
   void runOnOperation() override {
+    AliasAnalysis &aliasAnalysis = getAnalysis<AliasAnalysis>();
     if (failed(canonicalizeContiguousGroupLoads(getOperation())) ||
-        failed(fuseGroupSlotBroadcastLoads(getOperation()))) {
+        failed(fuseGroupSlotBroadcastLoads(getOperation())) ||
+        failed(fuseVMISingleLaneLoadBroadcasts(getOperation(), aliasAnalysis)) ||
+        failed(fusePTOScalarUBLoadBroadcasts(getOperation(), aliasAnalysis))) {
       signalPassFailure();
     }
   }

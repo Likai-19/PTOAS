@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-pre-assignment-combine -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
 
 // A 128-column scale tail asks for four groups over 128 lanes with the
 // deinterleaved=2 result layout layout assignment picks for it.  One E2B load
@@ -23,8 +23,10 @@ module {
     %c1 = arith.constant 1 : index
     %c16 = arith.constant 16 : index
     %aligned_off = arith.muli %off, %c16 : index
-    %out = pto.vmi.vload %src[%aligned_off], %c1 {dist_mode = "brc", group = 4}
-        : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<128xbf16, #pto.vmi.layout<deinterleaved = 2>>
+    %slots = pto.vmi.vload %src[%aligned_off], %c1 {group = 4}
+        : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<4xbf16>
+    %out = pto.vmi.vbrc %slots {group = 4}
+        : !pto.vmi.vreg<4xbf16> -> !pto.vmi.vreg<128xbf16, #pto.vmi.layout<deinterleaved = 2>>
     return %out : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<deinterleaved = 2>>
   }
 }

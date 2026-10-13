@@ -435,16 +435,6 @@ void VMIScatterOp::getEffects(
 
 //===----------------------------------------------------------------------===//
 
-static const std::set<StringRef> &validDistModes() {
-  static const std::set<StringRef> modes = {"continuous", "dintlv", "brc"};
-  return modes;
-}
-
-static const std::set<StringRef> &validStoreDistModes() {
-  static const std::set<StringRef> modes = {"continuous", "intlv"};
-  return modes;
-}
-
 LogicalResult VMIVgatherOp::verify() {
   auto offsetsType = cast<VMIVRegType>(getOffsets().getType());
   auto maskType = cast<VMIMaskType>(getMask().getType());
@@ -712,9 +702,10 @@ ParseResult VMIvStoreOp::parse(OpAsmParser &parser, OperationState &result) {
                                    preBracketOperands))) {
     return failure();
   }
-  if (preBracketOperands.empty()) {
+  size_t numValueAndDestinationOperands = preBracketOperands.size();
+  if (numValueAndDestinationOperands != mlir::pto::kValue2) {
     return parser.emitError(parser.getCurrentLocation(),
-                            "expected at least one value and one destination");
+                            "expected one value and one destination");
   }
   // Optional post-bracket operands: stride, block_stride, and/or mask.
   // Up to 2, disambiguated after parsing attrs and the type list.
@@ -742,7 +733,7 @@ ParseResult VMIvStoreOp::parse(OpAsmParser &parser, OperationState &result) {
                                 preBracketOperands.size() - 1, types.size(),
                                 hasStride, hasBlock, hasMask,
                                 strideIdx, blockIdx, maskIdx);
-  size_t nValues = preBracketOperands.size() - 1;
+  constexpr size_t nValues = 1;
   if (failed(resolveVStoreOperands(parser, result, preBracketOperands,
                                    offsetOperand, postBracketOps, types,
                                    nValues, hasStride, hasBlock, hasMask,
@@ -751,7 +742,7 @@ ParseResult VMIvStoreOp::parse(OpAsmParser &parser, OperationState &result) {
   }
   result.addAttribute("operandSegmentSizes",
                       parser.getBuilder().getDenseI32ArrayAttr(
-                          {static_cast<int32_t>(nValues), 1, 1,
+                          {1, 1, 1,
                            hasStride ? 1 : 0, hasBlock ? 1 : 0,
                            hasMask ? 1 : 0}));
   return success();
@@ -771,10 +762,7 @@ static void printVStrideBlockStride(OpAsmPrinter &p, Value stride,
 }
 
 void VMIvStoreOp::print(OpAsmPrinter &p) {
-  for (auto val : getValues()) {
-    p << ' ' << val << ", ";
-  }
-  p << getDestination() << '[';
+  p << ' ' << getValue() << ", " << getDestination() << '[';
   p.printOperand(getOffset());
   p << ']';
   printVStrideBlockStride(p, getStride(), getBlockStride());
@@ -784,9 +772,7 @@ void VMIvStoreOp::print(OpAsmPrinter &p) {
   }
   p.printOptionalAttrDict((*this)->getAttrs(), {"operandSegmentSizes"});
   p << " : ";
-  for (auto val : getValues()) {
-    p << val.getType() << ", ";
-  }
+  p << getValue().getType() << ", ";
   p << getDestination().getType();
   if (!getMask().empty()) {
     p << ", " << getMask()[0].getType();
@@ -794,27 +780,16 @@ void VMIvStoreOp::print(OpAsmPrinter &p) {
 }
 
 static LogicalResult verifyBlockStrideExclusions(
-    Operation *op, bool hasBlock, std::optional<StringRef> distMode,
-    bool hasGroup) {
-  if (hasBlock) {
-    if (distMode) {
-      return op->emitOpError(
-          "block_stride and dist_mode are mutually exclusive");
-    }
-    if (hasGroup) {
-      return op->emitOpError("block_stride and group are mutually exclusive");
-    }
+    Operation *op, bool hasBlock, bool hasGroup) {
+  if (hasBlock && hasGroup) {
+    return op->emitOpError("block_stride and group are mutually exclusive");
   }
   return success();
 }
 
 static LogicalResult verifyVStoreGroupAndBlockModes(
-    Operation *op, bool hasGroup, std::optional<StringRef> distMode,
-    bool hasStride, bool hasBlock, bool hasMask, int64_t numGroups,
-    size_t nValues, ValueRange values) {
-  if (hasGroup && distMode) {
-    return op->emitOpError("group and dist_mode are mutually exclusive");
-  }
+    Operation *op, bool hasGroup, bool hasStride, bool hasBlock,
+    bool hasMask, int64_t numGroups, VMIVRegType valueType) {
   if (hasGroup && !hasStride) {
     return op->emitOpError("group requires a stride operand");
   }
@@ -828,40 +803,26 @@ static LogicalResult verifyVStoreGroupAndBlockModes(
     if (numGroups <= 0) {
       return op->emitOpError("group must be positive, got ") << numGroups;
     }
-    if (nValues != 1) {
-      return op->emitOpError("group mode requires exactly 1 value");
-    }
-    auto valueType = cast<VMIVRegType>(values[0].getType());
     if (failed(verifyNumGroups(op, valueType, numGroups))) {
       return failure();
     }
   }
-  if (failed(verifyBlockStrideExclusions(op, hasBlock, distMode, hasGroup))) {
+  if (failed(verifyBlockStrideExclusions(op, hasBlock, hasGroup))) {
     return failure();
-  }
-  if (hasBlock && nValues != 1) {
-    return op->emitOpError("block-stride mode requires exactly 1 value");
   }
   return success();
 }
 
-static LogicalResult verifyVStoreDistModeAndMaskCount(
-    Operation *op, std::optional<StringRef> distMode, size_t nValues,
-    size_t maskCount) {
-  if (distMode && validStoreDistModes().find(*distMode) == validStoreDistModes().end()) {
-    return op->emitOpError("invalid dist-mode: \"") << *distMode << "\"";
+static LogicalResult rejectRemovedDistMode(Operation *op,
+                                           StringRef replacement) {
+  if (op->hasAttr("dist_mode")) {
+    return op->emitOpError()
+           << "dist_mode is no longer supported; " << replacement;
   }
-  bool isIntlv = distMode && *distMode == "intlv";
-  if (nValues < 1) {
-    return op->emitOpError("requires at least 1 value");
-  }
-  if (isIntlv && nValues != mlir::pto::kValue2) {
-    return op->emitOpError("dist-mode \"intlv\" requires exactly 2 values");
-  }
-  if (!isIntlv && nValues != 1) {
-    return op->emitOpError("requires exactly 1 value for dist-mode \"")
-           << (distMode ? *distMode : "continuous") << "\"";
-  }
+  return success();
+}
+
+static LogicalResult verifyVStoreMaskCount(Operation *op, size_t maskCount) {
   if (maskCount > 1) {
     return op->emitOpError("at most one mask allowed");
   }
@@ -869,10 +830,10 @@ static LogicalResult verifyVStoreDistModeAndMaskCount(
 }
 
 static LogicalResult verifyVStoreValueMaskTypes(Operation *op, bool hasGroup,
-                                                ValueRange values,
+                                                Value value,
                                                 Value destination,
                                                 ValueRange mask) {
-  auto valueType = cast<VMIVRegType>(values[0].getType());
+  auto valueType = cast<VMIVRegType>(value.getType());
   bool isPackedGroupStore =
       hasGroup &&
       isPackedByteGroupStore(destination.getType(), valueType);
@@ -880,20 +841,6 @@ static LogicalResult verifyVStoreValueMaskTypes(Operation *op, bool hasGroup,
       failed(verifyMemoryElementMatches(op, destination.getType(),
                                         valueType, "destination"))) {
     return failure();
-  }
-  if (values.size() == mlir::pto::kValue2) {
-    auto loType = cast<VMIVRegType>(values[0].getType());
-    auto hiType = cast<VMIVRegType>(values[1].getType());
-    if (failed(verifyAllSameVRegShapeAndLayout(
-            op, {loType, hiType}, /*requireSameElement=*/true))) {
-      return failure();
-    }
-    if (failed(verifyContiguousIfLayoutAssigned(op, loType,
-                                                "low input")) ||
-        failed(verifyContiguousIfLayoutAssigned(op, hiType,
-                                                "high input"))) {
-      return failure();
-    }
   }
   if (!mask.empty()) {
     auto maskType = cast<VMIMaskType>(mask[0].getType());
@@ -905,22 +852,25 @@ static LogicalResult verifyVStoreValueMaskTypes(Operation *op, bool hasGroup,
 }
 
 LogicalResult VMIvStoreOp::verify() {
+  if (failed(rejectRemovedDistMode(
+          getOperation(),
+          "use vintlv followed by two contiguous vstore operations"))) {
+    return failure();
+  }
   bool hasGroup = static_cast<bool>(getGroup());
-  auto distMode = getDistMode();
   bool hasStride = static_cast<bool>(getStride());
   bool hasBlock = static_cast<bool>(getBlockStride());
   bool hasMask = !getMask().empty();
-  size_t nValues = getValues().size();
   if (failed(verifyVStoreGroupAndBlockModes(
-          getOperation(), hasGroup, distMode, hasStride, hasBlock, hasMask,
-          hasGroup ? getGroupAttr().getInt() : 0, nValues, getValues()))) {
+          getOperation(), hasGroup, hasStride, hasBlock, hasMask,
+          hasGroup ? getGroupAttr().getInt() : 0,
+          cast<VMIVRegType>(getValue().getType())))) {
     return failure();
   }
-  if (failed(verifyVStoreDistModeAndMaskCount(getOperation(), distMode, nValues,
-                                             getMask().size()))) {
+  if (failed(verifyVStoreMaskCount(getOperation(), getMask().size()))) {
     return failure();
   }
-  return verifyVStoreValueMaskTypes(getOperation(), hasGroup, getValues(),
+  return verifyVStoreValueMaskTypes(getOperation(), hasGroup, getValue(),
                                    getDestination(), getMask());
 }
 
@@ -1047,6 +997,11 @@ ParseResult VMIvLoadOp::parse(OpAsmParser &parser, OperationState &result) {
   if (parser.parseTypeList(resultTypes)) {
     return failure();
   }
+  size_t numResultTypes = resultTypes.size();
+  if (numResultTypes != 1) {
+    return parser.emitError(parser.getCurrentLocation(),
+                            "expected exactly one result type");
+  }
   bool hasStride = false;
   bool hasBlock = false;
   disambiguateVLoadPostOperands(result, numPostBracket, postOp1, strideOperand,
@@ -1062,107 +1017,64 @@ void VMIvLoadOp::print(OpAsmPrinter &p) {
   p << ']';
   printVStrideBlockStride(p, getStride(), getBlockStride());
   p.printOptionalAttrDict((*this)->getAttrs(), {"operandSegmentSizes"});
-  p << " : " << getSource().getType() << " -> " << getResults().getTypes();
+  p << " : " << getSource().getType() << " -> " << getResult().getType();
 }
 
 static LogicalResult verifyVLoadGroupAndBlockModes(
-    Operation *op, bool hasGroup, std::optional<StringRef> distMode,
-    bool hasStride, bool hasBlock, int64_t numGroups, size_t nResults) {
-  if (hasGroup && distMode && *distMode != "brc") {
-    return op->emitOpError("group and dist_mode are mutually exclusive");
-  }
+    Operation *op, bool hasGroup, bool hasStride, bool hasBlock,
+    int64_t numGroups) {
   if (hasGroup && !hasStride) {
     return op->emitOpError("group requires a stride operand");
   }
   if (!hasGroup && hasStride) {
     return op->emitOpError("stride operand is only valid with group");
   }
-  if (hasGroup) {
-    if (numGroups <= 0) {
-      return op->emitOpError("group must be positive, got ") << numGroups;
-    }
-    if (nResults != 1) {
-      return op->emitOpError("group mode requires exactly 1 result");
-    }
+  if (hasGroup && numGroups <= 0) {
+    return op->emitOpError("group must be positive, got ") << numGroups;
   }
-  if (failed(verifyBlockStrideExclusions(op, hasBlock, distMode, hasGroup))) {
+  if (failed(verifyBlockStrideExclusions(op, hasBlock, hasGroup))) {
     return failure();
-  }
-  if (hasBlock && nResults != 1) {
-    return op->emitOpError("block-stride mode requires exactly 1 result");
   }
   return success();
 }
 
-static LogicalResult verifyVLoadDistModeAndPmode(
-    Operation *op, std::optional<StringRef> distMode, size_t nResults,
+static LogicalResult verifyVLoadModeAndResultTypes(
+    Operation *op, bool hasGroup, bool hasStride, bool hasBlock,
+    int64_t numGroups, Type sourceType, VMIVRegType resultType,
     std::optional<StringRef> pmode) {
-  if (distMode && validDistModes().find(*distMode) == validDistModes().end()) {
-    return op->emitOpError("invalid dist-mode: \"") << *distMode << "\"";
-  }
-  bool isDintlv = distMode && *distMode == "dintlv";
-  if (isDintlv && nResults != mlir::pto::kValue2) {
-    return op->emitOpError("dist-mode \"dintlv\" requires exactly 2 results");
-  }
-  if (!isDintlv && nResults != 1) {
-    return op->emitOpError("requires exactly 1 result for dist-mode \"")
-           << (distMode ? *distMode : "continuous") << "\"";
-  }
-  if (failed(verifyVMIPMode(op, pmode))) {
+  if (failed(verifyVLoadGroupAndBlockModes(op, hasGroup, hasStride,
+                                           hasBlock, numGroups))) {
     return failure();
   }
-  return success();
-}
-
-static LogicalResult verifyVLoadModeAndResultCounts(
-    Operation *op, bool hasGroup, std::optional<StringRef> distMode,
-    bool hasStride, bool hasBlock, int64_t numGroups, size_t nResults,
-    std::optional<StringRef> pmode) {
-  if (failed(verifyVLoadGroupAndBlockModes(op, hasGroup, distMode, hasStride,
-                                           hasBlock, numGroups, nResults))) {
+  if (failed(verifyMemoryElementMatches(op, sourceType, resultType, "source"))) {
     return failure();
   }
-  return verifyVLoadDistModeAndPmode(op, distMode, nResults, pmode);
-}
-
-static LogicalResult verifyVLoadResultTypes(
-    Operation *op, ValueRange results, Type sourceType,
-    std::optional<StringRef> distMode) {
-  bool isDintlv = distMode && *distMode == "dintlv";
-  for (auto res : results) {
-    auto resType = cast<VMIVRegType>(res.getType());
-    if (failed(verifyMemoryElementMatches(op, sourceType, resType,
-                                          "source"))) {
-      return failure();
-    }
-    if (isDintlv &&
-        failed(verifyContiguousIfLayoutAssigned(op, resType, "result"))) {
-      return failure();
-    }
-  }
-  return success();
+  return verifyVMIPMode(op, pmode);
 }
 
 LogicalResult VMIvLoadOp::verify() {
+  if (failed(rejectRemovedDistMode(
+          getOperation(),
+          "use two contiguous vload operations followed by vdintlv"))) {
+    return failure();
+  }
   bool hasGroup = static_cast<bool>(getGroup());
-  auto distMode = getDistMode();
   bool hasStride = static_cast<bool>(getStride());
   bool hasBlock = static_cast<bool>(getBlockStride());
-  size_t nResults = getResults().size();
-  if (failed(verifyVLoadModeAndResultCounts(
-          getOperation(), hasGroup, distMode, hasStride, hasBlock,
-          hasGroup ? getGroupAttr().getInt() : 0, nResults, getPmode()))) {
+  auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (failed(verifyVLoadModeAndResultTypes(
+          getOperation(), hasGroup, hasStride, hasBlock,
+          hasGroup ? getGroupAttr().getInt() : 0, getSource().getType(),
+          resultType, getPmode()))) {
     return failure();
   }
   if (hasGroup) {
-    auto resultType = cast<VMIVRegType>(getResults()[0].getType());
     if (failed(verifyNumGroups(getOperation(), resultType,
                                getGroupAttr().getInt()))) {
       return failure();
     }
   }
-  return verifyVLoadResultTypes(getOperation(), getResults(),
-                                getSource().getType(), distMode);
+  return success();
 }
 
 void VMIvLoadOp::getEffects(

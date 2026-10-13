@@ -6,8 +6,8 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
-// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-pre-assignment-combine -vmi-mask-granularity-assignment -vmi-layout-assignment | FileCheck %s --check-prefix=ASSIGN
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-pre-assignment-combine -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
 
 module {
   func.func @scalar_brc_vexpdif_group_store(
@@ -17,10 +17,12 @@ module {
     %c128 = arith.constant 128 : index
     %c1024 = arith.constant 1024 : index
     %aligned_off = arith.muli %off, %c8 : index
-    %x = pto.vmi.vload %scores[%aligned_off] {dist_mode = "continuous"}
+    %x = pto.vmi.vload %scores[%aligned_off]
         : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
-    %max = pto.vmi.vload %row_max[%aligned_off] {dist_mode = "brc"}
-        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
+    %max_scalar = pto.vmi.vload %row_max[%aligned_off]
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<1xf32>
+    %max = pto.vmi.vbrc %max_scalar
+        : !pto.vmi.vreg<1xf32> -> !pto.vmi.vreg<128xf32>
     %mask = pto.vmi.create_mask %c128
         : index -> !pto.vmi.mask<128xpred>
     %exp = pto.vmi.vexpdif %x, %max, %mask

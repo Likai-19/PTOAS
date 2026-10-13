@@ -621,34 +621,22 @@ def _vmi_vreg_element_count(type_obj, *, context: str):
     raise TypeError(f"{context} could not determine VMI vector lane count from {type_obj}")
 
 
-def _resolve_vmi_vload_result_types(source, size, *, dist_mode, context: str):
+def _resolve_vmi_vload_result_type(source, size, *, context: str):
     if size is None:
         raise TypeError(f"{context} requires size")
     _check_vmi_lane_count(size, context=context)
     element_type = _pointer_element_type(_type_of(source), context=context)
-    resolved = _pto.VMIVRegType.get(size, element_type)
-    if dist_mode == "dintlv":
-        return [resolved, resolved]
-    return [resolved]
+    return _pto.VMIVRegType.get(size, element_type)
 
 
-def _validate_vmi_load_modes(
+def _validate_vmi_memory_modes(
     context: str,
     *,
-    dist_mode,
     group,
     stride,
     block_stride,
-    allow_group_brc: bool,
-    allowed_dist_modes,
 ):
-    if dist_mode is not None and dist_mode not in allowed_dist_modes:
-        expected = ", ".join(repr(mode) for mode in sorted(allowed_dist_modes, key=str))
-        raise TypeError(f"{context} does not support dist_mode={dist_mode!r}; expected one of {expected}")
-
     if group is not None:
-        if dist_mode is not None and (not allow_group_brc or dist_mode != "brc"):
-            raise TypeError(f"{context} does not allow dist_mode together with group")
         if block_stride is not None:
             raise TypeError(f"{context} does not allow block_stride together with group")
         if stride is None:
@@ -656,8 +644,6 @@ def _validate_vmi_load_modes(
         return
 
     if block_stride is not None:
-        if dist_mode is not None:
-            raise TypeError(f"{context} does not allow dist_mode together with block_stride")
         if stride is not None:
             raise TypeError(f"{context} does not allow stride together with block_stride")
         return
@@ -786,34 +772,28 @@ class _VMINamespace:
         size,
         stride=None,
         block_stride=None,
-        dist_mode=None,
         group=None,
         loc=None,
         ip=None,
     ):
-        _validate_vmi_load_modes(
+        _validate_vmi_memory_modes(
             "pto.vmi.vload(...)",
-            dist_mode=dist_mode,
             group=group,
             stride=stride,
             block_stride=block_stride,
-            allow_group_brc=True,
-            allowed_dist_modes={None, "continuous", "dintlv", "brc"},
         )
-        result_types = _resolve_vmi_vload_result_types(
+        result_type = _resolve_vmi_vload_result_type(
             source,
             size,
-            dist_mode=dist_mode,
             context="pto.vmi.vload(...)",
         )
         return _call_value(
             "vload",
-            result_types,
+            result_type,
             _raw(source),
             _coerce_index_value(offset),
             stride=None if stride is None else _coerce_index_value(stride),
             block_stride=_i16_value(block_stride, context="pto.vmi.vload(block_stride)"),
-            dist_mode=dist_mode,
             group=group,
             loc=loc,
             ip=ip,
@@ -828,35 +808,30 @@ class _VMINamespace:
         *,
         stride=None,
         block_stride=None,
-        dist_mode=None,
         group=None,
         loc=None,
         ip=None,
     ):
-        _validate_vmi_load_modes(
+        _validate_vmi_memory_modes(
             "pto.vmi.vstore(...)",
-            dist_mode=dist_mode,
             group=group,
             stride=stride,
             block_stride=block_stride,
-            allow_group_brc=False,
-            allowed_dist_modes={None, "continuous", "intlv"},
         )
         if group is not None and mask is not None:
             raise TypeError("pto.vmi.vstore(...) group mode does not take a mask operand")
-        if dist_mode == "intlv":
-            if not _is_sequence(values) or len(values) != 2:
-                raise TypeError('pto.vmi.vstore(...) with dist_mode="intlv" requires an (even, odd) pair')
-        elif _is_sequence(values):
-            raise TypeError("pto.vmi.vstore(...) expects a single VMI vector unless dist_mode=\"intlv\"")
+        if _is_sequence(values):
+            raise TypeError(
+                "pto.vmi.vstore(...) expects one VMI vector; interleave vectors "
+                "with pto.vmi.vintlv(...) and store each result separately"
+            )
         return _generated("vstore")(
-            _raw_sequence(values),
+            _raw(values),
             _raw(destination),
             _coerce_index_value(offset),
             _variadic_mask(mask),
             stride=None if stride is None else _coerce_index_value(stride),
             block_stride=_i16_value(block_stride, context="pto.vmi.vstore(block_stride)"),
-            dist_mode=dist_mode,
             group=group,
             loc=loc,
             ip=ip,

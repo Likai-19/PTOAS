@@ -366,9 +366,9 @@ static constexpr GroupBroadcastLoadLayoutPattern
         {gbFull(), bits<8, 16, 32>(), memAny(), d(4), G<1>()},
         // Same argument for the lane-strided physical carriers: every lane of a
         // single-group broadcast holds the same element, so a contiguous
-        // lane_stride = 2 result needs no rearrangement either.  Without this
-        // row a plain `vload(..., dist_mode="brc")` (no group/stride) on an
-        // 8-bit buffer has no matching row at all.
+        // lane_stride = 2 result needs no rearrangement either. This row also
+        // supports the scalar broadcast-load form synthesized from a one-lane
+        // load followed by an ungrouped broadcast.
         {gbFull(), bits<8, 16, 32>(), memAny(), ls(2), G<1>()},
 };
 

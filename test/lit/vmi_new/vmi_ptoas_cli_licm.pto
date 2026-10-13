@@ -20,7 +20,7 @@ module attributes {pto.target_arch = "a5"} {
       pto.vecscope {
         scf.for %i = %c0 to %count step %c1 {
           %aligned_i = arith.muli %i, %c16 : index
-          %x16 = pto.vmi.vload %src[%aligned_i] {dist_mode = "continuous"}
+          %x16 = pto.vmi.vload %src[%aligned_i]
               : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
           %x32 = pto.vmi.vcvt %x16
               : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>

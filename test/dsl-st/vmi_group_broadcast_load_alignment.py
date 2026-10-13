@@ -7,7 +7,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 
-"""Group-broadcast-load alignment coverage for group=2/4/8.
+"""Group-slot-load plus vbrc alignment coverage for group=2/4/8.
 
 group=2/4 (and any group=8 whose 32-byte alignment is not provable) lower
 through the group-slot fallback.  That fallback must only use the block-strided
@@ -43,8 +43,10 @@ def build(name, group=None, offset=0, plain=False, stride=1):
         if plain:
             value = pto.vmi.vload(ub_src, offset, size=LANES)
         else:
-            value = pto.vmi.vload(ub_src, offset, size=LANES, dist_mode="brc",
-                                  group=group, stride=stride)
+            slots = pto.vmi.vload(
+                ub_src, offset, size=group, group=group, stride=stride
+            )
+            value = pto.vmi.vbrc(slots, size=LANES, group=group)
         pto.vmi.vstore(value, ub_out, 0)
         pto.set_flag("V", "MTE3", event_id=0)
         pto.wait_flag("V", "MTE3", event_id=0)

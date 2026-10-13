@@ -1,0 +1,63 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software; you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-pre-assignment-combine | FileCheck %s
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-pre-assignment-combine -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+
+module {
+  func.func @scalar_ub_load_broadcast_f32(%src: !pto.ptr<f32, ub>, %off: index)
+      -> !pto.vmi.vreg<64xf32> {
+    %scalar = pto.load %src[%off] : !pto.ptr<f32, ub> -> f32
+    %broadcast = pto.vmi.vbrc %scalar : f32 -> !pto.vmi.vreg<64xf32>
+    return %broadcast : !pto.vmi.vreg<64xf32>
+  }
+
+  func.func @scalar_ub_load_broadcast_f16(%src: !pto.ptr<f16, ub>, %off: index)
+      -> !pto.vmi.vreg<128xf16> {
+    %scalar = pto.load %src[%off] : !pto.ptr<f16, ub> -> f16
+    %broadcast = pto.vmi.vbrc %scalar : f16 -> !pto.vmi.vreg<128xf16>
+    return %broadcast : !pto.vmi.vreg<128xf16>
+  }
+
+  func.func @scalar_ub_load_broadcast_i8(%src: !pto.ptr<i8, ub>, %off: index)
+      -> !pto.vmi.vreg<256xi8> {
+    %scalar = pto.load %src[%off] : !pto.ptr<i8, ub> -> i8
+    %broadcast = pto.vmi.vbrc %scalar : i8 -> !pto.vmi.vreg<256xi8>
+    return %broadcast : !pto.vmi.vreg<256xi8>
+  }
+}
+
+// CHECK-LABEL: func.func @scalar_ub_load_broadcast_f32
+// CHECK-NOT: pto.load
+// CHECK: pto.vmi.group_broadcast_load
+// CHECK-NOT: pto.vmi.broadcast
+
+// CHECK-LABEL: func.func @scalar_ub_load_broadcast_f16
+// CHECK-NOT: pto.load
+// CHECK: pto.vmi.group_broadcast_load
+// CHECK-NOT: pto.vmi.broadcast
+
+// CHECK-LABEL: func.func @scalar_ub_load_broadcast_i8
+// CHECK-NOT: pto.load
+// CHECK: pto.vmi.group_broadcast_load
+// CHECK-NOT: pto.vmi.broadcast
+
+// LOWER-LABEL: func.func @scalar_ub_load_broadcast_f32
+// LOWER-NOT: pto.load
+// LOWER: pto.vlds {{.*}} {dist = "BRC_B32"}
+// LOWER-NOT: pto.vdup
+
+// LOWER-LABEL: func.func @scalar_ub_load_broadcast_f16
+// LOWER-NOT: pto.load
+// LOWER: pto.vlds {{.*}} {dist = "BRC_B16"}
+// LOWER-NOT: pto.vdup
+
+// LOWER-LABEL: func.func @scalar_ub_load_broadcast_i8
+// LOWER-NOT: pto.load
+// LOWER: pto.vlds {{.*}} {dist = "BRC_B8"}
+// LOWER-NOT: pto.vdup

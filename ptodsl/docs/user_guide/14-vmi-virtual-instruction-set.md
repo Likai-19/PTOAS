@@ -115,7 +115,7 @@ lowering; PTODSL does not expose layout selection on `pto.vmi.vreg(...)` or
 | Layout | Description |
 |--------|-------------|
 | `contiguous` (default) | Stride-1 mapping: lane `i` sits at position `i mod (2048/bitwidth(T))` within physical register `⌊i / (2048/bitwidth(T))⌋` |
-| `deinterleaved` | Parity split: EVEN lanes occupy the first `K/2` physical registers, ODD lanes occupy the second `K/2`. This is the natural output layout of a widening `vcvt` (e.g., `f16 → f32`) or a `vload` with `dist_mode="dintlv"` |
+| `deinterleaved` | Parity split: EVEN lanes occupy the first `K/2` physical registers, ODD lanes occupy the second `K/2`. This is the natural output layout of a widening `vcvt` (e.g., `f16 → f32`) or `vdintlv` |
 
 Layouts are a lowering concern managed by `ptoas`. The system
 propagates layouts automatically through Category A ops (most elementwise
@@ -136,29 +136,18 @@ values.
 The load/store family moves data between UB memory and VMI logical vector
 registers. These are the primary entry and exit points for VMI vector data.
 
-PTODSL groups the `vload` / `vstore` surface into three mutually exclusive
-mode families:
-
-- `dist_mode`: the regular logical memory surface. This covers the default
-  contiguous case plus other access patterns selected by `dist_mode`.
-- `group`: grouped row-strided load/store.
-- `block_stride`: block-strided load/store. The VMI contract exposes only the
-  logical block stride; lowering fixes the physical repeat stride to zero.
-
-Pick exactly one family per call. Do not mix `dist_mode`, `group`, and
-`block_stride` parameters in the same `vload` / `vstore`.
+`vload` and `vstore` access one contiguous vector. The `group` and
+`block_stride` parameters select row-strided and block-strided memory access.
 
 ### `vload`
 
-### `pto.vmi.vload(source, offset, *, size, dist_mode=None) -> VRegType`
-### `pto.vmi.vload(source, offset, *, size, dist_mode="dintlv") -> (VRegType, VRegType)`
+### `pto.vmi.vload(source, offset, *, size) -> VRegType`
 ### `pto.vmi.vload(source, offset, *, size, group, stride) -> VRegType`
-### `pto.vmi.vload(source, offset, *, size, group, stride, dist_mode="brc") -> VRegType`
 ### `pto.vmi.vload(source, offset, *, size, block_stride) -> VRegType`
 
-**Description**: Loads a logical VMI vector from a UB pointer. The element
-type is derived from the source pointer; `size` determines the logical lane
-count. Which memory access pattern is used depends on the selected mode family.
+**Description**: Loads `size` contiguous elements from a UB pointer. The
+element type is derived from the source pointer. Use `size=1` followed by
+`vbrc` to broadcast a scalar.
 
 **Common parameters**:
 
@@ -167,21 +156,6 @@ count. Which memory access pattern is used depends on the selected mode family.
 | `source` | `PtrType` (ub) | UB source pointer |
 | `offset` | `IndexLike` | Element offset into the source buffer |
 | `size` | `int` | Logical result lane count |
-
-**Mode 1: `dist_mode`**
-
-Use this family for the normal logical load surface. `dist_mode=None` means the
-default contiguous load.
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `dist_mode` | `str` or `None` | One of `None`, `"continuous"`, `"dintlv"`, or `"brc"` |
-
-Dist-mode behavior:
-
-- `None` or `"continuous"`: contiguous stride-1 load, returning one VMI vector.
-- `"dintlv"`: deinterleaved load, returning an `(even, odd)` pair.
-- `"brc"`: broadcast load from one source element, returning one VMI vector.
 
 **Bounded contiguous loads.** Public `size` values are
 `1/2/4/8/64/128/256`. A one-lane load reads one scalar and requires only element
@@ -203,7 +177,7 @@ range is safe. A raw UB pointer carries no allocation extent for that proof,
 so unsupported cases are rejected at compilation. A consumer mask does not
 shorten the read range. Full physical-register loads retain their existing rules.
 
-**Mode 2: `group`**
+**Grouped load**
 
 Use this family for grouped row-strided accesses.
 
@@ -217,10 +191,11 @@ Grouped load behavior:
 - `size > group`: full-group load. Each group contributes `size / group`
   elements.
 - `size == group`: slot load. Each group contributes one scalar slot.
-- `dist_mode="brc"` with `group` switches grouped load into grouped broadcast:
-  one source scalar is loaded per group and broadcast within that group.
+To broadcast one loaded scalar, load one lane and pass it to `vbrc`. For a
+grouped broadcast, load one slot per group, then pass the slots to grouped
+`vbrc`.
 
-**Mode 3: `block_stride`**
+**Block-stride load**
 
 Use this family for block-strided accesses.
 
@@ -228,12 +203,7 @@ Use this family for block-strided accesses.
 |-----------|------|-------------|
 | `block_stride` | `int` | 16-bit block stride operand |
 
-**Returns**:
-
-| Return Value | Type | Description |
-|--------------|------|-------------|
-| `vec` | `VRegType` | Single vector result for continuous, brc, group, and block-stride modes |
-| `(even, odd)` | `(VRegType, VRegType)` | Two-vector result for `dist_mode="dintlv"` |
+**Returns**: One VMI vector with `size` logical lanes.
 
 **Examples**:
 
@@ -244,15 +214,11 @@ lhs = pto.vmi.vload(src_ptr, offset, size=64)
 rhs = pto.vmi.vload(other_ptr, offset, size=64)
 ```
 
-Broadcast load:
+Broadcast a loaded scalar:
 
 ```python
-bias = pto.vmi.vload(
-    src_ptr,
-    offset,
-    size=64,
-    dist_mode="brc",
-)
+scalar = pto.vmi.vload(src_ptr, offset, size=1)
+bias = pto.vmi.vbrc(scalar, size=64)
 ```
 
 Group-mode load:
@@ -267,17 +233,11 @@ tile = pto.vmi.vload(
 )
 ```
 
-Grouped broadcast load:
+Grouped broadcast:
 
 ```python
-grouped = pto.vmi.vload(
-    src_ptr,
-    offset,
-    size=64,
-    group=8,
-    stride=row_stride,
-    dist_mode="brc",
-)
+slots = pto.vmi.vload(src_ptr, offset, size=8, group=8, stride=row_stride)
+grouped = pto.vmi.vbrc(slots, size=64, group=8)
 ```
 
 Block-stride load:
@@ -294,31 +254,28 @@ blocks = pto.vmi.vload(
 **Constraints**:
 
 - `size` is required for every `vload` form.
-- `block_stride` mode is mutually exclusive with both `dist_mode` and `group`.
-- `group` and `dist_mode` are mutually exclusive except for grouped broadcast,
-  spelled as `group=...`, `stride=...`, `dist_mode="brc"`.
+- `block_stride` mode is mutually exclusive with `group`.
 - `stride` is only accepted when `group` is provided.
 
 ---
 
 ### `vstore`
 
-### `pto.vmi.vstore(values, destination, offset, mask=None, *, dist_mode=None) -> None`
-### `pto.vmi.vstore((even, odd), destination, offset, mask=None, *, dist_mode="intlv") -> None`
+### `pto.vmi.vstore(values, destination, offset, mask=None) -> None`
 ### `pto.vmi.vstore(values, destination, offset, *, group, stride) -> None`
 ### `pto.vmi.vstore(values, destination, offset, mask=None, *, block_stride) -> None`
 
-**Description**: Writes one logical VMI vector, or a deinterleaved pair, back
-to a UB pointer. As with `vload`, the PTODSL surface is organized into the same
-three mutually exclusive mode families.
+**Description**: Writes one logical VMI vector to a UB pointer. A masked store
+writes only the selected lanes.
 
 **Common parameters**:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `values` | `VRegType` or `(VRegType, VRegType)` | One VMI vector for normal forms, or an `(even, odd)` pair for `dist_mode="intlv"` |
+| `values` | `VRegType` | One VMI vector to store |
 | `destination` | `PtrType` (ub) | UB destination pointer |
 | `offset` | `IndexLike` | Element offset into the destination buffer |
+| `mask` | VMI mask or `None` | Optional predicate mask; omitted means all lanes are active |
 
 **Stores are mask-governed.**
 
@@ -331,19 +288,7 @@ three mutually exclusive mode families.
   group-mode store does not take a mask operand (all elements are written),
   and the other forms default to all-active when `mask` is omitted.
 
-**Mode 1: `dist_mode`**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `mask` | VMI mask or `None` | Optional predicate mask gating which lanes are written |
-| `dist_mode` | `str` or `None` | One of `None`, `"continuous"`, or `"intlv"` |
-
-Dist-mode behavior:
-
-- `None` or `"continuous"`: contiguous store of one VMI vector.
-- `"intlv"`: interleaved store of an `(even, odd)` pair.
-
-**Mode 2: `group`**
+**Grouped store**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -353,11 +298,10 @@ Dist-mode behavior:
 Group store writes one grouped logical stream. On the current VMI contract,
 group-mode store does not take a mask operand.
 
-**Mode 3: `block_stride`**
+**Block-stride store**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `mask` | VMI mask or `None` | Optional store mask; omitting it means all lanes are active |
 | `block_stride` | `int` | 16-bit block stride operand |
 
 **Returns**: None (side-effect operation).
@@ -396,10 +340,9 @@ pto.vmi.vstore(
 
 **Constraints**:
 
-- `dist_mode`, `group`, and `block_stride` mode selection are mutually
-  exclusive.
-- `dist_mode="intlv"` requires `values` to be an `(even, odd)` pair.
+- `values` is one VMI vector.
 - Group mode requires `group` and `stride`, and does not accept `mask`.
+- `group` and `block_stride` are mutually exclusive.
 - Block-stride lowering fixes the physical repeat stride to zero.
 
 ---

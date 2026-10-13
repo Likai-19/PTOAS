@@ -1429,19 +1429,16 @@ def VMIvLoadOp : VMI_Op<"vload",
      AttrSizedOperandSegments]> {
   let summary = "VMI unified logical vector load";
   let description = [{
-    Unified vector load.  dist-mode selects the memory-access pattern.
+    Loads one contiguous logical vector.  Broadcast a loaded scalar with
+    vload(size=1) followed by vbrc.  Use group mode for row-strided loads and
+    block-stride mode for masked block-strided loads; these modes are
+    mutually exclusive.
 
-    dist-mode values:
-    - "continuous" (default): contiguous stride-1 load  → 1 result;
-      1/2/4/8-lane results alias group=1/2/4/8 with unit stride
-    - "dintlv":             deinterleaved dual load      → 2 results (%lo, %hi)
-    - "brc":                broadcast load               → 1 result
-
-    group mode (mutually exclusive with dist-mode):
+    group mode:
     - {group = C}: grouped vector load with row stride  → 1 result
 
-    block-stride mode (mutually exclusive with dist-mode and group):
-    - {block_stride = B}: block-strided masked load → 1 result
+    block-stride mode:
+    - {block_stride = B}: block-strided load → 1 result
 
     pmode ("zero" only) governs inactive-lane behavior on the result.
     vload itself has no mask operand; A5 loads are not predicable — masks
@@ -1452,11 +1449,10 @@ def VMIvLoadOp : VMI_Op<"vload",
     Index:$offset,
     Optional<Index>:$stride,
     Optional<I16>:$block_stride,
-    OptionalAttr<StrAttr>:$dist_mode,
     OptionalAttr<I64Attr>:$group,
     OptionalAttr<StrAttr>:$pmode
   );
-  let results = (outs Variadic<VMI_VRegTypeConstraint>:$results);
+  let results = (outs VMI_VRegTypeConstraint:$result);
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
 }
@@ -1467,17 +1463,14 @@ def VMIvStoreOp : VMI_Op<"vstore",
   let summary = "VMI unified logical vector store";
   let description = [{
     Unified vector store replacing the individual store, interleave_store,
-    masked_store, stride_store, and group_store ops.
+    masked_store, stride_store, and group_store ops.  It stores one contiguous
+    logical vector.  Interleaved data can be formed with vintlv and stored as
+    two adjacent vectors.
 
-    dist-mode controls the memory access pattern:
-    - "continuous" (default): contiguous stride-1 store  → 1 value;
-      1/2/4/8-lane inputs alias group=1/2/4/8 with unit stride
-    - "intlv":              interleaved dual store        → 2 values (%lo, %hi)
-
-    group mode (mutually exclusive with dist-mode):
+    group mode:
     - {group = C}: grouped vector store with row stride
 
-    block-stride mode (mutually exclusive with dist-mode and group):
+    block-stride mode:
     - {block_stride = B}: block-strided masked store
 
     The store is mask-governed: an inactive lane or block is not written, so
@@ -1487,13 +1480,12 @@ def VMIvStoreOp : VMI_Op<"vstore",
     mask is variadic: 0 or 1 mask operand.
   }];
   let arguments = (ins
-    Variadic<VMI_VRegTypeConstraint>:$values,
+    VMI_VRegTypeConstraint:$value,
     PtrOrMemRef:$destination,
     Index:$offset,
     Optional<Index>:$stride,
     Optional<I16>:$block_stride,
     Variadic<VMI_MaskTypeConstraint>:$mask,
-    OptionalAttr<StrAttr>:$dist_mode,
     OptionalAttr<I64Attr>:$group
   );
   let results = (outs);

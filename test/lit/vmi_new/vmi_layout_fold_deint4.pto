@@ -19,7 +19,7 @@ module {
     %value_c = pto.vmi.ensure_layout %value
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>
-    pto.vmi.vstore %value_c, %dst[%aligned_offset] {dist_mode = "continuous"}
+    pto.vmi.vstore %value_c, %dst[%aligned_offset]
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<contiguous>>,
           !pto.ptr<f32, ub>
     return

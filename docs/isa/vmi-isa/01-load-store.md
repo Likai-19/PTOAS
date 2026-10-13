@@ -1,10 +1,8 @@
 # 1. Load / Store
 
-> **Category:** A (+B on `dintlv`/`intlv`). **Mask:** load none (A5 loads are unpredicated), store `Pg`.
+> **Category:** A. **Mask:** load none (A5 loads are unpredicated), store `Pg`.
 >
-> `vload`/`vstore` are logical memory ops. **`[dist_mode]` explicitly declares
-> the access pattern**, defaulting to `continuous` (contiguous); the optional
-> modes are `dintlv` (deinterleaved dual load), `brc` (broadcast) and `intlv` (interleaved dual store).
+> `vload` and `vstore` access one contiguous vector.
 
 
 ---
@@ -12,21 +10,13 @@
 ## `pto.vmi.vload`
 
 - **semantics:** Load elements of type `T` from UB into a logical vector
-  register starting at `%source + %offset` (element offset). The default
-  (`continuous`) is a contiguous stride-1 read:
+  register starting at `%source + %offset` (element offset). This is a
+  contiguous stride-1 read:
 
   ```c
   for (int i = 0; i < L; i++)
       dst[i] = ub[base + offset + i];
   ```
-
-  The access pattern is not always contiguous: depending on the attributes
-  (`{dist_mode}`, `{group = C}` with a `stride` operand, or
-  `%block_stride`), the load may instead read in a strided/scattered
-  fashion (e.g. per-row stride for group mode, 32B-block stride for
-  block-stride mode), deinterleave the source, or broadcast. The exact pattern is
-  determined by these mutually exclusive attributes (see attributes and
-  lowering below).
 
 - **syntax:**
   ```mlir
@@ -63,20 +53,10 @@
 
   | Attribute | Values | Default | Description |
   |---|---|---|---|
-  | `dist_mode` | `"continuous"`, `"dintlv"`, `"brc"` | `"continuous"` | Memory access pattern |
-  | `group` | positive integer | *(none)* | Strided group load arity; mutually exclusive with `dist_mode`; requires `stride` |
+  | `group` | positive integer | *(none)* | Strided group load arity; requires `stride` |
   | `pmode` | `"zero"` | `"zero"` | Inactive-lane behavior (applied at consumer, not on load) |
 
 - **lowering to `pto.mi`:**
-  - **dist-mode** `vload` and `vstore` accept an optional `{dist_mode = "..."}` attribute
-declaring the memory access pattern. Default is `"continuous"`.
-
-  | `dist_mode` | Physical lowering |
-  |---|---|
-  | `"continuous"` | Known 32B-aligned addresses use aligned access; other effective UB addresses use an unaligned stateful access subject to `load-safety` |
-  | `"dintlv"` | `K × pto.vldsx2 {dist="DINTLV_B*"}` (deinterleaved dual load; suffix from `Ptr<T>`) |
-  | `"brc"` | `1 × pto.vlds {dist="BRC_B*"}` or `BRC_BLK`; broadcast-axis (1-reg backing, replicate-read) |
-
   **Short continuous access.** Address alignment and readable memory size
   are separate requirements. Let `A` be the effective byte address
   `source + offset * sizeof(T)` and `P = L * sizeof(T)` be the logical payload.
@@ -113,27 +93,36 @@ declaring the memory access pattern. Default is `"continuous"`.
     corresponding slot, producing a compact `V<C×T>`. This is the
     dual of group reduce — reduce
     folds lanes into slots, slot load reads those slots back into a vreg.
-    `C ∈ {1, 2, 4, 8}`. Not combinable with `dist_mode`.
+    `C ∈ {1, 2, 4, 8}`.
 
   **Block-stride mode** (`%block_stride` operand): 2D-tile block-strided load.
   Memory is read in 32B blocks with block `blk` at
   `base + blk * block_stride` (scattered access); the internal repeat stride
   defaults to 0. `%block_stride` is a dynamic `i16` operand. A5 loads are
   unpredicated, so an implicit all-active mask is applied. Not combinable
-  with `dist_mode` or `group`.
+  with `group`.
 
   `B*` suffix is derived from `Ptr<T>` element width: `f32/i32 → B32`, `f16/bf16/i16 → B16`, `i8/fp8 → B8`.
 
 - **examples:**
 
   ```mlir
-  // Continuous load (default dist_mode): UB → vreg
+  // Contiguous load: UB → vreg
   %v = pto.vmi.vload %ub[%offset] : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64×f32>
-  // → pto.as: Ptr<f32> → B32, dist_mode=continuous → pto.mi.vlds {dist="NORM"}
   // Slot load: 1 scalar per group → compact V<8×f32> (reads back reduce output)
   %s = pto.vmi.vload %ub[%off], %stride {group = 8}
       : !pto.ptr<f32, ub>, index -> !pto.vmi.vreg<8×f32>
   // → each of 8 groups loads 1 scalar into its slot
+  // Broadcast one loaded scalar across the result lanes
+  %scalar = pto.vmi.vload %ub[%offset]
+      : !pto.ptr<f32, ub> -> !pto.vmi.vreg<1×f32>
+  %vb = pto.vmi.vbrc %scalar
+      : !pto.vmi.vreg<1×f32> -> !pto.vmi.vreg<64×f32>
+  // Broadcast one loaded scalar per group
+  %slots = pto.vmi.vload %ub[%off], %stride {group = 8}
+      : !pto.ptr<f32, ub>, index -> !pto.vmi.vreg<8×f32>
+  %grouped = pto.vmi.vbrc %slots {group = 8}
+      : !pto.vmi.vreg<8×f32> -> !pto.vmi.vreg<64×f32>
   // Full-group load: 8 rows × 8 elements, stride 64
   %t = pto.vmi.vload %ub[%off], %stride {group = 8}
       : !pto.ptr<f32, ub>, index -> !pto.vmi.vreg<64×f32>
@@ -143,9 +132,6 @@ declaring the memory access pattern. Default is `"continuous"`.
       : !pto.ptr<f32, ub>, i16 -> !pto.vmi.vreg<64×f32>
   // → block-strided load (block=8), all lanes active
 
-  // Broadcast load: scalar/block replicate into vreg
-  %vb = pto.vmi.vload %ub[%offset] {dist_mode = "brc"} : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64×f32>
-  // → pto.as: Ptr<f32> → B32, dist_mode=brc → pto.mi.vlds {dist="BRC_B32"}
   ```
 
 - **notes:**
@@ -160,14 +146,11 @@ declaring the memory access pattern. Default is `"continuous"`.
     much larger than the logical payload: for example, a 32-byte logical load
     can read a full 64-lane/256-byte carrier. Alignment state is managed
     internally and is not part of the VMI programming model.
-  - `dist_mode` and layout inference are orthogonal: `pto.as` may still
-    rewrite the physical layout of a `continuous` load to serve a downstream
-    consumer (e.g. a grouped reduce).
   - The `pmode` attribute on `vload` governs the result lane behavior at the
     *consumer*, not on the load itself.
 
 - **attention:**
-  - **`{group}`, `%block_stride`, and `{dist_mode}` are mutually exclusive.**
+  - **`{group}` and `%block_stride` are mutually exclusive.**
     Specifying more than one at once is rejected by `pto.as`.
   - **`stride` operand is bound to `{group}`.** It is required with
     `{group = C}` and invalid otherwise; `block_stride` is bound to the
@@ -180,7 +163,7 @@ declaring the memory access pattern. Default is `"continuous"`.
 ## `pto.vmi.vstore`
 
 - **semantics:** Store elements from a vector register to UB starting at
-  `%dest + %offset` (element offset). The default (`continuous`) is a
+  `%dest + %offset` (element offset). This is a
   contiguous stride-1 write; only lanes where `mask[i] != 0` are written
   (A5 stores are predicated):
 
@@ -189,13 +172,6 @@ declaring the memory access pattern. Default is `"continuous"`.
       if (mask[i])
           ub[base + offset + i] = src[i];
   ```
-
-  The access pattern is not always contiguous: depending on the attributes
-  (`{dist_mode}`, `{group = C}` with a `stride` operand, or
-  `%block_stride`), the store may instead write in a strided/scattered
-  fashion (e.g. per-row stride for group mode, 32B-block stride for
-  block-stride mode). The exact pattern is determined by these mutually
-  exclusive attributes (see attributes and lowering below).
 
 - **syntax:**
   ```mlir
@@ -230,27 +206,18 @@ declaring the memory access pattern. Default is `"continuous"`.
 
   | Attribute | Values | Default | Description |
   |---|---|---|---|
-  | `dist_mode` | `"continuous"`, `"intlv"` | `"continuous"` | Memory access pattern |
-  | `group` | positive integer | *(none)* | Strided group store arity; mutually exclusive with `dist_mode`; requires `stride`; forbids `mask` |
+  | `group` | positive integer | *(none)* | Strided group store arity; requires `stride`; forbids `mask` |
 
 - **lowering to `pto.mi`:**
-  - **dist-mode** `vload` and `vstore` accept an optional `{dist_mode = "..."}` attribute
-declaring the memory access pattern. Default is `"continuous"`.
-
-  | `dist_mode` | Physical lowering |
-  |---|---|
-  | `"continuous"` | Known 32B-aligned addresses use the aligned fast path; unmasked accesses to other effective UB addresses use an unaligned sequence with lowering-managed alignment state |
-  | `"intlv"` | `K × pto.vstsx2 {dist="INTLV_B*"}` (interleaved dual store; suffix from `Ptr<T>`) |
-
   **Group mode** (`{group = C}` + `stride`): row-strided tile store. Not combinable with
-  `dist_mode` or `mask` (group stores are unpredicated).
+  `mask` (group stores are unpredicated).
 
   **Block-stride mode** (`%block_stride` operand): 2D-tile block-strided store.
   Memory is written in 32B blocks with block `blk` at
   `base + blk * block_stride` (scattered access); the internal repeat stride
   defaults to 0. `%block_stride` is a dynamic `i16` operand. An explicit
   `mask` is applied; if absent an implicit all-active mask is used. Not
-  combinable with `dist_mode` or `group`.
+  combinable with `group`.
 
   Continuous unmasked stores support effective UB addresses that are not
   32B-aligned, including a final prefix tail. Alignment state and the required
@@ -262,9 +229,8 @@ declaring the memory access pattern. Default is `"continuous"`.
 - **examples:**
 
   ```mlir
-  // Continuous store (default): vreg → UB, masked
+  // Contiguous store: vreg → UB, masked
   pto.vmi.vstore %v, %ub_out[%offset], %mask : !pto.vmi.vreg<64×f32>, !pto.ptr<f32, ub>, !pto.vmi.mask<64>
-  // → pto.as: Ptr<f32> → B32, dist_mode=continuous → pto.mi.vsts {dist="NORM_B32"}
   ```
 
   ```mlir

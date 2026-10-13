@@ -4114,34 +4114,30 @@ def vmi_f4x2_to_bf16x2_sat_probe():
 
 
 @pto.jit(target="a5", backend="vpto", mode="explicit")
-def vmi_brc_vload_probe():
+def vmi_scalar_load_broadcast_probe():
     src_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
     src_ptr = src_tile.as_ptr()
     offset = pto.const(0, dtype=pto.index)
 
-    _ = pto.vmi.vload(
-        src_ptr,
-        offset,
-        size=64,
-        dist_mode="brc",
-    )
+    scalar = pto.vmi.vload(src_ptr, offset, size=1)
+    _ = pto.vmi.vbrc(scalar, size=64)
 
 
 @pto.jit(target="a5", backend="vpto", mode="explicit")
-def vmi_group_brc_vload_probe():
+def vmi_group_slot_load_broadcast_probe():
     src_tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
     src_ptr = src_tile.as_ptr()
     offset = pto.const(0, dtype=pto.index)
     row_stride = pto.const(1, dtype=pto.index)
 
-    _ = pto.vmi.vload(
+    slots = pto.vmi.vload(
         src_ptr,
         offset,
-        size=64,
+        size=8,
         group=8,
         stride=row_stride,
-        dist_mode="brc",
     )
+    _ = pto.vmi.vbrc(slots, size=64, group=8)
 
 
 @pto.jit(target="a5", backend="vpto", mode="explicit")
@@ -8577,17 +8573,27 @@ def main() -> None:
         "pto.vmi.vdhist(...)" in str(vmi_vhist_bad_acc_error),
         "vdhist bad-acc rejection should carry the pto.vmi.vdhist call-site context",
     )
-    vmi_brc_vload_text = vmi_brc_vload_probe.compile().mlir_text()
-    expect_parse_roundtrip_and_verify(vmi_brc_vload_text, "public VMI brc vload specialization")
-    expect(
-        'dist_mode = "brc"' in vmi_brc_vload_text,
-        "pto.vmi.vload should preserve the authored brc dist_mode without requiring a stride operand",
+    vmi_scalar_load_broadcast_text = vmi_scalar_load_broadcast_probe.compile().mlir_text()
+    expect_parse_roundtrip_and_verify(
+        vmi_scalar_load_broadcast_text, "public VMI scalar load plus broadcast"
     )
-    vmi_group_brc_vload_text = vmi_group_brc_vload_probe.compile().mlir_text()
-    expect_parse_roundtrip_and_verify(vmi_group_brc_vload_text, "public VMI grouped brc vload specialization")
     expect(
-        'dist_mode = "brc"' in vmi_group_brc_vload_text and "group = 8" in vmi_group_brc_vload_text,
-        "pto.vmi.vload should allow the grouped brc form exposed by the VMI IR contract",
+        vmi_scalar_load_broadcast_text.count("pto.vmi.vload") == 1
+        and vmi_scalar_load_broadcast_text.count("pto.vmi.vbrc") == 1
+        and "!pto.vmi.vreg<1xf32" in vmi_scalar_load_broadcast_text
+        and "dist_mode" not in vmi_scalar_load_broadcast_text,
+        "scalar broadcast should be represented by a one-lane vload followed by vbrc",
+    )
+    vmi_group_slot_load_broadcast_text = vmi_group_slot_load_broadcast_probe.compile().mlir_text()
+    expect_parse_roundtrip_and_verify(
+        vmi_group_slot_load_broadcast_text, "public VMI group-slot load plus broadcast"
+    )
+    expect(
+        vmi_group_slot_load_broadcast_text.count("pto.vmi.vload") == 1
+        and vmi_group_slot_load_broadcast_text.count("pto.vmi.vbrc") == 1
+        and "group = 8" in vmi_group_slot_load_broadcast_text
+        and "dist_mode" not in vmi_group_slot_load_broadcast_text,
+        "grouped broadcast should use a group-slot vload followed by grouped vbrc",
     )
     vmi_block_stride_memory_text = vmi_block_stride_memory_probe.compile().mlir_text()
     expect_parse_roundtrip_and_verify(

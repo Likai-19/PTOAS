@@ -45,11 +45,16 @@ module attributes {pto.target_arch = "a5"} {
           %13 = arith.muli %arg2, %c256_9 : index
           %c2 = arith.constant 2 : index
           %14 = arith.muli %13, %c2 : index
-          %15:2 = pto.vmi.vload %3[%14] {dist_mode = "dintlv"} : !pto.ptr<ui32, ub> -> !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>
+          %c256 = arith.constant 256 : index
+          %second_offset = arith.addi %14, %c256 : index
+          %first = pto.vmi.vload %3[%14] : !pto.ptr<ui32, ub> -> !pto.vmi.vreg<256xui32>
+          %second = pto.vmi.vload %3[%second_offset] : !pto.ptr<ui32, ub> -> !pto.vmi.vreg<256xui32>
+          %all = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<256xpred>
+          %15_low, %15_high = pto.vmi.vdintlv %first, %second, %all : !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>
           %c9_i32 = arith.constant 9 : i32
           %16 = builtin.unrealized_conversion_cast %c9_i32 : i32 to ui32
-          %17 = pto.vmi.vcmps %15#0, %16, %6 {cmp = "lt"} : !pto.vmi.vreg<256xui32>, ui32, !pto.vmi.mask<256xpred> -> !pto.vmi.mask<256xpred>
-          %18 = pto.vmi.vcvt %15#0 : !pto.vmi.vreg<256xui32> -> !pto.vmi.vreg<256xui8>
+          %17 = pto.vmi.vcmps %15_low, %16, %6 {cmp = "lt"} : !pto.vmi.vreg<256xui32>, ui32, !pto.vmi.mask<256xpred> -> !pto.vmi.mask<256xpred>
+          %18 = pto.vmi.vcvt %15_low : !pto.vmi.vreg<256xui32> -> !pto.vmi.vreg<256xui8>
           %19 = pto.vmi.vdhist %9, %18, %17 : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<256xui8>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<256xui16>
           %20 = pto.vmi.vcvt %19 : !pto.vmi.vreg<256xui16> -> !pto.vmi.vreg<256xui32>
           %21 = pto.vmi.vadd %arg3, %20, %7 : !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>, !pto.vmi.mask<256xpred> -> !pto.vmi.vreg<256xui32>

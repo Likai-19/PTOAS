@@ -17,14 +17,14 @@ module {
       %dst: !pto.ptr<f16, ub>, %off: index) {
     %c16 = arith.constant 16 : index
     %aligned_off = arith.muli %off, %c16 : index
-    %x = pto.vmi.vload %src0[%aligned_off] {dist_mode = "continuous"}
+    %x = pto.vmi.vload %src0[%aligned_off]
         : !pto.ptr<f16, ub> -> !pto.vmi.vreg<64xf16>
-    %y = pto.vmi.vload %src1[%aligned_off] {dist_mode = "continuous"}
+    %y = pto.vmi.vload %src1[%aligned_off]
         : !pto.ptr<f16, ub> -> !pto.vmi.vreg<64xf16>
     %sum = pto.vmi.vadd %x, %y
         : !pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16>
         -> !pto.vmi.vreg<64xf16>
-    pto.vmi.vstore %sum, %dst[%aligned_off] {dist_mode = "continuous"}
+    pto.vmi.vstore %sum, %dst[%aligned_off]
         : !pto.vmi.vreg<64xf16>, !pto.ptr<f16, ub>
     return
   }
@@ -36,9 +36,9 @@ module {
     %c32 = arith.constant 32 : index
     %aligned_off = arith.muli %off, %c16 : index
     %mask = pto.vmi.create_mask %c32 : index -> !pto.vmi.mask<64xpred>
-    %x = pto.vmi.vload %src0[%aligned_off] {dist_mode = "continuous"}
+    %x = pto.vmi.vload %src0[%aligned_off]
         : !pto.ptr<f16, ub> -> !pto.vmi.vreg<64xf16>
-    %y = pto.vmi.vload %src1[%aligned_off] {dist_mode = "continuous"}
+    %y = pto.vmi.vload %src1[%aligned_off]
         : !pto.ptr<f16, ub> -> !pto.vmi.vreg<64xf16>
     %sum = pto.vmi.vadd %x, %y
         : !pto.vmi.vreg<64xf16>, !pto.vmi.vreg<64xf16>
@@ -54,14 +54,14 @@ module {
       %dst: !pto.ptr<f16, ub>, %off: index) {
     %c16 = arith.constant 16 : index
     %aligned_off = arith.muli %off, %c16 : index
-    %x = pto.vmi.vload %src0[%aligned_off] {dist_mode = "continuous"}
+    %x = pto.vmi.vload %src0[%aligned_off]
         : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
-    %y = pto.vmi.vload %src1[%aligned_off] {dist_mode = "continuous"}
+    %y = pto.vmi.vload %src1[%aligned_off]
         : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
     %sum = pto.vmi.vadd %x, %y
         : !pto.vmi.vreg<128xf16>, !pto.vmi.vreg<128xf16>
         -> !pto.vmi.vreg<128xf16>
-    pto.vmi.vstore %sum, %dst[%aligned_off] {dist_mode = "continuous"}
+    pto.vmi.vstore %sum, %dst[%aligned_off]
         : !pto.vmi.vreg<128xf16>, !pto.ptr<f16, ub>
     return
   }
@@ -71,14 +71,14 @@ module {
       %dst: !pto.ptr<ui8, ub>, %off: index) {
     %c32 = arith.constant 32 : index
     %aligned_off = arith.muli %off, %c32 : index
-    %x = pto.vmi.vload %src0[%aligned_off] {dist_mode = "continuous"}
+    %x = pto.vmi.vload %src0[%aligned_off]
         : !pto.ptr<ui8, ub> -> !pto.vmi.vreg<128xui8>
-    %y = pto.vmi.vload %src1[%aligned_off] {dist_mode = "continuous"}
+    %y = pto.vmi.vload %src1[%aligned_off]
         : !pto.ptr<ui8, ub> -> !pto.vmi.vreg<128xui8>
     %sum = pto.vmi.vadd %x, %y
         : !pto.vmi.vreg<128xui8>, !pto.vmi.vreg<128xui8>
         -> !pto.vmi.vreg<128xui8>
-    pto.vmi.vstore %sum, %dst[%aligned_off] {dist_mode = "continuous"}
+    pto.vmi.vstore %sum, %dst[%aligned_off]
         : !pto.vmi.vreg<128xui8>, !pto.ptr<ui8, ub>
     return
   }
@@ -88,14 +88,14 @@ module {
       %dst: !pto.ptr<ui8, ub>, %off: index) {
     %c32 = arith.constant 32 : index
     %aligned_off = arith.muli %off, %c32 : index
-    %x = pto.vmi.vload %src0[%aligned_off] {dist_mode = "continuous"}
+    %x = pto.vmi.vload %src0[%aligned_off]
         : !pto.ptr<ui8, ub> -> !pto.vmi.vreg<64xui8>
-    %y = pto.vmi.vload %src1[%aligned_off] {dist_mode = "continuous"}
+    %y = pto.vmi.vload %src1[%aligned_off]
         : !pto.ptr<ui8, ub> -> !pto.vmi.vreg<64xui8>
     %sum = pto.vmi.vadd %x, %y
         : !pto.vmi.vreg<64xui8>, !pto.vmi.vreg<64xui8>
         -> !pto.vmi.vreg<64xui8>
-    pto.vmi.vstore %sum, %dst[%aligned_off] {dist_mode = "continuous"}
+    pto.vmi.vstore %sum, %dst[%aligned_off]
         : !pto.vmi.vreg<64xui8>, !pto.ptr<ui8, ub>
     return
   }
@@ -106,7 +106,7 @@ module {
     %c0 = arith.constant 0 : index
     %c64 = arith.constant 64 : index
     %mask = pto.vmi.create_mask %c64 : index -> !pto.vmi.mask<128xpred>
-    %x = pto.vmi.vload %src[%c0] {dist_mode = "continuous"}
+    %x = pto.vmi.vload %src[%c0]
         : memref<256xf16, #pto.address_space<vec>> -> !pto.vmi.vreg<128xf16>
     %lo, %hi = "pto.vmi.channel_split"(%x)
         : (!pto.vmi.vreg<128xf16>)

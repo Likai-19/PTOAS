@@ -6,7 +6,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-expand-implicit-ensure-layouts -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-pre-assignment-combine -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-expand-implicit-ensure-layouts -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
 
 // Four-group 128-lane group broadcasts on both element widths that reach this
 // shape, with NO layout pinned anywhere and the broadcast consumed by a store
@@ -34,8 +34,10 @@ module {
     %c1 = arith.constant 1 : index
     %c16 = arith.constant 16 : index
     %aligned_off = arith.muli %off, %c16 : index
-    %out = pto.vmi.vload %src[%aligned_off], %c1 {dist_mode = "brc", group = 4}
-        : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<128xbf16>
+    %slots = pto.vmi.vload %src[%aligned_off], %c1 {group = 4}
+        : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<4xbf16>
+    %out = pto.vmi.vbrc %slots {group = 4}
+        : !pto.vmi.vreg<4xbf16> -> !pto.vmi.vreg<128xbf16>
     pto.vmi.vstore %out, %dst[%aligned_off]
         : !pto.vmi.vreg<128xbf16>, !pto.ptr<bf16, ub>
     return
@@ -46,8 +48,10 @@ module {
     %c1 = arith.constant 1 : index
     %c8 = arith.constant 8 : index
     %aligned_off = arith.muli %off, %c8 : index
-    %out = pto.vmi.vload %src[%aligned_off], %c1 {dist_mode = "brc", group = 4}
-        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
+    %slots = pto.vmi.vload %src[%aligned_off], %c1 {group = 4}
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<4xf32>
+    %out = pto.vmi.vbrc %slots {group = 4}
+        : !pto.vmi.vreg<4xf32> -> !pto.vmi.vreg<128xf32>
     pto.vmi.vstore %out, %dst[%aligned_off]
         : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
     return
@@ -63,8 +67,10 @@ module {
     %c8 = arith.constant 8 : index
     %aligned_off = arith.muli %off, %c8 : index
     %unaligned_off = arith.addi %aligned_off, %c1 : index
-    %out = pto.vmi.vload %src[%unaligned_off], %c1 {dist_mode = "brc", group = 4}
-        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
+    %slots = pto.vmi.vload %src[%unaligned_off], %c1 {group = 4}
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<4xf32>
+    %out = pto.vmi.vbrc %slots {group = 4}
+        : !pto.vmi.vreg<4xf32> -> !pto.vmi.vreg<128xf32>
     pto.vmi.vstore %out, %dst[%unaligned_off]
         : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
     return
@@ -78,8 +84,10 @@ module {
     %c16 = arith.constant 16 : index
     %aligned_off = arith.muli %off, %c16 : index
     %unaligned_off = arith.addi %aligned_off, %c1 : index
-    %out = pto.vmi.vload %src[%unaligned_off], %c1 {dist_mode = "brc", group = 4}
-        : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<128xbf16>
+    %slots = pto.vmi.vload %src[%unaligned_off], %c1 {group = 4}
+        : !pto.ptr<bf16, ub> -> !pto.vmi.vreg<4xbf16>
+    %out = pto.vmi.vbrc %slots {group = 4}
+        : !pto.vmi.vreg<4xbf16> -> !pto.vmi.vreg<128xbf16>
     pto.vmi.vstore %out, %dst[%unaligned_off]
         : !pto.vmi.vreg<128xbf16>, !pto.ptr<bf16, ub>
     return

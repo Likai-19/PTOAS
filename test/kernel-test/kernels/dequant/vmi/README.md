@@ -47,8 +47,8 @@ trying to mirror every source-side physical shuffle:
 - each half is widened by `pto.vmi.vcvt(..., pto.f32)`
 - `ComputeScale` writes a compact converted scale buffer: one scale value per
   32 input elements
-- `ComputeData` consumes that compact buffer with `vload(dist_mode="brc",
-  group=8)`, matching the source `DIST_E2B_B32` scale-load contract
+- `ComputeData` consumes that compact buffer with a group-slot load followed by
+  `vbrc(group=8)`, matching the source `DIST_E2B_B32` scale-load contract
 - dequant itself is just `vmul`
 - output uses `vstore`, with an extra `vcvt` only for `bf16` / `f16`
 

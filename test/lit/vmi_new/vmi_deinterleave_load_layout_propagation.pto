@@ -17,9 +17,16 @@ module {
       %full_mask: !pto.vmi.mask<256xpred>,
       %limit: ui32) -> !pto.vmi.vreg<256xui16> {
     %c8 = arith.constant 8 : index
+    %c256 = arith.constant 256 : index
     %aligned_offset = arith.muli %offset, %c8 : index
-    %low, %high = pto.vmi.vload %src[%aligned_offset] {dist_mode = "dintlv"}
-        : !pto.ptr<ui32, ub>
+    %second_offset = arith.addi %aligned_offset, %c256 : index
+    %first = pto.vmi.vload %src[%aligned_offset]
+        : !pto.ptr<ui32, ub> -> !pto.vmi.vreg<256xui32>
+    %second = pto.vmi.vload %src[%second_offset]
+        : !pto.ptr<ui32, ub> -> !pto.vmi.vreg<256xui32>
+    %deintlv_mask = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<256xpred>
+    %low, %high = pto.vmi.vdintlv %first, %second, %deintlv_mask
+        : !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>, !pto.vmi.mask<256xpred>
         -> !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>
     %valid = pto.vmi.vcmps %low, %limit, %full_mask {cmp = "lt"}
         : !pto.vmi.vreg<256xui32>, ui32, !pto.vmi.mask<256xpred>
@@ -36,9 +43,16 @@ module {
       %src: !pto.ptr<ui32, ub>,
       %offset: index) -> !pto.vmi.vreg<256xui8> {
     %c8 = arith.constant 8 : index
+    %c256 = arith.constant 256 : index
     %aligned_offset = arith.muli %offset, %c8 : index
-    %low, %high = pto.vmi.vload %src[%aligned_offset] {dist_mode = "dintlv"}
-        : !pto.ptr<ui32, ub>
+    %second_offset = arith.addi %aligned_offset, %c256 : index
+    %first = pto.vmi.vload %src[%aligned_offset]
+        : !pto.ptr<ui32, ub> -> !pto.vmi.vreg<256xui32>
+    %second = pto.vmi.vload %src[%second_offset]
+        : !pto.ptr<ui32, ub> -> !pto.vmi.vreg<256xui32>
+    %deintlv_mask = pto.vmi.pset "PAT_ALL" : !pto.vmi.mask<256xpred>
+    %low, %high = pto.vmi.vdintlv %first, %second, %deintlv_mask
+        : !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>, !pto.vmi.mask<256xpred>
         -> !pto.vmi.vreg<256xui32>, !pto.vmi.vreg<256xui32>
     %result = pto.vmi.vcvt %high {saturate = "SAT"}
         : !pto.vmi.vreg<256xui32> -> !pto.vmi.vreg<256xui8>

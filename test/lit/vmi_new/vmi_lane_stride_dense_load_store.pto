@@ -18,7 +18,7 @@ module {
       -> !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous, lane_stride = 2>> {
     %c16 = arith.constant 16 : index
     %aligned_off = arith.muli %off, %c16 : index
-    %load = pto.vmi.vload %src[%aligned_off] {dist_mode = "continuous"}
+    %load = pto.vmi.vload %src[%aligned_off]
         : !pto.ptr<f16, ub>
         -> !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous>>
     %strided = pto.vmi.ensure_layout %load
@@ -36,7 +36,7 @@ module {
     %compact = pto.vmi.ensure_layout %value
         : !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous, lane_stride = 2>>
         -> !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous>>
-    pto.vmi.vstore %compact, %dst[%aligned_off] {dist_mode = "continuous"}
+    pto.vmi.vstore %compact, %dst[%aligned_off]
         : !pto.vmi.vreg<64xf16, #pto.vmi.layout<contiguous>>,
           !pto.ptr<f16, ub>
     return
@@ -68,7 +68,7 @@ module {
     %compact = pto.vmi.ensure_layout %value
         : !pto.vmi.vreg<32xf32, #pto.vmi.layout<contiguous, lane_stride = 2>>
         -> !pto.vmi.vreg<32xf32, #pto.vmi.layout<contiguous>>
-    pto.vmi.vstore %compact, %dst[%aligned_off] {dist_mode = "continuous"}
+    pto.vmi.vstore %compact, %dst[%aligned_off]
         : !pto.vmi.vreg<32xf32, #pto.vmi.layout<contiguous>>,
           !pto.ptr<f32, ub>
     return
@@ -78,13 +78,13 @@ module {
       %src: !pto.ptr<ui8, ub>, %dst: !pto.ptr<ui8, ub>, %off: index) {
     %c32 = arith.constant 32 : index
     %aligned_off = arith.muli %off, %c32 : index
-    %load = pto.vmi.vload %src[%aligned_off] {dist_mode = "continuous"}
+    %load = pto.vmi.vload %src[%aligned_off]
         : !pto.ptr<ui8, ub>
         -> !pto.vmi.vreg<64xui8, #pto.vmi.layout<contiguous>>
     %strided = pto.vmi.ensure_layout %load
         : !pto.vmi.vreg<64xui8, #pto.vmi.layout<contiguous>>
         -> !pto.vmi.vreg<64xui8, #pto.vmi.layout<contiguous, lane_stride = 4>>
-    pto.vmi.vstore %strided, %dst[%aligned_off] {dist_mode = "continuous"}
+    pto.vmi.vstore %strided, %dst[%aligned_off]
         : !pto.vmi.vreg<64xui8, #pto.vmi.layout<contiguous, lane_stride = 4>>,
           !pto.ptr<ui8, ub>
     return
@@ -207,7 +207,7 @@ module {
       -> !pto.vmi.vreg<128xui16, #pto.vmi.layout<contiguous>> {
     %c32 = arith.constant 32 : index
     %aligned_off = arith.muli %off, %c32 : index
-    %load = pto.vmi.vload %src[%aligned_off] {dist_mode = "continuous"}
+    %load = pto.vmi.vload %src[%aligned_off]
         : !pto.ptr<ui8, ub>
         -> !pto.vmi.vreg<128xui8, #pto.vmi.layout<contiguous, lane_stride = 2>>
     %wide = pto.vmi.vcvt %load
@@ -222,7 +222,7 @@ module {
       -> !pto.vmi.vreg<64xui32, #pto.vmi.layout<contiguous>> {
     %c16 = arith.constant 16 : index
     %aligned_off = arith.muli %off, %c16 : index
-    %load = pto.vmi.vload %src[%aligned_off] {dist_mode = "continuous"}
+    %load = pto.vmi.vload %src[%aligned_off]
         : !pto.ptr<ui16, ub>
         -> !pto.vmi.vreg<64xui16, #pto.vmi.layout<contiguous, lane_stride = 2>>
     %wide = pto.vmi.vcvt %load
@@ -237,7 +237,7 @@ module {
       -> !pto.vmi.vreg<64xui32, #pto.vmi.layout<contiguous>> {
     %c32 = arith.constant 32 : index
     %aligned_off = arith.muli %off, %c32 : index
-    %load = pto.vmi.vload %src[%aligned_off] {dist_mode = "continuous"}
+    %load = pto.vmi.vload %src[%aligned_off]
         : !pto.ptr<ui8, ub>
         -> !pto.vmi.vreg<64xui8, #pto.vmi.layout<contiguous, lane_stride = 4>>
     %wide = pto.vmi.vcvt %load

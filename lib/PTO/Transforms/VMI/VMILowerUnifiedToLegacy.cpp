@@ -32,21 +32,14 @@
 //   vcvt forms for supported narrowing result families.
 //
 // Category C3 — unified load/store (2 ops):
-//   vload  → dispatch by dist_mode/group/block_stride to
-//            load / deinterleave_load / group_broadcast_load{num_groups=1} / ...
-//   vstore → dispatch to store / masked_store / interleave_store / group_store / ...
-//   Continuous 1/2/4/8-lane values alias unit-stride
-//   group_slot_load/group_store operations.
-//   Skipped: dist_mode "unpack" (physical widening, no legacy equivalent).
+//   vload  → load / group_load / group_slot_load / stride_load
+//   vstore → store / masked_store / group_store / stride_store
+//   Contiguous 1/2/4/8-lane values alias unit-stride group-slot operations.
 //
 // Category C4 — static mask creation (3 ops):
 //   pset → create_mask(all lanes)
 //   pge  → create_mask(N lanes)
 //   plt  → create_mask(min(rem, L))
-//
-// Category C3 — unified load/store (2 ops, dispatch by dist_mode/group):
-//   vload → load / deinterleave_load / group_load
-//   vstore → store / masked_store / interleave_store / group_store
 //
 // Category C6 — unified reduce (3 ops):
 //   vcadd → reduce_addf/reduce_addi or group_reduce_addf/group_reduce_addi
@@ -62,7 +55,9 @@
 //
 // Category D — no legacy equivalent (explicitly skipped, 13 ops):
 //   vadds/vmuls/vmaxs/vmins/vshls/vshrs
-//   vaddc vaddcs vintlv vdintlv vselr vgatherb vmull
+//   vaddc vaddcs standalone vintlv/vdintlv vselr vgatherb vmull
+//   Adjacent contiguous load/rearrange and rearrange/store compositions are
+//   first combined into the corresponding legacy memory operation.
 //
 //===----------------------------------------------------------------------===//
 
@@ -75,10 +70,13 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
+
+#include <limits>
 
 namespace mlir {
 namespace pto {
@@ -397,17 +395,11 @@ static Value createAllActiveMask(VMIVRegType valueType, Location loc,
 }
 
 static LogicalResult lowerGroupedLoad(VMIvLoadOp op, OpBuilder &builder) {
-  auto resultType = cast<VMIVRegType>(op.getResults().front().getType());
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
   int64_t numGroups = op.getGroupAttr().getInt();
-  bool isBroadcast = op.getDistMode() && op.getDistMode() == "brc";
   Value replacement;
-  if (isBroadcast) {
-    replacement = builder
-                      .create<VMIGroupBroadcastLoadOp>(
-                          op.getLoc(), resultType, op.getSource(),
-                          op.getOffset(), op.getStride(), op.getGroupAttr())
-                      .getResult();
-  } else if (resultType.getElementCount() == numGroups) {
+  bool hasOneSlotPerGroup = resultType.getElementCount() == numGroups;
+  if (hasOneSlotPerGroup) {
     replacement = builder
                       .create<VMIGroupSlotLoadOp>(
                           op.getLoc(), resultType, op.getSource(),
@@ -420,20 +412,20 @@ static LogicalResult lowerGroupedLoad(VMIvLoadOp op, OpBuilder &builder) {
                           op.getOffset(), op.getStride(), op.getGroupAttr())
                       .getResult();
   }
-  op.getResults().front().replaceAllUsesWith(replacement);
+  op.getResult().replaceAllUsesWith(replacement);
   return success();
 }
 
 static LogicalResult lowerBlockStrideLoad(VMIvLoadOp op,
                                           OpBuilder &builder) {
-  auto resultType = cast<VMIVRegType>(op.getResults().front().getType());
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
   Value mask = createAllActiveMask(resultType, op.getLoc(), builder);
   Value replacement =
       builder
           .create<VMIStrideLoadOp>(op.getLoc(), resultType, op.getSource(),
                                    op.getOffset(), op.getBlockStride(), mask)
           .getResult();
-  op.getResults().front().replaceAllUsesWith(replacement);
+  op.getResult().replaceAllUsesWith(replacement);
   return success();
 }
 
@@ -444,51 +436,13 @@ static LogicalResult lowerBlockStrideLoad(VMIvLoadOp op,
 // contract -- the value carries.
 static LogicalResult lowerContinuousLoad(VMIvLoadOp op,
                                          OpBuilder &builder) {
-  auto resultType = cast<VMIVRegType>(op.getResults().front().getType());
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
   Value replacement = builder
                           .create<VMILoadOp>(op.getLoc(), resultType,
                                              op.getSource(), op.getOffset())
                           .getResult();
-  op.getResults().front().replaceAllUsesWith(replacement);
+  op.getResult().replaceAllUsesWith(replacement);
   return success();
-}
-
-static LogicalResult lowerDeinterleaveLoad(VMIvLoadOp op,
-                                           OpBuilder &builder) {
-  auto load = builder.create<VMIDeinterleaveLoadOp>(
-      op.getLoc(), op.getResults()[0].getType(), op.getResults()[1].getType(),
-      op.getSource(), op.getOffset());
-  op.getResults()[0].replaceAllUsesWith(load.getLow());
-  op.getResults()[1].replaceAllUsesWith(load.getHigh());
-  return success();
-}
-
-static LogicalResult lowerBroadcastLoad(VMIvLoadOp op, OpBuilder &builder) {
-  Location loc = op.getLoc();
-  Type resultType = op.getResults().front().getType();
-  Value stride = builder.create<arith::ConstantOp>(
-      loc, builder.getIndexType(), builder.getIndexAttr(0));
-  auto load = builder.create<VMIGroupBroadcastLoadOp>(
-      loc, resultType, op.getSource(), op.getOffset(), stride,
-      builder.getI64IntegerAttr(1));
-  op.getResults().front().replaceAllUsesWith(load.getResult());
-  return success();
-}
-
-static LogicalResult lowerDistributedLoad(VMIvLoadOp op,
-                                          OpBuilder &builder) {
-  StringAttr modeAttr = op.getDistModeAttr();
-  StringRef mode = modeAttr ? modeAttr.getValue() : "continuous";
-  if (mode == "continuous") {
-    return lowerContinuousLoad(op, builder);
-  }
-  if (mode == "dintlv") {
-    return lowerDeinterleaveLoad(op, builder);
-  }
-  if (mode == "brc") {
-    return lowerBroadcastLoad(op, builder);
-  }
-  return failure();
 }
 
 static LogicalResult lowerVLoad(VMIvLoadOp op, OpBuilder &builder) {
@@ -498,7 +452,7 @@ static LogicalResult lowerVLoad(VMIvLoadOp op, OpBuilder &builder) {
   } else if (op.getBlockStride()) {
     result = lowerBlockStrideLoad(op, builder);
   } else {
-    result = lowerDistributedLoad(op, builder);
+    result = lowerContinuousLoad(op, builder);
   }
   if (failed(result)) {
     return failure();
@@ -509,61 +463,39 @@ static LogicalResult lowerVLoad(VMIvLoadOp op, OpBuilder &builder) {
 
 static LogicalResult lowerBlockStrideStore(VMIvStoreOp op,
                                            OpBuilder &builder) {
-  auto valueType = cast<VMIVRegType>(op.getValues()[0].getType());
+  auto valueType = cast<VMIVRegType>(op.getValue().getType());
   Value mask = op.getMask().empty()
                    ? createAllActiveMask(valueType, op.getLoc(), builder)
                    : op.getMask()[0];
   builder.create<VMIStrideStoreOp>(
-      op.getLoc(), op.getValues()[0], op.getDestination(), op.getOffset(),
+      op.getLoc(), op.getValue(), op.getDestination(), op.getOffset(),
       op.getBlockStride(), mask);
   return success();
 }
 
 static LogicalResult lowerContinuousStore(VMIvStoreOp op,
                                            OpBuilder &builder) {
-  ValueRange values = op.getValues();
-  if (values.empty()) {
-    return failure();
-  }
+  Value value = op.getValue();
   Value mask = op.getMask().empty() ? Value() : op.getMask().front();
-  auto valueType = cast<VMIVRegType>(values.front().getType());
+  auto valueType = cast<VMIVRegType>(value.getType());
   int64_t numGroups = valueType.getElementCount();
   bool canUseGroupStore = isCompactGroupCount(numGroups) &&
                           (!mask || isAllActiveSeed(mask));
   if (canUseGroupStore) {
     Value unitStride = builder.create<arith::ConstantIndexOp>(op.getLoc(), 1);
     builder.create<VMIGroupStoreOp>(
-        op.getLoc(), values.front(), op.getDestination(), op.getOffset(),
+        op.getLoc(), value, op.getDestination(), op.getOffset(),
         unitStride, builder.getI64IntegerAttr(numGroups));
     return success();
   }
   if (mask) {
-    builder.create<VMIMaskedStoreOp>(op.getLoc(), values.front(),
+    builder.create<VMIMaskedStoreOp>(op.getLoc(), value,
                                      op.getDestination(), op.getOffset(), mask);
   } else {
-    builder.create<VMIStoreOp>(op.getLoc(), values.front(),
+    builder.create<VMIStoreOp>(op.getLoc(), value,
                                op.getDestination(), op.getOffset());
   }
   return success();
-}
-
-static LogicalResult lowerDistributedStore(VMIvStoreOp op,
-                                           OpBuilder &builder) {
-  StringAttr modeAttr = op.getDistModeAttr();
-  StringRef mode = modeAttr ? modeAttr.getValue() : "continuous";
-  if (mode == "continuous") {
-    return lowerContinuousStore(op, builder);
-  }
-  if (mode == "intlv") {
-    ValueRange values = op.getValues();
-    if (values.size() < mlir::pto::kValue2) {
-      return failure();
-    }
-    builder.create<VMIInterleaveStoreOp>(
-        op.getLoc(), values[0], values[1], op.getDestination(), op.getOffset());
-    return success();
-  }
-  return failure();
 }
 
 /// A group store whose row stride equals the per-group element count writes the
@@ -577,11 +509,7 @@ static bool isDenseAliasedGroupStore(VMIvStoreOp op) {
   if (!op.getMask().empty()) {
     return false;
   }
-  ValueRange values = op.getValues();
-  if (values.size() != 1) {
-    return false;
-  }
-  auto valueType = dyn_cast<VMIVRegType>(values.front().getType());
+  auto valueType = dyn_cast<VMIVRegType>(op.getValue().getType());
   if (!valueType) {
     return false;
   }
@@ -621,19 +549,156 @@ static LogicalResult lowerVStore(VMIvStoreOp op, OpBuilder &builder) {
       result = lowerContinuousStore(op, builder);
     } else {
       builder.create<VMIGroupStoreOp>(
-          op.getLoc(), op.getValues()[0], op.getDestination(), op.getOffset(),
+          op.getLoc(), op.getValue(), op.getDestination(), op.getOffset(),
           op.getStride(), op.getGroupAttr());
     }
   } else if (op.getBlockStride()) {
     result = lowerBlockStrideStore(op, builder);
   } else {
-    result = lowerDistributedStore(op, builder);
+    result = lowerContinuousStore(op, builder);
   }
   if (failed(result)) {
     return failure();
   }
   op.erase();
   return success();
+}
+
+static bool areMemoryEffectsFreeBetween(Operation *first, Operation *second) {
+  Block *firstBlock = first ? first->getBlock() : nullptr;
+  Block *secondBlock = second ? second->getBlock() : nullptr;
+  if (!first || !second || firstBlock != secondBlock) {
+    return false;
+  }
+  for (Operation *op = first->getNextNode(); op && op != second;
+       op = op->getNextNode()) {
+    if (!isMemoryEffectFree(op)) {
+      return false;
+    }
+  }
+  return first->isBeforeInBlock(second);
+}
+
+static bool isOffsetPlusElements(Value base, Value candidate,
+                                 int64_t elementCount) {
+  if (auto baseValue = getConstantIndexValue(base)) {
+    if (auto candidateValue = getConstantIndexValue(candidate)) {
+      return *baseValue <= std::numeric_limits<int64_t>::max() - elementCount &&
+             *candidateValue == *baseValue + elementCount;
+    }
+  }
+  auto add = candidate.getDefiningOp<arith::AddIOp>();
+  if (!add) {
+    return false;
+  }
+  auto lhsOffset = getConstantIndexValue(add.getLhs());
+  auto rhsOffset = getConstantIndexValue(add.getRhs());
+  return (add.getLhs() == base && rhsOffset == elementCount) ||
+         (add.getRhs() == base && lhsOffset == elementCount);
+}
+
+static bool isContiguousVMIStore(VMIvStoreOp store) {
+  return !store.getStride() && !store.getBlockStride() && !store.getGroup() &&
+         store.getMask().empty();
+}
+
+static bool combineDeinterleaveLoads(VMIVdintlvOp deinterleave) {
+  if (!isAllActiveSeed(deinterleave.getMask())) {
+    return false;
+  }
+  auto firstLoad = deinterleave.getLhs().getDefiningOp<VMIvLoadOp>();
+  auto secondLoad = deinterleave.getRhs().getDefiningOp<VMIvLoadOp>();
+  if (!firstLoad || !secondLoad || firstLoad == secondLoad ||
+      firstLoad.getSource() != secondLoad.getSource() ||
+      firstLoad.getGroup() || secondLoad.getGroup() || firstLoad.getStride() ||
+      secondLoad.getStride() || firstLoad.getBlockStride() ||
+      secondLoad.getBlockStride() || !firstLoad.getResult().hasOneUse() ||
+      !secondLoad.getResult().hasOneUse() ||
+      *firstLoad.getResult().user_begin() != deinterleave.getOperation() ||
+      *secondLoad.getResult().user_begin() != deinterleave.getOperation()) {
+    return false;
+  }
+
+  auto firstType = cast<VMIVRegType>(firstLoad.getResult().getType());
+  int64_t laneCount = firstType.getElementCount();
+  if (laneCount <= 0 ||
+      !isOffsetPlusElements(firstLoad.getOffset(), secondLoad.getOffset(),
+                            laneCount) ||
+      !areMemoryEffectsFreeBetween(firstLoad, secondLoad)) {
+    return false;
+  }
+
+  OpBuilder builder(firstLoad);
+  auto fusedLoad = builder.create<VMIDeinterleaveLoadOp>(
+      deinterleave.getLoc(), deinterleave.getLow().getType(),
+      deinterleave.getHigh().getType(), firstLoad.getSource(),
+      firstLoad.getOffset());
+  deinterleave.getLow().replaceAllUsesWith(fusedLoad.getLow());
+  deinterleave.getHigh().replaceAllUsesWith(fusedLoad.getHigh());
+  deinterleave.erase();
+  firstLoad.erase();
+  secondLoad.erase();
+  return true;
+}
+
+static bool combineInterleaveStores(VMIVintlvOp interleave) {
+  bool hasAllActiveMask = isAllActiveSeed(interleave.getMask());
+  bool lowHasOneUse = interleave.getLow().hasOneUse();
+  bool highHasOneUse = interleave.getHigh().hasOneUse();
+  if (!hasAllActiveMask || !lowHasOneUse || !highHasOneUse) {
+    return false;
+  }
+  auto firstStore = dyn_cast<VMIvStoreOp>(*interleave.getLow().user_begin());
+  auto secondStore = dyn_cast<VMIvStoreOp>(*interleave.getHigh().user_begin());
+  if (!firstStore || !secondStore || firstStore == secondStore ||
+      firstStore.getValue() != interleave.getLow() ||
+      secondStore.getValue() != interleave.getHigh() ||
+      !isContiguousVMIStore(firstStore) ||
+      !isContiguousVMIStore(secondStore) ||
+      firstStore.getDestination() != secondStore.getDestination()) {
+    return false;
+  }
+
+  auto valueType = cast<VMIVRegType>(interleave.getLhs().getType());
+  int64_t laneCount = valueType.getElementCount();
+  if (laneCount <= 0 ||
+      !isOffsetPlusElements(firstStore.getOffset(), secondStore.getOffset(),
+                            laneCount) ||
+      !areMemoryEffectsFreeBetween(firstStore, secondStore)) {
+    return false;
+  }
+
+  OpBuilder builder(firstStore);
+  builder.create<VMIInterleaveStoreOp>(
+      interleave.getLoc(), interleave.getLhs(), interleave.getRhs(),
+      firstStore.getDestination(), firstStore.getOffset());
+  firstStore.erase();
+  secondStore.erase();
+  interleave.erase();
+  return true;
+}
+
+static void combineInterleavedMemoryOps(ModuleOp module) {
+  SmallVector<VMIVdintlvOp, mlir::pto::kValue8> deinterleaves;
+  SmallVector<VMIVintlvOp, mlir::pto::kValue8> interleaves;
+  module.walk([&](Operation *op) {
+    if (auto deinterleave = dyn_cast<VMIVdintlvOp>(op)) {
+      deinterleaves.push_back(deinterleave);
+    } else if (auto interleave = dyn_cast<VMIVintlvOp>(op)) {
+      interleaves.push_back(interleave);
+    }
+  });
+
+  for (VMIVdintlvOp op : deinterleaves) {
+    if (op->getBlock()) {
+      (void)combineDeinterleaveLoads(op);
+    }
+  }
+  for (VMIVintlvOp op : interleaves) {
+    if (op->getBlock()) {
+      (void)combineInterleaveStores(op);
+    }
+  }
 }
 
 // Category C4 helpers: pset / pge
@@ -937,6 +1002,7 @@ struct VMILowerUnifiedToLegacyPass
 
 void VMILowerUnifiedToLegacyPass::runOnOperation() {
   ModuleOp module = getOperation();
+  combineInterleavedMemoryOps(module);
   SmallVector<Operation *, mlir::pto::kValue128> worklist;
 
   // Collect all unified VMI ops (walk encounters them in IR order).

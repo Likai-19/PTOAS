@@ -193,15 +193,22 @@ def vmi_vload_mixed_mode_probe():
     tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
     src = tile.as_ptr()
     offset = pto.const(0, dtype=pto.index)
-    _ = pto.vmi.vload(src, offset, size=64, dist_mode="continuous", group=8, stride=8)
+    _ = pto.vmi.vload(
+        src,
+        offset,
+        size=64,
+        group=8,
+        stride=8,
+        block_stride=pto.i16(8),
+    )
 
 
 @pto.jit(target="a5")
-def vmi_vload_brc_stride_without_group_probe():
+def vmi_vload_dist_mode_removed_probe():
     tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
     src = tile.as_ptr()
     offset = pto.const(0, dtype=pto.index)
-    _ = pto.vmi.vload(src, offset, size=64, dist_mode="brc", stride=8)
+    _ = pto.vmi.vload(src, offset, size=64, dist_mode="dintlv")
 
 
 @pto.jit(target="a5")
@@ -841,13 +848,12 @@ def main() -> None:
         vmi_vload_mixed_mode_probe.compile,
         TypeError,
         "pto.vmi.vload(...)",
-        "dist_mode together with group",
+        "block_stride together with group",
     )
     expect_raises(
-        vmi_vload_brc_stride_without_group_probe.compile,
+        vmi_vload_dist_mode_removed_probe.compile,
         TypeError,
-        "pto.vmi.vload(...)",
-        "accepts stride only when group is provided",
+        "unexpected keyword argument 'dist_mode'",
     )
     expect_raises(
         vmi_vstore_group_mask_probe.compile,
