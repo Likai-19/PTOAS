@@ -12,12 +12,14 @@
 from ptodsl import pto
 import ptodsl.tilelib as tilelib
 
+from .._cube import CUBE_MOVE_DTYPES
+
 
 @tilelib.tile_template(
     op="pto.tmov",
     target="a5",
     name="template_tmov_m2l",
-    dtypes=[("f16", "f16"), ("bf16", "bf16"), ("f32", "f32"), ("i8", "i8")],
+    dtypes=CUBE_MOVE_DTYPES,
     iteration_axis="none",
     op_engine="other",
     op_class="movement",

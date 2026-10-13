@@ -1,0 +1,85 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// The GM -> MAT NZ load covers the same element types as the cube matmul
+// templates (#1597).  i8/f8e4m3/f8e5m2 used to fail template selection with
+// "template_tload_gm_to_mat_nd2nz: dtype signature ('i8', 'i8') is not
+// supported", so the whole FP8/INT8 matmul pipeline could not expand a tload.
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto --enable-tile-op-expand %s -o - | FileCheck %s
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<cube>} {
+
+  func.func @tload_mat_nd2nz_i8(%src: !pto.ptr<i8>) attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {
+   %c0 = arith.constant 0 : index
+   %c1 = arith.constant 1 : index
+   %c16 = arith.constant 16 : index
+   %c32 = arith.constant 32 : index
+   %tv = pto.make_tensor_view %src, shape = [%c16, %c32], strides = [%c32, %c1] : !pto.tensor_view<?x?xi8>
+   %sv = pto.partition_view %tv, offsets = [%c0, %c0], sizes = [%c16, %c32] : !pto.tensor_view<?x?xi8> -> !pto.partition_tensor_view<16x32xi8>
+   %dst_tile = pto.alloc_tile : !pto.tile_buf<mat, 16x32xi8, blayout=col_major, slayout=row_major>
+   pto.tload ins(%sv : !pto.partition_tensor_view<16x32xi8>)
+             outs(%dst_tile : !pto.tile_buf<mat, 16x32xi8, blayout=col_major, slayout=row_major>)
+   pto.barrier #pto.pipe<PIPE_ALL>
+   return
+  }
+
+  func.func @tload_mat_dn2nz_i8(%src: !pto.ptr<i8>) attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {
+   %c0 = arith.constant 0 : index
+   %c1 = arith.constant 1 : index
+   %c16 = arith.constant 16 : index
+   %c32 = arith.constant 32 : index
+   %tv = pto.make_tensor_view %src, shape = [%c32, %c16], strides = [%c1, %c32] : !pto.tensor_view<?x?xi8>
+   %sv = pto.partition_view %tv, offsets = [%c0, %c0], sizes = [%c32, %c16] : !pto.tensor_view<?x?xi8> -> !pto.partition_tensor_view<32x16xi8>
+   %dst_tile = pto.alloc_tile : !pto.tile_buf<mat, 16x32xi8, blayout=col_major, slayout=row_major>
+   pto.tload ins(%sv : !pto.partition_tensor_view<32x16xi8>)
+             outs(%dst_tile : !pto.tile_buf<mat, 16x32xi8, blayout=col_major, slayout=row_major>)
+   pto.barrier #pto.pipe<PIPE_ALL>
+   return
+  }
+
+  func.func @tload_mat_nd2nz_f8e4m3(%src: !pto.ptr<f8E4M3FN>) attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {
+   %c0 = arith.constant 0 : index
+   %c1 = arith.constant 1 : index
+   %c16 = arith.constant 16 : index
+   %c32 = arith.constant 32 : index
+   %tv = pto.make_tensor_view %src, shape = [%c16, %c32], strides = [%c32, %c1] : !pto.tensor_view<?x?xf8E4M3FN>
+   %sv = pto.partition_view %tv, offsets = [%c0, %c0], sizes = [%c16, %c32] : !pto.tensor_view<?x?xf8E4M3FN> -> !pto.partition_tensor_view<16x32xf8E4M3FN>
+   %dst_tile = pto.alloc_tile : !pto.tile_buf<mat, 16x32xf8E4M3FN, blayout=col_major, slayout=row_major>
+   pto.tload ins(%sv : !pto.partition_tensor_view<16x32xf8E4M3FN>)
+             outs(%dst_tile : !pto.tile_buf<mat, 16x32xf8E4M3FN, blayout=col_major, slayout=row_major>)
+   pto.barrier #pto.pipe<PIPE_ALL>
+   return
+  }
+
+  func.func @tload_mat_dn2nz_f8e5m2(%src: !pto.ptr<f8E5M2>) attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {
+   %c0 = arith.constant 0 : index
+   %c1 = arith.constant 1 : index
+   %c16 = arith.constant 16 : index
+   %c32 = arith.constant 32 : index
+   %tv = pto.make_tensor_view %src, shape = [%c32, %c16], strides = [%c1, %c32] : !pto.tensor_view<?x?xf8E5M2>
+   %sv = pto.partition_view %tv, offsets = [%c0, %c0], sizes = [%c32, %c16] : !pto.tensor_view<?x?xf8E5M2> -> !pto.partition_tensor_view<32x16xf8E5M2>
+   %dst_tile = pto.alloc_tile : !pto.tile_buf<mat, 16x32xf8E5M2, blayout=col_major, slayout=row_major>
+   pto.tload ins(%sv : !pto.partition_tensor_view<32x16xf8E5M2>)
+             outs(%dst_tile : !pto.tile_buf<mat, 16x32xf8E5M2, blayout=col_major, slayout=row_major>)
+   pto.barrier #pto.pipe<PIPE_ALL>
+   return
+  }
+}
+
+// CHECK-LABEL: func.func @tload_mat_nd2nz_i8(
+// CHECK: pto.copy_gm_to_cbuf_multi_nd2nz
+// CHECK-SAME: !pto.ptr<i8, gm>, !pto.ptr<i8, l1>
+// CHECK-LABEL: func.func @tload_mat_dn2nz_i8(
+// CHECK: pto.copy_gm_to_cbuf_multi_dn2nz
+// CHECK-SAME: !pto.ptr<i8, gm>, !pto.ptr<i8, l1>
+// CHECK-LABEL: func.func @tload_mat_nd2nz_f8e4m3(
+// CHECK: pto.copy_gm_to_cbuf_multi_nd2nz
+// CHECK-SAME: !pto.ptr<f8E4M3FN, gm>, !pto.ptr<f8E4M3FN, l1>
+// CHECK-LABEL: func.func @tload_mat_dn2nz_f8e5m2(
+// CHECK: pto.copy_gm_to_cbuf_multi_dn2nz
+// CHECK-SAME: !pto.ptr<f8E5M2, gm>, !pto.ptr<f8E5M2, l1>

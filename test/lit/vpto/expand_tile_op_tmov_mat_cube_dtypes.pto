@@ -1,0 +1,85 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// The MAT -> LEFT/RIGHT moves feed every cube matmul, so they must cover the
+// same element types as the GM -> MAT load (#1597).  i8 was the only non
+// f16/bf16/f32 entry, so FP8 matmuls still failed here with
+// "template_tmov_m2l: dtype signature ('f8e4m3', 'f8e4m3') is not supported"
+// after the load tables were extended.
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto --enable-tile-op-expand %s -o - | FileCheck %s
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<cube>} {
+
+  func.func @tmov_m2l_i8() attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {
+   %mat = pto.alloc_tile : !pto.tile_buf<mat, 16x32xi8, blayout=col_major, slayout=row_major>
+   %left = pto.alloc_tile : !pto.tile_buf<left, 16x32xi8, blayout=col_major, slayout=row_major>
+   pto.tmov ins(%mat : !pto.tile_buf<mat, 16x32xi8, blayout=col_major, slayout=row_major>) outs(%left : !pto.tile_buf<left, 16x32xi8, blayout=col_major, slayout=row_major>)
+   pto.barrier #pto.pipe<PIPE_ALL>
+   return
+  }
+
+  func.func @tmov_m2r_i8() attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {
+   %mat = pto.alloc_tile : !pto.tile_buf<mat, 32x32xi8, blayout=col_major, slayout=row_major>
+   %right = pto.alloc_tile : !pto.tile_buf<right, 32x32xi8, blayout=col_major, slayout=col_major>
+   pto.tmov ins(%mat : !pto.tile_buf<mat, 32x32xi8, blayout=col_major, slayout=row_major>) outs(%right : !pto.tile_buf<right, 32x32xi8, blayout=col_major, slayout=col_major>)
+   pto.barrier #pto.pipe<PIPE_ALL>
+   return
+  }
+
+  func.func @tmov_m2l_f8e4m3() attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {
+   %mat = pto.alloc_tile : !pto.tile_buf<mat, 16x32xf8E4M3FN, blayout=col_major, slayout=row_major>
+   %left = pto.alloc_tile : !pto.tile_buf<left, 16x32xf8E4M3FN, blayout=col_major, slayout=row_major>
+   pto.tmov ins(%mat : !pto.tile_buf<mat, 16x32xf8E4M3FN, blayout=col_major, slayout=row_major>) outs(%left : !pto.tile_buf<left, 16x32xf8E4M3FN, blayout=col_major, slayout=row_major>)
+   pto.barrier #pto.pipe<PIPE_ALL>
+   return
+  }
+
+  func.func @tmov_m2r_f8e4m3() attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {
+   %mat = pto.alloc_tile : !pto.tile_buf<mat, 32x32xf8E4M3FN, blayout=col_major, slayout=row_major>
+   %right = pto.alloc_tile : !pto.tile_buf<right, 32x32xf8E4M3FN, blayout=col_major, slayout=col_major>
+   pto.tmov ins(%mat : !pto.tile_buf<mat, 32x32xf8E4M3FN, blayout=col_major, slayout=row_major>) outs(%right : !pto.tile_buf<right, 32x32xf8E4M3FN, blayout=col_major, slayout=col_major>)
+   pto.barrier #pto.pipe<PIPE_ALL>
+   return
+  }
+
+  func.func @tmov_m2l_f8e5m2() attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {
+   %mat = pto.alloc_tile : !pto.tile_buf<mat, 16x32xf8E5M2, blayout=col_major, slayout=row_major>
+   %left = pto.alloc_tile : !pto.tile_buf<left, 16x32xf8E5M2, blayout=col_major, slayout=row_major>
+   pto.tmov ins(%mat : !pto.tile_buf<mat, 16x32xf8E5M2, blayout=col_major, slayout=row_major>) outs(%left : !pto.tile_buf<left, 16x32xf8E5M2, blayout=col_major, slayout=row_major>)
+   pto.barrier #pto.pipe<PIPE_ALL>
+   return
+  }
+
+  func.func @tmov_m2r_f8e5m2() attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {
+   %mat = pto.alloc_tile : !pto.tile_buf<mat, 32x32xf8E5M2, blayout=col_major, slayout=row_major>
+   %right = pto.alloc_tile : !pto.tile_buf<right, 32x32xf8E5M2, blayout=col_major, slayout=col_major>
+   pto.tmov ins(%mat : !pto.tile_buf<mat, 32x32xf8E5M2, blayout=col_major, slayout=row_major>) outs(%right : !pto.tile_buf<right, 32x32xf8E5M2, blayout=col_major, slayout=col_major>)
+   pto.barrier #pto.pipe<PIPE_ALL>
+   return
+  }
+
+}
+
+// CHECK-LABEL: func.func @tmov_m2l_i8(
+// CHECK: pto.load_cbuf_to_ca
+// CHECK-SAME: !pto.ptr<i8, l1>, !pto.ptr<i8, l0a>
+// CHECK-LABEL: func.func @tmov_m2r_i8(
+// CHECK: pto.load_cbuf_to_cb
+// CHECK-SAME: !pto.ptr<i8, l1>, !pto.ptr<i8, l0b>
+// CHECK-LABEL: func.func @tmov_m2l_f8e4m3(
+// CHECK: pto.load_cbuf_to_ca
+// CHECK-SAME: !pto.ptr<f8E4M3FN, l1>, !pto.ptr<f8E4M3FN, l0a>
+// CHECK-LABEL: func.func @tmov_m2r_f8e4m3(
+// CHECK: pto.load_cbuf_to_cb
+// CHECK-SAME: !pto.ptr<f8E4M3FN, l1>, !pto.ptr<f8E4M3FN, l0b>
+// CHECK-LABEL: func.func @tmov_m2l_f8e5m2(
+// CHECK: pto.load_cbuf_to_ca
+// CHECK-SAME: !pto.ptr<f8E5M2, l1>, !pto.ptr<f8E5M2, l0a>
+// CHECK-LABEL: func.func @tmov_m2r_f8e5m2(
+// CHECK: pto.load_cbuf_to_cb
+// CHECK-SAME: !pto.ptr<f8E5M2, l1>, !pto.ptr<f8E5M2, l0b>

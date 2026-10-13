@@ -1346,6 +1346,101 @@ class TileLibCatalogTest(unittest.TestCase):
                 self.assertEqual(selected.name, expected_name)
                 self.assertIn(expected_op, selected.specialize(**specs).mlir_text())
 
+    def test_tmov_mat_moves_accept_cube_element_types(self):
+        # #1597: MAT -> LEFT/RIGHT moves feed every cube matmul, so they must
+        # cover the same element types as the loads and the matmul templates.
+        for dtype in ("i8", "f8e4m3", "f8e5m2", "hif8"):
+            for dst_space, expected_name, expected_op in (
+                ("left", "template_tmov_m2l", "pto.mte_l1_l0a"),
+                ("right", "template_tmov_m2r", "pto.mte_l1_l0b"),
+            ):
+                specs = {
+                    "src": TileSpec(
+                        shape=(16, 32), dtype=ScalarType(dtype), memory_space="mat"
+                    ),
+                    "dst": TileSpec(
+                        shape=(16, 32), dtype=ScalarType(dtype), memory_space=dst_space
+                    ),
+                }
+                with self.subTest(dtype=dtype, dst=dst_space):
+                    selected = select("pto.tmov", "a5", specs)
+                    self.assertEqual(selected.name, expected_name)
+                    self.assertIn(expected_op, selected.specialize(**specs).mlir_text())
+
+    def test_mat_load_accepts_cube_element_types(self):
+        # #1597: the GM -> MAT NZ load must cover every element type the cube
+        # matmul templates accept, not only f16/bf16/f32.
+        for dtype in ("i8", "f8e4m3", "f8e5m2", "hif8"):
+            nd2nz_specs = {
+                "src": ViewSpec(
+                    shape=(1, 1, 1, 8, 64),
+                    dtype=ScalarType(dtype),
+                    strides=(512, 512, 512, 64, 1),
+                ),
+                "dst": TileSpec(
+                    shape=(8, 64),
+                    dtype=ScalarType(dtype),
+                    memory_space="mat",
+                    b_layout="col_major",
+                    s_layout="row_major",
+                ),
+            }
+            dn2nz_specs = {
+                "src": ViewSpec(
+                    shape=(1, 1, 1, 64, 8),
+                    dtype=ScalarType(dtype),
+                    strides=(512, 512, 512, 1, 64),
+                ),
+                "dst": TileSpec(
+                    shape=(8, 64),
+                    dtype=ScalarType(dtype),
+                    memory_space="mat",
+                    b_layout="col_major",
+                    s_layout="row_major",
+                ),
+            }
+            for expected_name, specs in (
+                ("template_tload_gm_to_mat_nd2nz", nd2nz_specs),
+                ("template_tload_gm_to_mat_dn2nz", dn2nz_specs),
+            ):
+                with self.subTest(dtype=dtype, template=expected_name):
+                    selected = select("pto.tload", "a5", specs)
+                    self.assertEqual(selected.name, expected_name)
+                    self.assertIn(
+                        "pto.mte_gm_l1_frac", selected.specialize(**specs).mlir_text()
+                    )
+
+    def test_matmul_acc_accepts_integer_and_low_precision_dtypes(self):
+        # #1597: the acc forms consume the same LEFT/RIGHT/ACC tiles as
+        # pto.tmatmul, so they must cover the same element types.
+        cases = (
+            ("i32", "i8", "i8", "i32"),
+            ("f32", "f8e4m3", "f8e4m3", "f32"),
+            ("f32", "f8e4m3", "f8e5m2", "f32"),
+            ("f32", "f8e5m2", "f8e4m3", "f32"),
+            ("f32", "f8e5m2", "f8e5m2", "f32"),
+            ("f32", "hif8", "hif8", "f32"),
+        )
+        for acc_dtype, lhs_dtype, rhs_dtype, dst_dtype in cases:
+            specs = {
+                "acc_in": TileSpec(
+                    shape=(16, 16), dtype=ScalarType(acc_dtype), memory_space="acc"
+                ),
+                "lhs": TileSpec(
+                    shape=(16, 16), dtype=ScalarType(lhs_dtype), memory_space="left"
+                ),
+                "rhs": TileSpec(
+                    shape=(16, 16), dtype=ScalarType(rhs_dtype), memory_space="right"
+                ),
+                "dst": TileSpec(
+                    shape=(16, 16), dtype=ScalarType(dst_dtype), memory_space="acc"
+                ),
+            }
+            with self.subTest(acc=acc_dtype, lhs=lhs_dtype, rhs=rhs_dtype):
+                selected = select("pto.tmatmul.acc", "a5", specs)
+                self.assertEqual(selected.name, "template_tmatmul_acc")
+                self.assertIn("pto.mad_acc", selected.specialize(**specs).mlir_text())
+
     def test_tstore_acc_uses_c0_aligned_source_stride(self):
         specs = {
             "src": TileSpec(
