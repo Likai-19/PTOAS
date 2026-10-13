@@ -39,6 +39,12 @@ CASE_SPECS = [
     ("f16_16x63_cat_16x64", np.float16, 16, 63, 64),
     ("f32_16x31_cat_16x32", np.float32, 16, 31, 32),
     ("int16_32x127_cat_32x128", np.int16, 32, 127, 128),
+    # Fills the A5 vector UB exactly (2 * 124 * 256 * 4 B = 253952 B). Only at
+    # that pressure does the planner try to reuse a dying buffer for dst, and
+    # both concat sources die at the concat itself; placing dst on a source made
+    # every dst row overwrite source rows it had not read yet (PTOAS issue
+    # #1602). Keep this shape at the cap -- shrinking it hides the regression.
+    ("f32_124x128_cat_124x128_ubmax", np.float32, 124, 128, 128),
 ]
 
 
