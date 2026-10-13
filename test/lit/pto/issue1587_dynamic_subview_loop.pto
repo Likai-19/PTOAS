@@ -1,0 +1,106 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a3 --pto-level=level3 --enable-insert-sync --emit-pto-ir %s | FileCheck %s
+// RUN: ptoas --pto-arch=a5 --pto-level=level3 --enable-insert-sync --emit-pto-ir %s | FileCheck %s
+
+// Dynamic trip count includes zero, short loops, and repeated slot reuse.
+// Keep loop-carried completion from the last reader, including event priming
+// and draining. Backedges remain conservative for dynamic subviews.
+module {
+  func.func @issue1587_loop(%n: index,
+      %g0: !pto.partition_tensor_view<1x64xf32>,
+      %g1: !pto.partition_tensor_view<1x64xf32>,
+      %out0: !pto.partition_tensor_view<1x64xf32>,
+      %out1: !pto.partition_tensor_view<1x64xf32>) attributes {pto.kernel_kind = #pto.kernel_kind<vector>} {
+    %base = arith.constant 0 : i64
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %delta = arith.constant 2 : index
+    %count = arith.constant 3 : index
+    %c64 = arith.constant 64 : index
+    %one = arith.constant 1.0 : f32
+    %parent = pto.alloc_tile addr = %base : !pto.tile_buf<vec, 3x64xf32>
+    scf.for %i = %c0 to %n step %c1 {
+      %ordinal = arith.remui %i, %c64 : index
+      %cur = arith.remui %ordinal, %count : index
+      %future = arith.addi %ordinal, %delta : index
+      %next = arith.remui %future, %count : index
+      %current = pto.subview %parent[%cur, %c0] sizes [1, 64] : !pto.tile_buf<vec, 3x64xf32> -> !pto.tile_buf<vec, 1x64xf32>
+      %future_tile = pto.subview %parent[%next, %c0] sizes [1, 64] : !pto.tile_buf<vec, 3x64xf32> -> !pto.tile_buf<vec, 1x64xf32>
+      pto.tload ins(%g0 : !pto.partition_tensor_view<1x64xf32>) outs(%current : !pto.tile_buf<vec, 1x64xf32>)
+      pto.tload ins(%g1 : !pto.partition_tensor_view<1x64xf32>) outs(%future_tile : !pto.tile_buf<vec, 1x64xf32>)
+      pto.tadds ins(%current, %one : !pto.tile_buf<vec, 1x64xf32>, f32) outs(%current : !pto.tile_buf<vec, 1x64xf32>)
+      pto.tstore ins(%current : !pto.tile_buf<vec, 1x64xf32>) outs(%out0 : !pto.partition_tensor_view<1x64xf32>)
+      pto.tstore ins(%future_tile : !pto.tile_buf<vec, 1x64xf32>) outs(%out1 : !pto.partition_tensor_view<1x64xf32>)
+    }
+    return
+  }
+
+  func.func @issue1587_loop_hoisted(%i: index, %n: index,
+      %g0: !pto.partition_tensor_view<1x64xf32>,
+      %g1: !pto.partition_tensor_view<1x64xf32>,
+      %out0: !pto.partition_tensor_view<1x64xf32>,
+      %out1: !pto.partition_tensor_view<1x64xf32>) attributes {pto.kernel_kind = #pto.kernel_kind<vector>} {
+    %base = arith.constant 0 : i64
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %delta = arith.constant 2 : index
+    %count = arith.constant 3 : index
+    %c64 = arith.constant 64 : index
+    %one = arith.constant 1.0 : f32
+    %parent = pto.alloc_tile addr = %base : !pto.tile_buf<vec, 3x64xf32>
+    %ordinal = arith.remui %i, %c64 : index
+    %cur = arith.remui %ordinal, %count : index
+    %future = arith.addi %ordinal, %delta : index
+    %next = arith.remui %future, %count : index
+    %current = pto.subview %parent[%cur, %c0] sizes [1, 64] : !pto.tile_buf<vec, 3x64xf32> -> !pto.tile_buf<vec, 1x64xf32>
+    %future_tile = pto.subview %parent[%next, %c0] sizes [1, 64] : !pto.tile_buf<vec, 3x64xf32> -> !pto.tile_buf<vec, 1x64xf32>
+    scf.for %k = %c0 to %n step %c1 {
+      pto.tload ins(%g0 : !pto.partition_tensor_view<1x64xf32>) outs(%current : !pto.tile_buf<vec, 1x64xf32>)
+      pto.tload ins(%g1 : !pto.partition_tensor_view<1x64xf32>) outs(%future_tile : !pto.tile_buf<vec, 1x64xf32>)
+      pto.tadds ins(%current, %one : !pto.tile_buf<vec, 1x64xf32>, f32) outs(%current : !pto.tile_buf<vec, 1x64xf32>)
+      pto.tstore ins(%current : !pto.tile_buf<vec, 1x64xf32>) outs(%out0 : !pto.partition_tensor_view<1x64xf32>)
+      pto.tstore ins(%future_tile : !pto.tile_buf<vec, 1x64xf32>) outs(%out1 : !pto.partition_tensor_view<1x64xf32>)
+    }
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @issue1587_loop
+// CHECK: pto.set_flag[<PIPE_MTE3>, <PIPE_MTE2>, <[[REUSE:EVENT_ID[0-9]+]]>]
+// CHECK-NEXT: scf.for
+// CHECK: pto.wait_flag[<PIPE_MTE3>, <PIPE_MTE2>, <[[REUSE]]>]
+// CHECK-NEXT: pto.tload
+// CHECK: pto.tload
+// CHECK: pto.wait_flag[<PIPE_MTE2>, <PIPE_V>,
+// CHECK-NEXT: pto.tadds
+// CHECK: pto.wait_flag[<PIPE_V>, <PIPE_MTE3>,
+// CHECK-NEXT: pto.tstore
+// CHECK: pto.tstore
+// CHECK-NEXT: pto.set_flag[<PIPE_MTE3>, <PIPE_MTE2>, <[[REUSE]]>]
+// CHECK-NEXT: }
+// CHECK-NEXT: pto.wait_flag[<PIPE_MTE3>, <PIPE_MTE2>, <[[REUSE]]>]
+// CHECK-NOT: pto.wait_flag
+// CHECK: return
+
+// CHECK-LABEL: func.func @issue1587_loop_hoisted
+// CHECK: pto.set_flag[<PIPE_MTE3>, <PIPE_MTE2>, <[[HOISTED:EVENT_ID[0-9]+]]>]
+// CHECK-NEXT: scf.for
+// CHECK: pto.wait_flag[<PIPE_MTE3>, <PIPE_MTE2>, <[[HOISTED]]>]
+// CHECK-NEXT: pto.tload
+// CHECK-NEXT: pto.tload
+// CHECK: pto.wait_flag[<PIPE_MTE2>, <PIPE_V>,
+// CHECK-NEXT: pto.tadds
+// CHECK: pto.tstore
+// CHECK: pto.tstore
+// CHECK-NEXT: pto.set_flag[<PIPE_MTE3>, <PIPE_MTE2>, <[[HOISTED]]>]
+// CHECK-NEXT: }
+// CHECK-NEXT: pto.wait_flag[<PIPE_MTE3>, <PIPE_MTE2>, <[[HOISTED]]>]
+// CHECK-NOT: pto.wait_flag
+// CHECK: return

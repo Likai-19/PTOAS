@@ -19,6 +19,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -511,6 +512,15 @@ void InsertSyncAnalysis::InsertSync(
   MemAnalyze(nowCompound, frontCompound, syncRecordList, forEndIndex);
 }
 
+static bool isOutsideLoops(Operation *op) {
+  for (Operation *parent = op; parent; parent = parent->getParentOp()) {
+    if (isa<LoopLikeOpInterface>(parent)) {
+      return false;
+    }
+  }
+  return op != nullptr;
+}
+
 // Returns true if a *same-iter* multi-buffer dep pair can be dropped
 // because the producer's and consumer's slot SSA expressions are provably
 // disjoint modulo N. Only applied to forward (non-back-edge) deps -- the
@@ -518,9 +528,13 @@ void InsertSyncAnalysis::InsertSync(
 // prefetch idiom). When the analysis is inconclusive (kUnknown / kEqual)
 // the dep is kept and the existing conservative path runs.
 static bool isForwardDepDroppableBySlotAffine(const BaseMemInfo *a,
-                                              const BaseMemInfo *b) {
+                                              const BaseMemInfo *b,
+                                              bool allowSubviewSlots) {
   if (!a || !b) {
     return false;
+  }
+  if (allowSubviewSlots && areDisjointSubviewSlots(a->baseBuffer, b->baseBuffer)) {
+    return true;
   }
   size_t aN = a->baseAddresses.size();
   size_t bN = b->baseAddresses.size();
@@ -555,9 +569,15 @@ void InsertSyncAnalysis::MemAnalyze(
   // Back-edge deps stay untouched -- they still need per-slot syncing
   // through the dyn-event-id pipeline.
   if (!forEndIndex.has_value()) {
-    auto isDroppable = [](const std::pair<const BaseMemInfo *,
+    // Subviews still use a single conservative memory range on backedges.
+    // Pruning their forward edges inside a loop would change event priming
+    // without a slot-keyed event model. Keep the existing loop behavior.
+    bool allowSubviewSlots = isOutsideLoops(nowCompound->elementOp) &&
+                             isOutsideLoops(frontCompound->elementOp);
+    auto isDroppable = [allowSubviewSlots](const std::pair<const BaseMemInfo *,
                                           const BaseMemInfo *> &pair) {
-      return isForwardDepDroppableBySlotAffine(pair.first, pair.second);
+      return isForwardDepDroppableBySlotAffine(pair.first, pair.second,
+                                               allowSubviewSlots);
     };
     depVec.erase(std::remove_if(depVec.begin(), depVec.end(), isDroppable),
                  depVec.end());

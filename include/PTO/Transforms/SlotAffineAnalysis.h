@@ -6,8 +6,10 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-//===- SlotAffineAnalysis.h - Multi-buffer slot affine compare --*- C++ -*-===//
+//===- SlotAffineAnalysis.h - Tile slot affine compare         --*- C++ -*-===//
 //
+// Affine helpers for multi-buffer slots and dense full-row subviews.
+// The subview proof is kept separate from loop-carried event modeling.
 // Small affine helper used by the multi-buffer sync path. InsertSync consumes
 // it to decide, for two `pto.multi_tile_get`
 // slot-index SSA expressions, whether they are provably equal modulo N,
@@ -52,6 +54,13 @@ mlir::Value findMultiTileSlotExpr(mlir::Value v);
 ///   compareSlotSSA(%iv % 2, %j % 2)          -> kUnknown   // diff symbols
 ///   compareSlotSSA(arith.constant 0, arith.constant 1) -> kDisjoint
 SlotRelation compareSlotSSA(mlir::Value a, mlir::Value b, uint32_t N);
+
+/// Prove that two dense full-row subviews of the same allocation select
+/// different rows in the same iteration. Byte-preserving tile aliases are
+/// supported; unknown layouts, ranges, and arithmetic wrap retain dependencies.
+/// Subview event modeling remains conservative inside loops; callers must
+/// restrict this proof to accesses outside loops.
+bool areDisjointSubviewSlots(mlir::Value a, mlir::Value b);
 
 } // namespace pto
 } // namespace mlir

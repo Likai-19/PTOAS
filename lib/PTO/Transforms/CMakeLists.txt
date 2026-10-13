@@ -256,6 +256,7 @@ add_mlir_dialect_library(PTOTransforms
   Passes/PTOResolveBufferSelect.cpp
   Passes/PTOResolveReservedBuffersPass.cpp
   Passes/SlotAffineAnalysis.cpp
+  Passes/SubviewSlotAnalysis.cpp
   Passes/PTOWrapFunctionsInSectionsPass.cpp
   Passes/PTONormalizeUncoveredTileSections.cpp
   Passes/PTOValidatePhysicalSectionBoundaries.cpp
