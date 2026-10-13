@@ -122,9 +122,17 @@ static FailureOr<Type> verifyPTOShapedBinarySameElemAndShape(Operation *op,
   return e0;
 }
 
-static LogicalResult verifyTPartBinaryA2A3(Operation *op, Type src0Ty,
-                                           Type src1Ty, Type dstTy,
-                                           StringRef opName) {
+/// Shape contract shared by the two-operand partial elementwise ops
+/// (`tpartadd` and `tpartmul`): shaped-like operands that share one element type
+/// and rank-2 shapes, with valid regions following the partial pattern -- A5
+/// allows any split, A2/A3 requires one operand to match `dst`.
+///
+/// The element types are not part of it: each op accepts the profile of the
+/// A5/A2A3 vector instruction it lowers to (`tpartadd` reaches `pto.vadd`,
+/// `tpartmul` reaches `pto.vmul`) and states it in its own verifier.
+static LogicalResult verifyTPartBinaryShape(Operation *op, Type src0Ty,
+                                            Type src1Ty, Type dstTy,
+                                            PTOArch targetArch) {
   if (!isPTOShapedLike(src0Ty) || !isPTOShapedLike(src1Ty) ||
       !isPTOShapedLike(dstTy)) {
     return op->emitOpError() << "expects PTO shaped-like src0/src1/dst";
@@ -142,62 +150,34 @@ static LogicalResult verifyTPartBinaryA2A3(Operation *op, Type src0Ty,
     return op->emitOpError()
            << "expects src0/src1/dst to be rank-2 (tile-shaped)";
   }
-  if (failed(verifyPartialValidPattern(op, src0Ty, src1Ty, dstTy))) {
+  return targetArch == PTOArch::A5
+             ? verifyPartialValidPatternLoose(op, src0Ty, src1Ty, dstTy)
+             : verifyPartialValidPattern(op, src0Ty, src1Ty, dstTy);
+}
+
+static LogicalResult verifyTPartAddImpl(TPartAddOp op, PTOArch targetArch) {
+  Operation *operation = op.getOperation();
+  if (failed(verifyTPartBinaryShape(operation, op.getSrc0().getType(),
+                                    op.getSrc1().getType(),
+                                    op.getDst().getType(), targetArch))) {
     return failure();
   }
-  Type elem = getElemTy(src0Ty);
-  if (!(elem.isInteger(mlir::pto::kValue32) ||
-        elem.isInteger(mlir::pto::kValue16) || elem.isF16() || elem.isF32())) {
-    return op->emitOpError()
-           << "expects A2/A3 " << opName
-           << " element type to be i32/i16/f16/f32";
-  }
-  return mlir::success();
-}
-
-static LogicalResult verifyTPartBinaryA5(Operation *op, Type src0Ty,
-                                         Type src1Ty, Type dstTy,
-                                         StringRef opName) {
-  if (!isPTOShapedLike(src0Ty) || !isPTOShapedLike(src1Ty) ||
-      !isPTOShapedLike(dstTy))
-    return op->emitOpError() << "expects PTO shaped-like src0/src1/dst";
-  if (getElemTy(src0Ty) != getElemTy(src1Ty) ||
-      getElemTy(src0Ty) != getElemTy(dstTy))
-    return op->emitOpError()
-           << "expects src0/src1/dst to have the same element type";
-  Type elem = getElemTy(src0Ty);
-  if (!(elem.isInteger(mlir::pto::kValue32) ||
-        elem.isInteger(mlir::pto::kValue16) ||
-        elem.isInteger(mlir::pto::kValue8) || elem.isF16() ||
-        elem.isBF16() || elem.isF32()))
-    return op->emitOpError()
-           << "expects A5 " << opName
-           << " element type to be i32/i16/i8/f16/bf16/f32";
-  auto s0 = getShapeVec(src0Ty);
-  auto s1 = getShapeVec(src1Ty);
-  auto d = getShapeVec(dstTy);
-  if (s0.size() != mlir::pto::kValue2 || s1.size() != mlir::pto::kValue2 ||
-      d.size() != mlir::pto::kValue2)
-    return op->emitOpError()
-           << "expects src0/src1/dst to be rank-2 (tile-shaped)";
-  return verifyPartialValidPatternLoose(op, src0Ty, src1Ty, dstTy);
-}
-
-static LogicalResult verifyTPartAddA2A3(TPartAddOp op) {
-  return verifyTPartBinaryA2A3(op, op.getSrc0().getType(),
-                               op.getSrc1().getType(), op.getDst().getType(),
-                               "tpartadd");
-}
-
-static LogicalResult verifyTPartAddA5(TPartAddOp op) {
-  return verifyTPartBinaryA5(op, op.getSrc0().getType(),
-                             op.getSrc1().getType(), op.getDst().getType(),
-                             "tpartadd");
+  // `tpartadd` reaches `pto.vadd`, whose A5 profile includes the 8-bit form
+  // (docs/isa/micro-isa/07-binary-vector-ops.md).
+  return verifyArithmeticElemTypeForArch(
+      operation, getElemTy(op.getSrc0().getType()), targetArch,
+      /*allowInt8OnA5=*/true, /*allowBf16OnA5=*/true,
+      "expects A2/A3 tpartadd element type to be i32/i16/f16/f32",
+      "expects A5 tpartadd element type to be i32/i16/i8/f16/bf16/f32");
 }
 
 mlir::LogicalResult mlir::pto::TPartAddOp::verify() {
-  auto verifyA2A3 = [this]() -> LogicalResult { return verifyTPartAddA2A3(*this); };
-  auto verifyA5 = [this]() -> LogicalResult { return verifyTPartAddA5(*this); };
+  auto verifyA2A3 = [this]() -> LogicalResult {
+    return verifyTPartAddImpl(*this, PTOArch::A3);
+  };
+  auto verifyA5 = [this]() -> LogicalResult {
+    return verifyTPartAddImpl(*this, PTOArch::A5);
+  };
   return dispatchVerifierByArch(getOperation(), verifyA2A3, verifyA5);
 }
 

@@ -3220,7 +3220,8 @@ The valid region is the intersection of each tile's valid rectangle defined by `
   - All three tiles must use row-major layout (`blayout=row_major`).
   - The implementation requires at least one input's valid region to match `dst`'s valid region, and the other input's valid region not greater than `dst`'s valid region (otherwise it asserts).
 - **Implementation checks (A5)**
-  - `dst/src0/src1` element types must be identical and must be one of: `i8`, `i16`, `i32`, `f16`, `bf16`, `f32`.
+  - `dst/src0/src1` element types must be identical and must be one of: `i16`, `i32`, `f16`, `bf16`, `f32`.
+    - The 8-bit forms (`i8`/`ui8`) are rejected: the A5 multiply profile has no 8-bit form (`pto.vmul` on A5 accepts `i16-i32`/`f16`/`bf16`/`f32`; see the micro Instruction SPEC, binary vector ops).
   - Requires `src0` and `src1` valid region to be `<= dst` valid region in both dimensions; other patterns are not supported (target-defined behavior).
 
 **Hardware Mapping:**

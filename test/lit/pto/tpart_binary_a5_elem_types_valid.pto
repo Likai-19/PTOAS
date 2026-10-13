@@ -1,0 +1,88 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a5 %s | FileCheck %s
+
+// Locks the A5 element-type profile of the two-operand partial ops after #1598:
+// `tpartmul` takes the `pto.vmul` set (i16/i32/f16/bf16/f32, no 8-bit form),
+// while `tpartadd` keeps the `pto.vadd` set (8-bit included).  The rejected
+// 8-bit `tpartmul` forms are covered by tpartmul_a5_{i8,ui8}_invalid.pto.
+
+module {
+  func.func private @tpartmul_i16(
+      %src0: !pto.tile_buf<vec, 8x32xi16>, %src1: !pto.tile_buf<vec, 8x32xi16>,
+      %dst: !pto.tile_buf<vec, 8x32xi16>) {
+    pto.tpartmul ins(%src0, %src1 : !pto.tile_buf<vec, 8x32xi16>, !pto.tile_buf<vec, 8x32xi16>)
+               outs(%dst : !pto.tile_buf<vec, 8x32xi16>)
+    return
+  }
+  func.func private @tpartmul_i32(
+      %src0: !pto.tile_buf<vec, 8x32xi32>, %src1: !pto.tile_buf<vec, 8x32xi32>,
+      %dst: !pto.tile_buf<vec, 8x32xi32>) {
+    pto.tpartmul ins(%src0, %src1 : !pto.tile_buf<vec, 8x32xi32>, !pto.tile_buf<vec, 8x32xi32>)
+               outs(%dst : !pto.tile_buf<vec, 8x32xi32>)
+    return
+  }
+  func.func private @tpartmul_f16(
+      %src0: !pto.tile_buf<vec, 8x32xf16>, %src1: !pto.tile_buf<vec, 8x32xf16>,
+      %dst: !pto.tile_buf<vec, 8x32xf16>) {
+    pto.tpartmul ins(%src0, %src1 : !pto.tile_buf<vec, 8x32xf16>, !pto.tile_buf<vec, 8x32xf16>)
+               outs(%dst : !pto.tile_buf<vec, 8x32xf16>)
+    return
+  }
+  func.func private @tpartmul_bf16(
+      %src0: !pto.tile_buf<vec, 8x32xbf16>, %src1: !pto.tile_buf<vec, 8x32xbf16>,
+      %dst: !pto.tile_buf<vec, 8x32xbf16>) {
+    pto.tpartmul ins(%src0, %src1 : !pto.tile_buf<vec, 8x32xbf16>, !pto.tile_buf<vec, 8x32xbf16>)
+               outs(%dst : !pto.tile_buf<vec, 8x32xbf16>)
+    return
+  }
+  func.func private @tpartmul_f32(
+      %src0: !pto.tile_buf<vec, 8x32xf32>, %src1: !pto.tile_buf<vec, 8x32xf32>,
+      %dst: !pto.tile_buf<vec, 8x32xf32>) {
+    pto.tpartmul ins(%src0, %src1 : !pto.tile_buf<vec, 8x32xf32>, !pto.tile_buf<vec, 8x32xf32>)
+               outs(%dst : !pto.tile_buf<vec, 8x32xf32>)
+    return
+  }
+  func.func private @tpartadd_i8(
+      %src0: !pto.tile_buf<vec, 8x32xi8>, %src1: !pto.tile_buf<vec, 8x32xi8>,
+      %dst: !pto.tile_buf<vec, 8x32xi8>) {
+    pto.tpartadd ins(%src0, %src1 : !pto.tile_buf<vec, 8x32xi8>, !pto.tile_buf<vec, 8x32xi8>)
+               outs(%dst : !pto.tile_buf<vec, 8x32xi8>)
+    return
+  }
+  func.func private @tpartadd_ui8(
+      %src0: !pto.tile_buf<vec, 8x32xui8>, %src1: !pto.tile_buf<vec, 8x32xui8>,
+      %dst: !pto.tile_buf<vec, 8x32xui8>) {
+    pto.tpartadd ins(%src0, %src1 : !pto.tile_buf<vec, 8x32xui8>, !pto.tile_buf<vec, 8x32xui8>)
+               outs(%dst : !pto.tile_buf<vec, 8x32xui8>)
+    return
+  }
+}
+
+// CHECK-LABEL: static AICORE void tpartmul_i16(
+// CHECK: Tile<TileType::Vec, int16_t,
+// CHECK: TPARTMUL(
+// CHECK-LABEL: static AICORE void tpartmul_i32(
+// CHECK: Tile<TileType::Vec, int32_t,
+// CHECK: TPARTMUL(
+// CHECK-LABEL: static AICORE void tpartmul_f16(
+// CHECK: Tile<TileType::Vec, half,
+// CHECK: TPARTMUL(
+// CHECK-LABEL: static AICORE void tpartmul_bf16(
+// CHECK: Tile<TileType::Vec, bfloat16_t,
+// CHECK: TPARTMUL(
+// CHECK-LABEL: static AICORE void tpartmul_f32(
+// CHECK: Tile<TileType::Vec, float,
+// CHECK: TPARTMUL(
+// CHECK-LABEL: static AICORE void tpartadd_i8(
+// CHECK: Tile<TileType::Vec, int8_t,
+// CHECK: TPARTADD(
+// CHECK-LABEL: static AICORE void tpartadd_ui8(
+// CHECK: Tile<TileType::Vec, uint8_t,
+// CHECK: TPARTADD(

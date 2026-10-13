@@ -67,21 +67,32 @@ mlir::LogicalResult mlir::pto::TPartArgMinOp::verify() {
   return dispatchVerifierByArch(getOperation(), verifyByArch, verifyByArch);
 }
 
-static LogicalResult verifyTPartMulA2A3(TPartMulOp op) {
-  return verifyTPartBinaryA2A3(op, op.getSrc0().getType(),
-                               op.getSrc1().getType(), op.getDst().getType(),
-                               "tpartmul");
-}
-
-static LogicalResult verifyTPartMulA5(TPartMulOp op) {
-  return verifyTPartBinaryA5(op, op.getSrc0().getType(),
-                             op.getSrc1().getType(), op.getDst().getType(),
-                             "tpartmul");
+static LogicalResult verifyTPartMulImpl(TPartMulOp op, PTOArch targetArch) {
+  Operation *operation = op.getOperation();
+  if (failed(verifyTPartBinaryShape(operation, op.getSrc0().getType(),
+                                    op.getSrc1().getType(),
+                                    op.getDst().getType(), targetArch))) {
+    return failure();
+  }
+  // `tpartmul` reaches `pto.vmul`, whose A5 profile has no 8-bit form
+  // (docs/isa/micro-isa/07-binary-vector-ops.md): an i8/ui8 operand has to be
+  // rejected here instead of being expanded to an `RV_VMUL` the simulator and
+  // the hardware have no encoding for (#1598).  Its accepted set is `pto.tmul`'s.
+  return verifyArithmeticElemTypeForArch(
+      operation, getElemTy(op.getSrc0().getType()), targetArch,
+      /*allowInt8OnA5=*/false, /*allowBf16OnA5=*/true,
+      "expects A2/A3 tpartmul element type to be i32/i16/f16/f32",
+      "expects A5 tpartmul element type to be i32/i16/f16/bf16/f32 (the A5 "
+      "vmul profile has no i8/ui8 form)");
 }
 
 mlir::LogicalResult mlir::pto::TPartMulOp::verify() {
-  auto verifyA2A3 = [this]() -> LogicalResult { return verifyTPartMulA2A3(*this); };
-  auto verifyA5 = [this]() -> LogicalResult { return verifyTPartMulA5(*this); };
+  auto verifyA2A3 = [this]() -> LogicalResult {
+    return verifyTPartMulImpl(*this, PTOArch::A3);
+  };
+  auto verifyA5 = [this]() -> LogicalResult {
+    return verifyTPartMulImpl(*this, PTOArch::A5);
+  };
   return dispatchVerifierByArch(getOperation(), verifyA2A3, verifyA5);
 }
 

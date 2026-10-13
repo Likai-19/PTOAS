@@ -1,0 +1,29 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not ptoas --pto-arch=a5 %s -o - 2>&1 | FileCheck %s --check-prefix=A5
+// RUN: not ptoas --pto-arch=a3 %s -o - 2>&1 | FileCheck %s --check-prefix=A3
+
+// Regression for #1598: the A5 multiply profile has no 8-bit form, so an i8
+// `pto.tpartmul` is rejected at verification.  It used to verify, expand to
+// `pto.vmul` on i8 (`@llvm.hivm.vmul.s.x.v256i8`) and only then abort the VPTO
+// simulator with "RV_VMUL, type.S8" (exit 134).  `pto.vmul` is i16-i32/f16/bf16/
+// f32 on A5 (see docs/isa/micro-isa/07-binary-vector-ops.md), and the
+// non-partial sibling `pto.tmul` already rejects i8 on A5.
+module {
+  func.func private @tpartmul_i8(
+      %src0: !pto.tile_buf<vec, 8x32xi8>, %src1: !pto.tile_buf<vec, 8x32xi8>,
+      %dst: !pto.tile_buf<vec, 8x32xi8>) {
+    pto.tpartmul ins(%src0, %src1 : !pto.tile_buf<vec, 8x32xi8>, !pto.tile_buf<vec, 8x32xi8>)
+               outs(%dst : !pto.tile_buf<vec, 8x32xi8>)
+    return
+  }
+}
+
+// A5: error: 'pto.tpartmul' op expects A5 tpartmul element type to be i32/i16/f16/bf16/f32 (the A5 vmul profile has no i8/ui8 form)
+// A3: error: 'pto.tpartmul' op expects A2/A3 tpartmul element type to be i32/i16/f16/f32
