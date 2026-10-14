@@ -1,0 +1,148 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Exercise interstage setup placement around low-level loop fusion. Independent
+// setup values can be hoisted before the fused loop. Values derived from an
+// earlier loop result can be sunk after the fused loop when no fused stage uses
+// them, but fusion must be rejected when a later stage consumes such a value.
+// Also cover fusing a legal prefix and remapping a result exported by the region.
+//
+// RUN: pto-test-opt --pto-low-level-loop-fusion %s | FileCheck %s
+
+module {
+  func.func @independent_setup_hoist() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c4 = arith.constant 4 : index
+    %region = pto.fusion_region {
+      %a = scf.for %i = %c0 to %c4 step %c1 iter_args(%carry = %c0) -> (index) {
+        %next = arith.addi %carry, %i : index
+        scf.yield %next : index
+      }
+      %setup = arith.addi %c0, %c1 : index
+      scf.for %j = %c0 to %c4 step %c1 {
+        %unused = arith.addi %setup, %j : index
+      }
+      pto.yield(%c0) : (index) -> ()
+    } : index
+    return
+  }
+
+  func.func @dependent_setup_sink() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c4 = arith.constant 4 : index
+    %region = pto.fusion_region {
+      %a = scf.for %i = %c0 to %c4 step %c1 iter_args(%carry = %c0) -> (index) {
+        %next = arith.addi %carry, %i : index
+        scf.yield %next : index
+      }
+      %setup = arith.addi %a, %c1 : index
+      scf.for %j = %c0 to %c4 step %c1 {
+        %unused = arith.addi %c0, %j : index
+      }
+      pto.yield(%c0) : (index) -> ()
+    } : index
+    return
+  }
+
+  func.func @dependent_setup_reject() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c4 = arith.constant 4 : index
+    %region = pto.fusion_region {
+      %a = scf.for %i = %c0 to %c4 step %c1 iter_args(%carry = %c0) -> (index) {
+        %next = arith.addi %carry, %i : index
+        scf.yield %next : index
+      }
+      %setup = arith.addi %a, %c1 : index
+      scf.for %j = %c0 to %c4 step %c1 {
+        %unused = arith.addi %setup, %j : index
+      }
+      pto.yield(%c0) : (index) -> ()
+    } : index
+    return
+  }
+
+  func.func @prefix_fuse_before_blocked_stage() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c4 = arith.constant 4 : index
+    %region = pto.fusion_region {
+      %a = scf.for %i = %c0 to %c4 step %c1 iter_args(%carry = %c0) -> (index) {
+        %next = arith.addi %carry, %i : index
+        scf.yield %next : index
+      }
+      %b = scf.for %j = %c0 to %c4 step %c1 iter_args(%carry = %c0) -> (index) {
+        %next = arith.addi %carry, %j : index
+        scf.yield %next : index
+      }
+      %setup = arith.addi %b, %c1 : index
+      scf.for %k = %c0 to %c4 step %c1 {
+        %unused = arith.addi %setup, %k : index
+      }
+      pto.yield(%c0) : (index) -> ()
+    } : index
+    return
+  }
+
+  func.func @loop_result_exported() -> index {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c4 = arith.constant 4 : index
+    %region = pto.fusion_region {
+      %a = scf.for %i = %c0 to %c4 step %c1 iter_args(%carry = %c0) -> (index) {
+        %next = arith.addi %carry, %i : index
+        scf.yield %next : index
+      }
+      scf.for %j = %c0 to %c4 step %c1 {
+        %unused = arith.addi %c0, %j : index
+      }
+      pto.yield(%a) : (index) -> ()
+    } : index
+    return %region : index
+  }
+}
+
+// CHECK-LABEL: func.func @independent_setup_hoist
+// CHECK: pto.fusion_region {
+// CHECK: %[[HOISTED:.*]] = arith.addi %c0, %c1 : index
+// CHECK-NEXT: %[[FUSED:.*]] = scf.for
+// CHECK: arith.addi %[[HOISTED]], %arg0 : index
+// CHECK-NOT: scf.for
+// CHECK: pto.yield
+
+// CHECK-LABEL: func.func @dependent_setup_sink
+// CHECK: pto.fusion_region {
+// CHECK: %[[FUSED_RESULT:.*]] = scf.for
+// CHECK-NOT: scf.for
+// CHECK: %[[SUNK:.*]] = arith.addi %[[FUSED_RESULT]], %c1 : index
+// CHECK: pto.yield
+
+// CHECK-LABEL: func.func @dependent_setup_reject
+// CHECK: pto.fusion_region {
+// CHECK: %[[ORIGINAL_RESULT:.*]] = scf.for
+// CHECK: %[[DEPENDENT:.*]] = arith.addi %[[ORIGINAL_RESULT]], %c1 : index
+// CHECK: scf.for
+// CHECK: arith.addi %[[DEPENDENT]], %arg0 : index
+// CHECK: pto.yield
+
+// CHECK-LABEL: func.func @prefix_fuse_before_blocked_stage
+// CHECK: pto.fusion_region {
+// CHECK: %[[PREFIX:.*]]:2 = scf.for
+// CHECK: %[[PREFIX_SETUP:.*]] = arith.addi %[[PREFIX]]#1, %c1 : index
+// CHECK: scf.for
+// CHECK: arith.addi %[[PREFIX_SETUP]], %arg0 : index
+// CHECK: pto.yield
+
+// CHECK-LABEL: func.func @loop_result_exported
+// CHECK: pto.fusion_region {
+// CHECK: %[[EXPORTED_RESULT:.*]] = scf.for
+// CHECK-NOT: scf.for
+// CHECK: pto.yield(%[[EXPORTED_RESULT]]) : (index) -> ()
+// CHECK: return %{{.*}} : index

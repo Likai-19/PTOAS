@@ -19,11 +19,11 @@
 // Key structural assertions:
 //  * one fusion_region with group_id = 0 carrying both the row-max and the
 //    exp tiles out via pto.yield;
-//  * three inner col loops inside the region, distinguished by their iter_args
+//  * two inner col loops inside the region, distinguished by their iter_args
 //    arity:
-//      - (i32)              -> tmuls            (pure elementwise, mask only)
-//      - (i32, vreg<64xf32>)-> trowmax          (reduce accumulator across cols)
-//      - (i32, i32)         -> trowexpandsub+texp (fused epilogue, two masks)
+//      - (i32, vreg<64xf32>, i32) -> tmuls+trowmax (legal prefix fusion with
+//        the reduction accumulator carried across cols)
+//      - (i32, i32)               -> trowexpandsub+texp (fused epilogue, two masks)
 //  * the low-level ops vmuls/vcmax/vdup/vsub/vexp all live inside the region.
 //
 // RUN: ptoas --pto-backend=vpto --pto-arch=a5 --pto-level=level3 --enable-op-fusion --enable-shape-inference --emit-vpto %s --mlir-print-ir-after=pto-low-level-loop-fusion -o /dev/null 2>&1 | FileCheck %s
@@ -74,15 +74,12 @@ module attributes { pto.kernel_kind = #pto.kernel_kind<vector>,pto.target_arch =
 // CHECK-LABEL: func.func @kernel_softmax_prepare_unaligned(
 // The whole tmuls->trowmax->trowexpandsub->texp chain must land in one region.
 // CHECK: pto.fusion_region {
-// Elementwise tmuls col loop: mask-only accumulator.
-// CHECK: scf.for {{.*}} iter_args({{.*}}) -> (index) {
+// The legal prefix combines tmuls and trowmax in one col loop.
+// CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}) -> (index, !pto.vreg<64xf32>, index) {
 // CHECK: pto.vmuls
-// CHECK: }
-// Row-reduce trowmax col loop: carries the reduction vreg across col segments.
-// CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}) -> (!pto.vreg<64xf32>, index) {
 // CHECK: pto.vcmax
 // CHECK: pto.vmax
-// CHECK: scf.yield {{.*}} : !pto.vreg<64xf32>, index
+// CHECK: scf.yield {{.*}} : index, !pto.vreg<64xf32>, index
 // CHECK: }
 // Fused epilogue: trowexpandsub + texp share one col loop (two mask accumulators).
 // CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}) -> (index, index) {

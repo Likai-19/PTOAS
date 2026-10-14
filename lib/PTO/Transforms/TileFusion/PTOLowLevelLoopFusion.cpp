@@ -497,6 +497,168 @@ static SmallVector<StageInfo, mlir::pto::kValue8> collectStageRunFrom(scf::ForOp
   return stages;
 }
 
+static bool isInsideStageLoop(Operation* op, ArrayRef<StageInfo> stages)
+{
+    scf::ForOp enclosingLoop = dyn_cast<scf::ForOp>(op);
+    if (!enclosingLoop) {
+        enclosingLoop = op->getParentOfType<scf::ForOp>();
+    }
+    if (!enclosingLoop) {
+        return false;
+    }
+
+    for (const StageInfo& stage : stages) {
+        for (const LoopLevelInfo& level : stage.levels) {
+            if (level.loop == enclosingLoop) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool valueDependsOnLoopResults(
+    Value value, ArrayRef<Value> loopResults, ArrayRef<Operation*> setupOps, SmallVectorImpl<Value>& visitedValues)
+{
+    if (llvm::is_contained(loopResults, value)) {
+        return true;
+    }
+    if (llvm::is_contained(visitedValues, value)) {
+        return false;
+    }
+    visitedValues.push_back(value);
+
+    Operation* definingOp = value.getDefiningOp();
+    if (!definingOp || !llvm::is_contained(setupOps, definingOp)) {
+        return false;
+    }
+    for (Value operand : definingOp->getOperands()) {
+        if (valueDependsOnLoopResults(operand, loopResults, setupOps, visitedValues)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool valueFeedsStageLoop(
+    Value value, ArrayRef<StageInfo> stages, ArrayRef<Operation*> setupOps, SmallVectorImpl<Value>& visitedValues)
+{
+    if (llvm::is_contained(visitedValues, value)) {
+        return false;
+    }
+    visitedValues.push_back(value);
+
+    for (OpOperand& use : value.getUses()) {
+        Operation* user = use.getOwner();
+        if (isInsideStageLoop(user, stages)) {
+            return true;
+        }
+        if (!llvm::is_contained(setupOps, user)) {
+            continue;
+        }
+        for (Value result : user->getResults()) {
+            if (valueFeedsStageLoop(result, stages, setupOps, visitedValues)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool hasLoopResultUseInFusedStages(ArrayRef<StageInfo> stages)
+{
+    for (const StageInfo& stage : stages) {
+        for (Value result : stage.getOuterLoop().getResults()) {
+            for (OpOperand& use : result.getUses()) {
+                if (isInsideStageLoop(use.getOwner(), stages)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+static bool setupOpDependsOnLoopResult(Operation* setupOp, ArrayRef<Value> loopResults, ArrayRef<Operation*> setupOps)
+{
+    for (Value operand : setupOp->getOperands()) {
+        SmallVector<Value, mlir::pto::kValue4> visitedValues;
+        if (valueDependsOnLoopResults(operand, loopResults, setupOps, visitedValues)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool setupOpFeedsStageLoop(Operation* setupOp, ArrayRef<StageInfo> stages, ArrayRef<Operation*> setupOps)
+{
+    for (Value result : setupOp->getResults()) {
+        SmallVector<Value, mlir::pto::kValue4> visitedUses;
+        if (valueFeedsStageLoop(result, stages, setupOps, visitedUses)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool planStageSetupOpPlacement(
+    ArrayRef<Operation*> stageSetupOps, ArrayRef<Value> priorLoopResults, ArrayRef<StageInfo> stages,
+    ArrayRef<Operation*> allSetupOps, SmallVectorImpl<Operation*>& setupOpsBefore,
+    SmallVectorImpl<Operation*>& setupOpsAfter, llvm::raw_ostream* debugOS)
+{
+    for (Operation* setupOp : stageSetupOps) {
+        if (!setupOpDependsOnLoopResult(setupOp, priorLoopResults, allSetupOps)) {
+            setupOpsBefore.push_back(setupOp);
+            continue;
+        }
+
+        if (setupOpFeedsStageLoop(setupOp, stages, allSetupOps)) {
+            if (debugOS) {
+                *debugOS << "[op-fusion] reject loop run: setup op " << setupOp->getName()
+                         << " depends on a prior loop result and feeds the fused "
+                            "loop nest\n";
+            }
+            return false;
+        }
+        setupOpsAfter.push_back(setupOp);
+    }
+    return true;
+}
+
+static bool planSetupOpPlacement(
+    ArrayRef<StageInfo> stages, SmallVectorImpl<Operation*>& setupOpsBefore, SmallVectorImpl<Operation*>& setupOpsAfter,
+    llvm::raw_ostream* debugOS)
+{
+    // A loop result is available only after that loop finishes, so a later
+    // stage in the fused loop nest cannot consume it.
+    if (hasLoopResultUseInFusedStages(stages)) {
+        if (debugOS) {
+            *debugOS << "[op-fusion] reject loop run: a stage loop result is used "
+                        "inside the fused loop nest\n";
+        }
+        return false;
+    }
+
+    SmallVector<Operation*, mlir::pto::kValue8> allSetupOps;
+    for (const StageInfo& stage : stages) {
+        allSetupOps.append(stage.setupOps.begin(), stage.setupOps.end());
+    }
+
+    SmallVector<Value, mlir::pto::kValue8> priorLoopResults;
+    for (const StageInfo& stage : stages) {
+        if (!planStageSetupOpPlacement(
+                stage.setupOps, priorLoopResults, stages, allSetupOps, setupOpsBefore, setupOpsAfter, debugOS)) {
+            return false;
+        }
+
+        for (Value result : stage.getOuterLoop().getResults()) {
+            priorLoopResults.push_back(result);
+        }
+    }
+
+    return true;
+}
+
 static bool sameLoopNestShape(const StageInfo &lhs, const StageInfo &rhs) {
   if (lhs.getDepth() != rhs.getDepth()) {
     return false;
@@ -637,45 +799,129 @@ static scf::ForOp buildFusedLoopNestAtLevel(OpBuilder &builder,
   return fusedLoop;
 }
 
-static bool fuseStageRun(SmallVectorImpl<StageInfo> &stages,
-                         llvm::raw_ostream *debugOS) {
-  if (stages.size() < mlir::pto::kValue2) {
-    if (debugOS) {
-      *debugOS << "[op-fusion] reject loop run: need at least 2 stages, got "
-               << stages.size() << "\n";
+static bool isLegalStagePrefix(
+    ArrayRef<StageInfo> candidateStages, SmallVectorImpl<Operation*>& setupOpsBefore,
+    SmallVectorImpl<Operation*>& setupOpsAfter, llvm::raw_ostream* debugOS)
+{
+    const StageInfo& first = candidateStages.front();
+    for (const StageInfo& stage : llvm::drop_begin(candidateStages)) {
+        if (!sameLoopNestShape(first, stage)) {
+            if (debugOS) {
+                *debugOS << "[op-fusion] reject stage prefix: loop nest shape mismatch\n";
+            }
+            return false;
+        }
     }
-    return false;
-  }
 
-  StageInfo &first = stages.front();
-  for (StageInfo &stage : llvm::drop_begin(stages)) {
-    if (!sameLoopNestShape(first, stage)) {
-      if (debugOS) {
-        *debugOS << "[op-fusion] reject loop run: loop nest shape mismatch\n";
-      }
-      return false;
+    if (!arePreludeReordersLegal(candidateStages, debugOS)) {
+        return false;
     }
-  }
-  if (!arePreludeReordersLegal(stages, debugOS)) {
-    return false;
-  }
+    return planSetupOpPlacement(candidateStages, setupOpsBefore, setupOpsAfter, debugOS);
+}
 
-  OpBuilder blockBuilder(first.getOuterLoop());
-  SmallVector<IRMapping, mlir::pto::kValue8> stageMappings(stages.size());
-  auto fusedOuterLoop =
-      buildFusedLoopNestAtLevel(blockBuilder, stages, stageMappings, 0);
-
-  for (StageInfo &stage : llvm::drop_begin(stages)) {
-    for (Operation *setupOp : stage.setupOps) {
-      setupOp->moveBefore(fusedOuterLoop);
+static size_t findLongestLegalStagePrefix(
+    ArrayRef<StageInfo> stages, SmallVectorImpl<Operation*>& setupOpsBefore, SmallVectorImpl<Operation*>& setupOpsAfter,
+    llvm::raw_ostream* debugOS)
+{
+    for (size_t stageCount = stages.size(); stageCount >= mlir::pto::kValue2; --stageCount) {
+        setupOpsBefore.clear();
+        setupOpsAfter.clear();
+        if (isLegalStagePrefix(stages.take_front(stageCount), setupOpsBefore, setupOpsAfter, debugOS)) {
+            return stageCount;
+        }
     }
-  }
+    return 0;
+}
 
-  for (StageInfo &stage : llvm::reverse(stages)) {
-    stage.getOuterLoop().erase();
-  }
+static bool collectMappedOuterLoopResults(
+    MutableArrayRef<StageInfo> stages, MutableArrayRef<IRMapping> stageMappings,
+    SmallVectorImpl<Value>& mappedOuterResults, llvm::raw_ostream* debugOS)
+{
+    for (auto [stageIndex, stage] : llvm::enumerate(stages)) {
+        for (Value originalResult : stage.getOuterLoop().getResults()) {
+            Value fusedResult = stageMappings[stageIndex].lookup(originalResult);
+            if (!fusedResult) {
+                if (debugOS) {
+                    *debugOS << "[op-fusion] reject fused loop: missing mapping for an "
+                                "outer loop result\n";
+                }
+                return false;
+            }
+            mappedOuterResults.push_back(fusedResult);
+        }
+    }
+    return true;
+}
 
-  return true;
+static void applySetupOpPlacement(
+    scf::ForOp fusedOuterLoop, ArrayRef<Operation*> setupOpsBefore, ArrayRef<Operation*> setupOpsAfter)
+{
+    for (Operation* setupOp : setupOpsBefore) {
+        setupOp->moveBefore(fusedOuterLoop);
+    }
+
+    Operation* lastSetupOp = fusedOuterLoop;
+    for (Operation* setupOp : setupOpsAfter) {
+        setupOp->moveAfter(lastSetupOp);
+        lastSetupOp = setupOp;
+    }
+}
+
+static void replaceOuterLoopResultsAndEraseStages(MutableArrayRef<StageInfo> stages, ArrayRef<Value> mappedOuterResults)
+{
+    size_t mappedResultIndex = 0;
+    for (StageInfo& stage : stages) {
+        for (Value originalResult : stage.getOuterLoop().getResults()) {
+            originalResult.replaceAllUsesWith(mappedOuterResults[mappedResultIndex++]);
+        }
+    }
+
+    for (StageInfo& stage : llvm::reverse(stages)) {
+        stage.getOuterLoop().erase();
+    }
+}
+
+static bool fuseStageRun(SmallVectorImpl<StageInfo>& stages, llvm::raw_ostream* debugOS)
+{
+    const bool hasEnoughStages = stages.size() >= mlir::pto::kValue2;
+    if (!hasEnoughStages) {
+        if (debugOS) {
+            *debugOS << "[op-fusion] reject loop run: need at least 2 stages, got " << stages.size() << "\n";
+        }
+        return false;
+    }
+
+    SmallVector<Operation*, mlir::pto::kValue8> setupOpsBefore;
+    SmallVector<Operation*, mlir::pto::kValue8> setupOpsAfter;
+    size_t fuseableStageCount = findLongestLegalStagePrefix(stages, setupOpsBefore, setupOpsAfter, debugOS);
+    if (fuseableStageCount < mlir::pto::kValue2) {
+        if (debugOS) {
+            *debugOS << "[op-fusion] reject loop run: no legal stage prefix to fuse\n";
+        }
+        return false;
+    }
+    bool fuseablePrefixOnly = fuseableStageCount < stages.size();
+    if (fuseablePrefixOnly && debugOS) {
+        *debugOS << "[op-fusion] fuse legal stage prefix of " << fuseableStageCount << " out of " << stages.size()
+                 << " stages\n";
+    }
+
+    MutableArrayRef<StageInfo> stagesToFuse(stages.data(), fuseableStageCount);
+    StageInfo& first = stagesToFuse.front();
+
+    OpBuilder blockBuilder(first.getOuterLoop());
+    SmallVector<IRMapping, mlir::pto::kValue8> stageMappings(stagesToFuse.size());
+    auto fusedOuterLoop = buildFusedLoopNestAtLevel(blockBuilder, stagesToFuse, stageMappings, 0);
+
+    SmallVector<Value, mlir::pto::kValue8> mappedOuterResults;
+    if (!collectMappedOuterLoopResults(stagesToFuse, stageMappings, mappedOuterResults, debugOS)) {
+        fusedOuterLoop.erase();
+        return false;
+    }
+
+    applySetupOpPlacement(fusedOuterLoop, setupOpsBefore, setupOpsAfter);
+    replaceOuterLoopResultsAndEraseStages(stagesToFuse, mappedOuterResults);
+    return true;
 }
 
 static bool fuseStageRunsInBlock(Block &block, llvm::raw_ostream *debugOS) {
