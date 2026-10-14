@@ -28,9 +28,24 @@ static LogicalResult verifyTTransA5(TTransOp op) {
 }
 
 mlir::LogicalResult mlir::pto::TTransOp::verify() {
-    auto verifyA2A3 = [this]() -> LogicalResult { return verifyTTransA2A3(*this); };
-    auto verifyA5 = [this]() -> LogicalResult { return verifyTTransA5(*this); };
-    return dispatchVerifierByArch(getOperation(), verifyA2A3, verifyA5);
+  // The runtime conv-layout TTRANS (TTransImplConvTile in pto-isa) operates
+  // on UB-resident plain tiles -- every helper takes __ubuf__ pointers and
+  // budgets src+dst+tmp against the 256KB UB -- while conv tiles live in L1
+  // (mat). Feeding a conv tile into it produces an illegal __cbuf__ ->
+  // __ubuf__ cast, and the dispatch chain has no NCDHW branch either, so
+  // unsupported pairs would silently no-op. Reject conv tiles outright until
+  // the runtime grows an L1-native conv TTRANS.
+  if (isa<pto::ConvTileBufType>(getSrc().getType()) ||
+      (getTmp() &&
+       isa<pto::ConvTileBufType>(getTmp().getType())) ||
+      isa<pto::ConvTileBufType>(getDst().getType())) {
+    return emitOpError(
+        "ttrans does not support conv_tile operands: the runtime conv TTRANS "
+        "works on UB-resident plain tiles, while conv tiles live in L1 (mat)");
+  }
+  auto verifyA2A3 = [this]() -> LogicalResult { return verifyTTransA2A3(*this); };
+  auto verifyA5 = [this]() -> LogicalResult { return verifyTTransA5(*this); };
+  return dispatchVerifierByArch(getOperation(), verifyA2A3, verifyA5);
 }
 
 ParseResult mlir::pto::TXorOp::parse(OpAsmParser &parser,

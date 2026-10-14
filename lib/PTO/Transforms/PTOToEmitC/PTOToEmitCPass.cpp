@@ -694,36 +694,47 @@ struct EmitPTOManualPass
     bool tRandom = false;
     bool globalTensorData = false;
     bool bitcast = false;
+    bool convTileInit = false;
   };
+
+  static void setHelperFlagsForOp(Operation *op, HelperFlags &flags) {
+    if (isa<mlir::pto::DeclareEventIdArrayOp>(op))
+      flags.eventIdArray = true;
+    if (isa<mlir::pto::TRandomOp>(op))
+      flags.tRandom = true;
+    if (auto cmo = dyn_cast<mlir::pto::CmoCacheInvalidOp>(op)) {
+      if (cmo.getAddr())
+        flags.globalTensorData = true;
+    }
+    if (auto init = dyn_cast<mlir::pto::InitializeL2G2LPipeOp>(op)) {
+      if (isa<mlir::pto::TensorViewType>(init.getGmAddr().getType()))
+        flags.globalTensorData = true;
+    }
+    if (isa<mlir::pto::PartitionViewOp>(op))
+      flags.globalTensorData = true;
+    if (auto load = dyn_cast<mlir::pto::TLoadOp>(op))
+      setTLoadHelperFlags(load, flags);
+    if (auto alloc = dyn_cast<mlir::pto::AllocTileOp>(op)) {
+      if (isa<mlir::pto::ConvTileBufType>(alloc.getResult().getType()))
+        flags.convTileInit = true;
+    }
+    if (isa<arith::BitcastOp, arith::MaximumFOp, arith::MinimumFOp>(op))
+      flags.bitcast = true;
+  }
+
+  static void setTLoadHelperFlags(mlir::pto::TLoadOp load, HelperFlags &flags) {
+    auto policy = load.getCachePolicyAttr();
+    const bool hasBypassOffset =
+        load.getOffset() && policy &&
+        policy.getValue() == pto::LoadCachePolicy::L2Bypass;
+    if (hasBypassOffset) {
+      flags.globalTensorData = true;
+    }
+  }
 
   static HelperFlags collectHelperFlags(ModuleOp mop) {
     HelperFlags flags;
-    mop.walk([&](Operation *op) {
-      if (isa<mlir::pto::DeclareEventIdArrayOp>(op))
-        flags.eventIdArray = true;
-      if (isa<mlir::pto::TRandomOp>(op))
-        flags.tRandom = true;
-      if (auto cmo = dyn_cast<mlir::pto::CmoCacheInvalidOp>(op)) {
-        if (cmo.getAddr())
-          flags.globalTensorData = true;
-      }
-      if (auto init = dyn_cast<mlir::pto::InitializeL2G2LPipeOp>(op)) {
-        if (isa<mlir::pto::TensorViewType>(init.getGmAddr().getType()))
-          flags.globalTensorData = true;
-      }
-      if (isa<mlir::pto::PartitionViewOp>(op))
-        flags.globalTensorData = true;
-      if (auto load = dyn_cast<mlir::pto::TLoadOp>(op)) {
-        auto policy = load.getCachePolicyAttr();
-        const bool hasBypassOffset = load.getOffset() && policy &&
-                                    policy.getValue() == pto::LoadCachePolicy::L2Bypass;
-        if (hasBypassOffset) {
-          flags.globalTensorData = true;
-        }
-      }
-      if (isa<arith::BitcastOp, arith::MaximumFOp, arith::MinimumFOp>(op))
-        flags.bitcast = true;
-    });
+    mop.walk([&](Operation *op) { setHelperFlagsForOp(op, flags); });
     return flags;
   }
 
@@ -758,6 +769,43 @@ struct EmitPTOManualPass
 
   // Emit the optional runtime helper snippets (global-tensor data accessor,
   // event-id array, TRandom, auto-sync tail, bitcast) needed by this module.
+  static void emitConvTileInitHelper(OpBuilder &builder, Location loc) {
+    builder.create<emitc::VerbatimOp>(
+        loc, builder.getStringAttr(R"cpp(
+template <typename Tile, typename PadValueT>
+static AICORE inline void PTOAS__INIT_CONVTILE_CONFIG(
+    Tile &tile, uint16_t fmapH, uint16_t fmapW, uint8_t padLeft,
+    uint8_t padRight, uint8_t padTop, uint8_t padBottom, uint16_t filterH,
+    uint16_t filterW, uint16_t dilationH, uint16_t dilationW,
+    uint16_t strideH, uint16_t strideW, PadValueT padValue,
+    uint16_t channelSize, uint16_t repeatStride, uint8_t repeatTime,
+    uint8_t repeatMode, uint16_t dstStride, uint16_t dstMposition,
+    bool transpose) {
+  const uint8_t padList[4] = {padLeft, padRight, padTop, padBottom};
+  tile.SetFmapH(fmapH);
+  tile.SetFmapW(fmapW);
+  tile.SetPadListArray(padList);
+  tile.SetFilterH(filterH);
+  tile.SetFilterW(filterW);
+  tile.SetDilationH(dilationH);
+  tile.SetDilationW(dilationW);
+  tile.SetStrideH(strideH);
+  tile.SetStrideW(strideW);
+  tile.SetPadValue(padValue);
+  tile.SetChannelSize(channelSize);
+  tile.SetRepeatStride(repeatStride);
+  tile.SetRepeatTime(repeatTime);
+  tile.SetRepeatMode(repeatMode);
+#ifndef PTO_NPU_ARCH_A2A3
+  tile.SetDstStride(dstStride);
+  tile.SetDstMposition(dstMposition);
+#endif
+  tile.SetTranspose(transpose);
+}
+)cpp"));
+  }
+
+
   static void emitPreambleRuntimeHelpers(ModuleOp mop, OpBuilder &builder,
                                          const HelperFlags &flags) {
     Location loc = mop->getLoc();
@@ -796,6 +844,9 @@ static AICORE inline void PTOAS__TRANDOM(
   TRANDOM<Rounds>(dst, key, counter);
 }
 )cpp"));
+    }
+    if (flags.convTileInit) {
+      emitConvTileInitHelper(builder, loc);
     }
   }
 
@@ -1079,7 +1130,7 @@ static inline To ptoas_bitcast(From from) {
     if (isEmitCPointerLikeType(inTy) && isa<BaseMemRefType>(outTy)) {
       return true;
     }
-    if (isEmitCTileLikeType(inTy) && isa<pto::TileBufType>(outTy)) {
+    if (isEmitCTileLikeType(inTy) && isa<pto::TileBufType, pto::ConvTileBufType>(outTy)) {
       return true;
     }
     // The converted output type equals the input type: the cast is a no-op.

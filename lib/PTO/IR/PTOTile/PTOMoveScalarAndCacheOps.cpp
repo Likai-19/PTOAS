@@ -18,6 +18,12 @@ static LogicalResult verifyTMovGeneric(TMovOp op, bool isA5) {
 }
 
 static LogicalResult verifyTMovImpl(TMovOp op, bool isA5) {
+  if (isa<pto::ConvTileBufType>(op.getSrc().getType()) ||
+      isa<pto::ConvTileBufType>(op.getDst().getType())) {
+    return op.emitOpError(
+        "tmov does not support conv_tile operands; use textract to move a "
+        "FRACTAL_Z conv tile to a right-side tile_buf");
+  }
   Value fp = op.getFp();
   if (fp && !getPTOMemorySpaceEnum(fp.getType())) {
     return op.emitOpError("expects the third tile to have an explicit address space");

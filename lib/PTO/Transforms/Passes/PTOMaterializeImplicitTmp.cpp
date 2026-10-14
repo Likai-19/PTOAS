@@ -134,7 +134,8 @@ static FailureOr<pto::TileBufType> makeSameShapeTmpType(MLIRContext *ctx,
 static FailureOr<Value> createAllocTmp(OpBuilder &builder, Location loc,
                                        pto::TileBufType tmpType) {
   return builder
-      .create<pto::AllocTileOp>(loc, tmpType, Value(), Value(), Value())
+      .create<pto::AllocTileOp>(loc, tmpType, Value(), Value(), Value(),
+                             pto::ConvTileConfigAttr())
       .getResult();
 }
 
@@ -389,7 +390,8 @@ static LogicalResult materializeTRowExpandTmp(OpTy op, bool requireExplicitTmp,
       builder
           .create<pto::AllocTileOp>(op.getLoc(),
                                     makeTRowExpandTmpType(ctx, dstTy), Value(),
-                                    Value(), Value())
+                                    Value(), Value(),
+                                    pto::ConvTileConfigAttr())
           .getResult();
   replaceTRowExpandBinaryOpWithTmp(op.getOperation(), op.getSrc0(), op.getSrc1(),
                                    tmp, op.getDst());
@@ -1083,7 +1085,7 @@ struct PTOMaterializeImplicitTmpPass
       auto tmpType = makeTCITmpType(ctx, getTCIDstBitWidth(op));
       Value tmp =
           builder.create<pto::AllocTileOp>(loc, tmpType, Value(), Value(),
-                                           Value())
+                                           Value(), pto::ConvTileConfigAttr())
               .getResult();
 
       auto newOp = builder.create<pto::TCIOp>(

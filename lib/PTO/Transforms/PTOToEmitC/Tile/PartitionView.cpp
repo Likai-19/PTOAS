@@ -130,9 +130,13 @@ Value ptr = rewriter
                                       linearOffset)
                 .getResult();
 
+auto convLayout = getConvLayoutFromViewType(resultType);
+if (!convLayout)
+  convLayout = resolveConvLayoutForGlobalTensor(op.getSource());
 auto layout = resolveLayoutForGlobalTensor(op.getOperation(), op.getSource());
 std::string layoutString =
-    layout ? layoutToEmitCString(*layout) : "pto::Layout::ND";
+    convLayout ? convLayoutToEmitCString(*convLayout)
+               : (layout ? layoutToEmitCString(*layout) : "pto::Layout::ND");
 auto result = buildRuntimeGlobalTensor(
     rewriter, op.getLoc(), ptr, resultType.getElementType(),
     resultType.getShape(), adaptor.getSizes(), sourceStrides, layoutString);
@@ -292,11 +296,18 @@ struct PTOPartitionViewStaticToEmitC
         getSpecialGlobalTensorTypeSpecForLayout(
             resolveLayoutForGlobalTensor(op.getOperation(), op.getSource()),
             resTy.getShape(), resTy.getElementType()),
-        resolveLayoutForGlobalTensor(op.getOperation(), op.getSource())
-                ? layoutToEmitCString(
-                      *resolveLayoutForGlobalTensor(op.getOperation(),
-                                                    op.getSource()))
-                : "pto::Layout::ND");
+        (getConvLayoutFromViewType(resTy)
+             ? getConvLayoutFromViewType(resTy)
+             : resolveConvLayoutForGlobalTensor(op.getSource()))
+            ? convLayoutToEmitCString(
+                  *(getConvLayoutFromViewType(resTy)
+                        ? getConvLayoutFromViewType(resTy)
+                        : resolveConvLayoutForGlobalTensor(op.getSource())))
+            : (resolveLayoutForGlobalTensor(op.getOperation(), op.getSource())
+                   ? layoutToEmitCString(
+                         *resolveLayoutForGlobalTensor(op.getOperation(),
+                                                       op.getSource()))
+                   : "pto::Layout::ND"));
     if (failed(resultOr))
       return rewriter.notifyMatchFailure(
           op, "failed to materialize partition GlobalTensor");

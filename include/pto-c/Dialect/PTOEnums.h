@@ -134,6 +134,13 @@ enum class MlirPTOSaturationMode {
   OFF = 1,
 };
 
+enum class MlirPTOFmatrixMode {
+  FMATRIX_A_AUTO = 0,
+  FMATRIX_B_AUTO = 1,
+  FMATRIX_A_MANUAL = 2,
+  FMATRIX_B_MANUAL = 3,
+};
+
 enum class MlirPTOPIPE {
   PIPE_S = 0,
   PIPE_V = 1,
@@ -158,6 +165,18 @@ enum class MlirPTOLayout {
   NZ = 2,
   MX_A_ZZ = 3,
   MX_B_NN = 4,
+};
+
+enum class MlirPTOConvLayout {
+  NC1HWC0 = 0,
+  NDC1HWC0 = 1,
+  FRACTAL_Z = 2,
+  FRACTAL_Z_3D = 3,
+  NCHW = 4,
+  NHWC = 5,
+  GNCHW = 6,
+  GNC1HWC0 = 7,
+  NCDHW = 8,
 };
 
 enum class MlirPTOAccToVecMode {

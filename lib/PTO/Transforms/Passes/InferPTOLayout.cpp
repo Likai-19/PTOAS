@@ -72,10 +72,25 @@ static bool isViewType(Type type) {
   return isa<TensorViewType, PartitionTensorViewType>(type);
 }
 
+static Attribute getViewConvLayoutAttr(Type type) {
+  if (auto tensorView = dyn_cast<TensorViewType>(type)) {
+    return dyn_cast_or_null<ConvLayoutAttr>(tensorView.getLayout());
+  }
+  if (auto partitionView = dyn_cast<PartitionTensorViewType>(type)) {
+    return dyn_cast_or_null<ConvLayoutAttr>(partitionView.getLayout());
+  }
+  return {};
+}
+
 static Type getViewTypeWithLayout(Type type, Layout layout) {
   Attribute layoutAttr;
   if (layout != Layout::ND) {
     layoutAttr = LayoutAttr::get(type.getContext(), layout);
+  }
+  // A conv storage layout declared on the view describes how the GM data is
+  // laid out; layout inference reasons about ND/NZ/DN only, so keep it.
+  if (Attribute convLayoutAttr = getViewConvLayoutAttr(type)) {
+    layoutAttr = convLayoutAttr;
   }
   if (auto tensorView = dyn_cast<TensorViewType>(type)) {
     return TensorViewType::get(type.getContext(), tensorView.getShape(),

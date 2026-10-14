@@ -71,6 +71,8 @@ void populateTileTileAllocPatterns(RewritePatternSet &patterns,
 void populateTileTileMiscPatterns(RewritePatternSet &patterns,
                         TypeConverter &typeConverter, MLIRContext *ctx,
                         PTOArch targetArch);
+void populateTileTileImg2colPatterns(RewritePatternSet &patterns,
+                        TypeConverter &typeConverter, MLIRContext *ctx);
 
 } // namespace pto
 } // namespace mlir

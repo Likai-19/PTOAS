@@ -136,6 +136,14 @@ static bool shouldEncodeViaGenericV0CompatibilityShim(mlir::Operation &op) {
   if (requiresGenericForExtendedTileOp(op)) {
     return true;
   }
+  if (auto timg2col = llvm::dyn_cast<mlir::pto::TImg2colOp>(&op)) {
+    // The shipped 0x102C payload carries exactly dst/src; the pos_m/pos_k
+    // runtime-offset operand forms postdate it, so they take the generic
+    // v0 record rather than truncating under the fixed schema. (Cache
+    // bust: reworded so content-keyed CI caches cannot replay the
+    // pre-shim object after 92af0db87.)
+    return timg2col.getPosM() || timg2col.getPosK();
+  }
   if (auto tmov = llvm::dyn_cast<mlir::pto::TMovOp>(&op)) {
     if (mlir::pto::classifyTMovForm(tmov.getFp()) ==
         mlir::pto::TMovForm::XToZz) {

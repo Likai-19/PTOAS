@@ -65,7 +65,224 @@ static LogicalResult verifyTExtractA2A3Mat(TExtractOp op,
   return success();
 }
 
+static bool isConvTileExtractElem(Type ty) {
+  if (ty.isF16() || ty.isBF16() || ty.isF32()) {
+    return true;
+  }
+  if (auto intTy = dyn_cast<IntegerType>(ty)) {
+    unsigned width = intTy.getWidth();
+    return width == 8 || width == 16 || width == 32;
+  }
+  return false;
+}
+
+static LogicalResult verifyConvTileTExtractLayouts(TExtractOp op) {
+  Type srcTy = op.getSrc().getType();
+  Type dstTy = op.getDst().getType();
+  auto srcCT = dyn_cast<pto::ConvTileBufType>(srcTy);
+  auto srcSpace = getPTOMemorySpaceEnum(srcTy);
+  auto dstSpace = getPTOMemorySpaceEnum(dstTy);
+  if (!srcSpace || *srcSpace != pto::AddressSpace::MAT) {
+    return op.emitOpError("expects convtile textract src to use loc=mat");
+  }
+  if (!dstSpace || *dstSpace != pto::AddressSpace::RIGHT) {
+    return op.emitOpError("expects convtile textract dst to use loc=right");
+  }
+  auto srcLayout = dyn_cast_or_null<pto::ConvLayoutAttr>(srcCT.getLayout());
+  if (!srcLayout ||
+      (srcLayout.getValue() != pto::ConvLayout::FRACTAL_Z &&
+       srcLayout.getValue() != pto::ConvLayout::FRACTAL_Z_3D)) {
+    return op.emitOpError(
+        "expects convtile textract src to use layout=FRACTAL_Z or FRACTAL_Z_3D");
+  }
+  auto dstTb = dyn_cast<pto::TileBufType>(dstTy);
+  if (!dstTb ||
+      dstTb.getBLayoutValueI32() !=
+          static_cast<int32_t>(pto::BLayout::RowMajor) ||
+      dstTb.getSLayoutValueI32() !=
+          static_cast<int32_t>(pto::SLayout::ColMajor)) {
+    return op.emitOpError(
+        "expects convtile textract dst to use blayout=row_major and slayout=col_major");
+  }
+  return success();
+}
+
+static LogicalResult verifyConvTileTExtractElems(TExtractOp op) {
+  Type srcElem = getElemTy(op.getSrc().getType());
+  Type dstElem = getElemTy(op.getDst().getType());
+  if (!srcElem || !dstElem || srcElem != dstElem) {
+    return op.emitOpError(
+        "expects convtile textract src and dst to have the same element type");
+  }
+  // A2/A3's TEXTRACT_CONVTILE_IMPL only accepts int8/half/bfloat16/float;
+  // the wider i16/i32 forms are A5-only (a5/TExtractCommon.hpp).
+  const bool isA5 = getVerifierTargetArch(op.getOperation()) ==
+                    VerifierTargetArch::A5;
+  if (!isConvTileExtractElem(srcElem) ||
+      (!isA5 && (srcElem.isInteger(16) || srcElem.isInteger(32)))) {
+    return op.emitOpError(
+        "expects convtile textract element type to be i8/i16/i32/f16/bf16/f32");
+  }
+  return success();
+}
+
+static LogicalResult verifyConvTileTExtractShape(TExtractOp op) {
+  auto srcCT = dyn_cast<pto::ConvTileBufType>(op.getSrc().getType());
+  auto srcLayout = dyn_cast_or_null<pto::ConvLayoutAttr>(srcCT.getLayout());
+  const bool isFractalZ =
+      srcLayout && srcLayout.getValue() == pto::ConvLayout::FRACTAL_Z;
+  const bool isFractalZ3D =
+      srcLayout && srcLayout.getValue() == pto::ConvLayout::FRACTAL_Z_3D;
+  if (!isFractalZ && !isFractalZ3D) {
+    return success();
+  }
+  // Mirrors the runtime TEXTRACT_CONVTILE_IMPL: a rank-4 FRACTAL_Z or
+  // FRACTAL_Z_3D conv tile is [C1HW, N/16, 16, C0] and must end in the
+  // static [16, c0] minor dims, a rank-5 FRACTAL_Z one is [C1, H, W, N, C0]
+  // and only the trailing c0 is fixed, where c0 = 32 / sizeof(element); see
+  // convC0ForElemBytes for why the c0 lookup is not a literal division.
+  // Rank is checked before indexing.
+  ArrayRef<int64_t> shape = srcCT.getShape();
+  if (shape.size() != 4 && !(isFractalZ && shape.size() == 5)) {
+    return op.emitOpError()
+           << "expects convtile textract "
+           << stringifyConvLayout(srcLayout.getValue()) << " src rank to be 4"
+           << (isFractalZ ? " or 5" : "") << ", got " << shape.size();
+  }
+  const int64_t elemBytes = getPTOStorageElemByteSize(srcCT.getElementType());
+  const std::optional<int64_t> c0 = mlir::pto::convC0ForElemBytes(elemBytes);
+  if (!c0) {
+    return op.emitOpError() << "expects convtile textract src element type to "
+                               "have a known storage size";
+  }
+  if (shape.size() == 4) {
+    if (shape[2] != 16 || shape[3] != *c0) {
+      return op.emitOpError()
+             << "expects convtile textract "
+             << stringifyConvLayout(srcLayout.getValue())
+             << " src trailing dims to be [16, " << *c0 << "]";
+    }
+  } else if (shape.back() != *c0) {
+    return op.emitOpError()
+           << "expects convtile textract rank-5 FRACTAL_Z src trailing dim to "
+              "be "
+           << *c0;
+  }
+  return success();
+}
+
+static LogicalResult verifyConvTileTExtractCoverage(TExtractOp op);
+static LogicalResult verifyConvTileTExtract(TExtractOp op,
+                                            bool allowLowPrecision) {
+  Type srcTy = op.getSrc().getType();
+  Type dstTy = op.getDst().getType();
+  const bool hasFp = static_cast<bool>(op.getFp());
+  const bool hasPreQuantScalar = static_cast<bool>(op.getPreQuantScalar());
+  const bool hasRelu = op.getReluPreMode() != pto::ReluPreMode::NoRelu;
+  if (failed(verifyTileLikeCommon(op, srcTy, "src",
+                                  /*allowLowPrecision=*/allowLowPrecision)) ||
+      failed(verifyTileBufCommon(op, dstTy, "dst",
+                                 /*allowLowPrecision=*/allowLowPrecision)) ||
+      failed(verifyNonNegativeIndexRowCol(
+          *op.getOperation(), op.getIndexRow(), op.getIndexCol(),
+          /*includeIndexAndIntOpsInConstFold=*/hasFp)) ||
+      failed(verifyConvTileTExtractShape(op)) ||
+      failed(verifyConvTileTExtractCoverage(op))) {
+    return failure();
+  }
+  if (hasFp || hasPreQuantScalar || hasRelu || op.getAccToVecModeAttr()) {
+    return op.emitOpError("expects convtile textract to use the base form");
+  }
+  if (failed(verifyConvTileTExtractLayouts(op)) ||
+      failed(verifyConvTileTExtractElems(op))) {
+    return failure();
+  }
+  return success();
+}
+
+// Verify the textract window stays within the source capacity and that
+// constant indices are aligned. The capacity formulas were validated on
+// real hardware (probe P-a: indexRow=32, K=64 → bit-exact golden match).
+// Misalignment does not corrupt data — the runtime truncates sub-fractal
+// offsets via >>4 / >>5 (probe P-c: indexCol=8 behaved identically to 0) —
+// but silently dropping the offset is a semantic trap worth catching.
+// K/N totals of a FRACTAL_Z / FRACTAL_Z_3D conv tile, derived from the
+// runtime's address math (probe-validated). Returns false when the shape
+// is not one of the supported fractal loadings.
+static bool convTileExtractCapacity(pto::ConvTileBufType srcCT,
+                                    pto::ConvLayout layoutVal,
+                                    int64_t &kTotal, int64_t &nTotal) {
+  ArrayRef<int64_t> shape = srcCT.getShape();
+  if (shape.size() == 4) {
+    nTotal = shape[1] * shape[2];
+    kTotal = shape[0] * shape[3];
+    return true;
+  }
+  if (shape.size() == 5 && layoutVal == pto::ConvLayout::FRACTAL_Z) {
+    nTotal = shape[3];
+    kTotal = shape[0] * shape[1] * shape[2] * shape[4];
+    return true;
+  }
+  return false;
+}
+
+static LogicalResult verifyConvTileTExtractCoverage(TExtractOp op) {
+  auto srcCT = dyn_cast<pto::ConvTileBufType>(op.getSrc().getType());
+  auto srcLayout = dyn_cast_or_null<pto::ConvLayoutAttr>(srcCT.getLayout());
+  if (!srcLayout) return success();
+  auto layoutVal = srcLayout.getValue();
+  if (layoutVal != pto::ConvLayout::FRACTAL_Z &&
+      layoutVal != pto::ConvLayout::FRACTAL_Z_3D) {
+    return success();
+  }
+  auto dstTB = dyn_cast<pto::TileBufType>(op.getDst().getType());
+  if (!dstTB) return success();
+  auto valid = dstTB.getValidShape();
+  if (valid.size() != 2 || valid[0] < 0 || valid[1] < 0) return success();
+  const int64_t dstRows = valid[0];
+  const int64_t dstCols = valid[1];
+
+  const int64_t elemBytes = getPTOStorageElemByteSize(srcCT.getElementType());
+  const auto c0 = mlir::pto::convC0ForElemBytes(elemBytes);
+  if (!c0) return success();
+
+  int64_t kTotal = 0, nTotal = 0;
+  if (!convTileExtractCapacity(srcCT, layoutVal, kTotal, nTotal)) {
+    return success();
+  }
+
+  auto idxRow = mlir::getConstantIntValue(op.getIndexRow());
+  auto idxCol = mlir::getConstantIntValue(op.getIndexCol());
+  if (idxCol) {
+    if (*idxCol % 16 != 0) {
+      return op.emitOpError()
+             << "textract indexCol " << *idxCol
+             << " is not aligned to 16; the runtime silently truncates the sub-fractal offset";
+    }
+    if (*idxCol + dstCols > nTotal) {
+      return op.emitOpError()
+             << "textract indexCol " << *idxCol << " + dstCols " << dstCols
+             << " exceeds N capacity " << nTotal;
+    }
+  }
+  if (idxRow) {
+    if (*idxRow % *c0 != 0) {
+      return op.emitOpError()
+             << "textract indexRow " << *idxRow
+             << " is not aligned to c0=" << *c0
+             << "; the runtime silently truncates the offset";
+    }
+    if (*idxRow + dstRows > kTotal) {
+      return op.emitOpError()
+             << "textract indexRow " << *idxRow << " + dstRows " << dstRows
+             << " exceeds K capacity " << kTotal;
+    }
+  }
+  return success();
+}
+
 static LogicalResult verifyTExtractA2A3(TExtractOp op) {
+
   auto common = verifyTExtractCommon(op, /*allowLowPrecision=*/false);
   if (failed(common)) {
     return failure();
@@ -170,6 +387,7 @@ static LogicalResult verifyTExtractA5Acc(TExtractOp op,
 }
 
 static LogicalResult verifyTExtractA5(TExtractOp op) {
+
   auto common = verifyTExtractCommon(op, /*allowLowPrecision=*/true);
   if (failed(common)) {
     return failure();
@@ -216,6 +434,11 @@ static LogicalResult verifyTExtractA5(TExtractOp op) {
 }
 
 mlir::LogicalResult mlir::pto::TExtractOp::verify() {
+  if (isa<pto::ConvTileBufType>(getSrc().getType())) {
+    const bool allowLowPrecision =
+        getVerifierTargetArch(getOperation()) == VerifierTargetArch::A5;
+    return verifyConvTileTExtract(*this, allowLowPrecision);
+  }
   auto verifyA2A3 = [this]() -> LogicalResult { return verifyTExtractA2A3(*this); };
   auto verifyA5 = [this]() -> LogicalResult { return verifyTExtractA5(*this); };
   return dispatchVerifierByArch(getOperation(), verifyA2A3, verifyA5);

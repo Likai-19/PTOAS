@@ -164,11 +164,20 @@ static LogicalResult parseViewShapeElemAndLayout(
     return failure();
   }
   if (succeeded(parser.parseOptionalComma())) {
-    LayoutAttr layoutAttr;
-    if (parser.parseAttribute(layoutAttr)) {
+    // A view carries either a generic GlobalTensor layout (#pto.layout) or a
+    // conv storage layout (#pto.conv_layout). The latter lets a GM view that
+    // already holds conv-formatted data feed pto.tload straight into a
+    // conv tile without an intermediate conversion.
+    Attribute parsedLayout;
+    if (parser.parseAttribute(parsedLayout)) {
       return failure();
     }
-    layout = layoutAttr;
+    if (!isa<LayoutAttr, ConvLayoutAttr>(parsedLayout)) {
+      parser.emitError(parser.getCurrentLocation())
+          << "view layout must be #pto.layout or #pto.conv_layout";
+      return failure();
+    }
+    layout = parsedLayout;
   }
   return parser.parseGreater();
 }

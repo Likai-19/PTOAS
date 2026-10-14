@@ -28,6 +28,7 @@ static void populateTileFamilyPatterns(RewritePatternSet &patterns,
   populateTileTensorViewPatterns(patterns, typeConverter, ctx);
   populateTileTileAllocPatterns(patterns, typeConverter, ctx, targetArch);
   populateTileTileMiscPatterns(patterns, typeConverter, ctx, targetArch);
+  populateTileTileImg2colPatterns(patterns, typeConverter, ctx);
 }
 
 void populateTilePatterns(RewritePatternSet &patterns,

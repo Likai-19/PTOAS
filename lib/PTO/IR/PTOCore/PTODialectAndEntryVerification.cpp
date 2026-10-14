@@ -8,6 +8,8 @@
 
 // Included by PTO.cpp as part of the PTO IR implementation translation unit.
 
+#include "llvm/ADT/APInt.h"
+
 AddressSpaceAttr mlir::pto::getPTOAddressSpaceAttr(Type type)
 {
     if (auto ptrType = dyn_cast<PtrType>(type)) {
@@ -249,8 +251,82 @@ static LogicalResult verifyConstantLocalAddress(Operation *op, Value addr,
   return success();
 }
 
+// pad_value flows to SetPadValue(DType) through an implicit C++
+// conversion. A float value feeding an integer tile truncates toward
+// zero and an out-of-range integer wraps -- both silently. Reject the
+// combinations that lose data; an integer pad on a float tile converts
+// exactly (up to 2^24) and stays legal.
+static LogicalResult verifyConvTilePadValue(pto::AllocTileOp op,
+                                            pto::ConvTileBufType convTy,
+                                            pto::ConvTileConfigAttr cfg) {
+  Type tileElem = convTy.getElementType();
+  Attribute padValue = cfg.getPadValue();
+  if (auto floatAttr = dyn_cast<mlir::FloatAttr>(padValue)) {
+    if (tileElem.isa<mlir::IntegerType>()) {
+      return op.emitOpError()
+             << "config pad_value " << floatAttr.getValueAsDouble()
+             << " is a float but the tile element type is "
+             << tileElem << "; the runtime would silently truncate it";
+    }
+    return success();
+  }
+  if (auto intAttr = dyn_cast<mlir::IntegerAttr>(padValue)) {
+    if (auto intTile = dyn_cast<mlir::IntegerType>(tileElem)) {
+      int64_t value = intAttr.getInt();
+      int64_t minValue = llvm::APInt::getSignedMinValue(intTile.getWidth())
+                             .getSExtValue();
+      int64_t maxValue = llvm::APInt::getSignedMaxValue(intTile.getWidth())
+                             .getSExtValue();
+      if (value < minValue || value > maxValue) {
+        return op.emitOpError()
+               << "config pad_value " << value
+               << " does not fit the tile element type " << tileElem
+               << "; the runtime would silently wrap it";
+      }
+    }
+    return success();
+  }
+  return success();
+}
+
+static LogicalResult verifyConvTileAlloc(pto::AllocTileOp op) {
+  if (op.getValidRow() || op.getValidCol()) {
+    return op.emitOpError(
+        "valid_row and valid_col operands require result to be "
+        "`!pto.conv_tile_buf`");
+  }
+  auto convTy = cast<pto::ConvTileBufType>(op.getResult().getType());
+  if (auto cfg = op.getConfig()) {
+    // a2a3's ConvTile has no dst_stride/dst_mposition fields and EmitC
+    // drops them; A5 packs them into the SET_IMG2COL_RPT config.
+    if (getVerifierTargetArch(op.getOperation()) != VerifierTargetArch::A5 &&
+        (cfg->getDstStride().getInt() != 0 ||
+         cfg->getDstMposition().getInt() != 0)) {
+      return op.emitOpError(
+          "config dst_stride/dst_mposition require --pto-arch=a5");
+    }
+    if (failed(verifyConvTilePadValue(op, convTy, *cfg))) {
+      return failure();
+    }
+  }
+  return verifyConstantLocalAddress(op.getOperation(), op.getAddr(),
+                                    convTy.getMemorySpace());
+}
+
 LogicalResult AllocTileOp::verify() {
-  auto ty = getResult().getType(); // TileBufType
+  auto resultType = getResult().getType();
+  if (isa<pto::ConvTileBufType>(resultType)) {
+    return verifyConvTileAlloc(*this);
+  }
+  if (getConfig()) {
+    return emitOpError("config attribute requires result to be `!pto.conv_tile_buf`");
+  }
+
+  auto ty = dyn_cast<pto::TileBufType>(resultType);
+  if (!ty) {
+    return emitOpError("result must be `!pto.tile_buf` or `!pto.conv_tile`");
+  }
+
   if (failed(verifyTileBufLayoutConstraints(*this, ty, "result"))) {
     return failure();
   }
@@ -265,9 +341,8 @@ LogicalResult AllocTileOp::verify() {
   bool hasVC = getValidCol() != nullptr;
 
   // type 上的 validShape
-  constexpr size_t kTileBufValidShapeRank = mlir::pto::kValue2;
   auto vs = ty.getValidShape();
-  if (vs.size() != kTileBufValidShapeRank) {
+  if (vs.size() != 2) {
     return emitOpError("result tile_buf must have rank-2 validShape");
   }
 

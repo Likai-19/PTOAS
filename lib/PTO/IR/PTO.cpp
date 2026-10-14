@@ -90,6 +90,7 @@
 #include "PTOTile/PTODeinterleaveAndRowProduct.cpp"
 #include "PTOTile/PTOScatterAndSelect.cpp"
 #include "PTOTile/PTOShiftSortSubtractOps.cpp"
+#include "PTOTile/PTOConvTileOps.cpp"
 #include "PTOTile/PTOTransposeXorPrintMatrix.cpp"
 
 // Concrete types, subviews, and memory-effect interfaces.

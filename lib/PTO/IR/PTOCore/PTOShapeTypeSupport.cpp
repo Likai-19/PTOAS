@@ -178,6 +178,10 @@ static SmallVector<int64_t, mlir::pto::kValue4> getValidShapeVec(Type ty);
 static SmallVector<int64_t, mlir::pto::kValue4> getValidShapeVec(Value value);
 static bool isKnownZeroOrUnitExtent(int64_t value);
 static bool isByteIntegerType(Type ty);
+static LogicalResult verifyConvTileCommon(Operation *op, Type ty, StringRef name,
+                                          bool allowLowPrecision = false);
+static LogicalResult verifyTileLikeCommon(Operation *op, Type ty, StringRef name,
+                                          bool allowLowPrecision = false);
 static LogicalResult verifyTileBufCommon(Operation *op, Type ty, StringRef name,
                                          bool allowLowPrecision = false);
 static LogicalResult verifyTmpCapacityAtLeast(Operation *op, Type tmpTy,

@@ -56,6 +56,19 @@ static uint64_t getStaticBufferSizeInBytes(ArrayRef<int64_t> shape,
   return size;
 }
 
+// A conv tile reserves buffer_size elements of storage in L1 (the type's
+// declared capacity, not the logical shape product).
+static uint64_t getConvTileFootprintBytes(pto::ConvTileBufType type) {
+  uint64_t elemBytes = pto::getPTOStorageElemByteSize(type.getElementType());
+  int64_t bufferSize = type.getBufferSizeValue();
+  if (elemBytes == 0 || bufferSize <= 0 ||
+      static_cast<uint64_t>(bufferSize) >
+          std::numeric_limits<uint64_t>::max() / elemBytes) {
+    return 0;
+  }
+  return static_cast<uint64_t>(bufferSize) * elemBytes;
+}
+
 static uint64_t getTileBufferFootprintBytes(pto::TileBufType type) {
   ArrayRef<int64_t> shape = type.getShape();
   uint64_t elemBytes = pto::getPTOStorageElemByteSize(type.getElementType());
@@ -279,8 +292,8 @@ static std::optional<pto::PipelineType> getSyncHelperPipe(func::FuncOp callee) {
 }
 
 static bool isSyncHelperMemoryOperand(Type type) {
-  return isa<pto::PtrType, pto::TileBufType, pto::TensorViewType,
-             pto::PartitionTensorViewType>(type);
+  return isa<pto::PtrType, pto::TileBufType, pto::ConvTileBufType,
+             pto::TensorViewType, pto::PartitionTensorViewType>(type);
 }
 
 static pto::TCoreType getSyncHelperCoreType(pto::PipelineType pipe) {
@@ -314,6 +327,17 @@ void PTOIRTranslator::UpdateKernelArgMemInfo() {
     } else if (auto tileType = dyn_cast<pto::TileBufType>(argType)) {
       space = getTileAddressSpace(tileType);
       sizeInBytes = getTileBufferFootprintBytes(tileType);
+    } else if (auto convType = dyn_cast<pto::ConvTileBufType>(argType)) {
+      // A conv tile handed in as a kernel argument participates in the same
+      // dependency tracking as a locally allocated one: without registering
+      // it here, a TLOAD (MTE2) -> TIMG2COL (MTE1) pair through the argument
+      // gets no barrier at all.
+      space = pto::AddressSpace::MAT;
+      if (auto attr =
+              dyn_cast_or_null<pto::AddressSpaceAttr>(convType.getMemorySpace())) {
+        space = attr.getAddressSpace();
+      }
+      sizeInBytes = getConvTileFootprintBytes(convType);
     } else if (auto multiType = dyn_cast<pto::MultiTileBufType>(argType)) {
       pto::TileBufType slotType = multiType.getSlotType();
       space = getTileAddressSpace(slotType);
@@ -487,6 +511,13 @@ LogicalResult PTOIRTranslator::UpdateAllocTileOpMemInfo(pto::AllocTileOp op) {
   // 1. 计算大小
   if (tileType) {
     sizeInBytes = getTileBufferFootprintBytes(tileType);
+    if (sizeInBytes == 0) {
+      return failure();
+    }
+  } else if (auto convType = dyn_cast<pto::ConvTileBufType>(res.getType())) {
+    // Without a footprint the overlap analysis treats every conv tile as
+    // size 0 and conservatively syncs non-overlapping buffers.
+    sizeInBytes = getConvTileFootprintBytes(convType);
     if (sizeInBytes == 0) {
       return failure();
     }

@@ -36,8 +36,12 @@ static LogicalResult verifyBoxedTileBufLayout(
     return success();
 }
 
-static LogicalResult verifyTileBufLayoutConstraints(Operation* op, pto::TileBufType tb, StringRef name)
+static LogicalResult verifyTileBufLayoutConstraints(Operation* op, Type ty, StringRef name)
 {
+    auto tb = dyn_cast<pto::TileBufType>(ty);
+    if (!tb) {
+        return op->emitOpError() << "expects " << name << " to be a !pto.tile_buf";
+    }
     auto shape = tb.getShape();
     if (failed(verifyTileBufPositiveShape(op, shape, name))) {
         return failure();

@@ -114,7 +114,7 @@ static Operation *cloneOpForInlineWithFix(OpBuilder &builder, Operation &op,
 
     auto cloned = builder.create<pto::AllocTileOp>(
         alloc.getLoc(), alloc.getType(), mappedAddr, mappedValidRow,
-        mappedValidCol);
+        mappedValidCol, pto::ConvTileConfigAttr());
     cloned->setAttrs(alloc->getAttrs());
     return cloned.getOperation();
   }

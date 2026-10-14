@@ -160,6 +160,20 @@ MLIR_CAPI_EXPORTED MlirType mlirPTOTileBufTypeGet(
 MLIR_CAPI_EXPORTED MlirType mlirPTOTileBufTypeGetWithConfig(
     MlirContext ctx, intptr_t rank, const int64_t *shape,
     MlirType elementType, MlirAttribute memorySpace, MlirAttribute config);
+
+// ---- ConvTileBufType ----
+MLIR_CAPI_EXPORTED bool mlirPTOTypeIsAConvTileBufType(MlirType type);
+
+MLIR_CAPI_EXPORTED MlirType mlirPTOConvTileBufTypeGet(
+    MlirContext ctx, intptr_t rank, const int64_t *shape,
+    MlirType elementType, MlirAttribute bufferSize,
+    MlirAttribute memorySpace, MlirAttribute layout);
+
+MLIR_CAPI_EXPORTED intptr_t mlirPTOConvTileBufTypeGetRank(MlirType type);
+MLIR_CAPI_EXPORTED MlirType mlirPTOConvTileBufTypeGetElementType(MlirType type);
+MLIR_CAPI_EXPORTED const int64_t *mlirPTOConvTileBufTypeGetShape(MlirType type,
+                                                               intptr_t *numDimsOut);
+MLIR_CAPI_EXPORTED MlirAttribute mlirPTOConvTileBufTypeGetLayout(MlirType type);
 // ---- Enum attrs helpers (BLayout/SLayout/PadValue in mlir::pto) ----
 MLIR_CAPI_EXPORTED bool mlirPTOAttrIsABLayoutAttr(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirAttribute mlirPTOBLayoutAttrGet(MlirContext ctx, int32_t value);
@@ -227,6 +241,9 @@ MLIR_CAPI_EXPORTED int32_t mlirPTOFmodPrecisionAttrGetValue(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirAttribute mlirPTOSaturationModeAttrGet(MlirContext ctx, int32_t value);
 MLIR_CAPI_EXPORTED bool mlirPTOAttrIsASaturationModeAttr(MlirAttribute attr);
 MLIR_CAPI_EXPORTED int32_t mlirPTOSaturationModeAttrGetValue(MlirAttribute attr);
+MLIR_CAPI_EXPORTED MlirAttribute mlirPTOFmatrixModeAttrGet(MlirContext ctx, int32_t value);
+MLIR_CAPI_EXPORTED bool mlirPTOAttrIsAFmatrixModeAttr(MlirAttribute attr);
+MLIR_CAPI_EXPORTED int32_t mlirPTOFmatrixModeAttrGetValue(MlirAttribute attr);
 // ---- Pipe attr ----
 MLIR_CAPI_EXPORTED MlirAttribute mlirPTOPipeAttrGet(MlirContext ctx, int32_t value);
 MLIR_CAPI_EXPORTED bool mlirPTOAttrIsAPipeAttr(MlirAttribute attr);
@@ -235,6 +252,11 @@ MLIR_CAPI_EXPORTED int32_t mlirPTOPipeAttrGetValue(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirAttribute mlirPTOLayoutAttrGet(MlirContext ctx, int32_t value);
 MLIR_CAPI_EXPORTED bool mlirPTOAttrIsALayoutAttr(MlirAttribute attr);
 MLIR_CAPI_EXPORTED int32_t mlirPTOLayoutAttrGetValue(MlirAttribute attr);
+// ---- ConvLayout attr ----
+MLIR_CAPI_EXPORTED MlirAttribute mlirPTOConvLayoutAttrGet(MlirContext ctx,
+                                                           int32_t value);
+MLIR_CAPI_EXPORTED bool mlirPTOAttrIsAConvLayoutAttr(MlirAttribute attr);
+MLIR_CAPI_EXPORTED int32_t mlirPTOConvLayoutAttrGetValue(MlirAttribute attr);
 // ---- SyncOpType attr ----
 MLIR_CAPI_EXPORTED MlirAttribute mlirPTOSyncOpTypeAttrGet(MlirContext ctx, int32_t value);
 MLIR_CAPI_EXPORTED bool mlirPTOAttrIsASyncOpTypeAttr(MlirAttribute attr);
@@ -301,6 +323,22 @@ MLIR_CAPI_EXPORTED MlirAttribute mlirPTOTileBufConfigAttrGetWithCompactMode(
     MlirAttribute bLayout, MlirAttribute sLayout,
     MlirAttribute sFractalSize, MlirAttribute pad,
     MlirAttribute compactMode);
+
+// ---- ConvTileConfigAttr ----
+MLIR_CAPI_EXPORTED bool mlirPTOAttrIsAConvTileConfigAttr(MlirAttribute attr);
+
+MLIR_CAPI_EXPORTED MlirAttribute mlirPTOConvTileConfigAttrGetDefault(MlirContext ctx);
+
+MLIR_CAPI_EXPORTED MlirAttribute mlirPTOConvTileConfigAttrGet(
+    MlirContext ctx, MlirAttribute fmapH, MlirAttribute fmapW,
+    intptr_t padListSize, const int64_t *padList,
+    MlirAttribute filterH, MlirAttribute filterW,
+    MlirAttribute dilationH, MlirAttribute dilationW,
+    MlirAttribute strideH, MlirAttribute strideW,
+    MlirAttribute padValue, MlirAttribute channelSize,
+    MlirAttribute repeatStride, MlirAttribute repeatTime,
+    MlirAttribute repeatMode, MlirAttribute dstStride,
+    MlirAttribute dstMposition, MlirAttribute transpose);
 MLIR_CAPI_EXPORTED MlirType mlirPTOTileBufTypeGetWithValidShape(
     MlirContext ctx, intptr_t rank, const int64_t *shape, MlirType elementType,
     MlirAttribute memorySpace, intptr_t validRank, const int64_t *validShape);

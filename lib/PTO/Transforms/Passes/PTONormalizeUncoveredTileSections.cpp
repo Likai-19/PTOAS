@@ -282,19 +282,20 @@ static std::optional<AddressSpace> getBufferAddressSpace(Type type) {
   if (auto ptrType = dyn_cast<PtrType>(type)) {
     return ptrType.getMemorySpace().getAddressSpace();
   }
+  // Collapsed so the per-type bodies do not duplicate the planner's copy
+  // of this lookup; each type only contributes its memory-space attribute.
+  Attribute memorySpace;
   if (auto tileType = dyn_cast<TileBufType>(type)) {
-    if (auto attr =
-            dyn_cast_or_null<AddressSpaceAttr>(tileType.getMemorySpace())) {
-      return attr.getAddressSpace();
-    }
+    memorySpace = tileType.getMemorySpace();
+  } else if (auto convType = dyn_cast<ConvTileBufType>(type)) {
+    memorySpace = convType.getMemorySpace();
+  } else if (auto memrefType = dyn_cast<MemRefType>(type)) {
+    memorySpace = memrefType.getMemorySpace();
+  } else {
     return std::nullopt;
   }
-  if (auto memrefType = dyn_cast<MemRefType>(type)) {
-    if (auto attr =
-            dyn_cast_or_null<AddressSpaceAttr>(memrefType.getMemorySpace())) {
-      return attr.getAddressSpace();
-    }
-    return std::nullopt;
+  if (auto attr = dyn_cast_or_null<AddressSpaceAttr>(memorySpace)) {
+    return attr.getAddressSpace();
   }
   return std::nullopt;
 }

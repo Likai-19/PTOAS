@@ -220,6 +220,7 @@ add_mlir_dialect_library(PTOTransforms
   PTOToEmitC/Tile/TensorView.cpp
   PTOToEmitC/Tile/TileAlloc.cpp
   PTOToEmitC/Tile/TileMisc.cpp
+  PTOToEmitC/Tile/TileImg2col.cpp
   PTOToEmitC/Tile/TileSupport.cpp
   PTOToEmitC/Tile/TilePatterns.cpp
   PTOToEmitC/SyncComm/BlockIdx.cpp

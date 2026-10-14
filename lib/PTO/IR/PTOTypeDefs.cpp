@@ -11,6 +11,7 @@
 #include <mutex>
 #include <unordered_map>
 #include "PTO/IR/PTO.h"
+#include "PTO/IR/PTOTypeUtils.h"
 #include "PTO/IR/PTOMultiBuffer.h"
 #include "mlir/IR/DialectImplementation.h"
 
@@ -209,21 +210,13 @@ static BLayout resolveTileBufBLayout(MLIRContext *context,
 }
 
 TileBufConfigAttr TileBufType::getConfigAttr() const {
-  // 情况 A：getConfig() 已经是 TileBufConfigAttr
-  if constexpr (std::is_same_v<decltype(getConfig()), TileBufConfigAttr>) {
-    auto cfg = getConfig();
-    if (!cfg) {
-      cfg = TileBufConfigAttr::getDefault(getContext());
-    }
-    return cfg;
-  } else {
-    // 情况 B：getConfig() 是 Attribute
-    auto cfg = llvm::dyn_cast_or_null<TileBufConfigAttr>(getConfig());
-    if (!cfg) {
-      cfg = TileBufConfigAttr::getDefault(getContext());
-    }
-    return cfg;
+  // The $config parameter is declared as TileBufConfigAttr, so getConfig()
+  // already returns that type; only the null (use-default) case remains.
+  auto cfg = getConfig();
+  if (!cfg) {
+    cfg = TileBufConfigAttr::getDefault(getContext());
   }
+  return cfg;
 }
 bool TileBufType::hasNonDefaultConfig() const {
   return !getConfigAttr().isDefault();
@@ -805,6 +798,466 @@ void mlir::pto::TileBufType::print(mlir::AsmPrinter &odsPrinter) const {
                              vcol);
 
   odsPrinter << ">";
+}
+
+namespace {
+
+struct ParsedConvTileFields {
+  std::string locStr;
+  SmallVector<int64_t, 6> shape;
+  Type dtype;
+  IntegerAttr bufferSize;
+  ConvLayoutAttr layoutAttr;
+};
+
+static std::optional<int64_t> computeConvTileBufferSize(ArrayRef<int64_t> shape) {
+  if (shape.empty()) {
+    return std::nullopt;
+  }
+
+  int64_t capacity = 1;
+  for (int64_t dim : shape) {
+    if (dim <= 0) {
+      return std::nullopt;
+    }
+    if (capacity > std::numeric_limits<int64_t>::max() / dim) {
+      return std::nullopt;
+    }
+    capacity *= dim;
+  }
+  return capacity;
+}
+
+static LogicalResult parseConvTileLayoutField(AsmParser &parser,
+                                              Attribute &layoutAttr) {
+  if (failed(parser.parseAttribute(layoutAttr))) {
+    return failure();
+  }
+  return success();
+}
+
+static void printConvTileLayoutField(AsmPrinter &printer, Attribute layoutAttr) {
+  printer << "layout=";
+  printer.printAttribute(layoutAttr);
+}
+
+static LogicalResult checkConvTileShape(AsmParser &parser,
+                                        ArrayRef<int64_t> shape) {
+  auto emitError = [&]() -> InFlightDiagnostic {
+    return parser.emitError(parser.getNameLoc());
+  };
+  if (shape.empty()) {
+    emitError() << "conv_tile shape must be non-empty";
+    return failure();
+  }
+  if (shape.size() > 6) {
+    emitError() << "conv_tile shape must have rank in [1, 6]";
+    return failure();
+  }
+  if (llvm::is_contained(shape, ShapedType::kDynamic)) {
+    emitError() << "conv_tile shape must be static";
+    return failure();
+  }
+  return success();
+}
+
+// FRACTAL_Z is rank 4 as [C1HW, N/16, 16, C0] and also rank 5 as
+// [C1, H, W, N, C0]: both loadings are handled by the runtime (TLoad's
+// FRACTAL_Z branch and TEXTRACT_CONVTILE_IMPL each dispatch on the dim
+// count). Every other layout has a single rank.
+// The blocked layouts hardwire their minor dims to the 32-byte block
+// geometry (c0 = 32 / element width): NC1HWC0 ends in C0 and rank-4
+// FRACTAL_Z ends in [16, C0]. Reject tiles whose declared dims disagree,
+// and require buffer_size to cover the padded footprint implied by those
+// fixed dims -- a smaller capacity silently under-covers the transfer.
+static LogicalResult verifyConvTileBlockedDims(
+    function_ref<InFlightDiagnostic()> emitError, ConvLayout layout,
+    ArrayRef<int64_t> shape, Type elementType, IntegerAttr bufferSize) {
+  const int64_t elemBytes = pto::getPTOStorageElemByteSize(elementType);
+  const std::optional<int64_t> c0Opt = pto::convC0ForElemBytes(elemBytes);
+  if (!c0Opt) {
+    return emitError() << "conv_tile element type must have a known storage "
+                          "size";
+  }
+  const int64_t c0 = *c0Opt;
+  auto requireTrailing = [&](size_t index, int64_t fixed) {
+    return shape.size() > index && shape[index] == fixed;
+  };
+  // Every blocked layout moves data in fixed 32-byte blocks regardless of
+  // the declared dims, so each one pins its minor dims to the block
+  // geometry: NC1HWC0/NDC1HWC0 end in C0, the rank-4 fractal layouts end
+  // in [16, C0], and the rank-5 FRACTAL_Z ends in C0.
+  if ((layout == ConvLayout::NC1HWC0 ||
+       layout == ConvLayout::NDC1HWC0) &&
+      !requireTrailing(shape.size() - 1, c0)) {
+    return emitError() << "conv_tile last dim must be " << c0
+                       << " (32-byte block), got " << shape.back();
+  }
+  if ((layout == ConvLayout::FRACTAL_Z ||
+       layout == ConvLayout::FRACTAL_Z_3D) &&
+      shape.size() == 4 && !(requireTrailing(2, 16) && requireTrailing(3, c0))) {
+    return emitError() << "conv_tile rank-4 fractal trailing dims must be "
+                          "[16, "
+                       << c0 << "]";
+  }
+  if (layout == ConvLayout::FRACTAL_Z && shape.size() == 5 &&
+      !requireTrailing(4, c0)) {
+    return emitError() << "conv_tile rank-5 fractal_z last dim must be "
+                       << c0;
+  }
+  return success();
+}
+
+static void appendExpectedRanksForConvLayout(
+    ConvLayout layout, SmallVectorImpl<size_t> &ranks) {
+  switch (layout) {
+  case ConvLayout::FRACTAL_Z_3D:
+    ranks.push_back(4);
+    break;
+  case ConvLayout::FRACTAL_Z:
+    ranks.push_back(4);
+    ranks.push_back(5);
+    break;
+  case ConvLayout::NC1HWC0:
+    ranks.push_back(5);
+    break;
+  case ConvLayout::NDC1HWC0:
+    ranks.push_back(6);
+    break;
+  case ConvLayout::NCHW:
+  case ConvLayout::NHWC:
+  case ConvLayout::NCDHW:
+  case ConvLayout::GNCHW:
+  case ConvLayout::GNC1HWC0:
+    break;
+  }
+}
+
+// Only the tile-side layouts can live in L1: every conv consumer on both
+// runtime generations (tload's destination, textract, timg2col) accepts just
+// these four. The view-side layouts (NCHW/NHWC/NCDHW/GNCHW/GNC1HWC0)
+// describe raw GM data and are legal only as a GM view annotation, never as
+// a conv_tile layout.
+static bool isTileSideConvLayout(ConvLayout layout) {
+  return layout == ConvLayout::NC1HWC0 || layout == ConvLayout::NDC1HWC0 ||
+         layout == ConvLayout::FRACTAL_Z ||
+         layout == ConvLayout::FRACTAL_Z_3D;
+}
+
+static SmallVector<size_t, mlir::pto::kValue2>
+expectedRanksForConvLayout(ConvLayout layout) {
+  SmallVector<size_t, mlir::pto::kValue2> ranks;
+  appendExpectedRanksForConvLayout(layout, ranks);
+  return ranks;
+}
+
+static bool isExpectedRankForConvLayout(ConvLayout layout, size_t rank) {
+  SmallVector<size_t, mlir::pto::kValue2> ranks;
+  appendExpectedRanksForConvLayout(layout, ranks);
+  return llvm::is_contained(ranks, rank);
+}
+
+static LogicalResult resolveConvTileBufferSize(AsmParser &parser,
+                                               const ParsedConvTileFields &fields,
+                                               IntegerAttr &bufferSize) {
+  auto defaultBufferSize = computeConvTileBufferSize(fields.shape);
+  if (!defaultBufferSize) {
+    parser.emitError(parser.getNameLoc())
+        << "conv_tile shape must have a positive, overflow-free element count";
+    return failure();
+  }
+  if (!bufferSize) {
+    bufferSize = IntegerAttr::get(parser.getBuilder().getI64Type(),
+                                  *defaultBufferSize);
+  } else if (bufferSize.getInt() < *defaultBufferSize) {
+    parser.emitError(parser.getNameLoc())
+        << "conv_tile buffer_size must be at least the logical element count";
+    return failure();
+  }
+  return success();
+}
+
+// Resolve the scalar facets of a parsed conv tile (shape validity, buffer
+// size, memory space); returns nullopt and diagnoses on failure.
+static std::optional<pto::AddressSpace>
+resolveConvTileStorageFacets(AsmParser &parser,
+                             const ParsedConvTileFields &fields,
+                             IntegerAttr &bufferSize) {
+  auto emitError = [&]() -> InFlightDiagnostic {
+    return parser.emitError(parser.getNameLoc());
+  };
+
+  if (failed(checkConvTileShape(parser, fields.shape))) {
+    return std::nullopt;
+  }
+  if (failed(resolveConvTileBufferSize(parser, fields, bufferSize))) {
+    return std::nullopt;
+  }
+
+  auto memorySpace = resolveTileBufMemorySpace(fields.locStr);
+  if (!memorySpace.has_value()) {
+    emitError() << "unknown loc: " << fields.locStr;
+    return std::nullopt;
+  }
+  if (*memorySpace != AddressSpace::MAT) {
+    emitError() << "conv_tile only supports loc=mat";
+    return std::nullopt;
+  }
+  return memorySpace;
+}
+
+static Type buildConvTileBufType(AsmParser &parser,
+                              const ParsedConvTileFields &fields) {
+  MLIRContext *ctx = parser.getContext();
+  auto emitError = [&]() -> InFlightDiagnostic {
+    return parser.emitError(parser.getNameLoc());
+  };
+
+  IntegerAttr bufferSize = fields.bufferSize;
+  auto memorySpace =
+      resolveConvTileStorageFacets(parser, fields, bufferSize);
+  if (!memorySpace) {
+    return Type();
+  }
+
+  auto layoutAttr = fields.layoutAttr;
+  if (!layoutAttr) {
+    emitError() << "layout must be a pto.conv_layout attr";
+    return Type();
+  }
+  if (!isTileSideConvLayout(layoutAttr.getValue())) {
+    emitError() << "conv_tile layout " << layoutAttr
+                << " is a GM view layout; a conv tile can only use "
+                   "nc1hwc0/ndc1hwc0/fractal_z/fractal_z_3d";
+    return Type();
+  }
+  if (failed(verifyConvTileBlockedDims(emitError, layoutAttr.getValue(),
+                                       fields.shape, fields.dtype,
+                                       bufferSize))) {
+    return Type();
+  }
+  SmallVector<size_t, mlir::pto::kValue2> expectedRanks =
+      expectedRanksForConvLayout(layoutAttr.getValue());
+  if (!llvm::is_contained(expectedRanks, fields.shape.size())) {
+    emitError() << "conv_tile layout " << layoutAttr << " requires rank "
+                << llvm::join(llvm::map_range(expectedRanks,
+                                              [](size_t r) {
+                                                return std::to_string(r);
+                                              }),
+                              " or ")
+                << ", got " << fields.shape.size();
+    return Type();
+  }
+  return ConvTileBufType::get(ctx, fields.shape, fields.dtype, bufferSize,
+                           AddressSpaceAttr::get(ctx, *memorySpace),
+                           layoutAttr);
+}
+
+} // namespace
+
+namespace {
+
+struct ParsedConvTileKeywords {
+  ConvLayoutAttr layout;
+  IntegerAttr bufferSize;
+};
+
+static LogicalResult parseConvTileLayoutKey(AsmParser &parser, bool &seen,
+                                            ConvLayoutAttr &layout) {
+  Attribute attr;
+  if (failed(parseConvTileLayoutField(parser, attr))) {
+    return failure();
+  }
+  layout = llvm::dyn_cast<ConvLayoutAttr>(attr);
+  if (!layout) {
+    parser.emitError(parser.getCurrentLocation())
+        << "conv_tile layout must be a pto.conv_layout attr";
+    return failure();
+  }
+  if (seen) {
+    parser.emitError(parser.getCurrentLocation())
+        << "conv_tile layout may be specified only once";
+    return failure();
+  }
+  seen = true;
+  return success();
+}
+
+static LogicalResult parseConvTileBufferSizeKey(AsmParser &parser, bool &seen,
+                                                IntegerAttr &bufferSize) {
+  Attribute attr;
+  if (failed(parser.parseAttribute(attr))) {
+    return failure();
+  }
+  bufferSize = llvm::dyn_cast_or_null<IntegerAttr>(attr);
+  if (!bufferSize || seen) {
+    return failure();
+  }
+  seen = true;
+  return success();
+}
+
+static LogicalResult parseConvTileBufTypeKeywords(AsmParser &parser,
+                                               ParsedConvTileKeywords &kw) {
+  bool parsedGreater = false;
+  bool seenLayout = false;
+  bool seenBufferSize = false;
+  while (!parsedGreater) {
+    if (succeeded(parser.parseOptionalGreater())) {
+      parsedGreater = true;
+      break;
+    }
+    if (failed(parser.parseComma())) {
+      return failure();
+    }
+
+    StringRef key;
+    if (failed(parser.parseKeyword(&key)) || failed(parser.parseEqual())) {
+      return failure();
+    }
+
+    if (key == "layout") {
+      if (failed(parseConvTileLayoutKey(parser, seenLayout, kw.layout))) {
+        return failure();
+      }
+    } else if (key == "buffer_size") {
+      if (failed(
+              parseConvTileBufferSizeKey(parser, seenBufferSize, kw.bufferSize))) {
+        return failure();
+      }
+    } else {
+      parser.emitError(parser.getCurrentLocation(),
+                       "unknown key in conv_tile syntax (config moved to the "
+                       "allocating op): ")
+          << key;
+      return failure();
+    }
+  }
+  return success();
+}
+
+} // namespace
+
+Type ConvTileBufType::parse(AsmParser &parser) {
+  if (failed(parser.parseLess())) {
+    return Type();
+  }
+
+  std::string firstToken;
+  if (failed(parser.parseKeywordOrString(&firstToken))) {
+    return Type();
+  }
+
+  ParsedConvTileFields fields;
+  fields.locStr = firstToken;
+
+  if (failed(parser.parseComma())) {
+    return Type();
+  }
+
+  if (failed(parser.parseDimensionList(fields.shape, /*allowDynamic=*/false,
+                                       /*withTrailingX=*/true))) {
+    return Type();
+  }
+
+  if (failed(parser.parseType(fields.dtype))) {
+    return Type();
+  }
+
+  ParsedConvTileKeywords kw;
+  if (failed(parseConvTileBufTypeKeywords(parser, kw))) {
+    return Type();
+  }
+
+  if (!kw.layout) {
+    kw.layout = ConvLayoutAttr::get(parser.getContext(), ConvLayout::NC1HWC0);
+  }
+  if (!kw.bufferSize) {
+    auto defaultBufferSize = computeConvTileBufferSize(fields.shape);
+    if (!defaultBufferSize) {
+      parser.emitError(
+          parser.getCurrentLocation(),
+          "conv_tile shape must have a positive, overflow-free element count");
+      return Type();
+    }
+    kw.bufferSize =
+        IntegerAttr::get(parser.getBuilder().getI64Type(), *defaultBufferSize);
+  }
+
+  return buildConvTileBufType(parser, {fields.locStr, fields.shape, fields.dtype,
+                                    kw.bufferSize, kw.layout});
+}
+
+void ConvTileBufType::print(AsmPrinter &printer) const {
+  printer << "<";
+  printer << stringifyLocFromMemorySpace(getMemorySpace());
+  printer << ", ";
+  auto shape = getShape();
+  for (auto it = shape.begin(); it != shape.end(); ++it) {
+    if (it != shape.begin()) {
+      printer << "x";
+    }
+    printTileBufDim(printer, *it);
+  }
+  printer << "x";
+  printer.printType(getElementType());
+  printer << ", buffer_size=";
+  printer.printAttribute(getBufferSize());
+  printer << ", ";
+  printConvTileLayoutField(printer, getLayout());
+  printer << ">";
+}
+
+// Invoked by getChecked (CAPI and Python bindings); the parser enforces the
+// same rules itself in buildConvTileBufType before the plain get() call.
+LogicalResult ConvTileBufType::verify(
+    function_ref<InFlightDiagnostic()> emitError, ArrayRef<int64_t> shape,
+    mlir::Type elementType, mlir::IntegerAttr bufferSize,
+    mlir::pto::AddressSpaceAttr memorySpace, mlir::pto::ConvLayoutAttr layout) {
+  if (!layout) {
+    return emitError() << "conv_tile layout must be a pto.conv_layout attr";
+  }
+  if (!isTileSideConvLayout(layout.getValue())) {
+    return emitError() << "conv_tile layout " << layout
+                       << " is a GM view layout; a conv tile can only use "
+                          "nc1hwc0/ndc1hwc0/fractal_z/fractal_z_3d";
+  }
+  if (!isExpectedRankForConvLayout(layout.getValue(), shape.size())) {
+    SmallVector<size_t, mlir::pto::kValue2> expectedRanks =
+        expectedRanksForConvLayout(layout.getValue());
+    return emitError() << "conv_tile layout " << layout << " requires rank "
+                       << llvm::join(llvm::map_range(expectedRanks,
+                                                     [](size_t rank) {
+                                                       return std::to_string(rank);
+                                                     }),
+                                     " or ")
+                       << ", got " << shape.size();
+  }
+  if (!memorySpace ||
+      memorySpace.getAddressSpace() != AddressSpace::MAT) {
+    return emitError() << "conv_tile only supports loc=mat";
+  }
+  if (!elementType) {
+    return emitError() << "conv_tile element type must be non-null";
+  }
+  for (int64_t dim : shape) {
+    if (dim <= 0) {
+      return emitError() << "conv_tile shape must be static and positive, got "
+                         << dim;
+    }
+  }
+  if (!bufferSize || bufferSize.getInt() < 0) {
+    return emitError() << "conv_tile buffer_size must be a non-negative i64";
+  }
+  // Blocked layouts move data in C0=32-byte blocks, so the last dim of an
+  // NC1HWC0 tile and the [16, C0] tail of a rank-4 FRACTAL_Z tile are
+  // hardware-fixed; the capacity must cover the padded element count the
+  // runtime actually touches, not merely the declared shape product.
+  if (failed(verifyConvTileBlockedDims(emitError, layout.getValue(), shape,
+                                       elementType, bufferSize))) {
+    return failure();
+  }
+  return success();
 }
 
 // ---- MultiTileBufType custom asm ----

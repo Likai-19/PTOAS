@@ -146,7 +146,7 @@ static bool isPTOShapedLike(Type ty) {
 }
 
 static bool isTileLikeType(Type ty) {
-  return isa<pto::TileBufType>(ty);
+  return isa<pto::TileBufType, pto::ConvTileBufType>(ty);
 }
 
 static Type getElemTy(Type ty) {
@@ -158,6 +158,9 @@ static Type getElemTy(Type ty) {
   }
   if (auto tb = mlir::dyn_cast<pto::TileBufType>(ty)) {
     return tb.getElementType();
+  }
+  if (auto ct = mlir::dyn_cast<pto::ConvTileBufType>(ty)) {
+    return ct.getElementType();
   }
   if (auto tv = mlir::dyn_cast<pto::PartitionTensorViewType>(ty)) {
     return tv.getElementType();
@@ -175,6 +178,9 @@ static SmallVector<int64_t, kShapeVecInlineCapacity> getShapeVec(Type ty) {
   }
   if (auto tb = mlir::dyn_cast<pto::TileBufType>(ty)) {
     return SmallVector<int64_t, kShapeVecInlineCapacity>(tb.getShape().begin(), tb.getShape().end());
+  }
+  if (auto ct = mlir::dyn_cast<pto::ConvTileBufType>(ty)) {
+    return SmallVector<int64_t, kShapeVecInlineCapacity>(ct.getShape().begin(), ct.getShape().end());
   }
   if (auto tv = mlir::dyn_cast<pto::PartitionTensorViewType>(ty)) {
     return SmallVector<int64_t, kShapeVecInlineCapacity>(tv.getShape().begin(), tv.getShape().end());

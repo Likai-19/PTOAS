@@ -281,6 +281,7 @@ using pto::ThreadfenceOp;
 using pto::TileBufConfigAttr;
 using pto::TileBufType;
 using pto::TileType;
+using pto::TImg2colOp;
 using pto::TInsertOp;
 using pto::TInterleaveOp;
 using pto::TLoadOp;

@@ -328,7 +328,8 @@ static LogicalResult resolveTileNativeSubviews(ModuleOp module,
     auto alloc = rewriter.create<pto::AllocTileOp>(
         op.getLoc(), physicalType, addr,
         getSubviewValidOperand(op, physicalType, kDim0, rewriter),
-        getSubviewValidOperand(op, physicalType, kDim1, rewriter));
+        getSubviewValidOperand(op, physicalType, kDim1, rewriter),
+        pto::ConvTileConfigAttr());
     alloc->setAttr("pto.view_semantics", rewriter.getStringAttr("subview"));
     rewriter.replaceOp(op, alloc.getResult());
   }
@@ -433,7 +434,8 @@ static LogicalResult resolveTileNativeMultiGets(ModuleOp module,
     auto slotHandle = rewriter.create<pto::AllocTileOp>(
         op.getLoc(), op.getResult().getType(), selectedAddr,
         alloc.getValidRow() ? alloc.getValidRow() : Value(),
-        alloc.getValidCol() ? alloc.getValidCol() : Value());
+        alloc.getValidCol() ? alloc.getValidCol() : Value(),
+        pto::ConvTileConfigAttr());
     rewriter.replaceOp(op, slotHandle.getResult());
   }
 

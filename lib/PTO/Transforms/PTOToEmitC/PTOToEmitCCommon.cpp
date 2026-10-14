@@ -250,8 +250,10 @@ buildDefaultLastUseTileSlotOrder(Operation *op) {
   SmallVector<unsigned, mlir::pto::kValue4> dpsInitTileOperands;
   SmallVector<unsigned, mlir::pto::kValue4> nonDpsTileOperands;
   for (OpOperand &operand : op->getOpOperands()) {
-    if (!isa<pto::TileBufType>(operand.get().getType()))
+    if (!isa<pto::TileBufType, pto::ConvTileBufType>(
+            operand.get().getType())) {
       continue;
+    }
     if (isDpsInitOperand(operand)) {
       dpsInitTileOperands.push_back(operand.getOperandNumber());
     } else {
@@ -618,7 +620,7 @@ void collectStructTypes(Type t, llvm::SetVector<pto::StructType> &out) {
 SmallVector<unsigned, mlir::pto::kValue4> collectTileOperandNumbers(Operation *op) {
   SmallVector<unsigned, mlir::pto::kValue4> tileOperandNumbers;
   for (OpOperand &operand : op->getOpOperands()) {
-    if (isa<pto::TileBufType>(operand.get().getType()))
+    if (isa<pto::TileBufType, pto::ConvTileBufType>(operand.get().getType()))
       tileOperandNumbers.push_back(operand.getOperandNumber());
   }
   return tileOperandNumbers;
@@ -641,6 +643,80 @@ void createLastUseAwareOpaqueCall(
       getLastUseAwareCallee(op, callee, calleeStorage, tileSlotOrder);
   createOpaqueCall(rewriter, op->getLoc(), resultTypes, effectiveCallee, args,
                    templateArgs, operands);
+}
+
+void emitConvTileConfigInitCall(ConversionPatternRewriter &rewriter,
+                                Location loc, Value tile,
+                                pto::ConvTileConfigAttr cfg) {
+  auto *ctx = rewriter.getContext();
+
+  SmallVector<Attribute, 24> args;
+  args.push_back(IntegerAttr::get(IndexType::get(ctx), 0));
+
+  auto appendI32 = [&](IntegerAttr attr) {
+    args.push_back(IntegerAttr::get(rewriter.getI32Type(), attr.getInt()));
+  };
+  auto appendPad = [&](int64_t value) {
+    args.push_back(IntegerAttr::get(rewriter.getI32Type(), value));
+  };
+
+  appendI32(cfg.getFmapH());
+  appendI32(cfg.getFmapW());
+  for (int64_t pad : cfg.getPadList())
+    appendPad(pad);
+  appendI32(cfg.getFilterH());
+  appendI32(cfg.getFilterW());
+  appendI32(cfg.getDilationH());
+  appendI32(cfg.getDilationW());
+  appendI32(cfg.getStrideH());
+  appendI32(cfg.getStrideW());
+  args.push_back(cfg.getPadValue());
+  appendI32(cfg.getChannelSize());
+  appendI32(cfg.getRepeatStride());
+  appendI32(cfg.getRepeatTime());
+  appendI32(cfg.getRepeatMode());
+  appendI32(cfg.getDstStride());
+  appendI32(cfg.getDstMposition());
+  args.push_back(cfg.getTranspose());
+
+  rewriter.create<emitc::CallOpaqueOp>(
+      loc, TypeRange{}, "PTOAS__INIT_CONVTILE_CONFIG",
+      /*args=*/rewriter.getArrayAttr(args),
+      /*templateArgs=*/ArrayAttr{}, /*operands=*/ValueRange{tile});
+}
+
+static StringRef getFmatrixModeToken(pto::FmatrixMode mode) {
+  switch (mode) {
+  case pto::FmatrixMode::FMATRIX_A_AUTO:
+    return "pto::SetFmatrixMode::FMATRIX_A_AUTO";
+  case pto::FmatrixMode::FMATRIX_B_AUTO:
+    return "pto::SetFmatrixMode::FMATRIX_B_AUTO";
+  case pto::FmatrixMode::FMATRIX_A_MANUAL:
+    return "pto::SetFmatrixMode::FMATRIX_A_MANUAL";
+  case pto::FmatrixMode::FMATRIX_B_MANUAL:
+    return "pto::SetFmatrixMode::FMATRIX_B_MANUAL";
+  }
+  llvm_unreachable("unknown FmatrixMode");
+}
+
+ArrayAttr getFmatrixModeTemplateArgs(
+    ConversionPatternRewriter &rewriter, pto::FmatrixMode mode,
+    ArrayRef<std::string> precedingTileTypes) {
+  // The runtime templates declare the tile types before the mode parameter
+  // (SETFMATRIX<ConvTileData, FmatrixMode>, TIMG2COL<TileData, ConvTileData,
+  // FmatrixMode>) with A_MANUAL as the default. With the default mode the
+  // tile types deduce from the arguments and no template argument is needed;
+  // any other mode must spell every preceding tile type explicitly.
+  if (mode == pto::FmatrixMode::FMATRIX_A_MANUAL) {
+    return ArrayAttr{};
+  }
+  auto *ctx = rewriter.getContext();
+  SmallVector<Attribute, 3> args;
+  for (const std::string &tileType : precedingTileTypes) {
+    args.push_back(emitc::OpaqueAttr::get(ctx, tileType));
+  }
+  args.push_back(emitc::OpaqueAttr::get(ctx, getFmatrixModeToken(mode)));
+  return rewriter.getArrayAttr(args);
 }
 
 Value emitCCast(ConversionPatternRewriter &rewriter, Location loc,
@@ -849,6 +925,30 @@ std::string getEmitCScalarTypeToken(Type elemTy) {
   return "float";
 }
 
+std::string convLayoutToEmitCString(mlir::pto::ConvLayout layout) {
+  switch (layout) {
+  case mlir::pto::ConvLayout::NCHW:
+    return "pto::Layout::NCHW";
+  case mlir::pto::ConvLayout::NC1HWC0:
+    return "pto::Layout::NC1HWC0";
+  case mlir::pto::ConvLayout::NCDHW:
+    return "pto::Layout::NCDHW";
+  case mlir::pto::ConvLayout::NDC1HWC0:
+    return "pto::Layout::NDC1HWC0";
+  case mlir::pto::ConvLayout::GNCHW:
+    return "pto::Layout::GNCHW";
+  case mlir::pto::ConvLayout::GNC1HWC0:
+    return "pto::Layout::GNC1HWC0";
+  case mlir::pto::ConvLayout::NHWC:
+    return "pto::Layout::NHWC";
+  case mlir::pto::ConvLayout::FRACTAL_Z:
+    return "pto::Layout::FRACTAL_Z";
+  case mlir::pto::ConvLayout::FRACTAL_Z_3D:
+    return "pto::Layout::FRACTAL_Z_3D";
+  }
+  return "pto::Layout::NC1HWC0";
+}
+
 std::optional<std::string> getEmitCTileTypeString(pto::TileBufType type) {
   if (type.getRank() != kTileRank) {
     return std::nullopt;
@@ -904,6 +1004,26 @@ std::optional<std::string> getEmitCTileTypeString(pto::TileBufType type) {
          ", " + tileBufSLayoutToken(configAttr) + ", " +
          std::to_string(fractal) + ", " + tileBufPadToken(configAttr) + ", " +
          tileBufCompactToken(configAttr) + ">";
+}
+
+std::optional<std::string> getEmitCConvTileBufTypeString(pto::ConvTileBufType type) {
+  auto shape = type.getShape();
+  if (shape.empty() || shape.size() > 6)
+    return std::nullopt;
+
+  Type elemTy = type.getElementType();
+  auto layoutAttr = dyn_cast_or_null<pto::ConvLayoutAttr>(type.getLayout());
+  if (!layoutAttr) {
+    layoutAttr = pto::ConvLayoutAttr::get(type.getContext(), pto::ConvLayout::NC1HWC0);
+  }
+
+  std::string shapeType = "pto::ConvTileShape<" + joinIntTemplateParams(shape) + ">";
+  return std::string("ConvTile<") +
+         tileRoleToken(type.getMemorySpace(), elemTy) + ", " +
+         getEmitCScalarTypeToken(elemTy) + ", " +
+         std::to_string(type.getBufferSizeValue()) + ", " +
+         convLayoutToEmitCString(layoutAttr.getValue()) + ", " +
+         shapeType + ">";
 }
 
 Type getEmitCVariableResultType(Type valueType) {
@@ -1017,6 +1137,43 @@ std::optional<mlir::pto::Layout> getLayoutAttrFromOp(Operation *op) {
   }
   if (auto attr = op->getAttrOfType<mlir::pto::LayoutAttr>("layout")) {
     return attr.getLayout();
+  }
+  return std::nullopt;
+}
+
+std::optional<mlir::pto::ConvLayout> getConvLayoutFromViewType(Type type) {
+  // A GM view may declare that its data already sits in a conv storage
+  // layout, which lets pto.tload move it straight into a conv tile.
+  if (auto partitionView = dyn_cast<pto::PartitionTensorViewType>(type)) {
+    if (auto convLayout =
+            dyn_cast_or_null<pto::ConvLayoutAttr>(partitionView.getLayout())) {
+      return convLayout.getValue();
+    }
+  }
+  if (auto tensorView = dyn_cast<pto::TensorViewType>(type)) {
+    if (auto convLayout =
+            dyn_cast_or_null<pto::ConvLayoutAttr>(tensorView.getLayout())) {
+      return convLayout.getValue();
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<mlir::pto::ConvLayout> resolveConvLayoutForGlobalTensor(Value v) {
+  v = peelUnrealized(v);
+  while (v) {
+    if (auto convLayout = getConvLayoutFromViewType(v.getType())) {
+      return convLayout;
+    }
+    Operation *def = v.getDefiningOp();
+    if (!def) {
+      break;
+    }
+    if (auto partition = dyn_cast<pto::PartitionViewOp>(def)) {
+      v = peelUnrealized(partition.getSource());
+      continue;
+    }
+    break;
   }
   return std::nullopt;
 }
@@ -1465,6 +1622,7 @@ std::string layoutToEmitCString(mlir::pto::Layout layout) {
   }
   return "pto::Layout::ND";
 }
+
 
 Value loadEmitCVariableIfNeeded(const OpBuilder& builder, Location loc, Value value)
 {

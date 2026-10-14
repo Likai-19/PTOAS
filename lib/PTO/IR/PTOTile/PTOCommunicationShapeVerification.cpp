@@ -180,6 +180,12 @@ static std::optional<pto::AddressSpace> getPTOMemorySpaceEnum(Type ty) {
     }
     return std::nullopt;
   }
+  if (auto ct = dyn_cast<pto::ConvTileBufType>(ty)) {
+    if (auto as = dyn_cast_or_null<pto::AddressSpaceAttr>(ct.getMemorySpace())) {
+      return as.getAddressSpace();
+    }
+    return std::nullopt;
+  }
   return std::nullopt;
 }
 

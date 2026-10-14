@@ -281,6 +281,13 @@ emitc::PointerType getEmitCPointerType(MLIRContext *ctx, StringRef qualifier,
 int64_t getEmitCScalarByteWidth(Type elemTy) ;
 std::string getEmitCScalarTypeToken(Type elemTy) ;
 std::optional<std::string> getEmitCTileTypeString(pto::TileBufType type) ;
+std::optional<std::string> getEmitCConvTileBufTypeString(pto::ConvTileBufType type) ;
+ArrayAttr getFmatrixModeTemplateArgs(
+    ConversionPatternRewriter &rewriter, pto::FmatrixMode mode,
+    ArrayRef<std::string> precedingTileTypes);
+void emitConvTileConfigInitCall(ConversionPatternRewriter &rewriter,
+                                Location loc, Value tile,
+                                pto::ConvTileConfigAttr cfg);
 Type getEmitCVariableResultType(Type valueType) ;
 Attribute getFFTSModeCodegenArg(ConversionPatternRewriter &rewriter, int64_t fftsMode) ;
 FailureOr<std::string> getFixpipeLayoutToken(FixpipeLayout layout) ;
@@ -335,6 +342,7 @@ bool isSetFFTsPointerLikeType(Type ty) ;
 bool isTriviallyInlineableExecuteRegion(scf::ExecuteRegionOp op) ;
 std::string joinIntTemplateParams(ArrayRef<int64_t> values) ;
 std::string layoutToEmitCString(mlir::pto::Layout layout) ;
+std::string convLayoutToEmitCString(mlir::pto::ConvLayout layout) ;
 Value loadEmitCVariableIfNeeded(const OpBuilder& builder, Location loc, Value value);
 Value makeEmitCIntConstant(ConversionPatternRewriter &rewriter, Location loc, Type type, int64_t value) ;
 Value makeEmitCOpaqueConstant(ConversionPatternRewriter &rewriter, Location loc, Type type, llvm::StringRef literal) ;
@@ -364,6 +372,8 @@ void replaceOrEraseWithOpaqueCallAndReturnDst(Operation *op, Value dst, StringRe
 FailureOr<TileBufType> resolveFixpipeConsumerTileType(Value pipeHandle) ;
 std::string resolveGlobalTensorLayout(Operation *anchor, Value basePtr, ArrayRef<int64_t> shape, ArrayRef<int64_t> strides, Type elemTy) ;
 std::optional<mlir::pto::Layout> resolveLayoutForGlobalTensor(Operation *anchor, Value basePtr) ;
+std::optional<mlir::pto::ConvLayout> resolveConvLayoutForGlobalTensor(Value basePtr) ;
+std::optional<mlir::pto::ConvLayout> getConvLayoutFromViewType(Type type) ;
 std::optional<mlir::pto::Layout> resolveLayoutFromValueChain(Value v) ;
 std::string sanitizeIdentifier(std::string s) ;
 const char *scalingRoleToken(Type elemTy, pto::TileBufConfigAttr configAttr) ;

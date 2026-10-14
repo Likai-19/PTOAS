@@ -1,0 +1,87 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. Do not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// End-to-end conv pipeline over conv tiles:
+//
+//   A path : GM fmap --tload--> conv tile(NC1HWC0) --set_fmatrix/rpt/padding--> timg2col --> LEFT
+//   B path : GM weight --tload--> conv tile(FRACTAL_Z) --textract--> RIGHT
+//   Compute: tmatmul(LEFT, RIGHT) --> ACC --tstore--> GM
+//
+// The kernel takes GM pointers (so the npu_validation harness can bind real
+// device buffers) and builds the views inside; each GM view declares the conv
+// storage layout its data already uses, which makes both tloads direct moves.
+//
+// Shapes: fmap NC1HWC0 [1,1,3,4,16] f16 (N=1,C1=1,H=3,W=4,C0=16), filter 2x2
+// stride 1 pad 0 -> 2x3 = 6 output positions, so LEFT is 16x32 valid 6x32;
+// weight FRACTAL_Z [2,1,16,16] (K=32, N=16) -> RIGHT 32x16; ACC 16x16 f32
+// valid 6x16 -> GM [6,16].
+//
+// Assemble with --enable-insert-sync: the nine instructions span the
+// MTE2/MTE1/M/FIX pipes, and without the auto-inserted barriers tmatmul
+// reads L0A/L0B before the moves land, so the output is garbage.
+// runop.sh enables the flag by default.
+
+#conv_fmap = #pto.conv_tile_config<fmap_h=3, fmap_w=4, pad_list=0x0x0x0, filter_h=2, filter_w=2, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=16, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=1, dst_mposition=0, transpose=false>
+#conv_wgt = #pto.conv_tile_config<fmap_h=0, fmap_w=0, pad_list=0x0x0x0, filter_h=1, filter_w=1, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=0, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+
+module attributes {pto.target_arch = "a5"} {
+  func.func @conv_pipeline(%fmap_ptr: !pto.ptr<f16>, %weight_ptr: !pto.ptr<f16>,
+                           %out_ptr: !pto.ptr<f32>) attributes {pto.entry} {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c3 = arith.constant 3 : index
+    %c4 = arith.constant 4 : index
+    %c6 = arith.constant 6 : index
+    %c16 = arith.constant 16 : index
+    %c64 = arith.constant 64 : index
+    %c192 = arith.constant 192 : index
+    %c256 = arith.constant 256 : index
+
+    // ---- GM views: the data already sits in the conv layouts ----
+    %fmap_tv = pto.make_tensor_view %fmap_ptr, shape = [%c1, %c1, %c3, %c4, %c16], strides = [%c192, %c192, %c64, %c16, %c1] : !pto.tensor_view<1x1x3x4x16xf16, #pto.conv_layout<nc1hwc0>>
+    %fmap_view = pto.partition_view %fmap_tv, offsets = [%c0, %c0, %c0, %c0, %c0], sizes = [%c1, %c1, %c3, %c4, %c16] : !pto.tensor_view<1x1x3x4x16xf16, #pto.conv_layout<nc1hwc0>> -> !pto.partition_tensor_view<1x1x3x4x16xf16, #pto.conv_layout<nc1hwc0>>
+
+    %wgt_tv = pto.make_tensor_view %weight_ptr, shape = [%c2, %c1, %c16, %c16], strides = [%c256, %c256, %c16, %c1] : !pto.tensor_view<2x1x16x16xf16, #pto.conv_layout<fractal_z>>
+    %wgt_view = pto.partition_view %wgt_tv, offsets = [%c0, %c0, %c0, %c0], sizes = [%c2, %c1, %c16, %c16] : !pto.tensor_view<2x1x16x16xf16, #pto.conv_layout<fractal_z>> -> !pto.partition_tensor_view<2x1x16x16xf16, #pto.conv_layout<fractal_z>>
+
+    %out_tv = pto.make_tensor_view %out_ptr, shape = [%c6, %c16], strides = [%c16, %c1] : !pto.tensor_view<6x16xf32>
+    %out_view = pto.partition_view %out_tv, offsets = [%c0, %c0], sizes = [%c6, %c16] : !pto.tensor_view<6x16xf32> -> !pto.partition_tensor_view<6x16xf32>
+
+    pto.section.cube {
+      // ---- A path: feature map in, program the IMG2COL engine, expand ----
+      %x_tile = pto.alloc_tile {config = #conv_fmap} : !pto.conv_tile_buf<mat, 1x1x3x4x16xf16, buffer_size=192 : i64, layout=#pto.conv_layout<nc1hwc0>>
+      pto.tload ins(%fmap_view : !pto.partition_tensor_view<1x1x3x4x16xf16, #pto.conv_layout<nc1hwc0>>) outs(%x_tile : !pto.conv_tile_buf<mat, 1x1x3x4x16xf16, buffer_size=192 : i64, layout=#pto.conv_layout<nc1hwc0>>)
+
+      pto.set_fmatrix %x_tile {fmatrixMode = #pto.fmatrix_mode<b_manual>} : !pto.conv_tile_buf<mat, 1x1x3x4x16xf16, buffer_size=192 : i64, layout=#pto.conv_layout<nc1hwc0>>
+      pto.set_img2col_rpt %x_tile {fmatrixMode = #pto.fmatrix_mode<b_manual>} : !pto.conv_tile_buf<mat, 1x1x3x4x16xf16, buffer_size=192 : i64, layout=#pto.conv_layout<nc1hwc0>>
+      pto.set_img2col_padding %x_tile {fmatrixMode = #pto.fmatrix_mode<b_manual>} : !pto.conv_tile_buf<mat, 1x1x3x4x16xf16, buffer_size=192 : i64, layout=#pto.conv_layout<nc1hwc0>>
+
+      %left = pto.alloc_tile : !pto.tile_buf<loc=left, dtype=f16, rows=16, cols=32, v_row=6, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+      // posM/posK stay at their default 0 and are not spelled out: the
+      // assembly printer elides default-valued attributes, and ptobc's
+      // generic opcode encoding stores the printed attribute dictionary,
+      // so an explicit default breaks the stage9 byte-level round-trip.
+      pto.timg2col %left, %x_tile {fmatrixMode = #pto.fmatrix_mode<b_manual>} : !pto.tile_buf<loc=left, dtype=f16, rows=16, cols=32, v_row=6, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>, !pto.conv_tile_buf<mat, 1x1x3x4x16xf16, buffer_size=192 : i64, layout=#pto.conv_layout<nc1hwc0>>
+
+      // ---- B path: weight in (FRACTAL_Z), unpack to RIGHT ----
+      %w_tile = pto.alloc_tile {config = #conv_wgt} : !pto.conv_tile_buf<mat, 2x1x16x16xf16, buffer_size=512 : i64, layout=#pto.conv_layout<fractal_z>>
+      pto.tload ins(%wgt_view : !pto.partition_tensor_view<2x1x16x16xf16, #pto.conv_layout<fractal_z>>) outs(%w_tile : !pto.conv_tile_buf<mat, 2x1x16x16xf16, buffer_size=512 : i64, layout=#pto.conv_layout<fractal_z>>)
+
+      %right = pto.alloc_tile : !pto.tile_buf<loc=right, dtype=f16, rows=32, cols=16, v_row=32, v_col=16, blayout=row_major, slayout=col_major, fractal=512, pad=0>
+      pto.textract ins(%w_tile, %c0, %c0 : !pto.conv_tile_buf<mat, 2x1x16x16xf16, buffer_size=512 : i64, layout=#pto.conv_layout<fractal_z>>, index, index) outs(%right : !pto.tile_buf<loc=right, dtype=f16, rows=32, cols=16, v_row=32, v_col=16, blayout=row_major, slayout=col_major, fractal=512, pad=0>)
+
+      // ---- Compute and store back ----
+      %acc = pto.alloc_tile : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=6, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>
+      pto.tmatmul ins(%left, %right : !pto.tile_buf<loc=left, dtype=f16, rows=16, cols=32, v_row=6, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>, !pto.tile_buf<loc=right, dtype=f16, rows=32, cols=16, v_row=32, v_col=16, blayout=row_major, slayout=col_major, fractal=512, pad=0>) outs(%acc : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=6, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>)
+
+      pto.tstore ins(%acc : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=6, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>) outs(%out_view : !pto.partition_tensor_view<6x16xf32>)
+    }
+    return
+  }
+}

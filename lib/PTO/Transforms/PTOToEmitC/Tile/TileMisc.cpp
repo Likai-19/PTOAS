@@ -60,6 +60,28 @@ struct PTOPipeTileOpToEmitC : public OpConversionPattern<OpTy> {
 using PTOTPushToEmitC = PTOPipeTileOpToEmitC<mlir::pto::TPushOp>;
 using PTOTPopToEmitC = PTOPipeTileOpToEmitC<mlir::pto::TPopOp>;
 
+static std::optional<std::string>
+getAllocTileEmitCTypeString(pto::TileBufType tileTy, pto::ConvTileBufType convTy) {
+  if (tileTy)
+    return getEmitCTileTypeString(tileTy);
+  if (convTy)
+    return getEmitCConvTileBufTypeString(convTy);
+  return std::nullopt;
+}
+
+// The conv geometry rides on the allocating op's config attribute; absent
+// means the all-default config.
+static void emitConvTileInitFromAllocOp(ConversionPatternRewriter &rewriter,
+                                        pto::AllocTileOp op, Value tile) {
+  std::optional<pto::ConvTileConfigAttr> configOpt = op.getConfig();
+  pto::ConvTileConfigAttr cfg =
+      configOpt ? *configOpt : pto::ConvTileConfigAttr();
+  if (!cfg) {
+    cfg = pto::ConvTileConfigAttr::getDefault(op.getContext());
+  }
+  emitConvTileConfigInitCall(rewriter, op.getLoc(), tile, cfg);
+}
+
 struct PTOAllocTileToEmitC
     : public OpConversionPattern<pto::AllocTileOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -68,19 +90,23 @@ struct PTOAllocTileToEmitC
                                 ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     MLIRContext *ctx = rewriter.getContext();
-    auto tileTy = cast<pto::TileBufType>(op.getResult().getType());
-    auto tileTypeString = getEmitCTileTypeString(tileTy);
+    Type resultTy = op.getResult().getType();
+    auto tileTy = dyn_cast<pto::TileBufType>(resultTy);
+    auto convTy = dyn_cast<pto::ConvTileBufType>(resultTy);
+    std::optional<std::string> tileTypeString =
+        getAllocTileEmitCTypeString(tileTy, convTy);
     if (!tileTypeString)
       return rewriter.notifyMatchFailure(
           op, "only rank-2 alloc_tile handles can be converted to EmitC");
 
-    Type convertedTy = getTypeConverter()->convertType(tileTy);
+    Type convertedTy = getTypeConverter()->convertType(resultTy);
     if (!convertedTy)
       convertedTy = emitc::OpaqueType::get(ctx, *tileTypeString);
 
-    auto validShape = tileTy.getValidShape();
+    ArrayRef<int64_t> validShape = tileTy ? tileTy.getValidShape()
+                                          : ArrayRef<int64_t>{};
     bool hasDynamicValidDim =
-        llvm::any_of(validShape, [](int64_t dim) { return dim < 0; });
+        tileTy && llvm::any_of(validShape, [](int64_t dim) { return dim < 0; });
     SmallVector<Value> constructorArgs;
     if (hasDynamicValidDim) {
       auto args = buildDynamicValidShapeArgs(op, adaptor, rewriter, tileTy);
@@ -105,6 +131,9 @@ struct PTOAllocTileToEmitC
               .getResult();
       tile = loadEmitCVariableIfNeeded(rewriter, loc, tile);
     }
+
+    if (convTy)
+      emitConvTileInitFromAllocOp(rewriter, op, tile);
 
     if (Value addr = adaptor.getAddr())
       assignTileAddress(rewriter, loc, ctx, tile, addr);

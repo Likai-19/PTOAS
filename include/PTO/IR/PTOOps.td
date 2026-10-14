@@ -38,13 +38,23 @@ include "mlir/Interfaces/ViewLikeInterface.td"
 def PTODpsType :
   AnyTypeOf<[AnyRankedTensor, PartitionTensorViewType, TileBufType]>;
 
+// DPS operands of the ops that also accept conv tiles (tload dst, textract
+// src, tmov src/dst, ttrans src/tmp/dst, tassign tile/result). PTODpsType
+// itself stays free of ConvTileBufType so the ops that only take tensor/view/
+// tile_buf operands reject conv tiles at parse time.
+def PTODpsTypeWithConvTileBuf :
+  AnyTypeOf<[AnyRankedTensor, PartitionTensorViewType, TileBufType,
+             ConvTileBufType],
+            "Tensor, PartitionTensorView, TileBuf, or ConvTile">;
+
 def PTOPipeEntryType :
   AnyTypeOf<[AnyRankedTensor, TensorViewType, TileBufType],
             "TensorView, TileBuf, or Tensor">;
 
 def PTOCommType :
   AnyTypeOf<[AnyRankedTensor, TensorViewType, PartitionTensorViewType,
-             TileBufType], "TensorView, PartitionTensorView, TileBuf, or Tensor">;
+             TileBufType],
+            "TensorView, PartitionTensorView, TileBuf, or Tensor">;
 
 def PtrOrMemRef :
   AnyTypeOf<[PtrType, AnyMemRef], "Ptr or MemRef">;
@@ -235,10 +245,16 @@ def AllocTileOp : PTO_Op<"alloc_tile", [AttrSizedOperandSegments]> {
   let arguments = (ins
     Optional<I64>:$addr,
     Optional<Index>:$valid_row,
-    Optional<Index>:$valid_col
+    Optional<Index>:$valid_col,
+    // Conv geometry for a conv_tile_buf result. The type itself carries
+    // only the storage identity; absent means the all-default config.
+    OptionalAttr<ConvTileConfigAttr>:$config
   );
 
-  let results = (outs TileBufType:$result);
+  // ConvTile values reuse the same allocation surface but carry a different
+  // type/metadata payload. The lowering selects the emitted C++ type from the
+  // result type.
+  let results = (outs AnyTypeOf<[TileBufType, ConvTileBufType], "TileBuf or ConvTile">:$result);
 
   let assemblyFormat = [{
     (`addr` `=` $addr^)?
@@ -514,9 +530,9 @@ def TLoadOp  : PTO_TOp<"tload", [
     change the source view's shape, strides, or layout.
   }];
 
-  let arguments = (ins 
+  let arguments = (ins
     PTODpsType:$src,
-    PTODpsType:$dst,
+    PTODpsTypeWithConvTileBuf:$dst,
     OptionalAttr<PTO_PadModeAttr>:$pad_mode,
     Optional<AnyType>:$pad_value,
     Optional<Index>:$left_padding_num,
@@ -794,9 +810,9 @@ def TTransOp : PTO_TOp<"ttrans", [
     require tmp to match the shape or valid shape of src/dst.
   }];
   let arguments = (ins
-    PTODpsType:$src,
-    Optional<PTODpsType>:$tmp,
-    PTODpsType:$dst
+    PTODpsTypeWithConvTileBuf:$src,
+    Optional<PTODpsTypeWithConvTileBuf>:$tmp,
+    PTODpsTypeWithConvTileBuf:$dst
   );
   let results = (outs);
 
@@ -1250,8 +1266,8 @@ def TMovOp  : PTO_TOp<"tmov", [
   let summary = "Move data between domains (DPS version).";
   
   let arguments = (ins
-    PTODpsType:$src,
-    PTODpsType:$dst,
+    PTODpsTypeWithConvTileBuf:$src,
+    PTODpsTypeWithConvTileBuf:$dst,
     Optional<PTODpsType>:$fp,
     Optional<I64>:$preQuantScalar,
     OptionalAttr<PTO_AccToVecModeAttr>:$accToVecMode,
@@ -1834,6 +1850,85 @@ def SetQuantVectorOp : PTO_Op<"set_quant_vector", [
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// ConvTile / IMG2COL config ops
+//===----------------------------------------------------------------------===//
+
+def SetFmatrixOp : PTO_Op<"set_fmatrix", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Set FMATRIX registers from a ConvTile config";
+  let arguments = (ins
+    ConvTileBufType:$src,
+    DefaultValuedAttr<PTO_FmatrixModeAttr, "::mlir::pto::FmatrixMode::FMATRIX_A_MANUAL">:$fmatrixMode
+  );
+  let results = (outs);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $src attr-dict `:` qualified(type($src))
+  }];
+}
+
+def SetImg2colRptOp : PTO_Op<"set_img2col_rpt", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Set IMG2COL repeat control from a ConvTile config";
+  let arguments = (ins
+    ConvTileBufType:$src,
+    DefaultValuedAttr<PTO_FmatrixModeAttr, "::mlir::pto::FmatrixMode::FMATRIX_A_MANUAL">:$fmatrixMode
+  );
+  let results = (outs);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $src attr-dict `:` qualified(type($src))
+  }];
+}
+
+def SetImg2colPaddingOp : PTO_Op<"set_img2col_padding", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Set IMG2COL padding control from a ConvTile config";
+  let arguments = (ins
+    ConvTileBufType:$src,
+    DefaultValuedAttr<PTO_FmatrixModeAttr, "::mlir::pto::FmatrixMode::FMATRIX_A_MANUAL">:$fmatrixMode
+  );
+  let results = (outs);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $src attr-dict `:` qualified(type($src))
+  }];
+}
+
+def TImg2colOp : PTO_Op<"timg2col", [
+    AttrSizedOperandSegments,
+    PTO_DpsInitOpInterface,
+    OpPipeInterface,
+    DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+]> {
+  let summary = "Image-to-column transform from ConvTile to TileBuf";
+  let arguments = (ins
+    TileBufType:$dst,
+    ConvTileBufType:$src,
+    // Runtime row/column window offsets, SSA so a loop induction variable
+    // can feed them (in-loop Split-K); absent means offset 0.
+    Optional<Index>:$posM,
+    Optional<Index>:$posK,
+    DefaultValuedAttr<PTO_FmatrixModeAttr, "::mlir::pto::FmatrixMode::FMATRIX_A_MANUAL">:$fmatrixMode
+  );
+  let results = (outs);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $dst `,` $src (`,` `pos_m` `=` $posM^)? (`,` `pos_k` `=` $posK^)?
+      attr-dict `:` qualified(type($dst)) `,` qualified(type($src))
+  }];
+
+  let extraClassDeclaration = [{
+    // IMG2COL expands a MAT conv tile into a LEFT tile_buf; like the other
+    // L1 -> L0 moves this runs on the MTE1 pipe.
+    ::mlir::pto::PIPE getPipe() { return ::mlir::pto::PIPE::PIPE_MTE1; }
+    // Declaring dst as the DPS init lets the memory planner see the first
+    // write, so an early-allocated LEFT's lifetime shrinks to the actual
+    // timg2col position and sequential tiles reuse one address.
+    ::mlir::MutableOperandRange getDpsInitsMutable() {
+      return getDstMutable();
+    }
+  }];
+}
+
 def ReserveBufferOp : PTO_Op<"reserve_buffer"> {
   let summary = "Reserve a local consumer slot buffer";
 
@@ -2314,10 +2409,10 @@ def TAssignOp : PTO_Op<"tassign", [Pure, AllTypesMatch<["tile", "result"]>]> {
   }];
 
   let arguments = (ins
-    PTODpsType:$tile,
+    PTODpsTypeWithConvTileBuf:$tile,
     I64:$addr
   );
-  let results = (outs PTODpsType:$result);
+  let results = (outs PTODpsTypeWithConvTileBuf:$result);
 
   let assemblyFormat = [{
     $tile `,` $addr attr-dict `:` qualified(type($tile)) `->` qualified(type($result))
@@ -4541,7 +4636,7 @@ def TExtractOp : PTO_TOp<"textract", [
   let summary = "Extract sub-tile window from src into dst (tilebuf, DPS)";
 
   let arguments = (ins
-    PTODpsType:$src,
+    PTODpsTypeWithConvTileBuf:$src,
     Index:$indexRow,
     Index:$indexCol,
     PTODpsType:$dst,
@@ -4576,6 +4671,12 @@ def TExtractOp : PTO_TOp<"textract", [
         if (auto tb = llvm::dyn_cast<::mlir::pto::TileBufType>(ty)) {
           if (auto as = llvm::dyn_cast_or_null<::mlir::pto::AddressSpaceAttr>(
                   tb.getMemorySpace()))
+            return as.getAddressSpace();
+          return std::nullopt;
+        }
+        if (auto ct = llvm::dyn_cast<::mlir::pto::ConvTileBufType>(ty)) {
+          if (auto as = llvm::dyn_cast_or_null<::mlir::pto::AddressSpaceAttr>(
+                  ct.getMemorySpace()))
             return as.getAddressSpace();
           return std::nullopt;
         }
@@ -6222,7 +6323,6 @@ def TDeInterleaveOp: PTO_TOp<"tdeinterleave", [
     ::mlir::Value getDst1() { return getDsts()[1]; }
   }];
 }
-
 def TRowProdOp: PTO_TOp<"trowprod", [
   PTO_DpsInitOpInterface,
   OpPipeInterface,

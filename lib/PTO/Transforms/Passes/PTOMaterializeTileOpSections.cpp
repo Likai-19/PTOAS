@@ -63,12 +63,12 @@ constexpr uint8_t kTileReadWrite =
 static bool isScalarType(Type type) { return type.isIntOrIndexOrFloat(); }
 
 static bool isTileOrScalarType(Type type) {
-  return isa<TileBufType>(type) || isScalarType(type);
+  return isa<TileBufType, ConvTileBufType>(type) || isScalarType(type);
 }
 
 static bool isMemoryReferenceType(Type type) {
-  return isa<TileBufType, PtrType, MemRefType, TensorViewType,
-             PartitionTensorViewType>(type);
+  return isa<TileBufType, ConvTileBufType, PtrType, MemRefType,
+             TensorViewType, PartitionTensorViewType>(type);
 }
 
 static bool isDirectSimtOperation(Operation *op) {
@@ -134,7 +134,7 @@ static std::optional<unsigned> traceToFunctionArgument(Value value,
 static void applyEffectToAllTileArguments(func::FuncOp function, uint8_t effect,
                                           SmallVectorImpl<uint8_t> &effects) {
   for (auto [index, type] : llvm::enumerate(function.getArgumentTypes()))
-    if (isa<TileBufType>(type)) {
+    if (isa<TileBufType, ConvTileBufType>(type)) {
       effects[index] |= effect;
     }
 }
@@ -212,7 +212,7 @@ static void summarizeTileOpEffects(func::FuncOp helper) {
   for (auto [type, effect] :
        llvm::zip_equal(helper.getArgumentTypes(), effects)) {
     StringRef effectName = "none";
-    if (isa<TileBufType>(type)) {
+    if (isa<TileBufType, ConvTileBufType>(type)) {
       if (effect == kTileReadWrite)
         effectName = "readwrite";
       else if (effect == static_cast<uint8_t>(TileArgumentEffect::ReadEffect))

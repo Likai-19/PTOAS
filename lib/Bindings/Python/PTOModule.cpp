@@ -63,6 +63,17 @@ static MlirContext inferContextFromElementType(MlirContext context,
   return mlirTypeGetContext(elementType);
 }
 
+static MlirContext inferContextFromAttribute(py::object contextObj,
+                                             MlirAttribute attr) {
+  if (!contextObj.is_none()) {
+    return contextObj.cast<MlirContext>();
+  }
+  if (mlirAttributeIsNull(attr)) {
+    throw py::value_error("context is required when attribute is null");
+  }
+  return mlirAttributeGetContext(attr);
+}
+
 static int32_t enumValueFromPy(py::object value, const char *attrName,
                                const char *enumName) {
   if (py::isinstance<py::int_>(value)) {
@@ -215,6 +226,7 @@ static void registerPTOEnums2(py::module_ &m) {
     .value("ON", MlirPTOSaturationMode::ON)
     .value("OFF", MlirPTOSaturationMode::OFF);
 
+
     py::enum_<MlirPTOCmpMode>(m, "CmpMode")
       .value("EQ", MlirPTOCmpMode_EQ)
       .value("NE", MlirPTOCmpMode_NE)
@@ -248,7 +260,9 @@ static void registerPTOEnums3(py::module_ &m) {
       .value("DN", MlirPTOLayout::DN)
       .value("NZ", MlirPTOLayout::NZ)
       .value("MX_A_ZZ", MlirPTOLayout::MX_A_ZZ)
-      .value("MX_B_NN", MlirPTOLayout::MX_B_NN);
+      .value("MX_B_NN", MlirPTOLayout::MX_B_NN)
+      .export_values();
+
 
     py::enum_<MlirPTOAccToVecMode>(m, "AccToVecMode")
       .value("SingleModeVec0", MlirPTOAccToVecMode::SingleModeVec0)
@@ -1634,6 +1648,172 @@ static void registerTileBufType(py::module_ &m) {
   addTileBufTypeAccessors2(tileBuf, m);
 }
 
+static void registerConvTileEnums(pybind11::module_ &m) {
+py::enum_<MlirPTOFmatrixMode>(m, "FmatrixMode")
+    .value("FMATRIX_A_AUTO", MlirPTOFmatrixMode::FMATRIX_A_AUTO)
+    .value("FMATRIX_B_AUTO", MlirPTOFmatrixMode::FMATRIX_B_AUTO)
+    .value("FMATRIX_A_MANUAL", MlirPTOFmatrixMode::FMATRIX_A_MANUAL)
+    .value("FMATRIX_B_MANUAL", MlirPTOFmatrixMode::FMATRIX_B_MANUAL);
+    py::enum_<MlirPTOConvLayout>(m, "ConvLayout")
+      .value("NC1HWC0", MlirPTOConvLayout::NC1HWC0)
+      .value("NDC1HWC0", MlirPTOConvLayout::NDC1HWC0)
+      .value("FRACTAL_Z", MlirPTOConvLayout::FRACTAL_Z)
+      .value("FRACTAL_Z_3D", MlirPTOConvLayout::FRACTAL_Z_3D)
+      .value("NCHW", MlirPTOConvLayout::NCHW)
+      .value("NHWC", MlirPTOConvLayout::NHWC)
+      .value("GNCHW", MlirPTOConvLayout::GNCHW)
+      .value("GNC1HWC0", MlirPTOConvLayout::GNC1HWC0)
+      .value("NCDHW", MlirPTOConvLayout::NCDHW)
+      .export_values();
+}
+
+static void registerConvTileValueAttrs(pybind11::module_ &m) {
+    bindPTOEnumAttr(m, "FmatrixModeAttr", "FmatrixMode",
+                    mlirPTOAttrIsAFmatrixModeAttr,
+                    mlirPTOFmatrixModeAttrGet,
+                    mlirPTOFmatrixModeAttrGetValue);
+
+        mlir_attribute_subclass(
+        m, "ConvLayoutAttr",
+        [](MlirAttribute a) { return mlirPTOAttrIsAConvLayoutAttr(a); })
+      .def_classmethod(
+          "get",
+          [](py::object cls, py::object value, MlirContext ctx) -> py::object {
+            int32_t v = enumValueFromPy(value, "ConvLayoutAttr", "ConvLayout");
+            MlirAttribute a = mlirPTOConvLayoutAttrGet(ctx, v);
+            if (mlirAttributeIsNull(a)) {
+              return py::none();
+            }
+            return cls(a);
+          },
+          py::arg("cls"), py::arg("value"), py::arg("context") = py::none())
+      .def_property_readonly(
+          "value",
+          [](MlirAttribute self) -> int32_t {
+            return mlirPTOConvLayoutAttrGetValue(self);
+          });
+}
+
+static void addConvTileConfigAttrGetMethods(pure_subclass &c) {
+  c
+      .def_classmethod(
+          "get_default",
+          [](py::object cls, MlirContext ctx) -> py::object {
+            MlirAttribute a = mlirPTOConvTileConfigAttrGetDefault(ctx);
+            if (mlirAttributeIsNull(a)) {
+              return py::none();
+            }
+            return cls(a);
+          },
+          py::arg("cls"), py::arg("context"))
+      .def_classmethod(
+          "get",
+          [](py::object cls, MlirAttribute fmapH, MlirAttribute fmapW,
+             std::vector<int64_t> padList, MlirAttribute filterH,
+             MlirAttribute filterW, MlirAttribute dilationH,
+             MlirAttribute dilationW, MlirAttribute strideH,
+             MlirAttribute strideW, MlirAttribute padValue,
+             MlirAttribute channelSize, MlirAttribute repeatStride,
+             MlirAttribute repeatTime, MlirAttribute repeatMode,
+             MlirAttribute dstStride, MlirAttribute dstMposition,
+             MlirAttribute transpose, py::object contextObj) -> py::object {
+            MlirContext ctx = inferContextFromAttribute(contextObj, fmapH);
+            MlirAttribute a = mlirPTOConvTileConfigAttrGet(
+                ctx, fmapH, fmapW, static_cast<intptr_t>(padList.size()),
+                padList.data(), filterH, filterW, dilationH, dilationW,
+                strideH, strideW, padValue, channelSize, repeatStride,
+                repeatTime, repeatMode, dstStride, dstMposition, transpose);
+            if (mlirAttributeIsNull(a)) {
+              return py::none();
+            }
+            return cls(a);
+          },
+          py::arg("cls"), py::arg("fmap_h"), py::arg("fmap_w"),
+          py::arg("pad_list"), py::arg("filter_h"), py::arg("filter_w"),
+          py::arg("dilation_h"), py::arg("dilation_w"), py::arg("stride_h"),
+          py::arg("stride_w"), py::arg("pad_value"), py::arg("channel_size"),
+          py::arg("repeat_stride"), py::arg("repeat_time"),
+          py::arg("repeat_mode"), py::arg("dst_stride"),
+          py::arg("dst_mposition"), py::arg("transpose"),
+          py::arg("context") = py::none());
+}
+
+static void registerConvTileConfigAttr(pybind11::module_ &m) {
+  pure_subclass configAttr = mlir_attribute_subclass(
+      m, "ConvTileConfigAttr", [](MlirAttribute a) -> bool {
+        return mlirPTOAttrIsAConvTileConfigAttr(a);
+      });
+  addConvTileConfigAttrGetMethods(configAttr);
+}
+
+static void addConvTileBufTypeGetMethods(pure_subclass &c) {
+  c
+      .def_classmethod(
+          "get",
+          [](py::object cls, std::vector<int64_t> shape, MlirType elementType,
+             MlirAttribute bufferSize, MlirAttribute memorySpace,
+             MlirAttribute layout,
+             MlirContext ctx) -> py::object {
+            ctx = inferContextFromElementType(ctx, elementType);
+            MlirType ty = mlirPTOConvTileBufTypeGet(
+                ctx, static_cast<intptr_t>(shape.size()), shape.data(),
+                elementType, bufferSize, memorySpace, layout);
+            if (mlirTypeIsNull(ty)) {
+              return py::none();
+            }
+            return cls(ty);
+          },
+          py::arg("cls"), py::arg("shape"), py::arg("element_type"),
+          py::arg("buffer_size"), py::arg("memory_space"), py::arg("layout"),
+          py::arg("context") = py::none())
+      .def_classmethod(
+          "upcast_type",
+          [](py::object cls, MlirType t) -> py::object {
+            if (mlirPTOTypeIsAConvTileBufType(t)) {
+              return cls(t);
+            }
+            return py::none();
+          },
+          py::arg("cls"), py::arg("type"));
+}
+
+static void addConvTileBufTypeAccessors(pure_subclass &c, pybind11::module_ &m) {
+  c
+      .def_property_readonly(
+          "rank",
+          [](MlirType self) -> intptr_t {
+            return mlirPTOConvTileBufTypeGetRank(self);
+          })
+      .def_property_readonly(
+          "element_type",
+          [](MlirType self) -> MlirType {
+            return mlirPTOConvTileBufTypeGetElementType(self);
+          })
+      .def_property_readonly(
+          "shape",
+          [](MlirType self) -> py::list {
+            intptr_t n = 0;
+            const int64_t *d = mlirPTOConvTileBufTypeGetShape(self, &n);
+            return shapeToPyList(d, n);
+          })
+      .def_property_readonly(
+          "layout",
+          [m](MlirType self) -> py::object {
+            MlirAttribute attr = mlirPTOConvTileBufTypeGetLayout(self);
+            return wrapAttributeAs(m, "ConvLayoutAttr", attr);
+          });
+}
+
+static void registerConvTileBufType(pybind11::module_ &m) {
+  pure_subclass convTile = mlir_type_subclass(
+      m, "ConvTileBufType", [](MlirType t) -> bool {
+        return mlirPTOTypeIsAConvTileBufType(t);
+      });
+  addConvTileBufTypeGetMethods(convTile);
+  addConvTileBufTypeAccessors(convTile, m);
+}
+
+
 void mlir::pto::python::populatePTODialectBindings(pybind11::module_ &m) {
     // --------------------------------------------------------------------------
     // Dialect registration helper
@@ -1684,5 +1864,9 @@ void mlir::pto::python::populatePTODialectBindings(pybind11::module_ &m) {
     registerPTOTypes10(m);
     registerTileBufConfigAttr(m);
     registerTileBufType(m);
+    registerConvTileEnums(m);
+    registerConvTileValueAttrs(m);
+    registerConvTileConfigAttr(m);
+    registerConvTileBufType(m);
     populatePTODialectSubmodule(m);
 }

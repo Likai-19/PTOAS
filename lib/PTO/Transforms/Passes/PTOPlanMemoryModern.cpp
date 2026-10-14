@@ -107,6 +107,14 @@ static std::optional<AddressSpace> getBufferAddressSpace(Type type) {
     return std::nullopt;
   }
 
+  if (auto convType = dyn_cast<ConvTileBufType>(type)) {
+    if (auto attr =
+            dyn_cast_or_null<AddressSpaceAttr>(convType.getMemorySpace())) {
+      return attr.getAddressSpace();
+    }
+    return std::nullopt;
+  }
+
   if (auto multiType = dyn_cast<MultiTileBufType>(type)) {
     return getBufferAddressSpace(multiType.getSlotType());
   }
@@ -210,46 +218,65 @@ static MemSpec getMemSpec(PTOArch arch, AddressSpace space) {
   return {};
 }
 
-static FailureOr<uint64_t> computeStaticBufferBytes(Value value) {
-  auto computeTileBytes = [](TileBufType type) -> FailureOr<uint64_t> {
-    ArrayRef<int64_t> shape = type.getShape();
-    uint64_t elemBytes = getPTOStorageElemByteSize(type.getElementType());
-    if (elemBytes == 0) {
+static FailureOr<uint64_t> computeTileBufBytes(TileBufType type) {
+  ArrayRef<int64_t> shape = type.getShape();
+  uint64_t elemBytes = getPTOStorageElemByteSize(type.getElementType());
+  if (elemBytes == 0) {
+    return failure();
+  }
+
+  if (type.getCompactModeI32() ==
+      static_cast<int32_t>(CompactMode::RowPlusOne)) {
+    if (shape.size() != 2 ||
+        llvm::is_contained(shape, ShapedType::kDynamic)) {
       return failure();
     }
 
-    if (type.getCompactModeI32() ==
-        static_cast<int32_t>(CompactMode::RowPlusOne)) {
-      if (shape.size() != 2 ||
-          llvm::is_contained(shape, ShapedType::kDynamic)) {
-        return failure();
-      }
-
-      bool rowMajor = type.getBLayoutValueI32() ==
-                      static_cast<int32_t>(BLayout::RowMajor);
-      uint64_t major = static_cast<uint64_t>(rowMajor ? shape[0] : shape[1]);
-      uint64_t minor = static_cast<uint64_t>(rowMajor ? shape[1] : shape[0]);
-      if (major == 0 || minor == 0) {
-        return uint64_t{0};
-      }
-      return ((major - 1) * (minor + 1) + minor) * elemBytes;
+    bool rowMajor = type.getBLayoutValueI32() ==
+                    static_cast<int32_t>(BLayout::RowMajor);
+    uint64_t major = static_cast<uint64_t>(rowMajor ? shape[0] : shape[1]);
+    uint64_t minor = static_cast<uint64_t>(rowMajor ? shape[1] : shape[0]);
+    if (major == 0 || minor == 0) {
+      return uint64_t{0};
     }
+    return ((major - 1) * (minor + 1) + minor) * elemBytes;
+  }
 
-    uint64_t numel = 1;
-    for (int64_t dim : shape) {
-      if (dim == ShapedType::kDynamic) {
-        return failure();
-      }
-      numel *= static_cast<uint64_t>(dim);
+  uint64_t numel = 1;
+  for (int64_t dim : shape) {
+    if (dim == ShapedType::kDynamic) {
+      return failure();
     }
-    return numel * elemBytes;
-  };
+    numel *= static_cast<uint64_t>(dim);
+  }
+  return numel * elemBytes;
+}
 
+static FailureOr<uint64_t> computeConvTileBytes(ConvTileBufType type) {
+  uint64_t elemBytes = getPTOStorageElemByteSize(type.getElementType());
+  const bool invalidCapacity =
+      elemBytes == 0 || type.getBufferSizeValue() <= 0;
+  if (invalidCapacity) {
+    return failure();
+  }
+  uint64_t bufferSize = static_cast<uint64_t>(type.getBufferSizeValue());
+  const bool overflows =
+      bufferSize > std::numeric_limits<uint64_t>::max() / elemBytes;
+  if (overflows) {
+    return failure();
+  }
+  return bufferSize * elemBytes;
+}
+
+static FailureOr<uint64_t> computeStaticBufferBytes(Value value) {
   if (auto tileType = dyn_cast<TileBufType>(value.getType())) {
-    return computeTileBytes(tileType);
+    return computeTileBufBytes(tileType);
+  }
+  if (auto convType = dyn_cast<ConvTileBufType>(value.getType())) {
+    return computeConvTileBytes(convType);
   }
   if (auto multiType = dyn_cast<MultiTileBufType>(value.getType())) {
-    return computeTileBytes(multiType.getSlotType());
+    return computeTileBufBytes(multiType.getSlotType());
   }
   return failure();
 }
@@ -1602,8 +1629,8 @@ public:
       return failure();
     }
 
-    auto tileType = dyn_cast<TileBufType>(op.getResult().getType());
-    if (!tileType) {
+    Type tileType = op.getResult().getType();
+    if (!isa<TileBufType, ConvTileBufType>(tileType)) {
       return failure();
     }
 
@@ -1622,7 +1649,8 @@ public:
     auto planned = rewriter.create<pto::AllocTileOp>(
         op.getLoc(), tileType, addr,
         op.getValidRow() ? op.getValidRow() : Value(),
-        op.getValidCol() ? op.getValidCol() : Value());
+        op.getValidCol() ? op.getValidCol() : Value(),
+        pto::ConvTileConfigAttr());
     for (NamedAttribute attr : op->getAttrs()) {
       if (attr.getName().getValue() == "operandSegmentSizes") {
         continue;

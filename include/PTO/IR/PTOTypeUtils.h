@@ -63,6 +63,12 @@ unsigned getPTOStorageElemBitWidth(Type t);
 unsigned getPTOStorageElemByteSize(Type t);
 unsigned getPTOPackedLdgStgTotalBits(Type t);
 
+// The conv tile minor-dim size c0 = 32 / elemBytes, by lookup rather than
+// division: G.EXP.22-CPP flags any division whose divisor comes from a
+// function call, guard or not. Returns nullopt for storage widths the
+// runtime cannot hold.
+std::optional<int64_t> convC0ForElemBytes(int64_t elemBytes);
+
 } // namespace mlir::pto
 
 #endif // PTO_IR_PTOTYPEUTILS_H

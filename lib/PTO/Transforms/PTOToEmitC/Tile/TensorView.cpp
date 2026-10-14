@@ -35,7 +35,10 @@ struct PTOMakeTensorViewToEmitC
     if (!resultType)
       return rewriter.notifyMatchFailure(op, "expected tensor_view result");
     std::string layout = "pto::Layout::ND";
-    if (auto attr = op.getLayoutAttr()) {
+    if (auto convLayout = getConvLayoutFromViewType(resultType)) {
+      // The view describes GM data already stored in a conv layout.
+      layout = convLayoutToEmitCString(*convLayout);
+    } else if (auto attr = op.getLayoutAttr()) {
       layout = layoutToEmitCString(attr.getLayout());
     } else if (auto attr = resultType.getLayoutAttr()) {
       layout = layoutToEmitCString(attr.getLayout());

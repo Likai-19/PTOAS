@@ -52,7 +52,7 @@ struct GroupSpan {
 };
 
 static bool isTileType(Type type) {
-  return isa<pto::TileBufType>(type);
+  return isa<pto::TileBufType, pto::ConvTileBufType>(type);
 }
 
 static bool isDpsInitOperand(OpOperand &operand) {

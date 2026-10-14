@@ -153,6 +153,23 @@ void PTOToEmitCTypeConverter::registerRuntimeValueConversions(MLIRContext *Ctx) 
   registerTileConversions(Ctx);
 }
 
+// Both GM view flavors resolve their GlobalTensor layout the same way: an
+// explicit LayoutAttr wins, a conv storage layout (GM data already stored in
+// NC1HWC0/FRACTAL_Z form, so pto.tload can move it straight into a conv tile)
+// maps to its GlobalTensor token, and ND is the default.
+template <typename ViewType>
+static Type convertGlobalTensorView(MLIRContext *Ctx, ViewType type) {
+  std::string layout = "pto::Layout::ND";
+  if (auto layoutAttr = type.getLayoutAttr()) {
+    layout = layoutToEmitCString(layoutAttr.getLayout());
+  } else if (auto convLayoutAttr =
+                 dyn_cast_or_null<pto::ConvLayoutAttr>(type.getLayout())) {
+    layout = convLayoutToEmitCString(convLayoutAttr.getValue());
+  }
+  return getRuntimeGlobalTensorOpaqueType(Ctx, type.getElementType(),
+                                          type.getShape(), layout);
+}
+
 // Views, async handles, pipes, events, arrays, structs.
 void PTOToEmitCTypeConverter::registerViewAndHandleConversions(MLIRContext *Ctx) {addConversion([Ctx](pto::PipeType type) -> Type {
   (void)type;
@@ -203,27 +220,24 @@ addConversion([Ctx](pto::PrefetchAsyncContextType type) -> Type {
 });
 
 addConversion([Ctx](pto::TensorViewType type) -> Type {
-  std::string layout = type.getLayoutAttr()
-                           ? layoutToEmitCString(
-                                 type.getLayoutAttr().getLayout())
-                           : "pto::Layout::ND";
-  return getRuntimeGlobalTensorOpaqueType(Ctx, type.getElementType(),
-                                          type.getShape(), layout);
+  return convertGlobalTensorView(Ctx, type);
 });
 
 addConversion([Ctx](pto::PartitionTensorViewType type) -> Type {
-  std::string layout = type.getLayoutAttr()
-                           ? layoutToEmitCString(
-                                 type.getLayoutAttr().getLayout())
-                           : "pto::Layout::ND";
-  return getRuntimeGlobalTensorOpaqueType(Ctx, type.getElementType(),
-                                          type.getShape(), layout);
+  return convertGlobalTensorView(Ctx, type);
 });
 }
 
 // Tile buffer types (tile_buf/alloc_tile handles).
 void PTOToEmitCTypeConverter::registerTileConversions(MLIRContext *Ctx) {addConversion([Ctx](pto::TileBufType type) -> std::optional<Type> {
   auto typeString = getEmitCTileTypeString(type);
+  if (!typeString)
+    return std::nullopt;
+  return emitc::OpaqueType::get(Ctx, *typeString);
+});
+
+addConversion([Ctx](pto::ConvTileBufType type) -> std::optional<Type> {
+  auto typeString = getEmitCConvTileBufTypeString(type);
   if (!typeString)
     return std::nullopt;
   return emitc::OpaqueType::get(Ctx, *typeString);
