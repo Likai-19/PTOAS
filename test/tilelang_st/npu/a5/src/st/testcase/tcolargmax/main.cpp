@@ -40,6 +40,12 @@ void LaunchTCOLARGMAX_ui8_16x256(void *dst, void *tmp, void *src, void *stream);
 void LaunchTCOLARGMAX_i8_1x256(void *dst, void *tmp, void *src, void *stream);
 void LaunchTCOLARGMAX_i8_16x128(void *dst, void *tmp, void *src, void *stream);
 void LaunchTCOLARGMAX_i8_16x256(void *dst, void *tmp, void *src, void *stream);
+void LaunchTCOLARGMAX_i16_16x128(void *dst, void *tmp, void *src, void *stream);
+void LaunchTCOLARGMAX_i32_16x128(void *dst, void *tmp, void *src, void *stream);
+void LaunchTCOLARGMAX_f32_16x128_u32(void *dst, void *tmp, void *src, void *stream);
+void LaunchTCOLARGMAX_i16_16x128_u32(void *dst, void *tmp, void *src, void *stream);
+void LaunchTCOLARGMAX_i8_16x128_u32(void *dst, void *tmp, void *src, void *stream);
+void LaunchTCOLARGMAX_i32_16x128_u32(void *dst, void *tmp, void *src, void *stream);
 
 using LaunchFnFloat = void (*)(int32_t *, float *, float *, void *);
 using LaunchFnVoid = void (*)(void *, void *, void *, void *);
@@ -65,6 +71,7 @@ struct TestCase {
     bool        isUi16;
     bool        isUi8;
     bool        isI8;
+    bool        isVoidLaunch;
 };
 
 static const TestCase kCases[] = {
@@ -86,6 +93,12 @@ static const TestCase kCases[] = {
     {"i8_1x256", (void*)LaunchTCOLARGMAX_i8_1x256, 1, 256, 1, 255, 1, 256, 1, 255, 1, 256, 255, sizeof(int8_t), sizeof(int32_t), false, false, false, false, true},
     {"i8_16x128", (void*)LaunchTCOLARGMAX_i8_16x128, 16, 128, 16, 127, 16, 128, 16, 127, 1, 128, 127, sizeof(int8_t), sizeof(int32_t), false, false, false, false, true},
     {"i8_16x256", (void*)LaunchTCOLARGMAX_i8_16x256, 16, 256, 15, 255, 16, 256, 15, 255, 1, 256, 255, sizeof(int8_t), sizeof(int32_t), false, false, false, false, true},
+    {"i16_16x128", (void*)LaunchTCOLARGMAX_i16_16x128, 16, 128, 16, 127, 16, 128, 16, 127, 1, 128, 127, sizeof(int16_t), sizeof(int32_t), false, false, false, false, false, true},
+    {"i32_16x128", (void*)LaunchTCOLARGMAX_i32_16x128, 16, 128, 16, 127, 16, 128, 16, 127, 1, 128, 127, sizeof(int32_t), sizeof(int32_t), false, false, false, false, false, true},
+    {"f32_16x128_u32", (void*)LaunchTCOLARGMAX_f32_16x128_u32, 16, 128, 16, 127, 16, 128, 16, 127, 1, 128, 127, sizeof(float), sizeof(uint32_t), false, false, false, false, false, true},
+    {"i16_16x128_u32", (void*)LaunchTCOLARGMAX_i16_16x128_u32, 16, 128, 16, 127, 16, 128, 16, 127, 1, 128, 127, sizeof(int16_t), sizeof(uint32_t), false, false, false, false, false, true},
+    {"i8_16x128_u32", (void*)LaunchTCOLARGMAX_i8_16x128_u32, 16, 128, 16, 127, 16, 128, 16, 127, 1, 128, 127, sizeof(int8_t), sizeof(uint32_t), false, false, false, false, false, true},
+    {"i32_16x128_u32", (void*)LaunchTCOLARGMAX_i32_16x128_u32, 16, 128, 16, 127, 16, 128, 16, 127, 1, 128, 127, sizeof(int32_t), sizeof(uint32_t), false, false, false, false, false, true},
 };
 static constexpr size_t kNumCases = sizeof(kCases) / sizeof(kCases[0]);
 
@@ -125,7 +138,7 @@ static int RunCase(const TestCase &tc, int deviceId, aclrtStream stream) {
     if (rc == 0) {
         aclrtMemcpy(srcDevice, srcFileSize, srcHost, srcFileSize, ACL_MEMCPY_HOST_TO_DEVICE);
 
-        if (tc.isFp16 || tc.isUi32 || tc.isUi16 || tc.isUi8 || tc.isI8) {
+        if (tc.isVoidLaunch || tc.isFp16 || tc.isUi32 || tc.isUi16 || tc.isUi8 || tc.isI8) {
             LaunchFnVoid launch = (LaunchFnVoid)tc.launch;
             launch(dstDevice, tmpDevice, srcDevice, stream);
         } else {

@@ -9,6 +9,7 @@
 
 """Shared constants/helpers for A5 TileLib template ports."""
 
+from ptodsl import pto
 import ptodsl.tilelib as tilelib
 
 
@@ -71,3 +72,24 @@ def element_store_dist(dtype):
     if bytewidth == 2:
         return "1PT_B16"
     return "1PT_B8"
+
+
+def scalar_literal(dtype, value):
+    name = dtype_name(dtype)
+    if name == "f32":
+        return pto.f32(float(value))
+    if name == "f16":
+        return pto.f16(float(value))
+    if name == "bf16":
+        return pto.bf16(float(value))
+    if name == "ui32":
+        return pto.ui32(value)
+    if name == "ui16":
+        return pto.ui16(value)
+    if name == "ui8":
+        return pto.ui8(value)
+    if name in {"i32", "si32"}:
+        return pto.i32(value)
+    if name in {"i16", "si16"}:
+        return pto.i16(value)
+    return pto.i8(value)

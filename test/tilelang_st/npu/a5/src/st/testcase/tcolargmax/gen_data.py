@@ -25,7 +25,10 @@ for case in CASES:
     dst_valid_shape = case["dst_valid_shape"]
     dst_dtype = case["dst_dtype"]
 
-    input1 = np.random.randint(1, 10, size=shape).astype(dtype)
+    # Signed integer inputs must include negatives: an all-positive input would
+    # not distinguish a signed from an unsigned vcmp on device.
+    low, high = (-9, 10) if np.dtype(dtype).kind == "i" else (1, 10)
+    input1 = np.random.randint(low, high, size=shape).astype(dtype)
 
     vr, vc = valid_shape
     golden = np.zeros(dst_shape, dtype=dst_dtype)

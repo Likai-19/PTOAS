@@ -15,6 +15,8 @@ from ptodsl import pto
 from ptodsl._ast_rewrite import rewrite_jit_function
 import ptodsl.tilelib as tilelib
 
+from ._common import scalar_literal
+
 
 def _constraints(src_config, tmp_config, dst_config, src_dtype, tmp_dtype, dst_dtype, dst_valid_shape, **_):
     return (
@@ -25,7 +27,7 @@ def _constraints(src_config, tmp_config, dst_config, src_dtype, tmp_dtype, dst_d
         and tmp_config.s_layout == "none_box"
         and dst_config.s_layout == "none_box"
         and src_dtype == tmp_dtype
-        and dst_dtype == "i32"
+        and dst_dtype in ("i32", "ui32")
         and dst_valid_shape[0] == 1
     )
 
@@ -34,6 +36,13 @@ def _intermediate_value_dtype(dtype):
     if str(dtype) == "ui8":
         return pto.ui16
     return pto.i16
+
+
+_INDEX_OUTPUT_DTYPES = ("i32", "ui32")
+
+
+def _dtype_matrix(src_dtypes):
+    return [(src, src, dst) for src in src_dtypes for dst in _INDEX_OUTPUT_DTYPES]
 
 
 @dataclass(frozen=True)
@@ -47,7 +56,7 @@ class _I8Ui8IndexStore:
 
 
 def _emit_i8_ui8_indexes(store, index_output, col_base, masks):
-    """Emit the interleaved i32 index stores for one i8/ui8 output quarter."""
+    """Emit the interleaved index stores for one i8/ui8 output quarter."""
     dst = store.dst
     lanes_i32 = store.lanes_i32
     full_mask_intermediate = store.full_mask_intermediate
@@ -61,8 +70,8 @@ def _emit_i8_ui8_indexes(store, index_output, col_base, masks):
         part=pto.VcvtPartMode.ODD,
     )
     output_0, output_1 = pto.vintlv(output_even, output_odd)
-    output_0 = pto.vbitcast(output_0, pto.i32)
-    output_1 = pto.vbitcast(output_1, pto.i32)
+    output_0 = pto.vbitcast(output_0, final_dtype)
+    output_1 = pto.vbitcast(output_1, final_dtype)
     pto.vsts(output_0, dst[0, col_base:], masks[0])
     pto.vsts(output_1, dst[0, col_base + lanes_i32:], masks[1])
 
@@ -78,7 +87,7 @@ def _i8_ui8_col_i32_masks(valid_cols, col):
 
 
 def _emit_i8_ui8_col_result(store, index_output_0, index_output_1, col_base, masks):
-    """Emit the two interleaved i32 store quarters for one i8/ui8 column."""
+    """Emit the two interleaved store quarters for one i8/ui8 column."""
     _emit_i8_ui8_indexes(
         store,
         index_output_0,
@@ -99,7 +108,7 @@ def _emit_col_arg_i8_ui8(src, dst, cmp_mode, reduce_op):
     dtype = src.dtype
     intermediate_dtype = _intermediate_value_dtype(dtype)
     index_dtype = pto.i16
-    final_dtype = pto.i32
+    final_dtype = dst.dtype
     lanes_i8 = pto.elements_per_vreg(dtype)
     lanes_i32 = pto.elements_per_vreg(pto.i32)
     full_mask_i8 = pto.make_mask(dtype, pto.PAT.ALL)
@@ -150,7 +159,7 @@ def register_col_arg_template(*, op, name, cmp_mode, reduce_op):
         op=op,
         target="a5",
         name=name,
-        dtypes=[("f32", "f32", "i32"), ("ui32", "ui32", "i32")],
+        dtypes=_dtype_matrix(("f32", "ui32", "i32")),
         iteration_axis="column",
         op_engine="vector",
         op_class="reduction",
@@ -172,13 +181,13 @@ def register_col_arg_template(*, op, name, cmp_mode, reduce_op):
         for col in range(0, src_valid_cols, lanes):
             remained = src_valid_cols - col
             mask, _ = pto.make_mask(src.dtype, remained)
-            index_old = pto.vdup(pto.i32(0), mask)
-            index_new = pto.vdup(pto.i32(0), mask)
+            index_old = pto.vdup(scalar_literal(dst.dtype, 0), mask)
+            index_new = pto.vdup(scalar_literal(dst.dtype, 0), mask)
             src_addr = pto.addptr(src_ptr, col)
             best_vals = pto.vlds(src_addr, 0)
 
             for row in range(1, src_valid_rows, 1):
-                index_new = pto.vadds(index_new, pto.i32(1), mask)
+                index_new = pto.vadds(index_new, scalar_literal(dst.dtype, 1), mask)
                 src_addr = pto.addptr(src_ptr, row * src_cols + col)
                 new_vals = pto.vlds(src_addr, 0)
                 select = pto.vcmp(new_vals, best_vals, full_mask, cmp_mode)
@@ -192,7 +201,7 @@ def register_col_arg_template(*, op, name, cmp_mode, reduce_op):
         op=op,
         target="a5",
         name=name.replace("f32_to_i32", "f16_ui16_to_i32"),
-        dtypes=[("f16", "f16", "i32"), ("ui16", "ui16", "i32")],
+        dtypes=_dtype_matrix(("f16", "ui16", "i16")),
         iteration_axis="column",
         op_engine="vector",
         op_class="reduction",
@@ -227,8 +236,8 @@ def register_col_arg_template(*, op, name, cmp_mode, reduce_op):
                 index_old = pto.vsel(index_new, index_old, select)
                 best_vals = reduce_op(best_vals, new_vals, elem_mask)
 
-            index_even = pto.vcvt(index_old, pto.i32, full_mask, part=pto.VcvtPartMode.EVEN)
-            index_odd = pto.vcvt(index_old, pto.i32, full_mask, part=pto.VcvtPartMode.ODD)
+            index_even = pto.vcvt(index_old, dst.dtype, full_mask, part=pto.VcvtPartMode.EVEN)
+            index_odd = pto.vcvt(index_old, dst.dtype, full_mask, part=pto.VcvtPartMode.ODD)
             index_lo, index_hi = pto.vintlv(index_even, index_odd)
 
             pto.vsts(index_lo, dst[0, col:], mask_i32_0)
@@ -238,7 +247,7 @@ def register_col_arg_template(*, op, name, cmp_mode, reduce_op):
         op=op,
         target="a5",
         name=name.replace("f32_to_i32", "i8_ui8_to_i32"),
-        dtypes=[("i8", "i8", "i32"), ("ui8", "ui8", "i32")],
+        dtypes=_dtype_matrix(("i8", "ui8")),
         iteration_axis="column",
         op_engine="vector",
         op_class="reduction",

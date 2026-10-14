@@ -13,7 +13,7 @@ from ptodsl import pto
 import ptodsl.tilelib as tilelib
 from ._common import NUMERIC_DTYPES
 from ._common import element_store_dist
-from ._row_arg import _scalar_literal
+from ._common import scalar_literal
 
 
 def _axis_is_row(axis_value, **_):

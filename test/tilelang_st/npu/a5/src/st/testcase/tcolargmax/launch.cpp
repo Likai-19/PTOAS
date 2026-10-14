@@ -137,3 +137,45 @@ extern "C" __global__ AICORE void TCOLARGMAX_i8_16x256(__gm__ int32_t *dst, __gm
 void LaunchTCOLARGMAX_i8_16x256(void *dst, void *tmp, void *src, void *stream) {
     TCOLARGMAX_i8_16x256<<<1, nullptr, stream>>>((__gm__ int32_t *)dst, (__gm__ int8_t *)tmp, (__gm__ int8_t *)src);
 }
+
+// Case 18: i16_16x128 (input: 16x128, tmp: 16x128, output: 1x128 indices)
+extern "C" __global__ AICORE void TCOLARGMAX_i16_16x128(__gm__ int32_t *dst, __gm__ int16_t *tmp, __gm__ int16_t *src);
+
+void LaunchTCOLARGMAX_i16_16x128(void *dst, void *tmp, void *src, void *stream) {
+    TCOLARGMAX_i16_16x128<<<1, nullptr, stream>>>((__gm__ int32_t *)dst, (__gm__ int16_t *)tmp, (__gm__ int16_t *)src);
+}
+
+// Case 19: i32_16x128 (input: 16x128, tmp: 16x128, output: 1x128 indices)
+extern "C" __global__ AICORE void TCOLARGMAX_i32_16x128(__gm__ int32_t *dst, __gm__ int32_t *tmp, __gm__ int32_t *src);
+
+void LaunchTCOLARGMAX_i32_16x128(void *dst, void *tmp, void *src, void *stream) {
+    TCOLARGMAX_i32_16x128<<<1, nullptr, stream>>>((__gm__ int32_t *)dst, (__gm__ int32_t *)tmp, (__gm__ int32_t *)src);
+}
+
+// Case 20: f32_16x128_u32 (input: 16x128, tmp: 16x128, output: 1x128 indices)
+extern "C" __global__ AICORE void TCOLARGMAX_f32_16x128_u32(__gm__ uint32_t *dst, __gm__ float *tmp, __gm__ float *src);
+
+void LaunchTCOLARGMAX_f32_16x128_u32(void *dst, void *tmp, void *src, void *stream) {
+    TCOLARGMAX_f32_16x128_u32<<<1, nullptr, stream>>>((__gm__ uint32_t *)dst, (__gm__ float *)tmp, (__gm__ float *)src);
+}
+
+// Case 21: i16_16x128_u32 (input: 16x128, tmp: 16x128, output: 1x128 indices)
+extern "C" __global__ AICORE void TCOLARGMAX_i16_16x128_u32(__gm__ uint32_t *dst, __gm__ int16_t *tmp, __gm__ int16_t *src);
+
+void LaunchTCOLARGMAX_i16_16x128_u32(void *dst, void *tmp, void *src, void *stream) {
+    TCOLARGMAX_i16_16x128_u32<<<1, nullptr, stream>>>((__gm__ uint32_t *)dst, (__gm__ int16_t *)tmp, (__gm__ int16_t *)src);
+}
+
+// Case 22: i8_16x128_u32 (input: 16x128, tmp: 16x128, output: 1x128 indices)
+extern "C" __global__ AICORE void TCOLARGMAX_i8_16x128_u32(__gm__ uint32_t *dst, __gm__ int8_t *tmp, __gm__ int8_t *src);
+
+void LaunchTCOLARGMAX_i8_16x128_u32(void *dst, void *tmp, void *src, void *stream) {
+    TCOLARGMAX_i8_16x128_u32<<<1, nullptr, stream>>>((__gm__ uint32_t *)dst, (__gm__ int8_t *)tmp, (__gm__ int8_t *)src);
+}
+
+// Case 23: i32_16x128_u32 (input: 16x128, tmp: 16x128, output: 1x128 indices)
+extern "C" __global__ AICORE void TCOLARGMAX_i32_16x128_u32(__gm__ uint32_t *dst, __gm__ int32_t *tmp, __gm__ int32_t *src);
+
+void LaunchTCOLARGMAX_i32_16x128_u32(void *dst, void *tmp, void *src, void *stream) {
+    TCOLARGMAX_i32_16x128_u32<<<1, nullptr, stream>>>((__gm__ uint32_t *)dst, (__gm__ int32_t *)tmp, (__gm__ int32_t *)src);
+}

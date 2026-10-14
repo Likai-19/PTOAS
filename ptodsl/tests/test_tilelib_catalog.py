@@ -1268,6 +1268,23 @@ class TileLibCatalogTest(unittest.TestCase):
                     self.assertIn(dtype, selected.name)
                     self.assertIn("pto.vcmp", selected.specialize(**specs).mlir_text())
 
+    def test_colarg_full_dtype_matrix_renders(self):
+        # Every src dtype must pair with both i32 and ui32 index outputs
+        # (issue #1600: i16/i32 sources and ui32 indexes used to miss every template).
+        src_dtypes = ("f32", "f16", "ui16", "i16", "i32", "ui32", "i8", "ui8")
+        for op in ("pto.tcolargmax", "pto.tcolargmin"):
+            for src_dtype, index_dtype in product(src_dtypes, ("i32", "ui32")):
+                with self.subTest(op=op, src=src_dtype, index=index_dtype):
+                    specs = {
+                        "src": TileSpec(shape=(8, 64), dtype=ScalarType(src_dtype)),
+                        "tmp": TileSpec(shape=(8, 64), dtype=ScalarType(src_dtype)),
+                        "dst": TileSpec(shape=(8, 64), dtype=ScalarType(index_dtype), valid_shape=(1, 64)),
+                    }
+                    selected = select(op, "a5", specs)
+                    mlir = selected.specialize(**specs).mlir_text()
+                    self.assertIn("pto.vcmp", mlir)
+                    self.assertIn("pto.vsel", mlir)
+
     def test_tload_versions_render(self):
         cases = (
             (

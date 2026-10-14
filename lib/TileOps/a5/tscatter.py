@@ -16,14 +16,14 @@ from ptodsl._ast_rewrite import rewrite_jit_function
 import ptodsl.tilelib as tilelib
 
 from ._common import NUMERIC_DTYPES
-from ._row_arg import _scalar_literal
+from ._common import scalar_literal
 
 
 def _init_ub_buffer(dst: pto.Tile):
     dtype = dst.dtype
     tile_rows, tile_cols = dst.shape
     lanes = pto.elements_per_vreg(dtype)
-    zeros = pto.vbr(_scalar_literal(dtype, 0))
+    zeros = pto.vbr(scalar_literal(dtype, 0))
     mask, _ = pto.make_mask(dtype, lanes)
     for row in range(0, tile_rows, 1):
         for col in range(0, tile_cols, lanes):
@@ -205,7 +205,7 @@ def _tscatter_mask_row_emit(src: pto.Tile, dst: pto.Tile, interleave_args):
     lanes = pto.elements_per_vreg(dtype)
     times = 1 << len(interleave_args)
     dst_valid_col = valid_cols * times
-    zeros = pto.vbr(_scalar_literal(dtype, 0))
+    zeros = pto.vbr(scalar_literal(dtype, 0))
     ctx = _MaskRowStore(
         src,
         dst,
