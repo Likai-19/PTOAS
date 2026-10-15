@@ -9,7 +9,7 @@
 // TileLang ST kernels for pto.trowexpandsub: row-wise broadcast subtraction.
 
 module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
-  // f32_8x128: dstRow=8, dstCol=128, src1Row=8, src1Col=1, src0eqdst=true
+  // f32_8x128: dstRow=8, dstCol=128, src1Row=8, src1Col=8, src0eqdst=true
   func.func @TROWEXPANDSUB_f32_24x32(%src0_ptr: !pto.ptr<f32>, %src1_ptr: !pto.ptr<f32>, %dst_ptr: !pto.ptr<f32>) attributes {pto.kernel} {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
@@ -33,12 +33,12 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
 
     pto.tload ins(%src0_part : !pto.partition_tensor_view<1x1x1x24x32xf32>) outs(%src0 : !pto.tile_buf<vec, 24x32xf32>)
     pto.tload ins(%src1_part : !pto.partition_tensor_view<1x1x1x24x8xf32>) outs(%src1 : !pto.tile_buf<vec, 24x8xf32>)
-    pto.trowexpandsub ins(%src0, %src1 : !pto.tile_buf<vec, 24x32xf32>, !pto.tile_buf<vec, 24x8xf32>) outs(%dst : !pto.tile_buf<vec, 24x32xf32>) {src1Col = 1 : i64, src0eqdst = true, highPrecision = false}
+    pto.trowexpandsub ins(%src0, %src1 : !pto.tile_buf<vec, 24x32xf32>, !pto.tile_buf<vec, 24x8xf32>) outs(%dst : !pto.tile_buf<vec, 24x32xf32>) {src1Col = 8 : i64, src0eqdst = true, highPrecision = false}
     pto.tstore ins(%dst : !pto.tile_buf<vec, 24x32xf32>) outs(%dst_part : !pto.partition_tensor_view<1x1x1x24x32xf32>)
     return
   }
 
-  // f16_16x256: dstRow=16, dstCol=256, src1Row=16, src1Col=1, src0eqdst=true
+  // f16_16x256: dstRow=16, dstCol=256, src1Row=16, src1Col=16, src0eqdst=true
 
   func.func @TROWEXPANDSUB_i32_16x32(%src0_ptr: !pto.ptr<i32>, %src1_ptr: !pto.ptr<i32>, %dst_ptr: !pto.ptr<i32>) attributes {pto.kernel} {
     %c0 = arith.constant 0 : index
@@ -63,10 +63,10 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
 
     pto.tload ins(%src0_part : !pto.partition_tensor_view<1x1x1x16x32xi32>) outs(%src0 : !pto.tile_buf<vec, 16x32xi32>)
     pto.tload ins(%src1_part : !pto.partition_tensor_view<1x1x1x16x8xi32>) outs(%src1 : !pto.tile_buf<vec, 16x8xi32>)
-    pto.trowexpandsub ins(%src0, %src1 : !pto.tile_buf<vec, 16x32xi32>, !pto.tile_buf<vec, 16x8xi32>) outs(%dst : !pto.tile_buf<vec, 16x32xi32>) {src1Col = 1 : i64, src0eqdst = true, highPrecision = false}
+    pto.trowexpandsub ins(%src0, %src1 : !pto.tile_buf<vec, 16x32xi32>, !pto.tile_buf<vec, 16x8xi32>) outs(%dst : !pto.tile_buf<vec, 16x32xi32>) {src1Col = 8 : i64, src0eqdst = true, highPrecision = false}
     pto.tstore ins(%dst : !pto.tile_buf<vec, 16x32xi32>) outs(%dst_part : !pto.partition_tensor_view<1x1x1x16x32xi32>)
     return
   }
 
-  // i16_16x64: dstRow=16, dstCol=64, src1Row=16, src1Col=1, src0eqdst=true
+  // i16_16x64: dstRow=16, dstCol=64, src1Row=16, src1Col=16, src0eqdst=true
 }

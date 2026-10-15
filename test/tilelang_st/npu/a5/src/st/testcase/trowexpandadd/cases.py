@@ -13,8 +13,8 @@
 
 trowexpandadd: dst = src0 + broadcast(src1) across columns.
 - src1Col determines how src1 is broadcast:
-  - src1Col=1: only first column is valid, broadcast to dstCols
-  - src1Col=8 (for f32): 8 columns are valid, no broadcast needed
+  - src1Col=32/sizeof(dtype): the 32-byte block repeats across the row (pto-isa TROWEXPAND Mode 2)
+  - src1Col=8 (for f32): 8 columns are valid: the 32-byte block repeats across the row
 - src1Cols (physical) = 32/sizeof(dtype) for NPU alignment
 
 Template parameters:
@@ -33,7 +33,7 @@ CASES = [
         "src0_shape": (16, 32),       # src0eqdst=true, same as dst
         "src0_valid_shape": (16, 32),
         "src1_shape": (16, 8),        # physical: 32/sizeof(f32)=8
-        "src1_valid_shape": (16, 1),  # src1Col=1, only first column valid
+        "src1_valid_shape": (16, 8),  # src1Col = 8
         "dst_shape": (16, 32),
         "dst_valid_shape": (16, 32),
         "eps": 1e-6,
@@ -45,7 +45,7 @@ CASES = [
         "src0_shape": (56, 128),      # src0eqdst=true
         "src0_valid_shape": (56, 128),
         "src1_shape": (56, 8),        # physical: 8
-        "src1_valid_shape": (56, 1),  # src1Col=1
+        "src1_valid_shape": (56, 8),  # src1Col = 8
         "dst_shape": (56, 128),
         "dst_valid_shape": (56, 128),
         "eps": 1e-6,
@@ -57,7 +57,7 @@ CASES = [
         "src0_shape": (48, 64),       # src0eqdst=true
         "src0_valid_shape": (48, 64),
         "src1_shape": (48, 16),       # physical: 32/sizeof(f16)=16
-        "src1_valid_shape": (48, 1),  # src1Col=1
+        "src1_valid_shape": (48, 16),  # src1Col = 16
         "dst_shape": (48, 64),
         "dst_valid_shape": (48, 64),
         "eps": 1e-3,
@@ -69,14 +69,14 @@ CASES = [
         "src0_shape": (16, 128),      # src0eqdst=true
         "src0_valid_shape": (16, 128),
         "src1_shape": (16, 16),       # physical: 16
-        "src1_valid_shape": (16, 1),  # src1Col=1
+        "src1_valid_shape": (16, 16),  # src1Col = 16
         "dst_shape": (16, 128),
         "dst_valid_shape": (16, 128),
         "eps": 1e-3,
     },
-    # Note: launchTRowExpandAdd2 with src1Col=8 has different semantics - TBD
-    # launchTRowExpandAdd2<float, 24, 64, 24, 8, true> - needs investigation
-    # launchTRowExpandAdd2<float, 20, 64, 20, 8, false> - needs investigation
+    # RowMajor src1 with 32/sizeof(dtype) columns (Mode 2) is not enabled in this suite.
+    # launchTRowExpandAdd2<float, 24, 64, 24, 8, true>
+    # launchTRowExpandAdd2<float, 20, 64, 20, 8, false>
     # launchTRowExpandAdd<aclFloat16, 32, 64, 32, 1, false>
     {
         "name": "f16_32x64_noeq",
@@ -84,7 +84,7 @@ CASES = [
         "src0_shape": (32, 64),       # src0eqdst=false, but src0 shape still matches dst
         "src0_valid_shape": (32, 64),
         "src1_shape": (32, 16),       # physical: 16
-        "src1_valid_shape": (32, 1),  # src1Col=1
+        "src1_valid_shape": (32, 16),  # src1Col = 16
         "dst_shape": (32, 64),
         "dst_valid_shape": (32, 64),
         "eps": 1e-3,
@@ -96,7 +96,7 @@ CASES = [
         "src0_shape": (16, 32),       # src0eqdst=true
         "src0_valid_shape": (16, 32),
         "src1_shape": (16, 8),        # physical: 32/sizeof(i32)=8
-        "src1_valid_shape": (16, 1),  # src1Col=1
+        "src1_valid_shape": (16, 8),  # src1Col = 8
         "dst_shape": (16, 32),
         "dst_valid_shape": (16, 32),
         "eps": 0,
@@ -108,7 +108,7 @@ CASES = [
         "src0_shape": (16, 64),       # src0eqdst=true
         "src0_valid_shape": (16, 64),
         "src1_shape": (16, 16),       # physical: 32/sizeof(i16)=16
-        "src1_valid_shape": (16, 1),  # src1Col=1
+        "src1_valid_shape": (16, 16),  # src1Col = 16
         "dst_shape": (16, 64),
         "dst_valid_shape": (16, 64),
         "eps": 0,

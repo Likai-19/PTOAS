@@ -23,7 +23,6 @@ void LaunchTROWEXPANDADD_f32_56x128(float *src0, float *src1, float *dst, void *
     TROWEXPANDADD_f32_56x128<<<1, nullptr, stream>>>((__gm__ float *)src0, (__gm__ float *)src1, (__gm__ float *)dst);
 }
 
-// Note: launchTRowExpandAdd2 with src1Col=8 has different semantics - TBD
 
 // f16 kernels (use uint16_t for aclFloat16)
 extern "C" __global__ AICORE void TROWEXPANDADD_f16_48x64(__gm__ uint16_t *src0, __gm__ uint16_t *src1, __gm__ uint16_t *dst);

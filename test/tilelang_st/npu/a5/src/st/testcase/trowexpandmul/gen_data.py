@@ -43,10 +43,12 @@ for case in CASES:
     golden = np.zeros(dst_shape, dtype=dtype)
     dst_vr, dst_vc = dst_valid_shape
     src0_vr, src0_vc = src0_valid_shape
-    src1_vr = src1_valid_shape[0]
+    src1_vr, src1_vc = src1_valid_shape
+    # pto-isa Mode 2: the 32-byte block repeats across the row
+    block_idx = np.arange(dst_vc) % src1_vc
 
     golden[:dst_vr, :dst_vc] = (
-        input1[:src0_vr, :src0_vc] * input2[:src1_vr, 0:1]
+        input1[:src0_vr, :src0_vc] * input2[:src1_vr, block_idx]
     ).astype(dtype, copy=False)
 
     save_case_data(case["name"], {"input1": input1, "input2": input2, "golden": golden})

@@ -46,32 +46,31 @@ for case in CASES:
     src1_vr, src1_vc = src1_valid_shape
 
     # Compute golden based on src1Col semantics
-    # src1Col=1: broadcast single column to all dst columns
-    # src1Col>1: each src1 column broadcasts to dst_vc/src1_vc columns
+    # src1Col=32/sizeof(dtype): the 32-byte block repeats across the row (pto-isa TROWEXPAND Mode 2)
+    # src1Col>1: RowMajor 32-byte block per row (src1_vc == 32/sizeof(dtype)) *repeats*
+    #            across the row: dst[:, c] = src0[:, c] OP src1[:, c % src1_vc] (Mode 2)
     if dtype in (np.int8, np.int16, np.int32):
         if src1_vc == 1:
             golden[:dst_vr, :dst_vc] = (
                 input1[:src0_vr, :src0_vc] // input2[:src1_vr, 0:1]
             ).astype(dtype, copy=False)
         else:
-            # src1Col > 1: each src1 column broadcasts to dst_vc/src1_vc dst columns
-            block_size = dst_vc // src1_vc
-            for c in range(src1_vc):
-                golden[:dst_vr, c*block_size:(c+1)*block_size] = (
-                    input1[:src0_vr, c*block_size:(c+1)*block_size] // input2[:src1_vr, c:c+1]
-                ).astype(dtype, copy=False)
+            # src1Col > 1: the 32-byte block repeats across the row (pto-isa TROWEXPAND Mode 2)
+            block_idx = np.arange(dst_vc) % src1_vc
+            golden[:dst_vr, :dst_vc] = (
+                input1[:src0_vr, :src0_vc] // input2[:src1_vr, block_idx]
+            ).astype(dtype, copy=False)
     else:
         if src1_vc == 1:
             golden[:dst_vr, :dst_vc] = (
                 input1[:src0_vr, :src0_vc] / input2[:src1_vr, 0:1]
             ).astype(dtype, copy=False)
         else:
-            # src1Col > 1: each src1 column broadcasts to dst_vc/src1_vc dst columns
-            block_size = dst_vc // src1_vc
-            for c in range(src1_vc):
-                golden[:dst_vr, c*block_size:(c+1)*block_size] = (
-                    input1[:src0_vr, c*block_size:(c+1)*block_size] / input2[:src1_vr, c:c+1]
-                ).astype(dtype, copy=False)
+            # src1Col > 1: the 32-byte block repeats across the row (pto-isa TROWEXPAND Mode 2)
+            block_idx = np.arange(dst_vc) % src1_vc
+            golden[:dst_vr, :dst_vc] = (
+                input1[:src0_vr, :src0_vc] / input2[:src1_vr, block_idx]
+            ).astype(dtype, copy=False)
 
     save_case_data(case["name"], {"input1": input1, "input2": input2, "golden": golden})
     print(f"[INFO] gen_data: {case['name']} dtype={dtype.__name__}")

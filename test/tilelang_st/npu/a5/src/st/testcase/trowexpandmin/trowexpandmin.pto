@@ -58,7 +58,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.tload ins(%src1_part : !pto.partition_tensor_view<1x1x1x16x8xf32>)
               outs(%src1 : !pto.tile_buf<vec, 16x8xf32>)
 
-    pto.trowexpandmin ins(%src0, %src1 : !pto.tile_buf<vec, 16x32xf32>, !pto.tile_buf<vec, 16x8xf32>) outs(%dst : !pto.tile_buf<vec, 16x32xf32>) {src1Col = 1 : i64, src0eqdst = true}
+    pto.trowexpandmin ins(%src0, %src1 : !pto.tile_buf<vec, 16x32xf32>, !pto.tile_buf<vec, 16x8xf32>) outs(%dst : !pto.tile_buf<vec, 16x32xf32>) {src1Col = 8 : i64, src0eqdst = true}
 
     pto.tstore ins(%dst : !pto.tile_buf<vec, 16x32xf32>)
                outs(%dst_part : !pto.partition_tensor_view<1x1x1x16x32xf32>)
@@ -113,7 +113,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.tload ins(%src1_part : !pto.partition_tensor_view<1x1x1x56x8xf32>)
               outs(%src1 : !pto.tile_buf<vec, 56x8xf32>)
 
-    pto.trowexpandmin ins(%src0, %src1 : !pto.tile_buf<vec, 56x128xf32>, !pto.tile_buf<vec, 56x8xf32>) outs(%dst : !pto.tile_buf<vec, 56x128xf32>) {src1Col = 1 : i64, src0eqdst = true}
+    pto.trowexpandmin ins(%src0, %src1 : !pto.tile_buf<vec, 56x128xf32>, !pto.tile_buf<vec, 56x8xf32>) outs(%dst : !pto.tile_buf<vec, 56x128xf32>) {src1Col = 8 : i64, src0eqdst = true}
 
     pto.tstore ins(%dst : !pto.tile_buf<vec, 56x128xf32>)
                outs(%dst_part : !pto.partition_tensor_view<1x1x1x56x128xf32>)
@@ -168,7 +168,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.tload ins(%src1_part : !pto.partition_tensor_view<1x1x1x48x16xf16>)
               outs(%src1 : !pto.tile_buf<vec, 48x16xf16>)
 
-    pto.trowexpandmin ins(%src0, %src1 : !pto.tile_buf<vec, 48x64xf16>, !pto.tile_buf<vec, 48x16xf16>) outs(%dst : !pto.tile_buf<vec, 48x64xf16>) {src1Col = 1 : i64, src0eqdst = true}
+    pto.trowexpandmin ins(%src0, %src1 : !pto.tile_buf<vec, 48x64xf16>, !pto.tile_buf<vec, 48x16xf16>) outs(%dst : !pto.tile_buf<vec, 48x64xf16>) {src1Col = 16 : i64, src0eqdst = true}
 
     pto.tstore ins(%dst : !pto.tile_buf<vec, 48x64xf16>)
                outs(%dst_part : !pto.partition_tensor_view<1x1x1x48x64xf16>)
@@ -222,7 +222,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.tload ins(%src1_part : !pto.partition_tensor_view<1x1x1x16x16xf16>)
               outs(%src1 : !pto.tile_buf<vec, 16x16xf16>)
 
-    pto.trowexpandmin ins(%src0, %src1 : !pto.tile_buf<vec, 16x128xf16>, !pto.tile_buf<vec, 16x16xf16>) outs(%dst : !pto.tile_buf<vec, 16x128xf16>) {src1Col = 1 : i64, src0eqdst = true}
+    pto.trowexpandmin ins(%src0, %src1 : !pto.tile_buf<vec, 16x128xf16>, !pto.tile_buf<vec, 16x16xf16>) outs(%dst : !pto.tile_buf<vec, 16x128xf16>) {src1Col = 16 : i64, src0eqdst = true}
 
     pto.tstore ins(%dst : !pto.tile_buf<vec, 16x128xf16>)
                outs(%dst_part : !pto.partition_tensor_view<1x1x1x16x128xf16>)
@@ -277,7 +277,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.tload ins(%src1_part : !pto.partition_tensor_view<1x1x1x32x16xf16>)
               outs(%src1 : !pto.tile_buf<vec, 32x16xf16>)
 
-    pto.trowexpandmin ins(%src0, %src1 : !pto.tile_buf<vec, 32x64xf16>, !pto.tile_buf<vec, 32x16xf16>) outs(%dst : !pto.tile_buf<vec, 32x64xf16>) {src1Col = 1 : i64, src0eqdst = false}
+    pto.trowexpandmin ins(%src0, %src1 : !pto.tile_buf<vec, 32x64xf16>, !pto.tile_buf<vec, 32x16xf16>) outs(%dst : !pto.tile_buf<vec, 32x64xf16>) {src1Col = 16 : i64, src0eqdst = false}
 
     pto.tstore ins(%dst : !pto.tile_buf<vec, 32x64xf16>)
                outs(%dst_part : !pto.partition_tensor_view<1x1x1x32x64xf16>)
@@ -332,7 +332,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.tload ins(%src1_part : !pto.partition_tensor_view<1x1x1x16x8xi32>)
               outs(%src1 : !pto.tile_buf<vec, 16x8xi32>)
 
-    pto.trowexpandmin ins(%src0, %src1 : !pto.tile_buf<vec, 16x32xi32>, !pto.tile_buf<vec, 16x8xi32>) outs(%dst : !pto.tile_buf<vec, 16x32xi32>) {src1Col = 1 : i64, src0eqdst = true}
+    pto.trowexpandmin ins(%src0, %src1 : !pto.tile_buf<vec, 16x32xi32>, !pto.tile_buf<vec, 16x8xi32>) outs(%dst : !pto.tile_buf<vec, 16x32xi32>) {src1Col = 8 : i64, src0eqdst = true}
 
     pto.tstore ins(%dst : !pto.tile_buf<vec, 16x32xi32>)
                outs(%dst_part : !pto.partition_tensor_view<1x1x1x16x32xi32>)
@@ -386,7 +386,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     pto.tload ins(%src1_part : !pto.partition_tensor_view<1x1x1x16x16xi16>)
               outs(%src1 : !pto.tile_buf<vec, 16x16xi16>)
 
-    pto.trowexpandmin ins(%src0, %src1 : !pto.tile_buf<vec, 16x64xi16>, !pto.tile_buf<vec, 16x16xi16>) outs(%dst : !pto.tile_buf<vec, 16x64xi16>) {src1Col = 1 : i64, src0eqdst = true}
+    pto.trowexpandmin ins(%src0, %src1 : !pto.tile_buf<vec, 16x64xi16>, !pto.tile_buf<vec, 16x16xi16>) outs(%dst : !pto.tile_buf<vec, 16x64xi16>) {src1Col = 16 : i64, src0eqdst = true}
 
     pto.tstore ins(%dst : !pto.tile_buf<vec, 16x64xi16>)
                outs(%dst_part : !pto.partition_tensor_view<1x1x1x16x64xi16>)

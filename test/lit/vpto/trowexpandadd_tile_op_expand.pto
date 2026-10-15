@@ -16,11 +16,17 @@
 
 // After the full tile-op-expand path on the VPTO backend, the original
 // pto.trowexpandadd should be lowered to vector-style VPTO IR.
+//
+// src1 below is RowMajor with 32/sizeof(f32) = 8 valid columns, which is pto-isa's
+// TROWEXPAND "Mode 2": the 32-byte block *repeats* across the destination row.
+// The expanded operand is therefore read with a block-replicate distribution
+// (BRC_BLK), so every column of the block reaches the result.
 // CHECK: func.func @TROWEXPANDADD
 // CHECK-NOT: pto.trowexpandadd ins
 // CHECK: pto.vecscope
 // CHECK: pto.vlds
-// CHECK: pto.vdup
+// CHECK: pto.vlds {{.*}} {dist = "BRC_BLK"}
+// CHECK-NOT: pto.vdup
 // CHECK: pto.vadd
 // CHECK: pto.vsts
 
@@ -30,8 +36,8 @@ module attributes {pto.kernel_kind = #pto.kernel_kind<vector>} {
     %src0 = pto.alloc_tile
       : !pto.tile_buf<loc=vec, dtype=f32, rows=32, cols=32, v_row=32, v_col=32,
                       blayout=row_major, slayout=none_box, fractal=512, pad=0>
-    // src1: 32x8 (one scalar vector per row, width=8 for f32 which is 32/sizeof(f32))
-    // For row-major src1, valid_shape[1] must be 32/sizeof(dtype)
+    // src1: 32x8 -- one 32-byte block per row (32/sizeof(f32) = 8), ISA Mode 2.
+    // For row-major src1, valid_shape[1] must be 32/sizeof(dtype).
     %src1 = pto.alloc_tile
       : !pto.tile_buf<loc=vec, dtype=f32, rows=32, cols=8, v_row=32, v_col=8,
                       blayout=row_major, slayout=none_box, fractal=512, pad=0>

@@ -190,13 +190,31 @@ static LogicalResult verifyTColExpandElementTypes(Operation *op, Type e0,
                            << " element type to be i16/i32/f16/f32";
 }
 
-static LogicalResult verifyTColExpandValidColumn(Operation *op, Type t1,
+static bool colExpandValidShapesMatch(ArrayRef<int64_t> lhs,
+                                      ArrayRef<int64_t> rhs) {
+  if (lhs.size() != rhs.size())
+    return false;
+  return llvm::all_of(llvm::zip(lhs, rhs), [](auto pair) {
+    auto [left, right] = pair;
+    return left == ShapedType::kDynamic || right == ShapedType::kDynamic ||
+           left == right;
+  });
+}
+
+// The full-sized operand is the one whose valid shape matches dst, with src0 taking
+// precedence when both do (pto-isa's `src0eqdst`); the other operand carries the
+// single row that is broadcast down the columns.
+static bool colExpandSrc0IsFullSized(Type src0Ty, Type dstTy) {
+  return colExpandValidShapesMatch(getValidShapeVec(src0Ty), getValidShapeVec(dstTy));
+}
+
+static LogicalResult verifyTColExpandValidColumn(Operation *op, Type expandedTy,
                                                  Type td) {
-  auto src1Valid = getValidShapeVec(t1);
+  auto expandedValid = getValidShapeVec(expandedTy);
   auto dstValid = getValidShapeVec(td);
-  if (src1Valid.size() == mlir::pto::kValue2 && dstValid.size() == mlir::pto::kValue2 &&
-      src1Valid[1] != ShapedType::kDynamic && dstValid[1] != ShapedType::kDynamic && src1Valid[1] != dstValid[1])
-      return op->emitOpError("expects src1 valid_shape[1] to equal dst valid_shape[1]");
+  if (expandedValid.size() == mlir::pto::kValue2 && dstValid.size() == mlir::pto::kValue2 &&
+      expandedValid[1] != ShapedType::kDynamic && dstValid[1] != ShapedType::kDynamic && expandedValid[1] != dstValid[1])
+      return op->emitOpError("expects the expanded operand valid_shape[1] to equal dst valid_shape[1]");
   return success();
 }
 

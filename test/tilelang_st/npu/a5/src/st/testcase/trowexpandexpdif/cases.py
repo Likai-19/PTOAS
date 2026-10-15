@@ -12,8 +12,8 @@
 """Single source of truth for trowexpandexpdif ST test cases.
 
 trowexpandexpdif: dst = exp(src0 - broadcast(src1))
-- src1Col=1: only first column of src1 is valid, broadcast to dstCols
-- src1Col>1: launchTRowExpandExpdif2 with different semantics (TBD)
+- src1Col=32/sizeof(dtype): the 32-byte block repeats across the row (pto-isa TROWEXPAND Mode 2)
+- src1Col>1 (RowMajor, 32/sizeof(dtype) columns): the 32-byte block repeats across the row
 - src1 physical cols = 32/sizeof(dtype) for NPU alignment
 - src0eqdst: true means src0 shape equals dst shape
 """
@@ -28,7 +28,7 @@ CASES = [
         "src0_shape": (32, 64),
         "src0_valid_shape": (32, 64),
         "src1_shape": (32, 8),        # physical: 32/sizeof(f32)=8
-        "src1_valid_shape": (32, 1),  # src1Col=1
+        "src1_valid_shape": (32, 8),  # src1Col = 8
         "dst_shape": (32, 64),
         "dst_valid_shape": (32, 64),
         "eps": 1e-5,
@@ -40,7 +40,7 @@ CASES = [
         "src0_shape": (16, 32),
         "src0_valid_shape": (16, 32),
         "src1_shape": (16, 8),
-        "src1_valid_shape": (16, 1),
+        "src1_valid_shape": (16, 8),
         "dst_shape": (16, 32),
         "dst_valid_shape": (16, 32),
         "eps": 1e-5,
@@ -52,7 +52,7 @@ CASES = [
         "src0_shape": (16, 32),
         "src0_valid_shape": (16, 32),
         "src1_shape": (16, 16),       # physical: 32/sizeof(f16)=16
-        "src1_valid_shape": (16, 1),
+        "src1_valid_shape": (16, 16),
         "dst_shape": (16, 32),
         "dst_valid_shape": (16, 32),
         "eps": 1e-3,
@@ -64,7 +64,7 @@ CASES = [
         "src0_shape": (48, 64),
         "src0_valid_shape": (48, 64),
         "src1_shape": (48, 16),
-        "src1_valid_shape": (48, 1),
+        "src1_valid_shape": (48, 16),
         "dst_shape": (48, 64),
         "dst_valid_shape": (48, 64),
         "eps": 1e-3,
@@ -76,12 +76,12 @@ CASES = [
         "src0_shape": (16, 128),      # src0eqdst=false
         "src0_valid_shape": (16, 128),
         "src1_shape": (16, 8),
-        "src1_valid_shape": (16, 1),
+        "src1_valid_shape": (16, 8),
         "dst_shape": (16, 128),
         "dst_valid_shape": (16, 128),
         "eps": 1e-5,
     },
-    # Note: launchTRowExpandExpdif2 with src1Col>1 has different semantics - TBD
+    # RowMajor src1 with 32/sizeof(dtype) columns (Mode 2) is not enabled in this suite.
     # - float, 24, 64, 24, 8, true (src1Col=8)
-    # - aclFloat16, 16, 64, 16, 16, false (src1Col=16)
+    # - aclFloat16, 16, 64, 16, 16, false (src1Col=32/sizeof(dtype)6)
 ]

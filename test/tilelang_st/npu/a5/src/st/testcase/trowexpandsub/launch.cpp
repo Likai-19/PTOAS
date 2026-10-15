@@ -52,4 +52,3 @@ void LaunchTROWEXPANDSUB_i16_16x64(void *src0, void *src1, void *dst, void *stre
     TROWEXPANDSUB_i16_16x64<<<1, nullptr, stream>>>((__gm__ int16_t *)src0, (__gm__ int16_t *)src1, (__gm__ int16_t *)dst);
 }
 
-// Note: launchTRowExpandSub2 with src1Col>1 has different semantics - TBD

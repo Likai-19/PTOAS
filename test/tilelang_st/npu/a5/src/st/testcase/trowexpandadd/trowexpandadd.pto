@@ -9,10 +9,10 @@
 // TileLang ST kernels for pto.trowexpandadd: row-wise broadcast addition.
 // dst = src0 + broadcast(src1) where src1 is expanded across columns.
 // src1 physical cols = 32/sizeof(dtype) for NPU alignment
-// src1 v_col = src1Col from template (1 or 8)
+// src1 is RowMajor with 32/sizeof(dtype) valid columns (pto-isa TROWEXPAND Mode 2)
 
 module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
-  // f32_16x32: dstRow=16, dstCol=32, src1Row=16, src1Col=1
+  // f32_16x32: dstRow=16, dstCol=32, src1Row=16, src1Col=8
   func.func @TROWEXPANDADD_f32_16x32(%src0_ptr: !pto.ptr<f32>, %src1_ptr: !pto.ptr<f32>, %dst_ptr: !pto.ptr<f32>) attributes {pto.kernel} {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
@@ -69,7 +69,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     return
   }
 
-  // f32_56x128: dstRow=56, dstCol=128, src1Row=56, src1Col=1
+  // f32_56x128: dstRow=56, dstCol=128, src1Row=56, src1Col=8
   func.func @TROWEXPANDADD_f32_56x128(%src0_ptr: !pto.ptr<f32>, %src1_ptr: !pto.ptr<f32>, %dst_ptr: !pto.ptr<f32>) attributes {pto.kernel} {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
@@ -126,9 +126,10 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     return
   }
 
-  // Note: launchTRowExpandAdd2 with src1Col=8 has different semantics - TBD
+  // A RowMajor src1 with 32/sizeof(dtype) valid columns repeats that 32-byte block
+  // across the row (pto-isa TROWEXPAND Mode 2).
 
-  // f16_48x64: dstRow=48, dstCol=64, src1Row=48, src1Col=1
+  // f16_48x64: dstRow=48, dstCol=64, src1Row=48, src1Col=16
   func.func @TROWEXPANDADD_f16_48x64(%src0_ptr: !pto.ptr<f16>, %src1_ptr: !pto.ptr<f16>, %dst_ptr: !pto.ptr<f16>) attributes {pto.kernel} {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
@@ -185,7 +186,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     return
   }
 
-  // f16_16x128: dstRow=16, dstCol=128, src1Row=16, src1Col=1
+  // f16_16x128: dstRow=16, dstCol=128, src1Row=16, src1Col=16
   func.func @TROWEXPANDADD_f16_16x128(%src0_ptr: !pto.ptr<f16>, %src1_ptr: !pto.ptr<f16>, %dst_ptr: !pto.ptr<f16>) attributes {pto.kernel} {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
@@ -298,7 +299,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     return
   }
 
-  // i32_16x32: dstRow=16, dstCol=32, src1Row=16, src1Col=1
+  // i32_16x32: dstRow=16, dstCol=32, src1Row=16, src1Col=8
   func.func @TROWEXPANDADD_i32_16x32(%src0_ptr: !pto.ptr<i32>, %src1_ptr: !pto.ptr<i32>, %dst_ptr: !pto.ptr<i32>) attributes {pto.kernel} {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
@@ -355,7 +356,7 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     return
   }
 
-  // i16_16x64: dstRow=16, dstCol=64, src1Row=16, src1Col=1
+  // i16_16x64: dstRow=16, dstCol=64, src1Row=16, src1Col=16
   func.func @TROWEXPANDADD_i16_16x64(%src0_ptr: !pto.ptr<i16>, %src1_ptr: !pto.ptr<i16>, %dst_ptr: !pto.ptr<i16>) attributes {pto.kernel} {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index

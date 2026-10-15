@@ -33,7 +33,6 @@ void LaunchTROWEXPANDADD_i32_16x32(void *src0, void *src1, void *dst, void *stre
 // i16
 void LaunchTROWEXPANDADD_i16_16x64(void *src0, void *src1, void *dst, void *stream);
 
-// Note: launchTRowExpandAdd2 with src1Col=8 has different semantics - TBD
 
 // Generic launch function type
 using LaunchFn = void (*)(void *, void *, void *, void *);
@@ -55,7 +54,6 @@ static const TestCase kCases[] = {
     // f32 cases
     {"f32_16x32", (LaunchFn)LaunchTROWEXPANDADD_f32_16x32, 16, 32, 16, 8, 16, 32, 32, sizeof(float)},
     {"f32_56x128", (LaunchFn)LaunchTROWEXPANDADD_f32_56x128, 56, 128, 56, 8, 56, 128, 128, sizeof(float)},
-    // Note: f32_24x64_v2 and f32_20x64_v2_noeq have different semantics - TBD
     // f16 cases
     {"f16_48x64", LaunchTROWEXPANDADD_f16_48x64, 48, 64, 48, 16, 48, 64, 64, sizeof(uint16_t)},
     {"f16_16x128", LaunchTROWEXPANDADD_f16_16x128, 16, 128, 16, 16, 16, 128, 128, sizeof(uint16_t)},

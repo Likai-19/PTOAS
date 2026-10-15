@@ -20,7 +20,11 @@
 // CHECK-NOT: pto.trowexpandmin ins
 // CHECK: pto.vecscope
 // CHECK: pto.vlds
-// CHECK: pto.vdup
+// src1 is RowMajor (32/sizeof(f32) = 8 columns per row): the 32-byte block repeats
+// across the row, so the expanded operand is read with a block-replicate load
+// (BRC_BLK): every column of the block reaches the result.
+// CHECK: pto.vlds {{.*}} {dist = "BRC_BLK"}
+// CHECK-NOT: pto.vdup
 // CHECK: pto.vmin
 // CHECK: pto.vsts
 

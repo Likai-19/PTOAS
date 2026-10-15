@@ -28,7 +28,6 @@ void LaunchTROWEXPANDMUL_f16_16x128(void *src0, void *src1, void *dst, void *str
 void LaunchTROWEXPANDMUL_i32_16x32(void *src0, void *src1, void *dst, void *stream);
 // i16 kernels
 
-// Note: launchTRowExpandMul2 with src1Col>1 has different semantics - TBD
 
 using LaunchFn = void (*)(void *, void *, void *, void *);
 

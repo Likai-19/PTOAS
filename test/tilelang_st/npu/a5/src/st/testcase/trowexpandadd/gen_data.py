@@ -12,8 +12,9 @@
 """Generate input and golden data for trowexpandadd ST test cases.
 
 trowexpandadd: dst = src0 + broadcast(src1) across columns.
-- src1Col=1: only first column valid, broadcast to all dst columns
-- src1Col>1: each src1 column maps to a block of dst columns (dstCol/src1Col)
+- src1Col=32/sizeof(dtype): the 32-byte block repeats across the row (pto-isa TROWEXPAND Mode 2)
+- src1Col>1: RowMajor, src1Col == 32/sizeof(dtype): that 32-byte block *repeats* across the
+  row, so dst[:, c] = src0[:, c] OP src1[:, c % src1Col] (pto-isa TROWEXPAND Mode 2)
 """
 
 import numpy as np
@@ -50,20 +51,20 @@ for case in CASES:
     src1_vr, src1_vc = src1_valid_shape
 
     if src1_vc == 1:
-        # src1Col=1: broadcast first column to all dst columns
+        # src1Col=32/sizeof(dtype): the 32-byte block repeats across the row (pto-isa TROWEXPAND Mode 2)
         golden[:dst_vr, :dst_vc] = (
             input1[:src0_vr, :src0_vc] + input2[:src1_vr, 0:1]
         ).astype(dtype, copy=False)
     else:
-        # src1Col>1: each src1 column maps to dstCol/src1_vc columns
-        # dst[:, block*repeat:(block+1)*repeat] = src0 + src1[:, block:block+1]
-        repeat = dst_vc // src1_vc
-        for block in range(src1_vc):
-            start_col = block * repeat
-            end_col = min((block + 1) * repeat, dst_vc)
-            golden[:dst_vr, start_col:end_col] = (
-                input1[:src0_vr, start_col:end_col] + input2[:src1_vr, block:block+1]
-            ).astype(dtype, copy=False)
+        # src1Col>1: src1 is the RowMajor 32-byte block per row
+        # (src1_vc == 32/sizeof(dtype)) and that block *repeats* across the row --
+        # pto-isa TROWEXPAND Mode 2:
+        #   dst[:, c] = src0[:, c] + src1[:, c % src1_vc]
+        reps = (dst_vc + src1_vc - 1) // src1_vc
+        tiled = np.tile(input2[:src1_vr, :src1_vc], (1, reps))[:, :dst_vc]
+        golden[:dst_vr, :dst_vc] = (
+            input1[:src0_vr, :src0_vc] + tiled
+        ).astype(dtype, copy=False)
 
     save_case_data(case["name"], {"input1": input1, "input2": input2, "golden": golden})
     print(f"[INFO] gen_data: {case['name']} src0={src0_shape} src1={src1_shape} dst={dst_shape} dtype={dtype.__name__}")

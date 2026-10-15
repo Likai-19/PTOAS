@@ -31,7 +31,6 @@ void LaunchTROWEXPANDMIN_i32_16x32(void *src0, void *src1, void *dst, void *stre
 // i16 kernels
 void LaunchTROWEXPANDMIN_i16_16x64(void *src0, void *src1, void *dst, void *stream);
 
-// Note: launchTRowExpandMin2 with src1Col>1 has different semantics - TBD
 
 using LaunchFn = void (*)(void *, void *, void *, void *);
 

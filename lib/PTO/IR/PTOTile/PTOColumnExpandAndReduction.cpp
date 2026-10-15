@@ -19,10 +19,16 @@
                                          opName, allowIntegerTypes)))
     return failure();
 
-  if (getShapeVec(t0) != getShapeVec(td)) {
-    return op->emitOpError("expects src0/dst to have same shape");
+  // Either operand may be full-sized; the one matching dst is (src0 takes precedence),
+  // and the other operand carries the single row broadcast down the columns.
+  bool src0IsFullSized = colExpandSrc0IsFullSized(t0, td);
+  Type fullTy = src0IsFullSized ? t0 : t1;
+  Type expandedTy = src0IsFullSized ? t1 : t0;
+  if (getShapeVec(fullTy) != getShapeVec(td)) {
+    return op->emitOpError("expects the operand matching dst to have dst's shape");
   }
-  if (failed(verifyTileBufSameValidShape(op, t0, td, "src0", "dst"))) {
+  if (failed(verifyTileBufSameValidShape(op, fullTy, td,
+                                         src0IsFullSized ? "src0" : "src1", "dst"))) {
     return failure();
   }
 
@@ -32,7 +38,7 @@
     return failure();
   }
 
-  return verifyTColExpandValidColumn(op, t1, td);
+  return verifyTColExpandValidColumn(op, expandedTy, td);
 }
 LogicalResult pto::TColExpandMulOp::verify() {
   PTOArch arch = getTargetArch(getOperation());

@@ -87,6 +87,14 @@ class _TemplateTile(TileValue):
     def config(self):
         return self._template_config
 
+    @property
+    def valid_shape_static(self):
+        """Valid shape from the ``TileSpec`` as a plain tuple.
+
+        Trace-time only, so template bodies can branch on it without emitting IR.
+        """
+        return self._template_static_valid_shape
+
 
 # ── tracing runtime ────────────────────────────────────────────────────────────────
 

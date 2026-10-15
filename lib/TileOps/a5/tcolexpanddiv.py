@@ -12,7 +12,12 @@
 from ptodsl import pto
 import ptodsl.tilelib as tilelib
 
-from ._expand_binary import _ub_or_vec_row_major, _valid_column_expand_binary, register_column_expand_binary
+from ._expand_binary import (
+    _emit_column_expand_integer_div,
+    _ub_or_vec_row_major,
+    _valid_column_expand_binary,
+    register_column_expand_binary,
+)
 from SoftOps import div_i32_soft
 
 
@@ -72,22 +77,4 @@ template_tcolexpanddiv = register_column_expand_binary(
     tags=("column_expand", "binary", "integer-div"),
 )
 def template_tcolexpanddiv_i32(src0: pto.Tile, src1: pto.Tile, dst: pto.Tile):
-    valid_rows, valid_cols = dst.valid_shape
-    dtype = dst.dtype
-    lanes = pto.elements_per_vreg(dtype)
-
-    with pto.for_(0, valid_rows, step=1) as row:
-        col_loop = pto.for_(0, valid_cols, step=lanes).carry(remained=valid_cols)
-        with col_loop:
-            col = col_loop.iv
-            mask, remained = pto.make_mask(dtype, col_loop.remained)
-            lhs = pto.vlds(src0[row, col:])
-            rhs = pto.vlds(src1[0, col:])
-            if str(dtype) == "i16":
-                f32_remained = (col_loop.remained + 1) // 2
-                f32_mask, _ = pto.make_mask(pto.f32, f32_remained)
-                result = _divide_i16(lhs, rhs, mask, f32_mask)
-            else:
-                result = div_i32_soft(lhs, rhs, mask)
-            pto.vsts(result, dst[row, col:], mask)
-            col_loop.update(remained=remained)
+    _emit_column_expand_integer_div(src0, src1, dst, _divide_i16, div_i32_soft)

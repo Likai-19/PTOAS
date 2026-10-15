@@ -5551,14 +5551,24 @@ Broadcast values across rows or columns. All execute on the **Vector pipeline** 
 | `pto.tcolexpandexpdif` | `dst[i,j] = exp(src0[i,j] - src1[0,j])` |
 | `pto.tcolexpandmax` | `dst[i,j] = max(src0[i,j], src1[0,j])` |
 | `pto.tcolexpandmin` | `dst[i,j] = min(src0[i,j], src1[0,j])` |
-| `pto.trowexpandmul` | `dst[i,j] = src0[i,j] * src1[i,0]` |
-| `pto.trowexpanddiv` | `dst[i,j] = src0[i,j] / src1[i,0]` |
-| `pto.trowexpandsub` | `dst[i,j] = src0[i,j] - src1[i,0]` |
-| `pto.trowexpandadd` | `dst[i,j] = src0[i,j] + src1[i,0]` |
-| `pto.trowexpandexpdif` | `dst[i,j] = exp(src0[i,j] - src1[i,0])` |
-| `pto.trowexpandmax` | `dst[i,j] = max(src0[i,j], src1[i,0])` |
-| `pto.trowexpandmin` | `dst[i,j] = min(src0[i,j], src1[i,0])` |
+| `pto.trowexpandmul` | `dst[i,j] = src0[i,j] * src1[i, c(j)]` |
+| `pto.trowexpanddiv` | `dst[i,j] = src0[i,j] / src1[i, c(j)]` |
+| `pto.trowexpandsub` | `dst[i,j] = src0[i,j] - src1[i, c(j)]` |
+| `pto.trowexpandadd` | `dst[i,j] = src0[i,j] + src1[i, c(j)]` |
+| `pto.trowexpandexpdif` | `dst[i,j] = exp(src0[i,j] - src1[i, c(j)])` |
+| `pto.trowexpandmax` | `dst[i,j] = max(src0[i,j], src1[i, c(j)])` |
+| `pto.trowexpandmin` | `dst[i,j] = min(src0[i,j], src1[i, c(j)])` |
 | `pto.texpands` | Broadcast scalar to all elements of dst |
+
+> `c(j)` selects the expanded operand's column, matching `pto-isa`'s two row-expand modes:
+> `c(j) = 0` when it is `ColMajor` with exactly one column (Mode 1), and
+> `c(j) = j % B` when it is `RowMajor` with `B = 32 / sizeof(dtype)` columns
+> (Mode 2, where the 32-byte block repeats across the row).
+>
+> Both families accept the expanded operand in either input: the full-sized operand is the
+> one whose `valid_shape` matches `dst`, with `src0` taking precedence when both do (as in
+> `pto-isa`'s `src0eqdst`). The formulas above use `%src1` as the expanded operand; otherwise
+> swap the two roles while keeping the authored order `src0 OP src1`.
 
 For `pto.trowexpandadd/trowexpandsub/trowexpandmul/trowexpandmax/trowexpandmin`
 and `pto.tcolexpandadd/tcolexpandsub/tcolexpandmul/tcolexpandmax/tcolexpandmin`,
@@ -5575,7 +5585,7 @@ accepted as a compatibility placeholder and may be smaller than the data tiles.
 
 For `pto.trowexpandexpdif/max/min`, PTO IR requires one source to match
 `dst valid_shape` and the other to be a per-row scalar vector. When the A3
-tmp-taking form is used, that scalar-vector operand must use a non-row-major
+tmp-taking form is used, the expanded operand must use a non-row-major
 layout. When `tmp` is present, it must have the same element type as `dst`.
 
 ---
@@ -5722,9 +5732,9 @@ pto.tcolexpandmul ins(<src0>, <src1> : <src0_type>, <src1_type>)
   - Element type:
     - A2/A3: `i16`, `i32`, `f16`, `f32`
     - A5: `i8`, `i16`, `i32`, `f16`, `f32`
-  - `src0` and `dst` must have the same shape and the same `valid_shape`.
+  - The operand whose `valid_shape` matches `dst` (`src0` when both match) must have `dst`'s shape and `valid_shape`; the other operand carries the broadcast row.
   - `src0`, `src1`, `dst` must use row-major layout (`blayout=row_major`).
-  - `src1 valid_shape[1]` must equal `dst valid_shape[1]`.
+  - The broadcast operand's `valid_shape[1]` must equal `dst valid_shape[1]` (one logical scalar per destination column).
 **Hardware Mapping:**
 
 - Executes on the **Vector pipeline** (`PIPE_V`)
@@ -5779,9 +5789,9 @@ pto.tcolexpanddiv ins(<src0>, <src1> : <src0_type>, <src1_type>)
 - **Implementation checks**:
   - `src0`, `src1`, `dst` must share the same element type.
   - The shared element type must be `f16` or `f32`.
-  - `src0` and `dst` must have the same shape and the same `valid_shape`.
+  - The operand whose `valid_shape` matches `dst` (`src0` when both match) must have `dst`'s shape and `valid_shape`; the other operand carries the broadcast row.
   - `src0`, `src1`, `dst` must use row-major layout (`blayout=row_major`).
-  - `src1 valid_shape[1]` must equal `dst valid_shape[1]` (one scalar per destination column).
+  - The broadcast operand's `valid_shape[1]` must equal `dst valid_shape[1]` (one logical scalar per destination column).
 
 **Hardware Mapping:**
 
@@ -5839,9 +5849,9 @@ pto.tcolexpandsub ins(<src0>, <src1> : <src0_type>, <src1_type>)
   - Element type:
     - A2/A3: `i16`, `i32`, `f16`, `f32`
     - A5: `i8`, `i16`, `i32`, `f16`, `f32`
-  - `src0` and `dst` must have the same shape and the same `valid_shape`.
+  - The operand whose `valid_shape` matches `dst` (`src0` when both match) must have `dst`'s shape and `valid_shape`; the other operand carries the broadcast row.
   - `src0`, `src1`, `dst` must use row-major layout (`blayout=row_major`).
-  - `src1 valid_shape[1]` must equal `dst valid_shape[1]` (one scalar per destination column).
+  - The broadcast operand's `valid_shape[1]` must equal `dst valid_shape[1]` (one logical scalar per destination column).
 
 **Hardware Mapping:**
 
@@ -5899,9 +5909,9 @@ pto.tcolexpandmax ins(<src0>, <src1> : <src0_type>, <src1_type>)
   - Element type:
     - A2/A3: `i16`, `i32`, `f16`, `f32`
     - A5: `i8`, `i16`, `i32`, `f16`, `f32`
-  - `src0` and `dst` must have the same shape and the same `valid_shape`.
+  - The operand whose `valid_shape` matches `dst` (`src0` when both match) must have `dst`'s shape and `valid_shape`; the other operand carries the broadcast row.
   - `src0`, `src1`, `dst` must use row-major layout (`blayout=row_major`).
-  - `src1 valid_shape[1]` must equal `dst valid_shape[1]`.
+  - The broadcast operand's `valid_shape[1]` must equal `dst valid_shape[1]` (one logical scalar per destination column).
 
 **Hardware Mapping:**
 
@@ -5959,9 +5969,9 @@ pto.tcolexpandmin ins(<src0>, <src1> : <src0_type>, <src1_type>)
   - Element type:
     - A2/A3: `i16`, `i32`, `f16`, `f32`
     - A5: `i8`, `i16`, `i32`, `f16`, `f32`
-  - `src0` and `dst` must have the same shape and the same `valid_shape`.
+  - The operand whose `valid_shape` matches `dst` (`src0` when both match) must have `dst`'s shape and `valid_shape`; the other operand carries the broadcast row.
   - `src0`, `src1`, `dst` must use row-major layout (`blayout=row_major`).
-  - `src1 valid_shape[1]` must equal `dst valid_shape[1]`.
+  - The broadcast operand's `valid_shape[1]` must equal `dst valid_shape[1]` (one logical scalar per destination column).
 
 **Hardware Mapping:**
 
@@ -5992,7 +6002,10 @@ pto.tcolexpandmin ins(%src0, %src1 : !pto.tile_buf<loc=vec, dtype=f32, rows=16, 
 
 ```
 For each element (i, j):
+    # Mode 1 (src1 ColMajor, 1 column), B = 32 / sizeof(dtype):
     dst[i, j] = src0[i, j] * src1[i, 0]
+    # Mode 2 (src1 RowMajor, B columns -- the 32-byte block repeats):
+    dst[i, j] = src0[i, j] * src1[i, j % B]
 ```
 
 **Arguments:**
@@ -6055,7 +6068,10 @@ pto.trowexpandmul ins(%src0, %src1, %tmp : !pto.tile_buf<loc=vec, dtype=f32, row
 
 ```
 For each element (i, j):
+    # Mode 1 (src1 ColMajor, 1 column), B = 32 / sizeof(dtype):
     dst[i, j] = src0[i, j] / src1[i, 0]
+    # Mode 2 (src1 RowMajor, B columns -- the 32-byte block repeats):
+    dst[i, j] = src0[i, j] / src1[i, j % B]
 ```
 
 **Arguments:**
@@ -6119,7 +6135,10 @@ pto.trowexpanddiv ins(%src0, %src1, %tmp : !pto.tile_buf<loc=vec, dtype=f32, row
 
 ```
 For each element (i, j):
+    # Mode 1 (src1 ColMajor, 1 column), B = 32 / sizeof(dtype):
     dst[i, j] = src0[i, j] - src1[i, 0]
+    # Mode 2 (src1 RowMajor, B columns -- the 32-byte block repeats):
+    dst[i, j] = src0[i, j] - src1[i, j % B]
 ```
 
 **Arguments:**
@@ -6184,7 +6203,10 @@ pto.trowexpandsub ins(%src0, %src1, %tmp : !pto.tile_buf<loc=vec, dtype=f32, row
 
 ```
 For each element (i, j):
+    # Mode 1 (src1 ColMajor, 1 column), B = 32 / sizeof(dtype):
     dst[i, j] = src0[i, j] + src1[i, 0]
+    # Mode 2 (src1 RowMajor, B columns -- the 32-byte block repeats):
+    dst[i, j] = src0[i, j] + src1[i, j % B]
 ```
 
 **Arguments:**
@@ -6211,11 +6233,11 @@ pto.trowexpandadd ins(<src0>, <src1> [, <tmp>] : <src0_type>, <src1_type> [, <tm
   - Element type:
     - A2/A3: `i16`, `i32`, `f16`, `f32`
     - A5: `i8`, `i16`, `i32`, `f16`, `f32`
-  - `src0` and `dst` must have the same `valid_shape`.
-  - `src0` and `dst` must use row-major layout (`blayout=row_major`).
-  - `src1 valid_shape[0]` must equal `dst valid_shape[0]`.
-  - If `src1` is row-major: `src1 valid_shape[1] == 32 / sizeof(dtype)` (`16` for `f16`, `8` for `f32`).
-  - If `src1` is not row-major: `src1 valid_shape[1] == 1`.
+  - One of `src0` / `src1` must match `dst valid_shape`; the other is the row-expanded operand.
+  - The full-sized operand and `dst` must use row-major layout (`blayout=row_major`).
+  - The row-expanded operand's `valid_shape[0]` must equal `dst valid_shape[0]`.
+  - If it is row-major: `valid_shape[1] == 32 / sizeof(dtype)` (`16` for `f16`, `8` for `f32`).
+  - Otherwise: `valid_shape[1] == 1`.
 - When `tmp` is present:
   - PTO IR does not require `tmp` to match the shape or valid shape of `src0` / `src1` / `dst`.
   - On A5, `tmp` is accepted as a compatibility placeholder and is not consumed by the current implementation.
@@ -6243,13 +6265,16 @@ pto.trowexpandadd ins(%src0, %src1 : !pto.tile_buf<loc=vec, dtype=f32, rows=16, 
 
 ##### `pto.trowexpandexpdif` - Row-wise Broadcast Exp-Difference
 
-**Summary:** Computes `exp(src0[i, j] - src1[i, 0])` using a per-row scalar vector.
+**Summary:** Computes `exp(src0[i, j] - src1[i, c(j)])` using a row-broadcast operand (see `c(j)` above: one scalar per row for a single-column `ColMajor` `src1`, or the repeating 32-byte block for a `RowMajor` `src1`).
 
 **Semantics:**
 
 ```
 For each element (i, j):
+    # Mode 1 (src1 ColMajor, 1 column), B = 32 / sizeof(dtype):
     dst[i, j] = exp(src0[i, j] - src1[i, 0])
+    # Mode 2 (src1 RowMajor, B columns -- the 32-byte block repeats):
+    dst[i, j] = exp(src0[i, j] - src1[i, j % B])
 ```
 
 **Arguments:**
@@ -6318,7 +6343,10 @@ pto.trowexpandexpdif ins(%src0, %src1, %tmp : !pto.tile_buf<loc=vec, dtype=f32, 
 
 ```
 For each element (i, j):
+    # Mode 1 (src1 ColMajor, 1 column), B = 32 / sizeof(dtype):
     dst[i, j] = max(src0[i, j], src1[i, 0])
+    # Mode 2 (src1 RowMajor, B columns -- the 32-byte block repeats):
+    dst[i, j] = max(src0[i, j], src1[i, j % B])
 ```
 
 **Arguments:**
@@ -6389,7 +6417,10 @@ pto.trowexpandmax ins(%src0, %src1, %tmp : !pto.tile_buf<loc=vec, dtype=f32, row
 
 ```
 For each element (i, j):
+    # Mode 1 (src1 ColMajor, 1 column), B = 32 / sizeof(dtype):
     dst[i, j] = min(src0[i, j], src1[i, 0])
+    # Mode 2 (src1 RowMajor, B columns -- the 32-byte block repeats):
+    dst[i, j] = min(src0[i, j], src1[i, j % B])
 ```
 
 **Arguments:**

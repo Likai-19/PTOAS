@@ -8,6 +8,23 @@
 
 // Included by PTO.cpp as part of the PTO IR implementation translation unit.
 
+static bool rowExpandValidShapesMatch(ArrayRef<int64_t> lhs,
+                                      ArrayRef<int64_t> rhs) {
+  if (lhs.size() != rhs.size())
+    return false;
+  return llvm::all_of(llvm::zip(lhs, rhs), [](auto pair) {
+    auto [left, right] = pair;
+    return left == ShapedType::kDynamic || right == ShapedType::kDynamic ||
+           left == right;
+  });
+}
+
+// The full-sized operand is the one whose valid shape matches dst, with src0 taking
+// precedence when both do (pto-isa's `src0eqdst`); the other operand is row-expanded.
+static bool rowExpandSrc0IsFullSized(Type src0Ty, Type dstTy) {
+  return rowExpandValidShapesMatch(getValidShapeVec(src0Ty), getValidShapeVec(dstTy));
+}
+
 static LogicalResult verifyTRowExpandImplicitTmpContract(
     Operation *op, Type src0Ty, Type src1Ty, Type dstTy, Type tmpTy,
     bool hasTmp, PTOArch targetArch) {
@@ -143,11 +160,15 @@ static FailureOr<Type> verifyTRowExpandAddCore(TRowExpandAddOp op,
   if (failed(elemOr)) {
     return failure();
   }
-  if (failed(verifyTileBufSameValidShape(op, src0Ty, dstTy, "src0", "dst"))) {
+  // Either operand may be full-sized; the one whose valid shape matches dst must be
+  // row-major, and the other operand is row-expanded.
+  Type fullTy = rowExpandSrc0IsFullSized(src0Ty, dstTy) ? src0Ty : src1Ty;
+  if (failed(verifyTileBufSameValidShape(op, fullTy, dstTy,
+                                         fullTy == src0Ty ? "src0" : "src1", "dst"))) {
     return failure();
   }
-  if (!isRowMajorTileBuf(src0Ty)) {
-    return op.emitOpError("expects src0 to use row-major layout");
+  if (!isRowMajorTileBuf(fullTy)) {
+    return op.emitOpError("expects the operand matching dst to use row-major layout");
   }
   Type elem = *elemOr;
   bool supported = elem.isF16() || elem.isF32() || elem.isInteger(mlir::pto::kValue16) ||
@@ -164,32 +185,36 @@ static FailureOr<Type> verifyTRowExpandAddCore(TRowExpandAddOp op,
   return elem;
 }
 
-static LogicalResult verifyTRowExpandAddSrc1(TRowExpandAddOp op, Type elem,
-                                             PTOArch targetArch) {
+static LogicalResult verifyTRowExpandAddExpandedOperand(TRowExpandAddOp op, Type elem,
+                                                        PTOArch targetArch) {
   Type src0Ty = op.getSrc0().getType();
   Type src1Ty = op.getSrc1().getType();
   Type dstTy = op.getDst().getType();
-  auto src1Valid = getValidShapeVec(src1Ty);
+  Type expandedTy = rowExpandSrc0IsFullSized(src0Ty, dstTy) ? src1Ty : src0Ty;
+  auto expandedValid = getValidShapeVec(expandedTy);
   auto dstValid = getValidShapeVec(dstTy);
-  if (src1Valid.size() != mlir::pto::kValue2 || dstValid.size() != mlir::pto::kValue2) {
-      return op.emitOpError("expects src1 and dst to have rank-2 valid_shape");
+  if (expandedValid.size() != mlir::pto::kValue2 || dstValid.size() != mlir::pto::kValue2) {
+      return op.emitOpError("expects the expanded operand and dst to have rank-2 valid_shape");
   }
-  if (src1Valid[0] != ShapedType::kDynamic && dstValid[0] != ShapedType::kDynamic &&
-      src1Valid[0] != dstValid[0]) {
-    return op.emitOpError("expects src1 valid_shape[0] to equal dst valid_shape[0]");
+  if (expandedValid[0] != ShapedType::kDynamic && dstValid[0] != ShapedType::kDynamic &&
+      expandedValid[0] != dstValid[0]) {
+    return op.emitOpError(
+        "expects the expanded operand's valid_shape[0] to equal dst valid_shape[0]");
   }
-  bool src1IsRowMajor = isRowMajorTileBuf(src1Ty);
+  bool expandedIsRowMajor = isRowMajorTileBuf(expandedTy);
   int64_t expectedCol = elem.isInteger(mlir::pto::kValue8)
                             ? 32
                             : ((elem.isF16() || elem.isInteger(mlir::pto::kValue16)) ? 16 : 8);
-  int64_t src1Col = src1Valid[1];
-  if (src1IsRowMajor) {
-    if (src1Col != ShapedType::kDynamic && src1Col != expectedCol) {
-      return op.emitOpError("expects row-major src1 valid_shape[1] to be 32/sizeof(dtype)");
+  int64_t expandedCol = expandedValid[1];
+  if (expandedIsRowMajor) {
+    if (expandedCol != ShapedType::kDynamic && expandedCol != expectedCol) {
+      return op.emitOpError(
+          "expects a row-major expanded operand valid_shape[1] to be 32/sizeof(dtype)");
     }
   } else {
-    if (src1Col != ShapedType::kDynamic && src1Col != 1) {
-      return op.emitOpError("expects non-row-major src1 valid_shape[1] to be 1");
+    if (expandedCol != ShapedType::kDynamic && expandedCol != 1) {
+      return op.emitOpError(
+          "expects a non-row-major expanded operand valid_shape[1] to be 1");
     }
   }
   if (failed(verifyTRowExpandImplicitTmpContract(
@@ -207,7 +232,7 @@ static LogicalResult verifyTRowExpandAddByArch(TRowExpandAddOp op,
   if (failed(elemOr)) {
     return failure();
   }
-  return verifyTRowExpandAddSrc1(op, *elemOr, targetArch);
+  return verifyTRowExpandAddExpandedOperand(op, *elemOr, targetArch);
 }
 
 mlir::LogicalResult mlir::pto::TRowExpandAddOp::verify() {
@@ -254,15 +279,4 @@ static FailureOr<Type> verifyTRowExpandReduceTypes(
     op->emitOpError() << "expects A2/A3 " << opName
                       << " element type to be i16/i32/f16/f32";
   return failure();
-}
-
-static bool rowExpandValidShapesMatch(ArrayRef<int64_t> lhs,
-                                      ArrayRef<int64_t> rhs) {
-  if (lhs.size() != rhs.size())
-    return false;
-  return llvm::all_of(llvm::zip(lhs, rhs), [](auto pair) {
-    auto [left, right] = pair;
-    return left == ShapedType::kDynamic || right == ShapedType::kDynamic ||
-           left == right;
-  });
 }

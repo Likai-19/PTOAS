@@ -13,8 +13,9 @@
 
 trowexpanddiv: dst = src0 / broadcast(src1) across columns.
 - src1Col determines how src1 is broadcast:
-  - src1Col=1: only first column is valid, broadcast to dstCols
-  - src1Col>1: each src1 column maps to a block of dst columns (dstCol/src1Col columns per src1 value)
+  - src1Col=32/sizeof(dtype): the 32-byte block repeats across the row (pto-isa TROWEXPAND Mode 2)
+  - src1Col>1: RowMajor 32-byte block per row (src1Col == 32/sizeof(dtype)) *repeats* across
+    the row (dst[:, c] = src0[:, c] / src1[:, c % src1Col])
 - src1 physical cols = 32/sizeof(dtype) for NPU alignment
 - highPrecision: use high precision mode for computation
 """
@@ -29,7 +30,7 @@ CASES = [
         "src0_shape": (16, 32),
         "src0_valid_shape": (16, 32),
         "src1_shape": (16, 16),       # physical: 32/sizeof(f16)=16
-        "src1_valid_shape": (16, 1),
+        "src1_valid_shape": (16, 16),
         "dst_shape": (16, 32),
         "dst_valid_shape": (16, 32),
         "eps": 1e-3,
@@ -42,7 +43,7 @@ CASES = [
         "src0_shape": (40, 64),       # src0eqdst=true
         "src0_valid_shape": (40, 64),
         "src1_shape": (40, 8),        # physical: 32/sizeof(f32)=8
-        "src1_valid_shape": (40, 1),  # src1Col=1
+        "src1_valid_shape": (40, 8),  # src1Col = 8
         "dst_shape": (40, 64),
         "dst_valid_shape": (40, 64),
         "eps": 1e-6,
@@ -55,7 +56,7 @@ CASES = [
         "src0_shape": (16, 256),
         "src0_valid_shape": (16, 256),
         "src1_shape": (16, 8),
-        "src1_valid_shape": (16, 1),
+        "src1_valid_shape": (16, 8),
         "dst_shape": (16, 256),
         "dst_valid_shape": (16, 256),
         "eps": 1e-6,
@@ -68,7 +69,7 @@ CASES = [
         "src0_shape": (32, 512),
         "src0_valid_shape": (32, 512),
         "src1_shape": (32, 16),
-        "src1_valid_shape": (32, 1),
+        "src1_valid_shape": (32, 16),
         "dst_shape": (32, 512),
         "dst_valid_shape": (32, 512),
         "eps": 1e-3,
@@ -81,7 +82,7 @@ CASES = [
         "src0_shape": (16, 128),      # src0eqdst=false
         "src0_valid_shape": (16, 128),
         "src1_shape": (16, 8),
-        "src1_valid_shape": (16, 1),
+        "src1_valid_shape": (16, 8),
         "dst_shape": (16, 128),
         "dst_valid_shape": (16, 128),
         "eps": 1e-6,
@@ -94,7 +95,7 @@ CASES = [
         "src0_shape": (32, 64),
         "src0_valid_shape": (32, 64),
         "src1_shape": (32, 16),
-        "src1_valid_shape": (32, 1),
+        "src1_valid_shape": (32, 16),
         "dst_shape": (32, 64),
         "dst_valid_shape": (32, 64),
         "eps": 1e-3,
@@ -107,7 +108,7 @@ CASES = [
         "src0_shape": (40, 32),
         "src0_valid_shape": (40, 32),
         "src1_shape": (40, 8),
-        "src1_valid_shape": (40, 1),
+        "src1_valid_shape": (40, 8),
         "dst_shape": (40, 32),
         "dst_valid_shape": (40, 32),
         "eps": 1e-6,
@@ -120,13 +121,12 @@ CASES = [
         "src0_shape": (16, 128),
         "src0_valid_shape": (16, 128),
         "src1_shape": (16, 16),
-        "src1_valid_shape": (16, 1),
+        "src1_valid_shape": (16, 16),
         "dst_shape": (16, 128),
         "dst_valid_shape": (16, 128),
         "eps": 1e-3,
         "high_precision": True,
     },
-    # Note: launchTRowExpandDiv2 with src1Col>1 has different semantics - TBD
 ]
 
 _SMOKE_CASE_NAMES = ['f16_16x32', 'f32_40x32_hp']

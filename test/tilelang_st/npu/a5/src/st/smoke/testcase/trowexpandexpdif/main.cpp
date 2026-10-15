@@ -25,7 +25,6 @@ void LaunchTROWEXPANDEXPDIF_f32_16x32(float *src0, float *src1, float *dst, void
 void LaunchTROWEXPANDEXPDIF_f16_16x32(void *src0, void *src1, void *dst, void *stream);
 void LaunchTROWEXPANDEXPDIF_f16_48x64(void *src0, void *src1, void *dst, void *stream);
 
-// Note: launchTRowExpandExpdif2 with src1Col>1 has different semantics - TBD
 
 using LaunchFn = void (*)(void *, void *, void *, void *);
 

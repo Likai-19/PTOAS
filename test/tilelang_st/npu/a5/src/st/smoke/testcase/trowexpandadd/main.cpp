@@ -30,7 +30,6 @@ void LaunchTROWEXPANDADD_f16_16x128(void *src0, void *src1, void *dst, void *str
 void LaunchTROWEXPANDADD_i32_16x32(void *src0, void *src1, void *dst, void *stream);
 // i16
 
-// Note: launchTRowExpandAdd2 with src1Col=8 has different semantics - TBD
 
 // Generic launch function type
 using LaunchFn = void (*)(void *, void *, void *, void *);

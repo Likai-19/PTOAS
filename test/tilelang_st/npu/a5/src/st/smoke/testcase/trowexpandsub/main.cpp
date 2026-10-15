@@ -27,7 +27,6 @@ void LaunchTROWEXPANDSUB_f16_32x64(void *src0, void *src1, void *dst, void *stre
 void LaunchTROWEXPANDSUB_i32_16x32(void *src0, void *src1, void *dst, void *stream);
 // i16 kernels
 
-// Note: launchTRowExpandSub2 with src1Col>1 has different semantics - TBD
 
 using LaunchFn = void (*)(void *, void *, void *, void *);
 
