@@ -8,8 +8,12 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 
+# Keep loop assertions and mocked PTOAS command policies in focused helpers.
+# main() retains the regression order and shared specialization state.
+
 from dataclasses import replace
 from pathlib import Path
+import contextlib
 import importlib
 import inspect
 import os
@@ -40,6 +44,19 @@ from ptodsl._runtime.codegen import generate_launch_cpp
 from ptodsl._runtime.launch import _marshal_launch_args
 from ptodsl._tracing import current_session
 from ptoas.mlir.ir import InsertionPoint, Location, Module
+
+
+_SIMT_DIMENSION_QUERY_OPS = (
+    "pto.get_tid_x",
+    "pto.get_tid_y",
+    "pto.get_tid_z",
+    "pto.get_block_dim_x",
+    "pto.get_block_dim_y",
+    "pto.get_block_dim_z",
+    "pto.get_grid_dim_x",
+    "pto.get_grid_dim_y",
+    "pto.get_grid_dim_z",
+)
 
 
 @pto.jit(target='a5')
@@ -5158,6 +5175,614 @@ def _check_tileop_helpers_are_private(mlir_text: str) -> None:
         )
 
 
+def _make_native_build_ptoas_fakes(build_root, native_build_observations):
+    def fake_artifacts(py_name, ir_function_name, specialization_key, cache_root=None):
+        cache_dir = Path(cache_root or build_root) / f"{py_name}_{ir_function_name}"
+        return NativeBuildArtifacts(
+            cache_dir=cache_dir,
+            mlir_path=cache_dir / "kernel.mlir",
+            kernel_object=cache_dir / "kernel.o",
+            launch_cpp=cache_dir / "launch.cpp",
+            shared_library=cache_dir / f"lib{ir_function_name}.so",
+            manifest_path=cache_dir / "manifest.json",
+        )
+
+    def fake_run_ptoas(mlir_path, kernel_object, *, target_arch, insert_sync=None, backend=None, pto_level=None):
+        native_build_observations.append(
+            {
+                "mlir_path": mlir_path,
+                "kernel_object": kernel_object,
+                "target_arch": target_arch,
+                "insert_sync": insert_sync,
+                "backend": backend,
+                "pto_level": pto_level,
+                "mlir_text": mlir_path.read_text(encoding="utf-8"),
+            }
+        )
+        if kernel_object.suffix == ".cpp":
+            kernel_object.write_text("fake emitc source\n", encoding="utf-8")
+        else:
+            kernel_object.write_bytes(b"\x7fELF fake fatobj")
+
+    return fake_artifacts, fake_run_ptoas
+
+
+def _make_native_build_bisheng_fakes(launch_target_arches):
+    def fake_compile_launch_cpp(
+        launch_cpp,
+        launch_object,
+        *,
+        kernel_kind,
+        target_arch,
+        export_macro,
+    ):
+        expect(launch_cpp.is_file(), "native build should materialize launch.cpp before compiling it")
+        expect(
+            kernel_kind in {None, "vector", "cube"},
+            "native build should forward the optional authored kernel kind",
+        )
+        launch_target_arches.append(target_arch)
+        expect(export_macro.endswith("_EXPORTS"), "native build should preserve launch export macro naming")
+        launch_object.write_text("fake launch object\n", encoding="utf-8")
+
+    def fake_compile_emitc_kernel(
+        kernel_cpp,
+        kernel_object,
+        *,
+        kernel_kind,
+        target_arch,
+    ):
+        expect(
+            kernel_cpp.is_file(),
+            "native build should run ptoas before compiling the emitc source",
+        )
+        expect(
+            kernel_cpp.suffix == ".cpp",
+            "emitc ptoas output should be offered a .cpp path",
+        )
+        kernel_object.write_bytes(b"\x7fELF fake emitc kernel")
+
+    def fake_link_shared_library(launch_object, kernel_object, shared_library, *, kernel_kind):
+        expect(launch_object.is_file(), "native build should compile launch.cpp before linking")
+        expect(kernel_object.is_file(), "native build should run ptoas before shared-library link")
+        expect(
+            kernel_kind in {None, "vector", "cube"},
+            "native build should preserve the optional kernel kind",
+        )
+        shared_library.write_text("fake shared library\n", encoding="utf-8")
+
+    return fake_compile_launch_cpp, fake_compile_emitc_kernel, fake_link_shared_library
+
+
+def _drive_native_build_variants(native_build_variants):
+    native_build_observations = []
+    launch_target_arches = []
+    fake_native_library = object()
+    with TemporaryDirectory() as tmpdir:
+        build_root = Path(tmpdir)
+        fake_artifacts, fake_run_ptoas = _make_native_build_ptoas_fakes(
+            build_root, native_build_observations
+        )
+        (
+            fake_compile_launch_cpp,
+            fake_compile_emitc_kernel,
+            fake_link_shared_library,
+        ) = _make_native_build_bisheng_fakes(launch_target_arches)
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(native_build_runtime, "artifact_paths", side_effect=fake_artifacts))
+            stack.enter_context(mock.patch.object(native_build_runtime, "is_native_build_current", return_value=False))
+            stack.enter_context(mock.patch.object(native_build_runtime, "_run_ptoas", side_effect=fake_run_ptoas))
+            stack.enter_context(
+                mock.patch.object(native_build_runtime, "_compile_launch_cpp", side_effect=fake_compile_launch_cpp)
+            )
+            stack.enter_context(
+                mock.patch.object(native_build_runtime, "_compile_emitc_kernel", side_effect=fake_compile_emitc_kernel)
+            )
+            stack.enter_context(
+                mock.patch.object(native_build_runtime, "_link_shared_library", side_effect=fake_link_shared_library)
+            )
+            stack.enter_context(
+                mock.patch.object(native_build_runtime, "runtime_library_flags", return_value=('-laclrt',))
+            )
+            stack.enter_context(
+                mock.patch.object(native_build_runtime.ctypes, "CDLL", return_value=fake_native_library)
+            )
+            # the build loop below runs with every native-build seam patched
+            for label, compiled, module_spec_override in native_build_variants:
+                module_spec = module_spec_override or getattr(compiled, "_module_spec")
+                lib, launch_symbol = native_build_runtime.build_native_library(
+                    py_name=getattr(compiled, "_py_name"),
+                    module_spec=module_spec,
+                    kernel_signature=getattr(compiled, "_kernel_signature"),
+                    mlir_text=compiled.mlir_text(),
+                    specialization_key=compiled.specialization_key,
+                )
+                expect(lib is fake_native_library, f"{label} native build should load the built shared library")
+                expect(
+                    launch_symbol.startswith("ptodsl_launch_"),
+                    f"{label} native build should preserve PTODSL launch wrapper naming",
+                )
+    return native_build_observations, launch_target_arches
+
+
+def _assert_native_build_variants(native_build_variants, native_build_observations, launch_target_arches):
+    expect(
+        len(native_build_observations) == len(native_build_variants),
+        "native build should drive ptoas once per compiled container variant under test",
+    )
+    for (label, compiled, module_spec_override), observation, launch_target_arch in zip(
+        native_build_variants, native_build_observations, launch_target_arches
+    ):
+        module_spec = module_spec_override or getattr(compiled, "_module_spec")
+        expect(
+            observation["target_arch"] == module_spec.target_arch,
+            f"{label} native build should still pass the target arch to ptoas",
+        )
+        expect(
+            launch_target_arch == module_spec.target_arch,
+            f"{label} native build should pass the target arch to launch compilation",
+        )
+        expected_insert_sync = (
+            module_spec.insert_sync
+            if module_spec.insert_sync is not None
+            else module_spec.mode != "explicit"
+        )
+        expect(
+            observation["insert_sync"] == expected_insert_sync,
+            f"{label} native build should forward the effective insert_sync policy to ptoas",
+        )
+        expected_backend = module_spec.backend if module_spec.jit_source is not None else None
+        expected_pto_level = "level3" if module_spec.mode == "explicit" else None
+        expect(
+            observation["backend"] == expected_backend,
+            f"{label} native build should only forward ptoas backend overrides for source-backed kernels",
+        )
+        expect(
+            observation["pto_level"] == expected_pto_level,
+            f"{label} native build should derive the PTOAS level from the authored mode",
+        )
+        expect(
+            observation["mlir_text"] == compiled.mlir_text(),
+            f"{label} native build should hand the backend-partitioned container MLIR to ptoas unchanged",
+        )
+        if module_spec.jit_source is None:
+            expected_module_count = 2
+            expect(
+                observation["mlir_text"].count("module") >= expected_module_count,
+                f"{label} native build should route the authored module shape through ptoas",
+            )
+
+
+def _check_native_build_variants(native_build_variants):
+    native_build_observations, launch_target_arches = _drive_native_build_variants(
+        native_build_variants
+    )
+    _assert_native_build_variants(
+        native_build_variants, native_build_observations, launch_target_arches
+    )
+
+
+def _check_rmsnorm_ub_layout_offsets(rmsnorm_alloc_buffer_text):
+    for expected_offset in (4096, 4224, 12416, 20608):
+        expect(
+            f"pto.constant {expected_offset} : index" in rmsnorm_alloc_buffer_text,
+            f"RMSNorm hand-authored UB layout should materialize f32 offset {expected_offset}",
+        )
+
+
+def _check_simt_fp8_pointer_types(simt_full_text):
+    for fp8_vec in (
+        "vector<4xf8E4M3FN>",
+        "vector<8xf8E4M3FN>",
+        "vector<4xf8E5M2>",
+        "vector<8xf8E5M2>",
+    ):
+        expect(
+            f"!pto.ptr<{fp8_vec}, gm>" in simt_full_text,
+            f"SIMT FP8 extension should preserve !pto.ptr<{fp8_vec}, gm>",
+        )
+        expect(
+            f"!pto.ptr<{fp8_vec}, gm>, {fp8_vec}" in simt_full_text,
+            f"SIMT FP8 extension stg should accept exact {fp8_vec} payload",
+        )
+
+
+def _check_control_flow_rewrite_counts(ast_control_flow_equiv_native_text, ast_control_flow_equiv_explicit_text):
+    for pattern in ("scf.for", "scf.if", "iter_args(", "scf.yield", "pto.addi"):
+        expect(
+            ast_control_flow_equiv_native_text.count(pattern) == ast_control_flow_equiv_explicit_text.count(pattern),
+            f"native AST rewrite should match explicit control-flow count for {pattern}",
+        )
+
+
+def _check_vec_16b_pack_types(vec_16b_text):
+    for vec_type, label in (("vector<2xf16>", "f16 x 2"), ("vector<4xf16>", "f16 x 4"), ("vector<4xi16>", "i16 x 4")):
+        expect(
+            vec_type in vec_16b_text,
+            f"pto.Vec(..., init=...) should build {vec_type} for {label} packs",
+        )
+
+
+def _check_vmi_bf16x2_rounding_modes(vmi_bf16x2_to_f4x2_text):
+    for rounding in ("R", "A", "F", "Z", "C"):
+        expect(
+            f'rounding = "{rounding}"' in vmi_bf16x2_to_f4x2_text,
+            f"bf16x2-to-f4x2 should accept and preserve {rounding} rounding",
+        )
+
+
+def _check_vmi_wrapper_dispatch_counts(expected_vmi_ops, vmi_wrapper_dispatch_text):
+    for op_name in expected_vmi_ops:
+        expect(
+            op_name in vmi_wrapper_dispatch_text,
+            f"representative {op_name} wrapper dispatch should emit the matching generated VMI op",
+        )
+    for op_name, expected_count in (("vcadd", 2), ("vcmax", 3), ("vcmin", 2)):
+        expect(
+            vmi_wrapper_dispatch_text.count(f"pto.vmi.{op_name}") == expected_count,
+            f"pto.vmi.{op_name} should emit both omitted-group and explicit-group probes",
+        )
+
+
+def _check_vmi_vcvt_rounding_modes(vmi_wrapper_dispatch_text):
+    for rounding in ("R", "A", "H", "Z"):
+        expect(
+            f'rounding = "{rounding}"' in vmi_wrapper_dispatch_text,
+            f"PTODSL vcvt should preserve canonical {rounding} rounding",
+        )
+
+
+def _collect_explicit_ca_controls(explicit_ca_match, public_surface_text):
+    explicit_ca_controls = []
+    if explicit_ca_match is not None:
+        explicit_ca_operands = re.findall(
+            r"%[a-zA-Z0-9_]+", explicit_ca_match.group(1)
+        )
+        constant_matches = re.findall(
+            r"^\s*(%[a-zA-Z0-9_]+) = pto\.constant (-?\d+) : i64$",
+            public_surface_text,
+            re.MULTILINE,
+        )
+        constant_values = {name: int(value) for name, value in constant_matches}
+        explicit_ca_controls = [
+            constant_values.get(name) for name in explicit_ca_operands[-6:]
+    ]
+    return explicit_ca_controls
+
+
+
+def _check_tile_buf_type_surface():
+    with make_context() as ctx:
+        with Location.unknown(ctx):
+            tile_buf_ty = pto_types.tile_buf_type(
+                [16, 32],
+                pto.f32,
+                [16, 8],
+                address_space="mat",
+                blayout="ColMajor",
+                slayout="RowMajor",
+            )
+            expect(hasattr(tile_buf_ty, "memory_space"), "TileBufType should expose a memory_space accessor")
+            expect(hasattr(tile_buf_ty, "shape"), "TileBufType should expose a shape accessor")
+            expect(hasattr(tile_buf_ty, "valid_shape"), "TileBufType should expose a valid_shape accessor")
+            expect(hasattr(tile_buf_ty, "element_type"), "TileBufType should expose an element_type accessor")
+            expect(
+                tile_buf_ty.memory_space.value == pto.MemorySpace.MAT.value,
+                "TileBufType.memory_space should preserve the authored address space",
+            )
+            expect(list(tile_buf_ty.shape) == [16, 32], "TileBufType.shape should preserve the authored physical shape")
+            expect(
+                list(tile_buf_ty.valid_shape) == [16, 8],
+                "TileBufType.valid_shape should preserve the authored valid shape",
+            )
+            expect(
+                str(tile_buf_ty.element_type) == "f32",
+                "TileBufType.element_type should preserve the authored element type",
+            )
+
+
+def _check_simt_grouped_query_ops(simt_grouped_query_text):
+    for op_name in _SIMT_DIMENSION_QUERY_OPS:
+        expect(
+            simt_grouped_query_text.count(op_name) == 1,
+            f"grouped SIMT query helpers should lower exactly once to {op_name}",
+        )
+
+
+def _check_simt_query_ops(simt_launch_text):
+    for op_name in (
+        *_SIMT_DIMENSION_QUERY_OPS,
+        "pto.get_block_idx_x",
+        "pto.get_block_idx_y",
+        "pto.get_block_idx_z",
+        "pto.get_veccoreid",
+        "pto.get_clock32",
+        "pto.get_clock64",
+        "pto.get_laneid",
+        "pto.get_lanemask_eq",
+        "pto.get_lanemask_le",
+        "pto.get_lanemask_lt",
+        "pto.get_lanemask_ge",
+        "pto.get_lanemask_gt",
+    ):
+        expect(op_name in simt_launch_text, f"SIMT query body should contain {op_name}")
+
+
+def _check_simt_full_surface_ops(simt_full_text):
+    for op_name in (
+        "pto.vote_all",
+        "pto.vote_any",
+        "pto.vote_uni",
+        "pto.vote_ballot",
+        "pto.shuffle_idx",
+        "pto.shuffle_up",
+        "pto.shuffle_down",
+        "pto.shuffle_bfly",
+        "pto.redux_addi",
+        "pto.redux_maxi",
+        "pto.redux_mini",
+        "pto.ldg",
+        "pto.stg",
+        "pto.atomic_exch",
+        "pto.atomic_add",
+        "pto.atomic_sub",
+        "pto.atomic_min",
+        "pto.atomic_max",
+        "pto.atomic_and",
+        "pto.atomic_or",
+        "pto.atomic_xor",
+        "pto.atomic_cas",
+        "pto.prmt",
+        "pto.mulhi",
+        "pto.mul_i32toi64",
+        "pto.absf",
+        "pto.sqrt",
+        "pto.exp",
+        "pto.log",
+        "pto.sin",
+        "pto.cos",
+        "pto.pow",
+        "pto.ceil",
+        "pto.floor",
+        "pto.rint",
+        "pto.round",
+        "pto.fma",
+        "pto.ftof", "pto.ftoi", "pto.itof",
+        "pto.syncthreads",
+        "pto.threadfence",
+        "pto.threadfence_block",
+        "pto.keep",
+        "pto.resume",
+    ):
+        expect(op_name in simt_full_text, f"full SIMT surface should contain {op_name}")
+
+
+def _check_integer_vector_element_types(per_element_vec_i32_text, per_element_vec_ui32_text):
+    for int_label, int_text in (("i32", per_element_vec_i32_text), ("ui32", per_element_vec_ui32_text)):
+        expect(
+            int_text.count("llvm.insertelement") == 2,
+            f"pto.Vec(pto.{int_label}, 2, init=...) should emit exactly two llvm.insertelement ops",
+        )
+        expect(
+            int_text.count("pto.store") == 1,
+            f"pto.Vec(pto.{int_label}, 2, init=...) store should emit exactly one pto.store",
+        )
+        expect(
+            "arith.fpext" not in int_text
+            and "arith.fptosi" not in int_text
+            and "arith.sitofp" not in int_text
+            and "arith.uitofp" not in int_text
+            and "arith.fptrunc" not in int_text,
+            f"pto.Vec(pto.{int_label}, 2, init=...) should keep element bit patterns without scalar conversions",
+        )
+
+
+def _check_vmi_bf16x2_rejections():
+    for invalid_probe in (
+        vmi_bf16x2_to_f4x2_sat_probe,
+        vmi_bf16x2_to_f4x2_nosat_probe,
+    ):
+        expect_raises(
+            ValueError,
+            invalid_probe.compile,
+            "does not support saturate for bf16x2",
+        )
+    for invalid_probe in (
+        vmi_bf16x2_unsupported_pair_probe,
+    ):
+        expect_raises(
+            TypeError,
+            invalid_probe.compile,
+            "supports bf16x2 only for bf16x2 <->",
+        )
+
+
+def _check_atomic_surface_ops(data_movement_surface_text):
+    for atomic_api in (
+        "set_atomic_s32",
+        "set_atomic_add",
+        "set_atomic_max",
+        "set_atomic_min",
+        "set_atomic_f32",
+        "set_atomic_f16",
+        "set_atomic_bf16",
+        "set_atomic_s16",
+        "set_atomic_s8",
+        "set_atomic_none",
+    ):
+        expect(
+            f"pto.{atomic_api}" in data_movement_surface_text,
+            f"{atomic_api} should lower through the explicit PTODSL surface",
+        )
+
+
+def _check_mx_staging_controls(explicit_mx_scale_staging_text):
+    for control_value in (3, 5, 16, 2, 8):
+        expect(
+            f"pto.constant {control_value} : i64" in explicit_mx_scale_staging_text,
+            f"explicit MX staging should preserve control value {control_value}",
+        )
+    for op_name in ("mte_l1_l0a_mx", "mte_l1_l0b_mx"):
+        expect(
+            re.search(
+                rf"pto\.{op_name}(?: %[a-zA-Z0-9_]+,?){{8}} :",
+                explicit_mx_scale_staging_text,
+            ) is not None,
+            f"{op_name}(...) should preserve every explicit MX control operand",
+        )
+
+
+def _capture_ptoas_commands(mlir_path, kernel_object, **options):
+    with mock.patch.object(
+        native_build_runtime,
+        "resolve_ptoas_binary",
+        return_value=Path("/tmp/fake-ptoas"),
+    ), mock.patch.object(native_build_runtime, "_run") as run_mock:
+        getattr(native_build_runtime, "_run_ptoas")(
+            mlir_path, kernel_object, target_arch="a5", **options
+        )
+    return [call[0][0] for call in run_mock.call_args_list]
+
+
+def _check_ptoas_default_command(mlir_path, kernel_object):
+    ptoas_cmds = _capture_ptoas_commands(mlir_path, kernel_object)
+    expect(len(ptoas_cmds) == 1, "native build should issue exactly one ptoas command per kernel container")
+    ptoas_cmd = ptoas_cmds[0]
+    expect(
+        ptoas_cmd[:2] == ["/tmp/fake-ptoas", "--pto-arch=a5"],
+        "native build should still pass the ptoas binary plus target-arch flag",
+    )
+    expect(
+        "--pto-backend=vpto" not in ptoas_cmd,
+        "native build should no longer force a global VPTO backend when compiling backend-partitioned containers",
+    )
+    expect(
+        "--pto-level=level3" not in ptoas_cmd,
+        "native build should not pass a global pto-level flag by default",
+    )
+    expect(
+        "--enable-insert-sync" not in ptoas_cmd,
+        "native build should keep the default insert-sync policy unset when _run_ptoas is called directly",
+    )
+    expect(
+        "--enable-tile-op-expand" in ptoas_cmd and str(mlir_path) in ptoas_cmd and str(kernel_object) in ptoas_cmd,
+        "native build should still pass the shared PTOAS compile inputs and output path",
+    )
+
+
+def _check_ptoas_insert_sync_command(mlir_path, kernel_object):
+    ptoas_cmds = _capture_ptoas_commands(mlir_path, kernel_object, insert_sync=True)
+    expect(len(ptoas_cmds) == 1, "native build should issue exactly one ptoas command when insert_sync is forced on")
+    expect(
+        "--enable-insert-sync" in ptoas_cmds[0],
+        "native build should pass --enable-insert-sync when the compiled module explicitly requests it",
+    )
+
+
+def _check_ptoas_explicit_command(mlir_path, kernel_object):
+    ptoas_cmds = _capture_ptoas_commands(
+        mlir_path,
+        kernel_object,
+        backend="vpto",
+        pto_level=getattr(native_build_runtime, "_effective_pto_level")(mode="explicit"),
+        insert_sync=True,
+    )
+    expect(len(ptoas_cmds) == 1, "native build should issue exactly one ptoas command with explicit-mode PTOAS policy")
+    explicit_ptoas_cmd = ptoas_cmds[0]
+    expect(
+        "--pto-backend=vpto" in explicit_ptoas_cmd,
+        "source-backed native build should pass the decorator backend to ptoas",
+    )
+    expect(
+        "--pto-level=level3" in explicit_ptoas_cmd,
+        'native build should pass --pto-level=level3 for mode="explicit"',
+    )
+    expect(
+        "--enable-insert-sync" in explicit_ptoas_cmd,
+        "source-backed native build should still pass explicit/effective insert-sync to ptoas",
+    )
+
+
+def _check_ptoas_vmi_command(mlir_path, kernel_object):
+    vmi_mlir_text = vmi_wrapper_dispatch_probe.compile().mlir_text()
+    mlir_path.write_text(vmi_mlir_text, encoding="utf-8")
+    ptoas_cmds = _capture_ptoas_commands(mlir_path, kernel_object)
+    expect(
+        len(ptoas_cmds) == 1,
+        "native build should issue exactly one ptoas command for PTODSL-generated VMI MLIR",
+    )
+
+
+def _check_ptoas_command_shapes(default_text):
+    with TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        mlir_path = tmpdir_path / "kernel.mlir"
+        kernel_object = tmpdir_path / "kernel.o"
+        mlir_path.write_text(default_text, encoding="utf-8")
+        _check_ptoas_default_command(mlir_path, kernel_object)
+        _check_ptoas_insert_sync_command(mlir_path, kernel_object)
+        _check_ptoas_explicit_command(mlir_path, kernel_object)
+        _check_ptoas_vmi_command(mlir_path, kernel_object)
+
+
+def _check_integer_constructor_bit_patterns():
+    bit_pattern_module = Module.create()
+    with InsertionPoint(bit_pattern_module.body):
+        _ = pto.si32("0xFFFFFFFF")
+        _ = pto.ui32("0xFFFFFFFF")
+        _ = pto.i32("0x80000000")
+    bit_pattern_text = str(bit_pattern_module)
+    expect(
+        "pto.constant -1 : i32" in bit_pattern_text and
+        "unrealized_conversion_cast" in bit_pattern_text and
+        "i32 to si32" in bit_pattern_text,
+        "signed integer constructors should use a signless common constant and restore the authored type",
+    )
+    expect(
+        "i32 to ui32" in bit_pattern_text,
+        "unsigned integer constructors should restore the authored type after the signless common constant",
+    )
+    expect(
+        "pto.constant -2147483648 : i32" in bit_pattern_text,
+        "pto.i32 bit-pattern initialization should materialize the documented PTO constant",
+    )
+
+
+def _check_multi_abi_import_metadata(multi_abi_compiled):
+    multi_abi_graph = multi_abi_compiled.kernel_module_graph
+    expect(
+        multi_abi_graph is not None and len(multi_abi_graph.imports) == 2,
+        "multiple concrete kernel-module ABIs should be reflected in the traced import metadata",
+    )
+    expect(
+        len({record.target_symbol_name for record in multi_abi_graph.imports}) == 2,
+        "multiple concrete kernel-module ABIs should produce distinct target symbols in import metadata",
+    )
+    expect(
+        multi_abi_graph.dependencies == (("entry_calls_kernel_module_multiple_abi_probe", ("process_tile_module",)),),
+        "higher-level dependency metadata should still preserve the authored caller->callee edge",
+    )
+
+
+def _check_simt_resource_attr_rejections():
+    expect_raises(
+        ValueError,
+        lambda: pto.simt(max_threads=0)(lambda: None),
+        "max_threads",
+    )
+
+    def _enter_inline_simt_with_resource_attr():
+        with pto.simt(max_threads=256):
+            pass
+
+    expect_raises(
+        TypeError,
+        _enter_inline_simt_with_resource_attr,
+        "function decorator",
+    )
+
+
 def main() -> None:
     expected_public_exports = [
         "f8e4m3",
@@ -5323,8 +5948,14 @@ def main() -> None:
     expect(hasattr(pto.tile, "matmul"), "pto.tile.matmul should be exported from the public tile namespace")
     expect(hasattr(pto.tile, "matmul_acc"), "pto.tile.matmul_acc should be exported from the public tile namespace")
     expect(hasattr(pto.tile, "matmul_mx"), "pto.tile.matmul_mx should be exported from the public tile namespace")
-    expect(hasattr(pto.tile, "matmul_mx_acc"), "pto.tile.matmul_mx_acc should be exported from the public tile namespace")
-    expect(hasattr(pto.tile, "matmul_mx_bias"), "pto.tile.matmul_mx_bias should be exported from the public tile namespace")
+    expect(
+        hasattr(pto.tile, "matmul_mx_acc"),
+        "pto.tile.matmul_mx_acc should be exported from the public tile namespace",
+    )
+    expect(
+        hasattr(pto.tile, "matmul_mx_bias"),
+        "pto.tile.matmul_mx_bias should be exported from the public tile namespace",
+    )
     expect(hasattr(pto.tile, "gemv_mx"), "pto.tile.gemv_mx should be exported from the public tile namespace")
     expect(hasattr(pto.tile, "gemv_mx_acc"), "pto.tile.gemv_mx_acc should be exported from the public tile namespace")
     expect(hasattr(pto.tile, "gemv_mx_bias"), "pto.tile.gemv_mx_bias should be exported from the public tile namespace")
@@ -5358,23 +5989,7 @@ def main() -> None:
     )
     _check_removed_public_interfaces()
 
-    with make_context() as ctx, Location.unknown(ctx):
-        tile_buf_ty = pto_types.tile_buf_type(
-            [16, 32],
-            pto.f32,
-            [16, 8],
-            address_space="mat",
-            blayout="ColMajor",
-            slayout="RowMajor",
-        )
-        expect(hasattr(tile_buf_ty, "memory_space"), "TileBufType should expose a memory_space accessor")
-        expect(hasattr(tile_buf_ty, "shape"), "TileBufType should expose a shape accessor")
-        expect(hasattr(tile_buf_ty, "valid_shape"), "TileBufType should expose a valid_shape accessor")
-        expect(hasattr(tile_buf_ty, "element_type"), "TileBufType should expose an element_type accessor")
-        expect(tile_buf_ty.memory_space.value == pto.MemorySpace.MAT.value, "TileBufType.memory_space should preserve the authored address space")
-        expect(list(tile_buf_ty.shape) == [16, 32], "TileBufType.shape should preserve the authored physical shape")
-        expect(list(tile_buf_ty.valid_shape) == [16, 8], "TileBufType.valid_shape should preserve the authored valid shape")
-        expect(str(tile_buf_ty.element_type) == "f32", "TileBufType.element_type should preserve the authored element type")
+    _check_tile_buf_type_surface()
 
     host_vec_copy.verify()
     runtime_metadata_kernel.verify()
@@ -5460,26 +6075,7 @@ def main() -> None:
             str(pto.ui8.resolve()) == "ui8",
             "pto.ui8 should resolve to an unsigned 8-bit integer type",
         )
-        bit_pattern_module = Module.create()
-        with InsertionPoint(bit_pattern_module.body):
-            _ = pto.si32("0xFFFFFFFF")
-            _ = pto.ui32("0xFFFFFFFF")
-            _ = pto.i32("0x80000000")
-        bit_pattern_text = str(bit_pattern_module)
-        expect(
-            "pto.constant -1 : i32" in bit_pattern_text and
-            "unrealized_conversion_cast" in bit_pattern_text and
-            "i32 to si32" in bit_pattern_text,
-            "signed integer constructors should use a signless common constant and restore the authored type",
-        )
-        expect(
-            "i32 to ui32" in bit_pattern_text,
-            "unsigned integer constructors should restore the authored type after the signless common constant",
-        )
-        expect(
-            "pto.constant -2147483648 : i32" in bit_pattern_text,
-            "pto.i32 bit-pattern initialization should materialize the documented PTO constant",
-        )
+        _check_integer_constructor_bit_patterns()
         expect(
             str(pto.f8e4m3.resolve()) == "f8E4M3FN",
             "pto.f8e4m3 should resolve to the public E4M3 float8 type",
@@ -6242,25 +6838,15 @@ def main() -> None:
     )
     expect(
         multi_abi_text.count("func.func public @process_tile_module__ptodsl_") == 2,
-        "one kernel-module symbol called through two concrete Tile ABIs should materialize two specialized public callee definitions",
+        "one kernel-module symbol called through two concrete Tile ABIs "
+        "should materialize two specialized public callee definitions",
     )
     expect(
         multi_abi_text.count("func.func private @process_tile_module__ptodsl_") == 2,
-        "one kernel-module symbol called through two concrete Tile ABIs should materialize two specialized private imports",
+        "one kernel-module symbol called through two concrete Tile ABIs "
+        "should materialize two specialized private imports",
     )
-    multi_abi_graph = multi_abi_compiled.kernel_module_graph
-    expect(
-        multi_abi_graph is not None and len(multi_abi_graph.imports) == 2,
-        "multiple concrete kernel-module ABIs should be reflected in the traced import metadata",
-    )
-    expect(
-        len({record.target_symbol_name for record in multi_abi_graph.imports}) == 2,
-        "multiple concrete kernel-module ABIs should produce distinct target symbols in import metadata",
-    )
-    expect(
-        multi_abi_graph.dependencies == (("entry_calls_kernel_module_multiple_abi_probe", ("process_tile_module",)),),
-        "higher-level dependency metadata should still preserve the authored caller->callee edge",
-    )
+    _check_multi_abi_import_metadata(multi_abi_compiled)
     host_vec_copy_compiled = host_vec_copy.compile()
     native_build_variants = (
         (
@@ -6279,225 +6865,8 @@ def main() -> None:
     launch_target_arches = []
     fake_native_library = object()
 
-    with TemporaryDirectory() as tmpdir:
-        build_root = Path(tmpdir)
-
-        def fake_artifacts(py_name, ir_function_name, specialization_key, cache_root=None):
-            cache_dir = Path(cache_root or build_root) / f"{py_name}_{ir_function_name}"
-            return NativeBuildArtifacts(
-                cache_dir=cache_dir,
-                mlir_path=cache_dir / "kernel.mlir",
-                kernel_object=cache_dir / "kernel.o",
-                launch_cpp=cache_dir / "launch.cpp",
-                shared_library=cache_dir / f"lib{ir_function_name}.so",
-                manifest_path=cache_dir / "manifest.json",
-            )
-
-        def fake_run_ptoas(mlir_path, kernel_object, *, target_arch, insert_sync=None, backend=None, pto_level=None):
-            native_build_observations.append(
-                {
-                    "mlir_path": mlir_path,
-                    "kernel_object": kernel_object,
-                    "target_arch": target_arch,
-                    "insert_sync": insert_sync,
-                    "backend": backend,
-                    "pto_level": pto_level,
-                    "mlir_text": mlir_path.read_text(encoding="utf-8"),
-                }
-            )
-            kernel_object.write_text("fake fatobj\n", encoding="utf-8")
-
-        def fake_compile_launch_cpp(
-            launch_cpp,
-            launch_object,
-            *,
-            kernel_kind,
-            target_arch,
-            export_macro,
-        ):
-            expect(launch_cpp.is_file(), "native build should materialize launch.cpp before compiling it")
-            expect(
-                kernel_kind in {None, "vector", "cube"},
-                "native build should forward the optional authored kernel kind",
-            )
-            launch_target_arches.append(target_arch)
-            expect(export_macro.endswith("_EXPORTS"), "native build should preserve launch export macro naming")
-            launch_object.write_text("fake launch object\n", encoding="utf-8")
-
-        def fake_link_shared_library(launch_object, kernel_object, shared_library, *, kernel_kind):
-            expect(launch_object.is_file(), "native build should compile launch.cpp before linking")
-            expect(kernel_object.is_file(), "native build should run ptoas before shared-library link")
-            expect(
-                kernel_kind in {None, "vector", "cube"},
-                "native build should preserve the optional kernel kind",
-            )
-            shared_library.write_text("fake shared library\n", encoding="utf-8")
-
-        with mock.patch.object(native_build_runtime, "artifact_paths", side_effect=fake_artifacts), mock.patch.object(
-            native_build_runtime, "is_native_build_current", return_value=False
-        ), mock.patch.object(native_build_runtime, "_run_ptoas", side_effect=fake_run_ptoas), mock.patch.object(
-            native_build_runtime, "_compile_launch_cpp", side_effect=fake_compile_launch_cpp
-        ), mock.patch.object(
-            native_build_runtime, "_link_shared_library", side_effect=fake_link_shared_library
-        ), mock.patch.object(native_build_runtime, "runtime_library_flags", return_value=("-laclrt",)), \
-                mock.patch.object(native_build_runtime.ctypes, "CDLL", return_value=fake_native_library):
-            for label, compiled, module_spec_override in native_build_variants:
-                module_spec = module_spec_override or compiled._module_spec
-                lib, launch_symbol = native_build_runtime.build_native_library(
-                    py_name=compiled._py_name,
-                    module_spec=module_spec,
-                    kernel_signature=compiled._kernel_signature,
-                    mlir_text=compiled.mlir_text(),
-                    specialization_key=compiled.specialization_key,
-                )
-                expect(lib is fake_native_library, f"{label} native build should load the built shared library")
-                expect(
-                    launch_symbol.startswith("ptodsl_launch_"),
-                    f"{label} native build should preserve PTODSL launch wrapper naming",
-                )
-
-    expect(
-        len(native_build_observations) == len(native_build_variants),
-        "native build should drive ptoas once per compiled container variant under test",
-    )
-    for (label, compiled, module_spec_override), observation, launch_target_arch in zip(
-        native_build_variants, native_build_observations, launch_target_arches
-    ):
-        module_spec = module_spec_override or compiled._module_spec
-        expect(
-            observation["target_arch"] == module_spec.target_arch,
-            f"{label} native build should still pass the target arch to ptoas",
-        )
-        expect(
-            launch_target_arch == module_spec.target_arch,
-            f"{label} native build should pass the target arch to launch compilation",
-        )
-        expected_insert_sync = (
-            module_spec.insert_sync
-            if module_spec.insert_sync is not None
-            else module_spec.mode != "explicit"
-        )
-        expect(
-            observation["insert_sync"] == expected_insert_sync,
-            f"{label} native build should forward the effective insert_sync policy to ptoas",
-        )
-        expected_backend = module_spec.backend if module_spec.jit_source is not None else None
-        expected_pto_level = "level3" if module_spec.mode == "explicit" else None
-        expect(
-            observation["backend"] == expected_backend,
-            f"{label} native build should only forward ptoas backend overrides for source-backed kernels",
-        )
-        expect(
-            observation["pto_level"] == expected_pto_level,
-            f"{label} native build should derive the PTOAS level from the authored mode",
-        )
-        expect(
-            observation["mlir_text"] == compiled.mlir_text(),
-            f"{label} native build should hand the backend-partitioned container MLIR to ptoas unchanged",
-        )
-        if module_spec.jit_source is None:
-            expected_module_count = 2
-            expect(
-                observation["mlir_text"].count("module") >= expected_module_count,
-                f"{label} native build should route the authored module shape through ptoas",
-            )
-    with TemporaryDirectory() as tmpdir:
-        tmpdir_path = Path(tmpdir)
-        mlir_path = tmpdir_path / "kernel.mlir"
-        kernel_object = tmpdir_path / "kernel.o"
-        mlir_path.write_text(default_text, encoding="utf-8")
-        ptoas_cmds = []
-
-        def fake_run_ptoas_cmd(cmd, *, cwd=None):
-            ptoas_cmds.append(cmd)
-
-        with mock.patch.object(native_build_runtime, "resolve_ptoas_binary", return_value=Path("/tmp/fake-ptoas")), mock.patch.object(
-            native_build_runtime, "_run", side_effect=fake_run_ptoas_cmd
-        ):
-            native_build_runtime._run_ptoas(
-                mlir_path,
-                kernel_object,
-                target_arch="a5",
-            )
-
-        expect(len(ptoas_cmds) == 1, "native build should issue exactly one ptoas command per kernel container")
-        ptoas_cmd = ptoas_cmds[0]
-        expect(
-            ptoas_cmd[:2] == ["/tmp/fake-ptoas", "--pto-arch=a5"],
-            "native build should still pass the ptoas binary plus target-arch flag",
-        )
-        expect(
-            "--pto-backend=vpto" not in ptoas_cmd,
-            "native build should no longer force a global VPTO backend when compiling backend-partitioned containers",
-        )
-        expect(
-            "--pto-level=level3" not in ptoas_cmd,
-            "native build should not pass a global pto-level flag by default",
-        )
-        expect(
-            "--enable-insert-sync" not in ptoas_cmd,
-            "native build should keep the default insert-sync policy unset when _run_ptoas is called directly",
-        )
-        expect(
-            "--enable-tile-op-expand" in ptoas_cmd and str(mlir_path) in ptoas_cmd and str(kernel_object) in ptoas_cmd,
-            "native build should still pass the shared PTOAS compile inputs and output path",
-        )
-        ptoas_cmds.clear()
-        with mock.patch.object(native_build_runtime, "resolve_ptoas_binary", return_value=Path("/tmp/fake-ptoas")), mock.patch.object(
-            native_build_runtime, "_run", side_effect=fake_run_ptoas_cmd
-        ):
-            native_build_runtime._run_ptoas(
-                mlir_path,
-                kernel_object,
-                target_arch="a5",
-                insert_sync=True,
-            )
-        expect(len(ptoas_cmds) == 1, "native build should issue exactly one ptoas command when insert_sync is forced on")
-        expect(
-            "--enable-insert-sync" in ptoas_cmds[0],
-            "native build should pass --enable-insert-sync when the compiled module explicitly requests it",
-        )
-        ptoas_cmds.clear()
-        with mock.patch.object(native_build_runtime, "resolve_ptoas_binary", return_value=Path("/tmp/fake-ptoas")), mock.patch.object(
-            native_build_runtime, "_run", side_effect=fake_run_ptoas_cmd
-        ):
-            native_build_runtime._run_ptoas(
-                mlir_path,
-                kernel_object,
-                target_arch="a5",
-                backend="vpto",
-                pto_level=native_build_runtime._effective_pto_level(mode="explicit"),
-                insert_sync=True,
-            )
-        expect(len(ptoas_cmds) == 1, "native build should issue exactly one ptoas command with explicit-mode PTOAS policy")
-        explicit_ptoas_cmd = ptoas_cmds[0]
-        expect(
-            "--pto-backend=vpto" in explicit_ptoas_cmd,
-            "source-backed native build should pass the decorator backend to ptoas",
-        )
-        expect(
-            "--pto-level=level3" in explicit_ptoas_cmd,
-            'native build should pass --pto-level=level3 for mode="explicit"',
-        )
-        expect(
-            "--enable-insert-sync" in explicit_ptoas_cmd,
-            "source-backed native build should still pass explicit/effective insert-sync to ptoas",
-        )
-        ptoas_cmds.clear()
-        vmi_mlir_text = vmi_wrapper_dispatch_probe.compile().mlir_text()
-        mlir_path.write_text(vmi_mlir_text, encoding="utf-8")
-        with mock.patch.object(native_build_runtime, "resolve_ptoas_binary", return_value=Path("/tmp/fake-ptoas")), mock.patch.object(
-            native_build_runtime, "_run", side_effect=fake_run_ptoas_cmd
-        ):
-            native_build_runtime._run_ptoas(
-                mlir_path,
-                kernel_object,
-                target_arch="a5",
-            )
-        expect(
-            len(ptoas_cmds) == 1,
-            "native build should issue exactly one ptoas command for PTODSL-generated VMI MLIR",
-        )
+    _check_native_build_variants(native_build_variants)
+    _check_ptoas_command_shapes(default_text)
     expect("valid=?" not in default_text, "default alloc_tile() should keep full static valid-shape when valid_shape= is omitted")
     auto_mode_violation = expect_raises(
         RuntimeError,
@@ -6908,11 +7277,7 @@ def main() -> None:
     )
     rmsnorm_alloc_buffer_text = rmsnorm_alloc_buffer_layout_probe.compile().mlir_text()
     expect_parse_roundtrip_and_verify(rmsnorm_alloc_buffer_text, "RMSNorm hand-authored UB layout specialization")
-    for expected_offset in (4096, 4224, 12416, 20608):
-        expect(
-            f"pto.constant {expected_offset} : index" in rmsnorm_alloc_buffer_text,
-            f"RMSNorm hand-authored UB layout should materialize f32 offset {expected_offset}",
-        )
+    _check_rmsnorm_ub_layout_offsets(rmsnorm_alloc_buffer_text)
     expect(
         rmsnorm_alloc_buffer_text.count("llvm.alloca") == 2,
         "RMSNorm alloc_buffer fragment helper should allocate x_frag and sum_sq locally",
@@ -6955,21 +7320,7 @@ def main() -> None:
         re.search(r"pto\.simt_launch @simt_grouped_query_probe__simt_\d+<<<", simt_grouped_query_text) is not None,
         "grouped SIMT query probe should be launchable through helper[x, y, z](...)",
     )
-    for op_name in (
-        "pto.get_tid_x",
-        "pto.get_tid_y",
-        "pto.get_tid_z",
-        "pto.get_block_dim_x",
-        "pto.get_block_dim_y",
-        "pto.get_block_dim_z",
-        "pto.get_grid_dim_x",
-        "pto.get_grid_dim_y",
-        "pto.get_grid_dim_z",
-    ):
-        expect(
-            simt_grouped_query_text.count(op_name) == 1,
-            f"grouped SIMT query helpers should lower exactly once to {op_name}",
-        )
+    _check_simt_grouped_query_ops(simt_grouped_query_text)
     expect(
         simt_grouped_query_text.count("pto.keep") == 9,
         "grouped SIMT query helpers should return values that can be consumed by later micro-ops",
@@ -6993,45 +7344,8 @@ def main() -> None:
         ) is not None,
         "@pto.simt(max_threads=...) should attach resource attrs to the helper function",
     )
-    expect_raises(
-        ValueError,
-        lambda: pto.simt(max_threads=0)(lambda: None),
-        "max_threads",
-    )
-
-    def _enter_inline_simt_with_resource_attr():
-        with pto.simt(max_threads=256):
-            pass
-
-    expect_raises(
-        TypeError,
-        _enter_inline_simt_with_resource_attr,
-        "function decorator",
-    )
-    for op_name in (
-        "pto.get_tid_x",
-        "pto.get_tid_y",
-        "pto.get_tid_z",
-        "pto.get_block_dim_x",
-        "pto.get_block_dim_y",
-        "pto.get_block_dim_z",
-        "pto.get_grid_dim_x",
-        "pto.get_grid_dim_y",
-        "pto.get_grid_dim_z",
-        "pto.get_block_idx_x",
-        "pto.get_block_idx_y",
-        "pto.get_block_idx_z",
-        "pto.get_veccoreid",
-        "pto.get_clock32",
-        "pto.get_clock64",
-        "pto.get_laneid",
-        "pto.get_lanemask_eq",
-        "pto.get_lanemask_le",
-        "pto.get_lanemask_lt",
-        "pto.get_lanemask_ge",
-        "pto.get_lanemask_gt",
-    ):
-        expect(op_name in simt_launch_text, f"SIMT query body should contain {op_name}")
+    _check_simt_resource_attr_rejections()
+    _check_simt_query_ops(simt_launch_text)
 
     simt_arg_type_text = simt_specialized_arg_type_probe.compile(TRACE_TOKEN=1).mlir_text()
     expect_parse_roundtrip_and_verify(simt_arg_type_text, "simt arg-type specialization")
@@ -7056,52 +7370,7 @@ def main() -> None:
 
     simt_full_text = simt_full_surface_probe.compile(TRACE_TOKEN=1).mlir_text()
     expect_parse_roundtrip_and_verify(simt_full_text, "full simt surface specialization")
-    for op_name in (
-        "pto.vote_all",
-        "pto.vote_any",
-        "pto.vote_uni",
-        "pto.vote_ballot",
-        "pto.shuffle_idx",
-        "pto.shuffle_up",
-        "pto.shuffle_down",
-        "pto.shuffle_bfly",
-        "pto.redux_addi",
-        "pto.redux_maxi",
-        "pto.redux_mini",
-        "pto.ldg",
-        "pto.stg",
-        "pto.atomic_exch",
-        "pto.atomic_add",
-        "pto.atomic_sub",
-        "pto.atomic_min",
-        "pto.atomic_max",
-        "pto.atomic_and",
-        "pto.atomic_or",
-        "pto.atomic_xor",
-        "pto.atomic_cas",
-        "pto.prmt",
-        "pto.mulhi",
-        "pto.mul_i32toi64",
-        "pto.absf",
-        "pto.sqrt",
-        "pto.exp",
-        "pto.log",
-        "pto.sin",
-        "pto.cos",
-        "pto.pow",
-        "pto.ceil",
-        "pto.floor",
-        "pto.rint",
-        "pto.round",
-        "pto.fma",
-        "pto.ftof", "pto.ftoi", "pto.itof",
-        "pto.syncthreads",
-        "pto.threadfence",
-        "pto.threadfence_block",
-        "pto.keep",
-        "pto.resume",
-    ):
-        expect(op_name in simt_full_text, f"full SIMT surface should contain {op_name}")
+    _check_simt_full_surface_ops(simt_full_text)
     expect(
         re.search(r"pto\.minf .* : f16", simt_full_text) is not None,
         "full SIMT surface should accept scalar f16 pto.minf",
@@ -7110,20 +7379,7 @@ def main() -> None:
         re.search(r"pto\.maxf .* : f16", simt_full_text) is not None,
         "full SIMT surface should accept scalar f16 pto.maxf",
     )
-    for fp8_vec in (
-        "vector<4xf8E4M3FN>",
-        "vector<8xf8E4M3FN>",
-        "vector<4xf8E5M2>",
-        "vector<8xf8E5M2>",
-    ):
-        expect(
-            f"!pto.ptr<{fp8_vec}, gm>" in simt_full_text,
-            f"SIMT FP8 extension should preserve !pto.ptr<{fp8_vec}, gm>",
-        )
-        expect(
-            f"!pto.ptr<{fp8_vec}, gm>, {fp8_vec}" in simt_full_text,
-            f"SIMT FP8 extension stg should accept exact {fp8_vec} payload",
-        )
+    _check_simt_fp8_pointer_types(simt_full_text)
 
     expect_raises(
         TypeError,
@@ -7698,11 +7954,9 @@ def main() -> None:
         mlir_op_sequence(ast_control_flow_equiv_native_text) == mlir_op_sequence(ast_control_flow_equiv_explicit_text),
         "native Python for/if rewrite should emit the same operation sequence as explicit pto.for_/pto.if_",
     )
-    for pattern in ("scf.for", "scf.if", "iter_args(", "scf.yield", "pto.addi"):
-        expect(
-            ast_control_flow_equiv_native_text.count(pattern) == ast_control_flow_equiv_explicit_text.count(pattern),
-            f"native AST rewrite should match explicit control-flow count for {pattern}",
-        )
+    _check_control_flow_rewrite_counts(
+        ast_control_flow_equiv_native_text, ast_control_flow_equiv_explicit_text
+    )
 
     ast_closure_kernel_text = ast_closure_kernel_probe.compile().mlir_text()
     expect_parse_roundtrip_and_verify(ast_closure_kernel_text, "AST-rewritten closure kernel specialization")
@@ -8129,23 +8383,7 @@ def main() -> None:
     expect_parse_roundtrip_and_verify(per_element_vec_i32_text, "per-element Vec init= i32 specialization")
     per_element_vec_ui32_text = per_element_vec_ui32_probe.compile().mlir_text()
     expect_parse_roundtrip_and_verify(per_element_vec_ui32_text, "per-element Vec init= ui32 specialization")
-    for int_label, int_text in (("i32", per_element_vec_i32_text), ("ui32", per_element_vec_ui32_text)):
-        expect(
-            int_text.count("llvm.insertelement") == 2,
-            f"pto.Vec(pto.{int_label}, 2, init=...) should emit exactly two llvm.insertelement ops",
-        )
-        expect(
-            int_text.count("pto.store") == 1,
-            f"pto.Vec(pto.{int_label}, 2, init=...) store should emit exactly one pto.store",
-        )
-        expect(
-            "arith.fpext" not in int_text
-            and "arith.fptosi" not in int_text
-            and "arith.sitofp" not in int_text
-            and "arith.uitofp" not in int_text
-            and "arith.fptrunc" not in int_text,
-            f"pto.Vec(pto.{int_label}, 2, init=...) should keep element bit patterns without scalar conversions",
-        )
+    _check_integer_vector_element_types(per_element_vec_i32_text, per_element_vec_ui32_text)
     expect(
         "vector<2xi32>" in per_element_vec_ui32_text,
         "pto.Vec(pto.ui32, 2, init=...) should build a signless vector<2xi32> keeping the bit pattern",
@@ -8203,11 +8441,7 @@ def main() -> None:
 
     vec_16b_text = vec_init_16b_probe.compile().mlir_text()
     expect_parse_roundtrip_and_verify(vec_16b_text, "per-element Vec init= 16-bit specialization")
-    for vec_type, label in (("vector<2xf16>", "f16 x 2"), ("vector<4xf16>", "f16 x 4"), ("vector<4xi16>", "i16 x 4")):
-        expect(
-            vec_type in vec_16b_text,
-            f"pto.Vec(..., init=...) should build {vec_type} for {label} packs",
-        )
+    _check_vec_16b_pack_types(vec_16b_text)
     # Snapshot-style count (see the NOTE above the f32 probe assertions): 2+4+4+4 packed
     # elements across the four 16-bit stores. Update if the pipeline folds the chain.
     expect(
@@ -8667,11 +8901,7 @@ def main() -> None:
         vmi_bf16x2_to_f4x2_text.count('rounding = "R"') >= 2,
         "omitted rounding for bf16x2-to-f4x2 should materialize deterministic R rounding",
     )
-    for rounding in ("R", "A", "F", "Z", "C"):
-        expect(
-            f'rounding = "{rounding}"' in vmi_bf16x2_to_f4x2_text,
-            f"bf16x2-to-f4x2 should accept and preserve {rounding} rounding",
-        )
+    _check_vmi_bf16x2_rounding_modes(vmi_bf16x2_to_f4x2_text)
     expect(
         'saturate =' not in vmi_bf16x2_to_f4x2_text,
         "bf16x2-to-f4x2 VMI vcvt must not emit a saturate attribute",
@@ -8710,23 +8940,7 @@ def main() -> None:
         vmi_bf16x2_to_f4x2_invalid_rounding_probe.compile,
         "expected one of A, C, F, R, Z",
     )
-    for invalid_probe in (
-        vmi_bf16x2_to_f4x2_sat_probe,
-        vmi_bf16x2_to_f4x2_nosat_probe,
-    ):
-        expect_raises(
-            ValueError,
-            invalid_probe.compile,
-            "does not support saturate for bf16x2",
-        )
-    for invalid_probe in (
-        vmi_bf16x2_unsupported_pair_probe,
-    ):
-        expect_raises(
-            TypeError,
-            invalid_probe.compile,
-            "supports bf16x2 only for bf16x2 <->",
-        )
+    _check_vmi_bf16x2_rejections()
     vmi_f4x2_to_bf16x2_text = vmi_f4x2_to_bf16x2_vcvt_probe.compile().mlir_text()
     expect_parse_roundtrip_and_verify(
         vmi_f4x2_to_bf16x2_text,
@@ -8817,16 +9031,7 @@ def main() -> None:
         "pto.vmi.vintlv",
         "pto.vmi.vdintlv",
     ]
-    for op_name in expected_vmi_ops:
-        expect(
-            op_name in vmi_wrapper_dispatch_text,
-            f"representative {op_name} wrapper dispatch should emit the matching generated VMI op",
-        )
-    for op_name, expected_count in (("vcadd", 2), ("vcmax", 3), ("vcmin", 2)):
-        expect(
-            vmi_wrapper_dispatch_text.count(f"pto.vmi.{op_name}") == expected_count,
-            f"pto.vmi.{op_name} should emit both omitted-group and explicit-group probes",
-        )
+    _check_vmi_wrapper_dispatch_counts(expected_vmi_ops, vmi_wrapper_dispatch_text)
     expect(
         vmi_wrapper_dispatch_text.count("pto.vmi.vexpdif") == 2,
         "VMI wrapper dispatch should cover both f32 and f16 vexpdif forms",
@@ -8859,11 +9064,7 @@ def main() -> None:
         "!pto.vmi.vreg<64xf16>" in vmi_wrapper_dispatch_text,
         "PTODSL VMI conversion probes should materialize converted logical VMI vector result types in MLIR",
     )
-    for rounding in ("R", "A", "H", "Z"):
-        expect(
-            f'rounding = "{rounding}"' in vmi_wrapper_dispatch_text,
-            f"PTODSL vcvt should preserve canonical {rounding} rounding",
-        )
+    _check_vmi_vcvt_rounding_modes(vmi_wrapper_dispatch_text)
     expect(
         vmi_wrapper_dispatch_text.count('saturate = "SAT"') >= 5,
         "PTODSL vcvt should preserve explicit SAT and default omitted narrowing saturation to SAT",
@@ -9088,22 +9289,7 @@ def main() -> None:
         data_movement_surface_text.count("pto.set_store_atomic_cfg") == 2,
         "set_store_atomic_cfg should lower the requested config and reset",
     )
-    for atomic_api in (
-        "set_atomic_s32",
-        "set_atomic_add",
-        "set_atomic_max",
-        "set_atomic_min",
-        "set_atomic_f32",
-        "set_atomic_f16",
-        "set_atomic_bf16",
-        "set_atomic_s16",
-        "set_atomic_s8",
-        "set_atomic_none",
-    ):
-        expect(
-            f"pto.{atomic_api}" in data_movement_surface_text,
-            f"{atomic_api} should lower through the explicit PTODSL surface",
-        )
+    _check_atomic_surface_ops(data_movement_surface_text)
     expect(
         "pto.constant 7 : i64" in data_movement_surface_text
         and re.search(
@@ -9250,19 +9436,7 @@ def main() -> None:
         public_surface_text,
     )
     explicit_ca_controls = []
-    if explicit_ca_match is not None:
-        explicit_ca_operands = re.findall(
-            r"%[a-zA-Z0-9_]+", explicit_ca_match.group(1)
-        )
-        constant_matches = re.findall(
-            r"^\s*(%[a-zA-Z0-9_]+) = pto\.constant (-?\d+) : i64$",
-            public_surface_text,
-            re.MULTILINE,
-        )
-        constant_values = {name: int(value) for name, value in constant_matches}
-        explicit_ca_controls = [
-            constant_values.get(name) for name in explicit_ca_operands[-6:]
-    ]
+    explicit_ca_controls = _collect_explicit_ca_controls(explicit_ca_match, public_surface_text)
     expect(
         explicit_ca_controls == [4, 0, 4, 16, 16, 4],
         "explicit mte_l1_l0a wrapper should preserve independent source and destination strides",
@@ -9273,19 +9447,7 @@ def main() -> None:
         explicit_mx_scale_staging_text.count("!pto.ptr<!pto.f8E8M0, l1>") >= 2,
         "explicit MX staging should preserve E8M0 L1 source pointers",
     )
-    for control_value in (3, 5, 16, 2, 8):
-        expect(
-            f"pto.constant {control_value} : i64" in explicit_mx_scale_staging_text,
-            f"explicit MX staging should preserve control value {control_value}",
-        )
-    for op_name in ("mte_l1_l0a_mx", "mte_l1_l0b_mx"):
-        expect(
-            re.search(
-                rf"pto\.{op_name}(?: %[a-zA-Z0-9_]+,?){{8}} :",
-                explicit_mx_scale_staging_text,
-            ) is not None,
-            f"{op_name}(...) should preserve every explicit MX control operand",
-        )
+    _check_mx_staging_controls(explicit_mx_scale_staging_text)
     expect("pto.tmatmul.mx" in public_surface_text, "pto.tile.matmul_mx should lower to pto.tmatmul.mx")
     expect("pto.tmatmul.mx.acc" in public_surface_text, "pto.tile.matmul_mx_acc should lower to pto.tmatmul.mx.acc")
     expect("pto.tmatmul.mx.bias" in public_surface_text, "pto.tile.matmul_mx_bias should lower to pto.tmatmul.mx.bias")

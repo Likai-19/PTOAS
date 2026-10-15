@@ -92,6 +92,16 @@ def _source_ptoas_overrides(module_spec) -> dict:
     return {"backend": module_spec.backend}
 
 
+def _resolve_ptoas_backend(module_spec, ptoas_overrides: dict) -> str | None:
+    """Resolve the backend ptoas will compile with, using its own precedence.
+
+    ptoas takes ``--pto-backend`` when given and otherwise reads the module's
+    ``pto.backend`` attribute (driver ``buildBackendInfo``); the Python side
+    must apply the same order or the two sides diverge silently.
+    """
+    return ptoas_overrides.get("backend") or getattr(module_spec, "backend", None)
+
+
 def _compile_config_text(
     *,
     module_spec,
@@ -177,6 +187,28 @@ def _compile_launch_cpp(
     )
 
 
+def _compile_emitc_kernel(
+    kernel_cpp: Path,
+    kernel_object: Path,
+    *,
+    kernel_kind: str | None,
+    target_arch: str,
+) -> None:
+    """Compile EmitC C++ from ptoas into the object the fat link expects."""
+    bisheng = resolve_bisheng()
+    _run(
+        [
+            bisheng,
+            *bisheng_extra_flags(),
+            *_kernel_compile_flags(kernel_kind, target_arch),
+            "-c",
+            str(kernel_cpp),
+            "-o",
+            str(kernel_object),
+        ]
+    )
+
+
 def _link_shared_library(
     launch_object: Path,
     kernel_object: Path,
@@ -205,6 +237,67 @@ def _link_shared_library(
     )
 
 
+def _is_elf_object(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            return handle.read(4) == b"\x7fELF"
+    except OSError:
+        return False
+
+
+def _produce_kernel_object(
+    artifacts,
+    module_spec,
+    *,
+    effective_insert_sync: bool,
+    effective_pto_level: str | None,
+    ptoas_overrides: dict,
+) -> None:
+    """Run ptoas and leave a linkable ELF object at artifacts.kernel_object.
+
+    The resolved backend only picks the name offered to ptoas (emitc output
+    is C++ source, vpto output is an ELF object); what actually landed on
+    disk then drives the next step, so a backend disagreement surfaces here
+    instead of as a cce-ld "not a valid object file" error at link time.
+    """
+    backend = _resolve_ptoas_backend(module_spec, ptoas_overrides)
+    ptoas_output = artifacts.kernel_object
+    if backend == "emitc":
+        ptoas_output = artifacts.kernel_object.with_suffix(".cpp")
+    _run_ptoas(
+        artifacts.mlir_path,
+        ptoas_output,
+        target_arch=module_spec.target_arch,
+        insert_sync=effective_insert_sync,
+        pto_level=effective_pto_level,
+        **ptoas_overrides,
+    )
+    if not ptoas_output.is_file():
+        raise RuntimeError(
+            f"ptoas reported success but produced no output at {ptoas_output}"
+        )
+    if _is_elf_object(ptoas_output):
+        # ptoas produced the linkable object itself: the vpto backend, or a
+        # mixed-backend container whose fatobj link already ran inside ptoas.
+        if ptoas_output != artifacts.kernel_object:
+            os.replace(ptoas_output, artifacts.kernel_object)
+        return
+    if backend != "emitc":
+        raise RuntimeError(
+            f"ptoas wrote C++ source to {ptoas_output} instead of an ELF "
+            f"object (resolved backend={backend!r}); the module's pto.backend "
+            f"attribute selected emitc while the Python-side backend did not, "
+            f"and emitc output must be compiled with bisheng -c before the "
+            f"fat link"
+        )
+    _compile_emitc_kernel(
+        ptoas_output,
+        artifacts.kernel_object,
+        kernel_kind=module_spec.kernel_kind,
+        target_arch=module_spec.target_arch,
+    )
+
+
 def _native_build_config(module_spec):
     effective_insert_sync = _effective_insert_sync(
         mode=module_spec.mode,
@@ -230,13 +323,12 @@ def _native_build_config(module_spec):
 
 
 def _compile_native_artifacts(artifacts, module_spec, *, effective_insert_sync, effective_pto_level, ptoas_overrides):
-    _run_ptoas(
-        artifacts.mlir_path,
-        artifacts.kernel_object,
-        target_arch=module_spec.target_arch,
-        insert_sync=effective_insert_sync,
-        pto_level=effective_pto_level,
-        **ptoas_overrides,
+    _produce_kernel_object(
+        artifacts,
+        module_spec,
+        effective_insert_sync=effective_insert_sync,
+        effective_pto_level=effective_pto_level,
+        ptoas_overrides=ptoas_overrides,
     )
     launch_object = artifacts.cache_dir / "launch.o"
     _compile_launch_cpp(

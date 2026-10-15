@@ -37,6 +37,10 @@ This can be selected with `--backend emitc --target a3`.
 
 This can be selected with `--backend vpto --target a5`.
 
+### A5 emitc backend
+
+This can be selected with `--backend emitc --target a5`.
+
 ## Test matrix
 
 ### Binary elementwise
