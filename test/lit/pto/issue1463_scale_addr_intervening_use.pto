@@ -1,0 +1,101 @@
+// RUN: pto-test-opt --split-input-file --verify-diagnostics --pto-a5-normalize-tmov %s
+
+// Destination binding is observable inside nested regions as well as at top level.
+!mat = !pto.tile_buf<mat, 1x4x!pto.f8E8M0, slayout=row_major, fractal=32>
+!scale = !pto.tile_buf<scaling, 1x4x!pto.f8E8M0, slayout=row_major, fractal=32>
+!left = !pto.tile_buf<left, 1x512xf8E4M3FN, valid=1x128, blayout=col_major, slayout=row_major>
+module attributes {pto.target_arch = "a5"} {
+  func.func private @consume(!scale)
+  func.func @direct(%cond : i1) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %mat = pto.alloc_tile : !mat
+    %dst = pto.alloc_tile : !scale
+    // expected-note@+1 {{matching TMOV is here}}
+    pto.tmov ins(%mat : !mat) outs(%dst : !scale)
+    // expected-note@+1 {{intervening destination use: func.call}}
+    func.call @consume(%dst) : (!scale) -> ()
+    %src = pto.alloc_tile : !left
+    // expected-error@+1 {{cannot safely establish scaling address before matching TMOV: intervening destination use}}
+    pto.tget_scale_addr ins(%src : !left) outs(%dst : !scale)
+    return
+  }
+}
+
+// -----
+
+!mat = !pto.tile_buf<mat, 1x4x!pto.f8E8M0, slayout=row_major, fractal=32>
+!scale = !pto.tile_buf<scaling, 1x4x!pto.f8E8M0, slayout=row_major, fractal=32>
+!left = !pto.tile_buf<left, 1x512xf8E4M3FN, valid=1x128, blayout=col_major, slayout=row_major>
+module attributes {pto.target_arch = "a5"} {
+  func.func private @consume(!scale)
+  func.func @if_capture(%cond : i1) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %mat = pto.alloc_tile : !mat
+    %dst = pto.alloc_tile : !scale
+    %src = pto.alloc_tile : !left
+    // expected-note@+1 {{matching TMOV is here}}
+    pto.tmov ins(%mat : !mat) outs(%dst : !scale)
+    scf.if %cond {
+      // expected-note@+1 {{intervening destination use: func.call}}
+      func.call @consume(%dst) : (!scale) -> ()
+    }
+    // expected-error@+1 {{cannot safely establish scaling address before matching TMOV: intervening destination use}}
+    pto.tget_scale_addr ins(%src : !left) outs(%dst : !scale)
+    return
+  }
+}
+
+// -----
+
+!mat = !pto.tile_buf<mat, 1x4x!pto.f8E8M0, slayout=row_major, fractal=32>
+!scale = !pto.tile_buf<scaling, 1x4x!pto.f8E8M0, slayout=row_major, fractal=32>
+!left = !pto.tile_buf<left, 1x512xf8E4M3FN, valid=1x128, blayout=col_major, slayout=row_major>
+module attributes {pto.target_arch = "a5"} {
+  func.func private @consume(!scale)
+  func.func @for_capture(%cond : i1) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %mat = pto.alloc_tile : !mat
+    %dst = pto.alloc_tile : !scale
+    // expected-note@+1 {{matching TMOV is here}}
+    pto.tmov ins(%mat : !mat) outs(%dst : !scale)
+    scf.for %i = %c0 to %c1 step %c1 {
+      // expected-note@+1 {{intervening destination use: func.call}}
+      func.call @consume(%dst) : (!scale) -> ()
+    }
+    %src = pto.alloc_tile : !left
+    // expected-error@+1 {{cannot safely establish scaling address before matching TMOV: intervening destination use}}
+    pto.tget_scale_addr ins(%src : !left) outs(%dst : !scale)
+    return
+  }
+}
+
+// -----
+
+!mat = !pto.tile_buf<mat, 1x4x!pto.f8E8M0, slayout=row_major, fractal=32>
+!scale = !pto.tile_buf<scaling, 1x4x!pto.f8E8M0, slayout=row_major, fractal=32>
+!left = !pto.tile_buf<left, 1x512xf8E4M3FN, valid=1x128, blayout=col_major, slayout=row_major>
+module attributes {pto.target_arch = "a5"} {
+  func.func private @consume(!scale)
+  func.func @nested_else_capture(%cond : i1) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %mat = pto.alloc_tile : !mat
+    %dst = pto.alloc_tile : !scale
+    // expected-note@+1 {{matching TMOV is here}}
+    pto.tmov ins(%mat : !mat) outs(%dst : !scale)
+    scf.if %cond {
+    } else {
+      scf.for %i = %c0 to %c1 step %c1 {
+        // expected-note@+1 {{intervening destination use: func.call}}
+        func.call @consume(%dst) : (!scale) -> ()
+      }
+    }
+    %src = pto.alloc_tile : !left
+    // expected-error@+1 {{cannot safely establish scaling address before matching TMOV: intervening destination use}}
+    pto.tget_scale_addr ins(%src : !left) outs(%dst : !scale)
+    return
+  }
+}

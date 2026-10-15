@@ -1,0 +1,35 @@
+// RUN: not pto-test-opt --pto-a5-normalize-tmov --mlir-print-ir-after-failure %s 2>&1 | FileCheck %s
+// RUN: not ptoas --pto-arch=a5 --pto-level=level3 %s -o - 2>&1 | FileCheck %s --check-prefix=DIAG
+
+!mat = !pto.tile_buf<mat, 1x4x!pto.f8E8M0, slayout=row_major, fractal=32>
+!scale = !pto.tile_buf<scaling, 1x4x!pto.f8E8M0, slayout=row_major, fractal=32>
+!left = !pto.tile_buf<left, 1x512xf8E4M3FN, valid=1x128, blayout=col_major, slayout=row_major>
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<cube>} {
+  func.func private @consume(!scale)
+  func.func @blocked_binding(%cond : i1) attributes {pto.kernel} {
+    %zero = arith.constant 0 : i64
+    %mat = pto.alloc_tile addr = %zero : !mat
+    %dst = pto.alloc_tile addr = %zero : !scale
+    pto.tmov ins(%mat : !mat) outs(%dst : !scale)
+    scf.if %cond {
+      func.call @consume(%dst) : (!scale) -> ()
+    }
+    %addr = arith.constant 1024 : i64
+    %src = pto.alloc_tile addr = %addr : !left
+    pto.tget_scale_addr ins(%src : !left) outs(%dst : !scale)
+    return
+  }
+}
+
+// CHECK: IR Dump After
+// CHECK: %[[MAT:.*]] = pto.alloc_tile
+// CHECK-NEXT: %[[DST:.*]] = pto.alloc_tile
+// CHECK-NEXT: pto.tmov ins(%[[MAT]]{{.*}}outs(%[[DST]]
+// CHECK-NEXT: scf.if
+// CHECK-NEXT: call @consume(%[[DST]])
+// CHECK-NEXT: }
+// CHECK-NEXT: %[[ADDR:.*]] = arith.constant 1024
+// CHECK-NEXT: %[[SRC:.*]] = pto.alloc_tile addr = %[[ADDR]]
+// CHECK-NEXT: pto.tget_scale_addr ins(%[[SRC]]{{.*}}outs(%[[DST]]
+// CHECK: cannot safely establish scaling address before matching TMOV: intervening destination use
+// DIAG: cannot safely establish scaling address before matching TMOV: intervening destination use
