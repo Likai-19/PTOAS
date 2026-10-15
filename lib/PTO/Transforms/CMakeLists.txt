@@ -274,6 +274,10 @@ add_mlir_dialect_library(PTOTransforms
   InsertSync/RemoveSlotRedundantSync.cpp
   InsertSync/SyncEventIdAllocation.cpp
   InsertSync/SyncCodegen.cpp
+  InsertSync/UnifiedSyncModel.cpp
+  InsertSync/PTOUnifiedSync.cpp
+  InsertSync/SyncOracleExtract.cpp
+  InsertSync/SyncOracleGates.cpp
   BufidSync/BufidSyncPass.cpp
   BufidSync/BufidSyncAnalysis.cpp
   BufidSync/BufidSyncIdAlloc.cpp
@@ -362,6 +366,19 @@ if(TARGET obj.PTOTransforms)
   target_compile_options(obj.PTOTransforms PRIVATE -Wno-overloaded-virtual)
 endif()
 target_compile_options(PTOTransforms PRIVATE -Wno-overloaded-virtual)
+
+# GCC 12/13 emit a false-positive -Warray-bounds when SmallVector's inline-buffer
+# move assignment is inlined: moving the SyncModel temporary returned by
+# unified::buildSyncModel() into the member at PTOUnifiedSync.cpp triggers a bogus
+# "__builtin_memmove ... out of bounds" on the SmallVector<HiddenReservation>
+# inline storage. The access is in-bounds; GCC mis-models the small buffer. Keep
+# the warning visible but non-fatal for just this one unit, mirroring the project's
+# -Wno-error=deprecated-declarations policy for upstream/compiler churn. Clang does
+# not emit this, so scope it to GNU.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  set_source_files_properties(InsertSync/PTOUnifiedSync.cpp
+    PROPERTIES COMPILE_OPTIONS "-Wno-error=array-bounds")
+endif()
 
 if(TARGET vfsim::native_core AND TARGET obj.PTOTransforms)
   # Preserve the simulator target's compile usage requirements on the object

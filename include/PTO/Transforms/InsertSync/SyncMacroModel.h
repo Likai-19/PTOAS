@@ -13,7 +13,9 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/SmallVector.h"
+#include <cstddef>
 #include <optional>
+#include <utility>
 
 namespace mlir {
 namespace pto {
@@ -39,6 +41,9 @@ struct SyncMacroModel {
 };
 
 std::optional<SyncMacroModel> getSyncMacroModel(Operation *op);
+
+/// Padded first-to-last phase span of a macro call in SyncIR index space.
+std::optional<std::pair<unsigned, unsigned>> getSyncMacroSpan(const SyncIRs &syncIR, std::size_t firstIndex);
 
 } // namespace pto
 } // namespace mlir

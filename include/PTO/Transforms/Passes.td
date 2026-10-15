@@ -1769,4 +1769,166 @@ def VPTOMaskSimplify
   let dependentDialects = ["mlir::pto::PTODialect"];
 }
 
+def PTOCheckSyncIds : Pass<"pto-check-sync-ids", "func::FuncOp"> {
+  let summary = "Oracle gate G3: device-id legality of the emitted synchronization";
+  let description = [{
+    Read-only apart from diagnostics. Checks that every static synchronization id
+    in the function is one the target permits: intra-core event ids inside their
+    per-direction pool, honouring the reserved tail, and buffer ids inside both the
+    hardware field and the arch's exposed buffer-id capacity, which the pass receives
+    from its caller and defaults to zero. Rotating ids on `set_flag_dyn` /
+    `wait_flag_dyn` resolve at runtime and are not checked. Fails the pass on any
+    violation.
+  }];
+
+  let constructor = "mlir::pto::createPTOCheckSyncIdsPass()";
+}
+
+def PTOCheckSyncInterference : Pass<"pto-check-sync-interference", "func::FuncOp"> {
+  let summary = "Oracle gate G2: no two overlapping intervals may share a sync id";
+  let description = [{
+    Read-only apart from diagnostics. Generalizes
+    `BufidSyncIdAlloc::validateNoSamePhysicalIdNesting` from buffer ids to every
+    id class: for each id key the live intervals must be pairwise disjoint.
+    Event ids are keyed by (srcPipe, dstPipe, eventId) because event flags are
+    per-direction disjoint hardware; buffer ids are keyed by buf_id alone
+    because that pool is global. Fails the pass on any nesting, on a close
+    without an open, or on a leaked id.
+  }];
+
+  let constructor = "mlir::pto::createPTOCheckSyncInterferencePass()";
+}
+
+def PTOCheckSyncSelfCoverage
+    : Pass<"pto-check-sync-self-coverage", "func::FuncOp"> {
+  let summary = "Oracle gate G1-self: every analysed dependency must be ordered by emitted sync";
+  let description = [{
+    ABSOLUTE, not differential -- there is no reference file. Rebuilds the
+    front-end SyncIR (`PTOIRTranslator`) and calls
+    `MemoryDependentAnalyzer::DepBetween` over the resulting def/use vectors
+    directly, then asserts that every dependency it reports is ordered by the
+    emitted sync, using the transitive closure of `computeCoverage`'s edge set
+    (loop-carried dependencies are checked against carried edges at d=1).
+
+    The expected set reads none of the sync pass's decisions -- not its hazard
+    selection, mechanism choice, ids, or emitted ops -- so a green result is
+    independent of them. It is NOT a proof of correctness: pairs on mutually
+    exclusive `scf.if` arms are excluded; `PIPE_S`->`PIPE_S` pairs are excluded on
+    every arch, on compiler behaviour rather than a stated guarantee; and on A5
+    `PIPE_V`->`PIPE_V` pairs are credited to the target's intra-pipe ordering
+    guarantee. All three exclusions are counted and reported rather than dropped.
+    `InsertSyncAnalysis::IsMemInfoHasDependency`, which layers policy on top of
+    `DepBetween`. It cannot, however, catch a dependency the front-end alias
+    analysis itself misses; see SyncOracleGates.h for that limit.
+
+    Dependencies whose endpoint op is not an anchor are reported as `unmappable`
+    rather than dropped.
+  }];
+
+  let constructor = "mlir::pto::createPTOCheckSyncSelfCoveragePass()";
+}
+
+def PTODumpSyncCoverage : Pass<"pto-dump-sync-coverage", "func::FuncOp"> {
+  let summary = "Dump the happens-before edges the emitted sync induces (oracle gate G1, reference side)";
+  let description = [{
+    Read-only. Numbers every op that carries a pipe and a memory effect, then
+    emits the set of ordered anchor pairs the emitted synchronization
+    establishes, including the buffer-token ordering `rls_buf` precedes
+    `get_buf` for the same buffer id.
+  }];
+
+  let constructor = "mlir::pto::createPTODumpSyncCoveragePass()";
+}
+
+def PTOCheckSyncCoverage : Pass<"pto-check-sync-coverage", "func::FuncOp"> {
+  let summary = "Oracle gate G1: the new sync mode must establish every ordering InsertSync does";
+  let description = [{
+    Differential. Reads a reference profile produced by `pto-dump-sync-coverage`
+    on an InsertSync run and asserts, per function, that the current run's
+    happens-before edge set is a superset of the reference's. A differing anchor
+    signature, or a missing reference profile, is a violation. Fails the pass on
+    any missing ordering.
+  }];
+
+  let constructor = "mlir::pto::createPTOCheckSyncCoveragePass(\"\")";
+}
+
+def PTODumpSyncCounts : Pass<"pto-dump-sync-counts", "func::FuncOp"> {
+  let summary = "Dump kernel-body sync-op counts (oracle gate G4, reference side)";
+  let description = [{
+    Read-only. Emits one `[sync-count]` line per function counting the emitted
+    `pto.set_flag` / `pto.wait_flag` / `pto.get_buf` / `pto.rls_buf` /
+    `pto.barrier` ops in the function body. These are IR ops, so the emitted
+    `ptoas_auto_sync_tail` C++ boilerplate cannot contaminate the count.
+  }];
+
+  let constructor = "mlir::pto::createPTODumpSyncCountsPass()";
+}
+
+def PTOCheckSyncCountFloor : Pass<"pto-check-sync-count-floor", "func::FuncOp"> {
+  let summary = "Oracle gate G4: the new sync mode must not synchronize more than InsertSync";
+  let description = [{
+    Differential. Reads a reference profile produced by `pto-dump-sync-counts`
+    on an InsertSync run and asserts, per function, that the current run does not
+    increase (a) the total sync-op count, (b) the barrier count, or (c) the
+    PIPE_ALL barrier count. A missing reference profile is a violation. Fails the
+    pass on any regression.
+  }];
+
+  let constructor = "mlir::pto::createPTOCheckSyncCountFloorPass(\"\")";
+}
+
+def PTOUnifiedSync : Pass<"pto-unified-sync", "func::FuncOp"> {
+  let summary = "Unified intra-core sync allocator (event-ID + buffer-ID + barrier)";
+  let description = [{
+    Allocates intra-core synchronization for one function across all three
+    mechanisms from a single model, instead of committing to a mechanism before
+    the cost of that choice is known: event ids, drawn from a pool per
+    (src, dst) pipe direction; buffer-id tokens, drawn from one pool of K and
+    available only where K is non-zero; and PIPE_ALL barriers, the fallback that
+    always succeeds and orders everything.
+
+    The dependence analysis is shared with pto-insert-sync rather than
+    reimplemented, so both passes see the same program and the same hazards.
+    Only the assignment of mechanisms and ids differs. Hazards whose direction
+    would overflow its event pool are routed to buffer-id tokens where the buffer
+    is eligible; what remains is coloured into the event pools by live interval,
+    and anything that still does not fit spills to a barrier. A hazard always
+    ends on some mechanism.
+
+    Functions that already contain explicit synchronization are left untouched.
+
+    Macro ops are supported. They lower to library calls that consume fixed
+    internal event ids which no operation in the IR names, so those (direction, id)
+    pairs are reserved over the call's span before any id is allocated; an id
+    already taken is never offered. A gate checks the result on every run, since a
+    collision with a library-internal id is otherwise invisible.
+  }];
+
+  let constructor = "mlir::pto::createPTOUnifiedSyncPass()";
+
+  let dependentDialects = [
+    "mlir::pto::PTODialect",
+    "mlir::memref::MemRefDialect",
+    "mlir::arith::ArithDialect"
+  ];
+}
+
+def PTODumpSyncExtract : Pass<"pto-dump-sync-extract", "func::FuncOp"> {
+  let summary = "Dump the oracle's structured extraction of emitted sync ops";
+  let description = [{
+    Read-only. Walks the emitted `pto.set_flag` / `pto.wait_flag` /
+    `pto.get_buf` / `pto.rls_buf` / `pto.barrier` ops and renders one record per
+    line (pipes, event_id / buf_id, program order). This is the shared IR-view
+    surface the differential oracle gates (coverage superset, sync-count floor)
+    read from each compiler run.
+  }];
+
+  let constructor = "mlir::pto::createPTODumpSyncExtractPass()";
+
+  let dependentDialects = [
+    "mlir::pto::PTODialect"
+  ];
+}
+
 #endif // MLIR_DIALECT_PTO_PASSES

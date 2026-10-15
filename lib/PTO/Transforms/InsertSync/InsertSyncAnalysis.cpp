@@ -11,11 +11,14 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-#include <algorithm>
-#include <limits>
-#include <memory>
-#include <optional>
-#include <utility>
+#include "PTO/Transforms/InsertSync/InsertSyncAnalysis.h"
+#include "PTO/IR/PTO.h"
+#include "PTO/IR/PTOMultiBuffer.h"
+#include "PTO/IR/PTOTypeUtils.h"
+#include "PTO/Support/CodeConstants.h"
+#include "PTO/Transforms/InsertSync/SyncCommon.h"
+#include "PTO/Transforms/SlotAffineAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
@@ -25,13 +28,11 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "PTO/IR/PTO.h"
-#include "PTO/IR/PTOMultiBuffer.h"
-#include "PTO/IR/PTOTypeUtils.h"
-#include "PTO/Support/CodeConstants.h"
-#include "PTO/Transforms/InsertSync/InsertSyncAnalysis.h"
-#include "PTO/Transforms/InsertSync/SyncCommon.h"
-#include "PTO/Transforms/SlotAffineAnalysis.h"
+#include <algorithm>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <utility>
 
 #include "PTO/IR/PTO.h"
 #include "PTO/IR/PTOMultiBuffer.h"
@@ -512,6 +513,347 @@ void InsertSyncAnalysis::InsertSync(
   MemAnalyze(nowCompound, frontCompound, syncRecordList, forEndIndex);
 }
 
+//===----------------------------------------------------------------------===//
+// Affine-disjoint carried accesses
+//===----------------------------------------------------------------------===//
+//
+// An access has no loop-carried dependence on itself when it moves far enough per
+// iteration that the memory two iterations touch never meets. This proves that for
+// a `pto.partition_view` whose offset is affine in the induction variable of the loop
+// whose back edge carries the dependence, which is the shape a store walking a tensor
+// takes.
+//
+// Every condition is cumulative and the default is to keep the sync: each helper
+// refuses the moment an input is not a compile-time constant.
+
+/// The `scf.for` whose back edge `forEndIndex` denotes, or null.
+///
+/// THE INNERMOST ENCLOSING LOOP IS THE WRONG ANSWER, and silently so. A carried
+/// dependence is analysed once per back edge, and for an access inside a nest the
+/// outer back edge and the inner one are different questions: inner iterations can
+/// be disjoint while the outer loop restarts and revisits the same addresses. Proving
+/// disjointness against the innermost enclosing loop therefore answers the inner
+/// question and applies the result to whichever edge is under analysis.
+///
+/// `forEndIndex` indexes `syncIR_`, and its element is the loop's LOOP_END marker.
+/// `UpdateForOpInfo` records the op on both markers, so the loop is recovered exactly
+/// rather than inferred. Note the index refers to `syncIR_` even while a back edge is
+/// being analysed over the copied body slice, so it must not be resolved against the
+/// SyncIRs the current traversal happens to walk.
+///
+/// Null on every path that does not resolve to an `scf.for`: an out-of-range index, an
+/// element that is not a loop, a loop marker with no op, and an `scf.while`, which
+/// reaches the same element type through `UpdateWhileOpInfo`. Callers must treat null
+/// as "not proven".
+static scf::ForOp carryingForOf(const SyncIRs &syncIR, const std::optional<unsigned> &forEndIndex) {
+  if (!forEndIndex.has_value() || forEndIndex.value() >= syncIR.size()) {
+    return {};
+  }
+  const auto *loopEl = dyn_cast_or_null<LoopInstanceElement>(syncIR[forEndIndex.value()].get());
+  if (!loopEl || !loopEl->elementOp) {
+    return {};
+  }
+  return dyn_cast<scf::ForOp>(loopEl->elementOp);
+}
+
+/// `v` as a compile-time constant index, or nullopt.
+static std::optional<int64_t> constantIndexOf(Value v) {
+  APInt value;
+  if (!v || !matchPattern(v, m_ConstantInt(&value))) {
+    return std::nullopt;
+  }
+  return value.getSExtValue();
+}
+
+/// How far `v` moves per iteration of `forOp`: the coefficient of its induction
+/// variable, or nullopt when that is not a compile-time constant.
+///
+/// `v` qualifies when it is a sum of terms that are each either loop-invariant or a
+/// constant multiple of the induction variable. A load, `iv * iv`, a select, or a
+/// non-constant scale on the induction variable all yield nullopt.
+///
+/// Loop-invariance, not constant-ness, is the base case that matters: offsets are
+/// built from the block index and from enclosing loops' induction variables, none of
+/// which folds to a constant, but a value defined outside this loop's body cannot
+/// change between its iterations.
+static std::optional<int64_t> movementPerIteration(Value v, scf::ForOp forOp, unsigned depth = 0);
+
+static std::optional<int64_t> scaledMovement(arith::MulIOp mul, scf::ForOp forOp, unsigned depth) {
+  // Only a constant scale is usable: `iv * n` with n loop-invariant but unknown
+  // moves by an unknown amount, which must refuse.
+  if (auto c = constantIndexOf(mul.getRhs())) {
+    auto l = movementPerIteration(mul.getLhs(), forOp, depth + 1);
+    if (!l) {
+      return std::nullopt;
+    }
+    int64_t result;
+    if (__builtin_mul_overflow(*l, *c, &result)) {
+      return std::nullopt;
+    }
+    return result;
+  }
+  if (auto c = constantIndexOf(mul.getLhs())) {
+    auto r = movementPerIteration(mul.getRhs(), forOp, depth + 1);
+    if (!r) {
+      return std::nullopt;
+    }
+    int64_t result;
+    if (__builtin_mul_overflow(*r, *c, &result)) {
+      return std::nullopt;
+    }
+    return result;
+  }
+  return std::nullopt;
+}
+
+static std::optional<int64_t> movementPerIteration(Value v, scf::ForOp forOp, unsigned depth) {
+  if (!v || !forOp || depth > 8) {
+    return std::nullopt;
+  }
+  if (v == forOp.getInductionVar()) {
+    return 1;
+  }
+  if (forOp.isDefinedOutsideOfLoop(v) || constantIndexOf(v)) {
+    return 0;
+  }
+  if (auto add = v.getDefiningOp<arith::AddIOp>()) {
+    auto l = movementPerIteration(add.getLhs(), forOp, depth + 1);
+    auto r = movementPerIteration(add.getRhs(), forOp, depth + 1);
+    if (!l || !r) {
+      return std::nullopt;
+    }
+    int64_t result;
+    if (__builtin_add_overflow(*l, *r, &result)) {
+      return std::nullopt;
+    }
+    return result;
+  }
+  if (auto sub = v.getDefiningOp<arith::SubIOp>()) {
+    auto l = movementPerIteration(sub.getLhs(), forOp, depth + 1);
+    auto r = movementPerIteration(sub.getRhs(), forOp, depth + 1);
+    if (!l || !r) {
+      return std::nullopt;
+    }
+    int64_t result;
+    if (__builtin_sub_overflow(*l, *r, &result)) {
+      return std::nullopt;
+    }
+    return result;
+  }
+  if (auto mul = v.getDefiningOp<arith::MulIOp>()) {
+    return scaledMovement(mul, forOp, depth);
+  }
+  return std::nullopt;
+}
+
+/// The strides of the tensor view a `pto.partition_view` reads, as compile-time
+/// constants, or nullopt when the view is not a `pto.make_tensor_view` with
+/// constant strides of the expected rank.
+static std::optional<SmallVector<int64_t>> viewStrides(Value source, unsigned rank) {
+  auto make = source.getDefiningOp<pto::MakeTensorViewOp>();
+  if (!make || make.getStrides().size() != rank) {
+    return std::nullopt;
+  }
+  SmallVector<int64_t> strides;
+  for (Value stride : make.getStrides()) {
+    auto c = constantIndexOf(stride);
+    if (!c) {
+      return std::nullopt;
+    }
+    strides.push_back(*c);
+  }
+  return strides;
+}
+
+/// Whether the base pointer the `pto.partition_view` ultimately reads is invariant
+/// across the carrying loop.
+///
+/// The disjointness proof below tracks only how the `partition_view`'s OFFSETS move
+/// per iteration, scaled by the view strides. It silently assumes the underlying
+/// `pto.make_tensor_view` base pointer is fixed. If that pointer instead moves with
+/// the induction variable -- e.g. `moving = pto.addptr base, -i*stride` feeding the
+/// view while the offset advances by `+i*stride` -- the two movements cancel and
+/// every iteration lands on the same addresses, yet the offset-only math still
+/// reports a non-zero shift. Dropping the dependence then deletes a real
+/// cross-iteration hazard. Guard against it conservatively: require the base pointer
+/// to be defined outside the loop. When it cannot be proven invariant, the caller
+/// keeps the dependence. (Supporting a dynamic base would mean folding the pointer's
+/// own per-iteration movement into the address-shift proof, which this does not do.)
+static bool viewBaseInvariant(Value source, scf::ForOp forOp) {
+  auto make = source.getDefiningOp<pto::MakeTensorViewOp>();
+  if (!make) {
+    return false;
+  }
+  return forOp.isDefinedOutsideOfLoop(make.getPtr());
+}
+
+/// Locate the single offset dimension that advances with this loop.
+static std::optional<std::pair<unsigned, int64_t>> varyingOffset(ValueRange offsets, scf::ForOp forOp) {
+  unsigned rank = offsets.size();
+  std::optional<unsigned> varyingDim;
+  int64_t coeff = 0;
+  for (unsigned d = 0; d < rank; ++d) {
+    auto c = movementPerIteration(offsets[d], forOp);
+    if (!c) {
+      return std::nullopt; // offset not affine in the induction variable
+    }
+    if (*c == 0) {
+      continue; // affine but loop-invariant
+    }
+    if (varyingDim) {
+      return std::nullopt; // two dimensions moving at once: not modelled
+    }
+    varyingDim = d;
+    coeff = *c;
+  }
+  if (!varyingDim) {
+    return std::nullopt; // nothing moves: every iteration hits the same region
+  }
+  return std::make_pair(*varyingDim, coeff);
+}
+
+static constexpr int64_t kMaxViewFactor = 1LL << 30;
+
+static bool boundedViewFactor(int64_t v) { return v > -kMaxViewFactor && v < kMaxViewFactor; }
+
+static std::optional<int64_t> viewAddressWindow(ValueRange sizes, llvm::ArrayRef<int64_t> strides) {
+  unsigned rank = sizes.size();
+  // Bound each factor and the accumulated address window before using it as proof.
+  int64_t window = 0;
+  for (unsigned d = 0; d < rank; ++d) {
+    auto size = constantIndexOf(sizes[d]);
+    if (!size || *size <= 0) {
+      return std::nullopt;
+    }
+    int64_t stride = strides[d];
+    if (!boundedViewFactor(*size) || !boundedViewFactor(stride)) {
+      return std::nullopt;
+    }
+    window += (*size - 1) * std::abs(stride);
+    if (!boundedViewFactor(window)) {
+      return std::nullopt;
+    }
+  }
+
+  return window;
+}
+
+/// Do two consecutive iterations of `view` touch disjoint memory?
+///
+/// Requires, cumulatively: a constant loop step; exactly one dimension whose offset
+/// varies with the induction variable, with a compile-time constant coefficient, and
+/// every other offset loop-invariant; constant sizes in every dimension; constant
+/// view strides; a base pointer that does not move with the loop; and the separation
+/// itself.
+///
+/// The separation is proven in ADDRESS space, not index space. Disjoint index ranges
+/// imply disjoint addresses only if the layout maps distinct index tuples to
+/// distinct addresses, which a strided view does not promise: two dimensions may
+/// share a stride, and a stride may be zero. So the footprint is bounded directly.
+/// One iteration touches addresses within `window` of its base, and the next
+/// iteration's base sits `shift` away, where a `pto.partition_view` selects a
+/// contiguous box -- it carries offsets and sizes and no strides, so its step within
+/// each dimension is one by construction and the view stride alone gives the
+/// address step. Strictly greater means the two windows cannot overlap whatever the
+/// layout does, and a zero stride on the varying dimension makes `shift` zero, so it
+/// refuses without needing a special case.
+///
+/// The bound is tight rather than slack: an access that walks a tensor with no gap
+/// between iterations has `shift` exactly one greater than `window`, which is the
+/// intended reading -- adjacent is disjoint.
+static bool partitionViewIterationsDisjoint(pto::PartitionViewOp view, scf::ForOp forOp) {
+  if (!view || !forOp) {
+    return false;
+  }
+
+  auto step = constantIndexOf(forOp.getStep());
+  if (!step || *step == 0) {
+    return false;
+  }
+
+  ValueRange offsets = view.getOffsets();
+  ValueRange sizes = view.getSizes();
+  unsigned rank = offsets.size();
+  if (rank == 0 || sizes.size() != rank) {
+    return false;
+  }
+
+  std::optional<SmallVector<int64_t>> strides = viewStrides(view.getSource(), rank);
+  if (!strides) {
+    return false;
+  }
+
+  // The offset math below assumes a fixed base; a base that moves with the loop can
+  // cancel the offset movement and alias the exact same addresses every iteration.
+  if (!viewBaseInvariant(view.getSource(), forOp)) {
+    return false;
+  }
+
+  auto varying = varyingOffset(offsets, forOp);
+  auto window = viewAddressWindow(sizes, *strides);
+  if (!varying || !window) {
+    return false;
+  }
+
+  int64_t indexDelta;
+  int64_t shift;
+  if (__builtin_mul_overflow(varying->second, *step, &indexDelta) ||
+      __builtin_mul_overflow(indexDelta, (*strides)[varying->first], &shift)) {
+    return false;
+  }
+  if (!boundedViewFactor(indexDelta) || !boundedViewFactor(shift)) {
+    return false;
+  }
+  return std::abs(shift) > *window;
+}
+
+/// The carried dependence `pair` claims between `element` and its own next execution
+/// does not exist, because both sides are the same `pto.partition_view` and
+/// consecutive iterations of it touch disjoint memory.
+///
+/// Scoped to a self pair: the general case of two different accesses proven never to
+/// meet at any iteration distance needs a pairwise comparison this does not attempt.
+///
+/// The multi-address refusal below is a precondition rather than a discriminator.
+/// A `pto.partition_view` source is constrained to `TensorViewType`; more than one
+/// base address arises only from a multi-tile argument or `pto.subview`, neither of
+/// which can inhabit that type.
+static bool isCarriedSelfDepAffineDisjoint(const CompoundInstanceElement *nowCompound,
+                                           const CompoundInstanceElement *frontCompound,
+                                           const std::pair<const BaseMemInfo *, const BaseMemInfo *> &pair,
+                                           scf::ForOp carryingFor) {
+  if (nowCompound != frontCompound || !nowCompound) {
+    return false;
+  }
+  if (!pair.first || !pair.second || !(*pair.first == *pair.second)) {
+    return false;
+  }
+  if (pair.first->baseAddresses.size() > 1 || pair.second->baseAddresses.size() > 1) {
+    return false;
+  }
+
+  // The loop under analysis, not the innermost one enclosing the access. Null means
+  // the back edge did not resolve to an `scf.for`, which is never a proof of
+  // disjointness.
+  if (!carryingFor) {
+    return false;
+  }
+
+  auto viewOf = [](const BaseMemInfo *mi) -> pto::PartitionViewOp {
+    if (!mi || !mi->baseBuffer) {
+      return {};
+    }
+    return mi->baseBuffer.getDefiningOp<pto::PartitionViewOp>();
+  };
+  pto::PartitionViewOp a = viewOf(pair.first);
+  pto::PartitionViewOp b = viewOf(pair.second);
+  if (!a || a != b) {
+    return false;
+  }
+
+  return partitionViewIterationsDisjoint(a, carryingFor);
+}
+
 static bool isOutsideLoops(Operation *op) {
   for (Operation *parent = op; parent; parent = parent->getParentOp()) {
     if (isa<LoopLikeOpInterface>(parent)) {
@@ -566,8 +908,9 @@ void InsertSyncAnalysis::MemAnalyze(
 
   // Same-iter (forward) deps: drop pairs that the affine analysis proves
   // touch disjoint slots in every iteration of the multi-buffer loop.
-  // Back-edge deps stay untouched -- they still need per-slot syncing
-  // through the dyn-event-id pipeline.
+  // THIS drop never looks at back-edge deps: a rotating slot set still needs
+  // per-slot syncing through the dyn-event-id pipeline, so a slot-disjointness
+  // argument does not transfer to the back edge.
   if (!forEndIndex.has_value()) {
     // Subviews still use a single conservative memory range on backedges.
     // Pruning their forward edges inside a loop would change event priming
@@ -581,6 +924,20 @@ void InsertSyncAnalysis::MemAnalyze(
     };
     depVec.erase(std::remove_if(depVec.begin(), depVec.end(), isDroppable),
                  depVec.end());
+    if (depVec.empty()) {
+      return;
+    }
+  }
+
+  // Carried deps whose two iterations provably touch disjoint memory. Kept separate
+  // from the forward drop above because this case only arrives on the back-edge pass,
+  // which the forward drop deliberately does not look at.
+  if (forEndIndex.has_value()) {
+    scf::ForOp carryingFor = carryingForOf(syncIR_, forEndIndex);
+    auto isDroppableCarried = [&](const std::pair<const BaseMemInfo *, const BaseMemInfo *> &pair) {
+      return isCarriedSelfDepAffineDisjoint(nowCompound, frontCompound, pair, carryingFor);
+    };
+    depVec.erase(std::remove_if(depVec.begin(), depVec.end(), isDroppableCarried), depVec.end());
     if (depVec.empty()) {
       return;
     }
@@ -797,6 +1154,22 @@ void InsertSyncAnalysis::InsertCrossPipeEventSync(
   SmallVector<Value> depRoots = GetMemInfoBuffers(depBaseMemInfosVec);
   setOp->depRootBuffers = depRoots;
   waitOp->depRootBuffers = depRoots;
+  // Keep the BaseMemInfo objects too, not just their roots. The root is the
+  // root ALLOCATION and is far coarser than a buffer -- many tiles share one --
+  // so a consumer that needs to know *which tile* this dependency is on cannot
+  // recover it from `depRoots`. Both halves get the same vector, exactly as
+  // the roots do.
+  SmallVector<const BaseMemInfo *> depMemInfos;
+  for (const auto &memInfoPair : depBaseMemInfosVec) {
+    if (memInfoPair.first) {
+      depMemInfos.push_back(memInfoPair.first);
+    }
+    if (memInfoPair.second) {
+      depMemInfos.push_back(memInfoPair.second);
+    }
+  }
+  setOp->depMemInfos = depMemInfos;
+  waitOp->depMemInfos = depMemInfos;
   setOp->SetDepSyncIRIndex(frontCompound->GetIndex());
   waitOp->SetDepSyncIRIndex(frontCompound->GetIndex());
 

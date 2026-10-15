@@ -448,3 +448,33 @@ std::optional<SyncMacroModel> mlir::pto::getSyncMacroModel(Operation *op) {
   }
   return std::nullopt;
 }
+
+std::optional<std::pair<unsigned, unsigned>> mlir::pto::getSyncMacroSpan(const SyncIRs &syncIR,
+                                                           std::size_t firstIndex) {
+  if (firstIndex >= syncIR.size()) {
+    return std::nullopt;
+  }
+  auto *first = dyn_cast<CompoundInstanceElement>(syncIR[firstIndex].get());
+  if (!first || !first->elementOp) {
+    return std::nullopt;
+  }
+  unsigned end = first->GetIndex() + 1;
+  for (size_t j = firstIndex + 1; j < syncIR.size(); ++j) {
+    auto *other = dyn_cast<pto::CompoundInstanceElement>(syncIR[j].get());
+    if (!other || other->elementOp != first->elementOp) {
+      continue;
+    }
+    end = other->GetIndex();
+  }
+  unsigned begin = first->GetIndex();
+  if (begin > 0) {
+    --begin;
+  }
+  if (end + 1 < syncIR.size()) {
+    ++end;
+  }
+  if (begin >= end) {
+    return std::nullopt;
+  }
+  return std::make_pair(begin, end);
+}

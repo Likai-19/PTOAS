@@ -1188,18 +1188,21 @@ static LogicalResult validateTAssignConfiguration(ModuleOp module,
                     "disabled.\n";
     return failure();
   }
-  const int enabledAutoSyncModes =
-      (enableInsertSync ? 1 : 0) + (enableBufidSync ? 1 : 0) +
-      (enableInjectBarrierAllSync ? 1 : 0);
+  const int enabledAutoSyncModes = (enableInsertSync ? 1 : 0) + (enableUnifiedSync ? 1 : 0) +
+                                   (enableBufidSync ? 1 : 0) + (enableInjectBarrierAllSync ? 1 : 0);
   if (enabledAutoSyncModes > 1) {
     llvm::errs() << "Error: --enable-insert-sync, --enable-bufid_sync, "
-                    "and --enable-inject-barrier-all-sync are mutually "
+                    "--enable-unified-sync, and --enable-inject-barrier-all-sync are mutually "
                     "exclusive.\n";
     return failure();
   }
   if (hasTAssign && enableInjectBarrierAllSync) {
     llvm::errs() << "Error: pto.tassign requires "
                     "--enable-inject-barrier-all-sync to be disabled.\n";
+    return failure();
+  }
+  if (hasTAssign && enableUnifiedSync) {
+    llvm::errs() << "Error: pto.tassign requires --enable-unified-sync to be disabled.\n";
     return failure();
   }
   if (hasTAssign && enableBufidSync) {
@@ -1358,16 +1361,18 @@ static LogicalResult appendPlanMemoryPasses(PassManager &pm,
 /// BufidSync is A5-only get_buf/rls_buf synchronization. Sync
 /// runs BEFORE PTOResolveBufferSelect so it sees per-use `pto.multi_tile_get`
 /// operations and keeps their slot identity for alias and event-id analysis.
-static void appendAutoSyncPasses(PassManager &pm) {
-  if (enableInsertSync) {
+static void appendAutoSyncPasses(PassManager &pm, StringRef arch) {
+  if (enableUnifiedSync) {
+    pm.addNestedPass<func::FuncOp>(pto::createPTOUnifiedSyncPass(arch == "a5" ? 32u : 0u, enableUnifiedSyncDebug,
+                                                                 unifiedSyncForceMechanism, checkAddrReuseWar));
+  } else if (enableInsertSync) {
     if (emitMlirIR) {
       pm.addPass(std::make_unique<SerialAutoSyncPass>(
           SerialAutoSyncPass::Mode::InsertSync, false));
     } else {
       pm.addNestedPass<func::FuncOp>(pto::createPTOInsertSyncPass());
     }
-  }
-  else if (enableBufidSync) {
+  } else if (enableBufidSync) {
     if (emitMlirIR) {
       pm.addPass(std::make_unique<SerialAutoSyncPass>(
           SerialAutoSyncPass::Mode::Bufid, enableBufidSyncDebug));
@@ -1384,6 +1389,35 @@ static void appendAutoSyncPasses(PassManager &pm) {
       pm.addNestedPass<func::FuncOp>(
           pto::createPTOInjectBarrierAllSyncPass());
     }
+  }
+}
+
+// Appends read-only synchronization gates and optional reports.
+static void appendSyncOraclePasses(PassManager &pm, const CompilePipelineState &state) {
+  if (checkSyncIds) {
+    pm.addNestedPass<mlir::func::FuncOp>(
+        pto::createPTOCheckSyncIdsPass(state.arch == "a5" ? 32u : 0u, checkSyncIdsInjectFault));
+  }
+  if (checkSyncInterference) {
+    pm.addNestedPass<mlir::func::FuncOp>(pto::createPTOCheckSyncInterferencePass(checkSyncInterferenceInjectFault));
+  }
+  if (checkSyncSelfCoverage) {
+    pm.addNestedPass<mlir::func::FuncOp>(pto::createPTOCheckSyncSelfCoveragePass());
+  }
+  if (dumpSyncExtract) {
+    pm.addNestedPass<mlir::func::FuncOp>(pto::createPTODumpSyncExtractPass());
+  }
+  if (dumpSyncCoverage) {
+    pm.addNestedPass<mlir::func::FuncOp>(pto::createPTODumpSyncCoveragePass());
+  }
+  if (!checkSyncCoverage.empty()) {
+    pm.addNestedPass<mlir::func::FuncOp>(pto::createPTOCheckSyncCoveragePass(checkSyncCoverage));
+  }
+  if (dumpSyncCounts) {
+    pm.addNestedPass<mlir::func::FuncOp>(pto::createPTODumpSyncCountsPass());
+  }
+  if (!checkSyncCountFloor.empty()) {
+    pm.addNestedPass<mlir::func::FuncOp>(pto::createPTOCheckSyncCountFloorPass(checkSyncCountFloor));
   }
 }
 
@@ -1441,7 +1475,11 @@ static LogicalResult populateMainLoweringPasses(PassManager &pm,
   pm.addPass(pto::createPTOResolveReservedBuffersPass());
   pm.addNestedPass<mlir::func::FuncOp>(pto::createPTORemoveIdentityTMovPass());
 
-  appendAutoSyncPasses(pm);
+  appendAutoSyncPasses(pm, state.arch);
+
+  // Oracle gates. Read-only apart from diagnostics, and each fails the pipeline on
+  // a violation rather than reporting and continuing.
+  appendSyncOraclePasses(pm, state);
 
   // Materialize each `pto.multi_tile_get` as an addressed `pto.alloc_tile`;
   // dynamic selections use an `arith.select` chain over planned addresses.

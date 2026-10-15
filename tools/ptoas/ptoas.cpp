@@ -142,6 +142,100 @@ llvm::cl::opt<bool> vptoSchedulerRemat(
         "(defaults to on with the A5 scheduler; use =false to disable)"),
     llvm::cl::init(false));
 
+llvm::cl::opt<bool> dumpSyncExtract("dump-sync-extract",
+                                    llvm::cl::desc("Render the structured extraction of whatever sync the selected "
+                                                   "mode emitted. Read-only"),
+                                    llvm::cl::init(false));
+
+llvm::cl::opt<bool> enableUnifiedSync("enable-unified-sync",
+                                      llvm::cl::desc("Enable the unified intra-core sync allocator: event ids, buffer "
+                                                     "ids and barriers as three resource classes over one "
+                                                     "interval-colouring problem"),
+                                      llvm::cl::init(false));
+
+llvm::cl::opt<bool>
+    enableUnifiedSyncDebug("enable-unified-sync-debug",
+                           llvm::cl::desc("Print the unified allocator's model, routing, colouring and "
+                                          "emission reports to stderr. Off by default; gate violations are "
+                                          "reported either way"),
+                           llvm::cl::init(false));
+
+llvm::cl::opt<std::string>
+    unifiedSyncForceMechanism("unified-sync-force-mechanism",
+                              llvm::cl::desc("Test-only: route hazard group 0 off its TYPE-derived mechanism "
+                                             "(bufid | bufid-spill), so the buffer-id path and the "
+                                             "resource-exhaustion downgrade can be exercised on a kernel the "
+                                             "router would otherwise leave alone"),
+                              llvm::cl::init(""), llvm::cl::Hidden);
+
+llvm::cl::opt<bool> checkAddrReuseWar("check-addr-reuse-war",
+                                      llvm::cl::desc("List the synchronization orderings whose two endpoints are "
+                                                     "distinct tile allocations placed at the same physical "
+                                                     "address in one scope. Reports; never fails"),
+                                      llvm::cl::init(false));
+
+llvm::cl::opt<bool> dumpSyncCoverage("dump-sync-coverage",
+                                     llvm::cl::desc("Write the happens-before edges this run's emitted sync induces, "
+                                                    "as the reference profile for --check-sync-coverage"),
+                                     llvm::cl::init(false));
+
+llvm::cl::opt<std::string>
+    checkSyncCoverage("check-sync-coverage",
+                      llvm::cl::desc("Run oracle gate G1: assert this run establishes every ordering "
+                                     "in the given file (a prior --dump-sync-coverage run). "
+                                     "DIFFERENTIAL -- its strength is bounded by that reference"),
+                      llvm::cl::init(""), llvm::cl::value_desc("profile-file"));
+
+llvm::cl::opt<bool> dumpSyncCounts("dump-sync-counts",
+                                   llvm::cl::desc("Write this run's kernel-body sync-op counts, one line per "
+                                                  "function, as the reference for --check-sync-count-floor"),
+                                   llvm::cl::init(false));
+
+llvm::cl::opt<std::string>
+    checkSyncCountFloor("check-sync-count-floor",
+                        llvm::cl::desc("Run oracle gate G4: assert this run does not synchronize more "
+                                       "than the given reference profile, per class (total, barriers, "
+                                       "PIPE_ALL barriers). DIFFERENTIAL"),
+                        llvm::cl::init(""), llvm::cl::value_desc("profile-file"));
+
+llvm::cl::opt<bool> checkSyncIds("check-sync-ids",
+                                 llvm::cl::desc("Run oracle gate G3: verify every static emitted sync id is "
+                                                "legal for its direction, op and arch. Rotating set_flag_dyn / "
+                                                "wait_flag_dyn ids resolve at runtime and are not checked "
+                                                "(fails on violation)"),
+                                 llvm::cl::init(false));
+
+llvm::cl::opt<std::string>
+    checkSyncIdsInjectFault("check-sync-ids-inject-fault",
+                            llvm::cl::desc("Gate self-test: feed G3 a synthetic illegal id "
+                                           "(event-oor | block-all-stomp | bufid-oor). Appended to the "
+                                           "gate's own record list after extraction, never to the IR, "
+                                           "because an out-of-range event id is unrepresentable in IR"),
+                            llvm::cl::init(""), llvm::cl::Hidden);
+
+llvm::cl::opt<std::string>
+    checkSyncInterferenceInjectFault("check-sync-interference-inject-fault",
+                                     llvm::cl::desc("Gate self-test: judge a synthetic pre-codegen shape "
+                                                    "(comp-conflict | multi-id-conflict) on its own record list. "
+                                                    "Never added to the IR, so it cannot reach codegen"),
+                                     llvm::cl::init(""), llvm::cl::Hidden);
+
+llvm::cl::opt<bool> checkSyncInterference("check-sync-interference",
+                                          llvm::cl::desc("Run oracle gate G2: assert no two overlapping intervals "
+                                                         "share a sync id (fails on nesting / leak)"),
+                                          llvm::cl::init(false));
+
+llvm::cl::opt<bool>
+    checkSyncSelfCoverage("check-sync-self-coverage",
+                          llvm::cl::desc("Run oracle gate G1-self: assert every dependency the "
+                                         "front-end analysis (DepBetween) reports is ordered by the "
+                                         "emitted sync, except pairs on mutually exclusive scf.if arms, "
+                                         "PIPE_S->PIPE_S pairs on every arch, and, on A5, "
+                                         "PIPE_V->PIPE_V pairs the target orders itself; all three "
+                                         "exclusions are counted and reported. ABSOLUTE -- no "
+                                         "reference profile and nothing inherited from the sync pass"),
+                          llvm::cl::init(false));
+
 llvm::cl::opt<bool> enableInsertSync("enable-insert-sync",
                                             llvm::cl::desc("Enable automatic synchronization insertion pass"),
                                             llvm::cl::init(false));
