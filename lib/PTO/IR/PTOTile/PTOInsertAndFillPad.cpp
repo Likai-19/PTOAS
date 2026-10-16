@@ -230,7 +230,7 @@ static bool isSupportedGatherElemTypeA5Index(Type ty) {
   if (isPTOFloat8Type(ty)) {
     return true;
   }
-  if (ty.isF16() || ty.isF32()) {
+  if (ty.isF16() || ty.isBF16() || ty.isF32()) {
     return true;
   }
   if (auto it = dyn_cast<IntegerType>(ty)) {

@@ -140,7 +140,7 @@ static LogicalResult verifyTGatherIndexTypes(TGatherOp op, bool allow16BitIndice
     if (!isSupportedGatherElemTypeA5Index(srcElem) ||
         !isSupportedGatherElemTypeA5Index(dstElem)) {
       return op.emitOpError(
-          "expects A5 gather src/dst element type to be i8/i16/i32/f16/f32");
+          "expects A5 gather src/dst element type to be i8/i16/i32/f16/bf16/f32");
     }
   } else if (!isSupportedGatherElemTypeA2A3(srcElem) ||
              !isSupportedGatherElemTypeA2A3(dstElem)) {
