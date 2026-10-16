@@ -1,0 +1,92 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+
+// RUN: pto-test-opt %s -split-input-file -pto-validate-vmi-ir -verify-diagnostics
+
+module {
+  func.func @surface_in_struct(
+      %x: !llvm.struct<(!pto.vmi.vreg<128xf32>)>,
+      %mask: !pto.ptr<!pto.vmi.mask<128xpred>, ub>) {
+    return
+  }
+}
+
+// -----
+
+module {
+  func.func @surface_in_ptr(
+      %x: !pto.ptr<!pto.vmi.vreg<128xf32>, ub>,
+      %mask: !pto.ptr<!pto.vmi.mask<128xpred>, ub>) {
+    return
+  }
+}
+
+// -----
+
+module {
+  func.func @surface_in_tuple(
+      %x: tuple<!pto.ptr<!pto.vmi.vreg<128xf32>, ub>>,
+      %mask: !pto.ptr<!pto.vmi.mask<128xpred>, ub>) {
+    return
+  }
+}
+
+// -----
+
+module {
+  func.func @surface_in_array(
+      %x: !llvm.array<2 x !pto.vmi.vreg<128xf32>>,
+      %mask: !pto.ptr<!pto.vmi.mask<128xpred>, ub>) {
+    return
+  }
+}
+
+// -----
+
+module {
+  func.func @surface_in_tensor_view(
+      %x: !pto.tensor_view<1x!pto.vmi.vreg<128xf32>>,
+      %mask: !pto.ptr<!pto.vmi.mask<128xpred>, ub>) {
+    return
+  }
+}
+
+// -----
+
+module {
+  func.func @surface_in_partition_view(
+      %x: !pto.partition_tensor_view<1x!pto.vmi.vreg<128xf32>>,
+      %mask: !pto.ptr<!pto.vmi.mask<128xpred>, ub>) {
+    return
+  }
+}
+
+// -----
+
+module {
+  func.func @surface_in_deep(
+      %x: !pto.ptr<!llvm.struct<(tuple<!pto.vmi.vreg<128xf32>>)>, ub>,
+      %mask: !pto.ptr<!pto.vmi.mask<128xpred>, ub>) {
+    return
+  }
+}
+
+// -----
+
+module attributes {pto.plain_type = tuple<!pto.ptr<f32, ub>, !llvm.array<2 x f32>>} {
+  func.func @plain_and_opaque(
+      %plain: !pto.ptr<!llvm.struct<(tuple<f32>)>, ub>,
+      %opaque: !llvm.struct<"opaque", opaque>) {
+    return
+  }
+  func.func @recursive(
+      %cycle: !llvm.struct<"cycle", (!pto.ptr<!llvm.struct<"cycle">, ub>, f32)>) {
+    return
+  }
+}

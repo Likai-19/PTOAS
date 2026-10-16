@@ -1,0 +1,81 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+
+// RUN: pto-test-opt %s -split-input-file -pto-validate-vmi-ir -verify-diagnostics
+// RUN: pto-test-opt %s -split-input-file -pto-validate-vmi-layout-ir -verify-diagnostics
+
+// struct: a type attribute must not hide nested VMI.
+// expected-error@+1 {{VMI-PASS-INVARIANT: VMI type appears in a non-signature attribute}}
+module attributes {
+  pto.hidden_vmi_state = !llvm.struct<(!pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>)>
+} {}
+
+// -----
+
+// ptr: a type attribute must not hide nested VMI.
+// expected-error@+1 {{VMI-PASS-INVARIANT: VMI type appears in a non-signature attribute}}
+module attributes {
+  pto.hidden_vmi_state = !pto.ptr<!pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>, ub>
+} {}
+
+// -----
+
+// tuple: a type attribute must not hide nested VMI.
+// expected-error@+1 {{VMI-PASS-INVARIANT: VMI type appears in a non-signature attribute}}
+module attributes {
+  pto.hidden_vmi_state = tuple<!pto.ptr<!pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>, ub>>
+} {}
+
+// -----
+
+// array: a type attribute must not hide nested VMI.
+// expected-error@+1 {{VMI-PASS-INVARIANT: VMI type appears in a non-signature attribute}}
+module attributes {
+  pto.hidden_vmi_state = !llvm.array<2 x !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>>
+} {}
+
+// -----
+
+// tensor_view: a type attribute must not hide nested VMI.
+// expected-error@+1 {{VMI-PASS-INVARIANT: VMI type appears in a non-signature attribute}}
+module attributes {
+  pto.hidden_vmi_state = !pto.tensor_view<1x!pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>>
+} {}
+
+// -----
+
+// partition_view: a type attribute must not hide nested VMI.
+// expected-error@+1 {{VMI-PASS-INVARIANT: VMI type appears in a non-signature attribute}}
+module attributes {
+  pto.hidden_vmi_state = !pto.partition_tensor_view<1x!pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>>
+} {}
+
+// -----
+
+// deep: a type attribute must not hide nested VMI.
+// expected-error@+1 {{VMI-PASS-INVARIANT: VMI type appears in a non-signature attribute}}
+module attributes {
+  pto.hidden_vmi_state = !pto.ptr<!llvm.struct<(tuple<!pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>>)>, ub>
+} {}
+
+// -----
+
+// Surface VMI is also forbidden in non-signature attributes.
+// expected-error@+1 {{VMI-PASS-INVARIANT: VMI type appears in a non-signature attribute}}
+module attributes {
+  pto.hidden_vmi_state = {nested = [!pto.ptr<!pto.vmi.mask<128xpred>, ub>]}
+} {}
+
+// -----
+
+// Recursion through a function type inside a type attribute.
+// expected-error@+1 {{VMI-PASS-INVARIANT: VMI type appears in a non-signature attribute}}
+module attributes {
+  pto.hidden_vmi_state = (!pto.ptr<!pto.vmi.vreg<128xf32>, ub>) -> ()
+} {}

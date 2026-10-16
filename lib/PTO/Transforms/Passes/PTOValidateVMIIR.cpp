@@ -7,6 +7,8 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 //===- PTOValidateVMIIR.cpp - VMI boundary verifier ----------------------===//
+// Type checks use MLIR subelement walking so both stage gates and hidden
+// attribute checks reach nested containers, including recursive type graphs.
 //===----------------------------------------------------------------------===//
 
 #include "PTO/IR/PTO.h"
@@ -41,23 +43,10 @@ namespace {
 bool isVMIType(Type type) { return isa<VMIVRegType, VMIMaskType>(type); }
 
 bool containsVMIType(Type type) {
-  if (isVMIType(type)) {
-    return true;
-  }
-
-  if (auto functionType = dyn_cast<FunctionType>(type)) {
-    return llvm::any_of(functionType.getInputs(),
-                        [](Type input) { return containsVMIType(input); }) ||
-           llvm::any_of(functionType.getResults(), [](Type result) {
-             return containsVMIType(result);
-           });
-  }
-
-  if (auto shapedType = dyn_cast<ShapedType>(type)) {
-    return containsVMIType(shapedType.getElementType());
-  }
-
-  return false;
+  return type.walk([](Type nestedType) {
+    return isVMIType(nestedType) ? WalkResult::interrupt()
+                                 : WalkResult::advance();
+  }).wasInterrupted();
 }
 
 bool containsVMIType(Attribute attr) {
@@ -266,30 +255,20 @@ LogicalResult verifyBoundaryType(Operation *owner, Type type,
   return success();
 }
 
+LogicalResult verifyTypeTree(
+    Operation *owner, Type type, llvm::raw_ostream *diagOS,
+    LogicalResult (*verifyType)(Operation *, Type, llvm::raw_ostream *)) {
+  WalkResult result = type.walk([owner, diagOS, verifyType](Type nestedType) {
+    return failed(verifyType(owner, nestedType, diagOS))
+               ? WalkResult::interrupt()
+               : WalkResult::advance();
+  });
+  return failure(result.wasInterrupted());
+}
+
 LogicalResult verifyBoundaryTypeTree(Operation *owner, Type type,
                                      llvm::raw_ostream *diagOS) {
-  if (failed(verifyBoundaryType(owner, type, diagOS))) {
-    return failure();
-  }
-
-  if (auto functionType = dyn_cast<FunctionType>(type)) {
-    for (Type input : functionType.getInputs()) {
-      if (failed(verifyBoundaryTypeTree(owner, input, diagOS))) {
-        return failure();
-      }
-    }
-    for (Type result : functionType.getResults()) {
-      if (failed(verifyBoundaryTypeTree(owner, result, diagOS))) {
-        return failure();
-      }
-    }
-  }
-
-  if (auto shapedType = dyn_cast<ShapedType>(type)) {
-    return verifyBoundaryTypeTree(owner, shapedType.getElementType(), diagOS);
-  }
-
-  return success();
+  return verifyTypeTree(owner, type, diagOS, verifyBoundaryType);
 }
 
 LogicalResult verifyLayoutAssignedType(Operation *owner, Type type,
@@ -306,29 +285,7 @@ LogicalResult verifyLayoutAssignedType(Operation *owner, Type type,
 
 LogicalResult verifyLayoutAssignedTypeTree(Operation *owner, Type type,
                                            llvm::raw_ostream *diagOS) {
-  if (failed(verifyLayoutAssignedType(owner, type, diagOS))) {
-    return failure();
-  }
-
-  if (auto functionType = dyn_cast<FunctionType>(type)) {
-    for (Type input : functionType.getInputs()) {
-      if (failed(verifyLayoutAssignedTypeTree(owner, input, diagOS))) {
-        return failure();
-      }
-    }
-    for (Type result : functionType.getResults()) {
-      if (failed(verifyLayoutAssignedTypeTree(owner, result, diagOS))) {
-        return failure();
-      }
-    }
-  }
-
-  if (auto shapedType = dyn_cast<ShapedType>(type)) {
-    return verifyLayoutAssignedTypeTree(owner, shapedType.getElementType(),
-                                        diagOS);
-  }
-
-  return success();
+  return verifyTypeTree(owner, type, diagOS, verifyLayoutAssignedType);
 }
 
 template <typename TypeVerifier>

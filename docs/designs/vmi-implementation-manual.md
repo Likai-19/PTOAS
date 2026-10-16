@@ -347,11 +347,20 @@ lib/PTO/Transforms/Passes/PTOValidateVMIIR.cpp
     Operation::walk
     func::FuncOp function type inspection
     recursive TypeAttr / TypedAttr / ArrayAttr / DictionaryAttr scan
+    Type::walk for nested type payloads and stage type checks
   must not:
     rewrite IR
     create unrealized_conversion_cast
     create ConversionTarget
     repair illegal helper/type leakage
+
+  type tree coverage:
+    both stage gates and hidden-VMI attribute detection use MLIR subelement walking
+    function signatures, operands, results, and region block arguments are checked
+    LLVM structs/arrays, PTO pointers/views, tuples, and mixed nesting are traversed
+    recursive identified type graphs terminate through the walker's visited set
+    producer gate requires surface VMI; layout gate requires assigned VMI
+    non-signature attributes reject nested VMI at either stage
 
 lib/PTO/Transforms/VMI/VMILayoutAssignment.cpp
   pass:
