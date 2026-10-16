@@ -20,13 +20,14 @@ pto.texpands ins(%scalar : <scalar_type>)
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `scalar` | signless integer / floating-point scalar | Scalar value broadcast into the destination tile. |
+| `scalar` | integer / floating-point scalar | Scalar value broadcast into the destination tile. |
 | `dst` | `pto.tile_buf` | Destination tile buffer. |
 
 **Constraints:**
 
 - The TileLib template is VEC-oriented and fills `dst.valid_shape`.
 - The scalar type must be compatible with `dst.dtype`.
+- On A5, `ui8`, `ui16`, and `ui32` scalars are accepted with matching destination element types.
 
 **Example:**
 
@@ -58,6 +59,7 @@ pto.trowexpand ins(%src : !pto.tile_buf<...>)
 - `src` and `dst` must have the same number of valid rows.
 - `src` must encode exactly one logical source value per destination row.
 - Templates target row-major VEC layouts.
+- On A5, matching `ui8`, `ui16`, and `ui32` source and destination types are supported.
 
 **Example:**
 
@@ -126,7 +128,10 @@ pto.<op> ins(%src0, %src1 : !pto.tile_buf<...>, !pto.tile_buf<...>)
 - `pto.trowexpandadd` also accepts an optional scratch `%tmp` operand for
   cross-architecture API compatibility.
 - Templates target row-major VEC layouts.
-- `pto.trowexpanddiv` and `pto.trowexpandexpdif` are floating-point-only.
+- On A5, add, sub, mul, max, and min accept matching `bf16`, `ui8`, `ui16`, and `ui32` tiles.
+- On A5, `pto.trowexpanddiv` also accepts matching `bf16`, `ui8`, `ui16`, and `ui32` tiles;
+  unsigned integer division truncates toward zero and requires a nonzero divisor.
+- `pto.trowexpandexpdif` is floating-point-only (`f16` or `f32`).
 - `pto.trowexpanddiv` additionally accepts `precisionType = #pto<div_precision default|high_precision>`.
   Omitted means `default`.
   `high_precision` requires floating-point element type and an explicit `tmp` operand.
@@ -177,6 +182,7 @@ pto.tcolexpand ins(%src : !pto.tile_buf<...>)
 - `src` and `dst` must have the same number of valid columns.
 - `src` must encode exactly one logical source value per destination column.
 - Templates target row-major VEC layouts.
+- On A5, matching `ui8`, `ui16`, and `ui32` source and destination types are supported.
 
 **Example:**
 
@@ -231,7 +237,11 @@ pto.<op> ins(%src0, %src1 : !pto.tile_buf<...>, !pto.tile_buf<...>)
 - The expanded operand must provide one logical scalar per destination column
   (`valid_shape[1] == dst valid_shape[1]`).
 - Templates target row-major VEC layouts.
-- `pto.tcolexpanddiv` and `pto.tcolexpandexpdif` are floating-point-only.
+- On A5, add, sub, mul, max, and min accept matching `bf16`, `ui8`, `ui16`, and `ui32` tiles.
+- On A5, `pto.tcolexpanddiv` also accepts matching `bf16`, `ui8`, `ui16`, `ui32`,
+  `i16`, and `i32` tiles; integer division truncates toward zero and requires a
+  nonzero divisor.
+- `pto.tcolexpandexpdif` is floating-point-only (`f16` or `f32`).
 - `pto.tcolexpanddiv` additionally accepts `precisionType = #pto<div_precision default|high_precision>`.
   Omitted means `default`.
   `high_precision` is currently legal only when the tile element type is `f16` or `f32`.

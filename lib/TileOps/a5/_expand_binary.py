@@ -11,6 +11,8 @@
 
 from collections import namedtuple
 
+from SoftOps.div_uint import div_uint_soft
+
 from ptodsl import pto
 import ptodsl.tilelib as tilelib
 
@@ -19,6 +21,9 @@ NUMERIC_SIGNATURES = [
     ("i8", "i8", "i8"),
     ("i16", "i16", "i16"),
     ("i32", "i32", "i32"),
+    ("ui8", "ui8", "ui8"),
+    ("ui16", "ui16", "ui16"),
+    ("ui32", "ui32", "ui32"),
     ("f16", "f16", "f16"),
     ("bf16", "bf16", "bf16"),
     ("f32", "f32", "f32"),
@@ -26,8 +31,11 @@ NUMERIC_SIGNATURES = [
 
 FLOAT_SIGNATURES = [
     ("f16", "f16", "f16"),
+    ("bf16", "bf16", "bf16"),
     ("f32", "f32", "f32"),
 ]
+
+UNSIGNED_SIGNATURES = [(dtype, dtype, dtype) for dtype in ("ui8", "ui16", "ui32")]
 
 
 def _ub_or_vec_row_major(operand_memory_spaces, operand_b_layouts, operand_s_layouts, **_):
@@ -341,6 +349,46 @@ def _row_operand_repeats_block(tile) -> bool:
     return layout == "row_major"
 
 
+def _mul_i8(lhs, rhs, mask, dtype):
+    """Multiply byte lanes modulo 256 using the supported 16-bit VMUL form."""
+    lhs16 = pto.vbitcast(lhs, pto.ui16)
+    rhs16 = pto.vbitcast(rhs, pto.ui16)
+    mask16 = pto.make_mask(pto.ui16, pto.PAT.ALL)
+    low = pto.vands(pto.vmul(lhs16, rhs16, mask16), pto.ui16(0xff), mask16)
+    high_lhs = pto.vshrs(lhs16, 8, mask16)
+    high_rhs = pto.vshrs(rhs16, 8, mask16)
+    high = pto.vshls(pto.vmul(high_lhs, high_rhs, mask16), 8, mask16)
+    return pto.vbitcast(pto.vor(low, high, mask16), dtype)
+
+
+def _div_bf16(lhs, rhs, mask):
+    mask32 = pto.make_mask(pto.f32, pto.PAT.ALL)
+    lhs_even = pto.vcvt(lhs, pto.f32, mask, part=pto.VcvtPartMode.EVEN)
+    lhs_odd = pto.vcvt(lhs, pto.f32, mask, part=pto.VcvtPartMode.ODD)
+    rhs_even = pto.vcvt(rhs, pto.f32, mask, part=pto.VcvtPartMode.EVEN)
+    rhs_odd = pto.vcvt(rhs, pto.f32, mask, part=pto.VcvtPartMode.ODD)
+    even = pto.vcvt(pto.vdiv(lhs_even, rhs_even, mask32), pto.bf16, mask32,
+                    rnd=pto.VcvtRoundMode.R, sat=pto.VcvtSatMode.NOSAT,
+                    part=pto.VcvtPartMode.EVEN)
+    odd = pto.vcvt(pto.vdiv(lhs_odd, rhs_odd, mask32), pto.bf16, mask32,
+                   rnd=pto.VcvtRoundMode.R, sat=pto.VcvtSatMode.NOSAT,
+                   part=pto.VcvtPartMode.ODD)
+    return pto.vbitcast(
+        pto.vor(pto.vbitcast(even, pto.ui16), pto.vbitcast(odd, pto.ui16), mask),
+        pto.bf16,
+    )
+
+
+def _binary_result(lhs, rhs, mask, dtype, vector_op):
+    if vector_op == pto.vmul and str(dtype) in {"i8", "ui8"}:
+        return _mul_i8(lhs, rhs, mask, dtype)
+    if vector_op == pto.vdiv and str(dtype) == "bf16":
+        return _div_bf16(lhs, rhs, mask)
+    if vector_op == pto.vdiv and str(dtype) in {"ui8", "ui16", "ui32"}:
+        return div_uint_soft(lhs, rhs, mask, dtype)
+    return vector_op(lhs, rhs, mask)
+
+
 def _emit_row_expand_body(src0, src1, dst, vector_op):
     dtype = dst.dtype
     valid_rows, valid_cols = dst.valid_shape
@@ -369,9 +417,9 @@ def _emit_row_expand_body(src0, src1, dst, vector_op):
                 expanded_vec = pto.vdup(pto.vlds(expanded[row, :]), mask)
             # Keep the authored operand order: dst = src0 OP src1.
             if src0_is_full:
-                result = vector_op(full_vec, expanded_vec, mask)
+                result = _binary_result(full_vec, expanded_vec, mask, dtype, vector_op)
             else:
-                result = vector_op(expanded_vec, full_vec, mask)
+                result = _binary_result(expanded_vec, full_vec, mask, dtype, vector_op)
             pto.vsts(result, dst[row, col:], mask)
             col_loop.update(remained=remained)
 
@@ -408,7 +456,7 @@ def _emit_column_expand_loop(src0, src1, dst, apply_op):
 def _emit_column_expand_body(src0, src1, dst, vector_op):
     """Column expand built from a single ``dst = src0 OP src1`` vector op."""
     _emit_column_expand_loop(
-        src0, src1, dst, lambda lhs, rhs, mask, _remained: vector_op(lhs, rhs, mask)
+        src0, src1, dst, lambda lhs, rhs, mask, _remained: _binary_result(lhs, rhs, mask, dst.dtype, vector_op)
     )
 
 
@@ -443,6 +491,7 @@ def _valid_column_expand_binary(src0_valid_shape=(), src1_valid_shape=(), dst_va
 __all__ = [
     "FLOAT_SIGNATURES",
     "NUMERIC_SIGNATURES",
+    "UNSIGNED_SIGNATURES",
     "register_column_expand_binary",
     "register_column_expand_expdif",
     "register_row_expand_binary",

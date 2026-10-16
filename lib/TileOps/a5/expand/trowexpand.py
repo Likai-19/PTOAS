@@ -27,12 +27,9 @@ def _valid_row_expand(src_valid_shape=(), dst_valid_shape=(), **_):
     target="a5",
     name="template_trowexpand",
     dtypes=[
-        ("i8", "i8"),
-        ("i16", "i16"),
-        ("i32", "i32"),
-        ("f16", "f16"),
-        ("bf16", "bf16"),
-        ("f32", "f32"),
+        ("i8", "i8"), ("i16", "i16"), ("i32", "i32"),
+        ("ui8", "ui8"), ("ui16", "ui16"), ("ui32", "ui32"),
+        ("f16", "f16"), ("bf16", "bf16"), ("f32", "f32"),
     ],
     iteration_axis="row",
     op_engine="vector",
@@ -54,9 +51,9 @@ def template_trowexpand(src: pto.Tile, dst: pto.Tile):
     lanes = pto.elements_per_vreg(dtype)
 
     for row in range(0, valid_rows, 1):
+        value = pto.vlds(src[row, :])
         remained = valid_cols
         for col in range(0, valid_cols, lanes):
             mask, remained = pto.make_mask(dtype, remained)
-            value = pto.vlds(src[row, :])
             broadcast = pto.vdup(value, mask)
             pto.vsts(broadcast, dst[row, col:], mask)

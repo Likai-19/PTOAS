@@ -1,4 +1,4 @@
-// RUN: ptoas --pto-arch=a5 --enable-insert-sync %s -o - 2>&1 | FileCheck %s --check-prefix=A5
+// RUN: not ptoas --pto-arch=a5 --enable-insert-sync %s -o - 2>&1 | FileCheck %s --check-prefix=A5
 // RUN: not ptoas --pto-arch=a3 --enable-insert-sync %s -o - 2>&1 | FileCheck %s --check-prefix=A3
 
 module {
@@ -42,10 +42,6 @@ module {
   }
 }
 
-// A5-LABEL: AICORE void expanddiv_i8()
-// A5-LABEL: AICORE void expanddiv_i16()
-// A5-LABEL: AICORE void expanddiv_i32()
-// A5: TCOLEXPANDDIV(
-// A5: TROWEXPANDDIV(
+// A5: 'pto.tcolexpanddiv' op expects A5 tcolexpanddiv element type to be ui8/ui16/ui32/i16/i32/f16/bf16/f32
 
 // A3: error: 'pto.tcolexpanddiv' op expects tcolexpanddiv element type to be f16 or f32

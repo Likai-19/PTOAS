@@ -18,9 +18,11 @@
 // pto.trowexpand should be lowered to vector-style VPTO IR.
 // CHECK: func.func @TROWEXPAND
 // CHECK-NOT: pto.trowexpand ins
+// CHECK-NOT: pto.load
 // CHECK: pto.vecscope
-// CHECK: pto.vlds
-// CHECK: pto.vdup
+// CHECK-NOT: pto.load
+// CHECK: %[[ROW:.*]] = pto.vlds
+// CHECK: pto.vdup %[[ROW]],
 // CHECK: pto.vsts
 
 module attributes {pto.kernel_kind = #pto.kernel_kind<vector>} {

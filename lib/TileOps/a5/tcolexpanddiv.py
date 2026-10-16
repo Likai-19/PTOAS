@@ -17,6 +17,7 @@ from ._expand_binary import (
     _ub_or_vec_row_major,
     _valid_column_expand_binary,
     register_column_expand_binary,
+    UNSIGNED_SIGNATURES,
 )
 from SoftOps import div_i32_soft
 
@@ -54,8 +55,9 @@ template_tcolexpanddiv = register_column_expand_binary(
     vector_op=pto.vdiv,
     dtypes=[
         ("f16", "f16", "f16"),
+        ("bf16", "bf16", "bf16"),
         ("f32", "f32", "f32"),
-    ],
+    ] + UNSIGNED_SIGNATURES,
 )
 
 

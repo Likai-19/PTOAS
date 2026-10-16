@@ -66,6 +66,9 @@ def TensorViewOrPartitionView :
 def ScalarType :
   AnyTypeOf<[AnySignlessInteger, AnyFloat], "numeric (integer/float)">;
 
+def ExpandScalarType :
+  AnyTypeOf<[AnyInteger, AnyFloat], "numeric (integer/float)">;
+
 def PrintScalarType :
   AnyTypeOf<[AnyInteger, AnyFloat], "integer/float printable scalar">;
 
@@ -4607,7 +4610,7 @@ def TExpandsOp : PTO_TOp<"texpands", [
   let summary = "Broadcast scalar into dst (tilebuf, DPS)";
 
   let arguments = (ins
-    ScalarType:$scalar,
+    ExpandScalarType:$scalar,
     PTODpsType:$dst
   );
 

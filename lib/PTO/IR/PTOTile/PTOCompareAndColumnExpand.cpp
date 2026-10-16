@@ -148,7 +148,9 @@ LogicalResult pto::TColExpandOp::verify() {
 }
 static bool isSupportedTColExpandElem(Type elemTy, PTOArch targetArch,
                                      bool allowIntegerTypes) {
-  if (elemTy.isF16() || elemTy.isF32()) {
+  bool supportedFloat = elemTy.isF16() || elemTy.isF32();
+  bool supportedBf16 = targetArch == PTOArch::A5 && elemTy.isBF16() && allowIntegerTypes;
+  if (supportedFloat || supportedBf16) {
     return true;
   }
   if (!allowIntegerTypes) {
@@ -178,14 +180,35 @@ static LogicalResult verifyTColExpandElementTypes(Operation *op, Type e0,
   bool supported = isSupportedTColExpandElem(e0, targetArch, allowIntegerTypes) &&
                    isSupportedTColExpandElem(e1, targetArch, allowIntegerTypes) &&
                    isSupportedTColExpandElem(ed, targetArch, allowIntegerTypes);
-  if (supported)
+  if (targetArch == PTOArch::A5 && opName == "tcolexpanddiv") {
+    auto isSupportedDivElem = [](Type elem) {
+      bool supportedFloat = elem.isF16() || elem.isBF16() || elem.isF32();
+      if (supportedFloat) {
+        return true;
+      }
+      auto intElem = dyn_cast<IntegerType>(elem);
+      return intElem &&
+             ((intElem.isUnsigned() && (intElem.getWidth() == kByteElemBitWidth ||
+                                        intElem.getWidth() == kI16ElemBitWidth ||
+                                        intElem.getWidth() == kI32ElemBitWidth)) ||
+              (intElem.isSignless() && (intElem.getWidth() == kI16ElemBitWidth ||
+                                        intElem.getWidth() == kI32ElemBitWidth)));
+    };
+    supported = isSupportedDivElem(e0) && isSupportedDivElem(e1) && isSupportedDivElem(ed);
+  }
+  if (supported) {
     return success();
-  if (!allowIntegerTypes)
+  }
+  if (!allowIntegerTypes) {
     return op->emitOpError() << "expects " << opName
                              << " element type to be f16 or f32";
-  if (targetArch == PTOArch::A5)
+  }
+  if (targetArch == PTOArch::A5) {
     return op->emitOpError() << "expects A5 " << opName
-                             << " element type to be i8/i16/i32/f16/f32";
+                             << (opName == "tcolexpanddiv"
+                                     ? " element type to be ui8/ui16/ui32/i16/i32/f16/bf16/f32"
+                                     : " element type to be i8/i16/i32/f16/bf16/f32");
+  }
   return op->emitOpError() << "expects A2/A3 " << opName
                            << " element type to be i16/i32/f16/f32";
 }

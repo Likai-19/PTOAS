@@ -76,14 +76,16 @@ mlir::LogicalResult mlir::pto::TRowExpandDivOp::verify() {
       return failure();
     }
     Type elem = *elemOr;
+    auto intElem = dyn_cast<IntegerType>(elem);
     bool supported =
-        elem.isF16() || elem.isF32() ||
-        (targetArch == PTOArch::A5 &&
-         (elem.isInteger(mlir::pto::kValue8) || elem.isInteger(mlir::pto::kValue16) || elem.isInteger(mlir::pto::kValue32)));
+        elem.isF16() || elem.isF32() || (targetArch == PTOArch::A5 && elem.isBF16()) ||
+        (targetArch == PTOArch::A5 && intElem && intElem.isUnsigned() &&
+         (elem.isInteger(mlir::pto::kValue8) || elem.isInteger(mlir::pto::kValue16) ||
+          elem.isInteger(mlir::pto::kValue32)));
     if (!supported) {
       if (targetArch == PTOArch::A5) {
         return emitOpError(
-            "expects A5 trowexpanddiv element type to be i8/i16/i32/f16/f32");
+            "expects A5 trowexpanddiv element type to be ui8/ui16/ui32/f16/bf16/f32");
       }
       return emitOpError("expects element type to be f16 or f32");
     }
@@ -112,7 +114,9 @@ static LogicalResult verifyTRowExpandMulSub(
                                         static_cast<bool>(tmp));
   if (failed(elem))
     return failure();
-  bool supported = elem->isF16() || elem->isF32() || elem->isInteger(mlir::pto::kValue16) ||
+  bool supported = elem->isF16() || elem->isF32() ||
+                   (targetArch == PTOArch::A5 && elem->isBF16()) ||
+                   elem->isInteger(mlir::pto::kValue16) ||
                    elem->isInteger(mlir::pto::kValue32) ||
                    (targetArch == PTOArch::A5 && elem->isInteger(mlir::pto::kValue8));
   if (!supported)
@@ -171,7 +175,9 @@ static FailureOr<Type> verifyTRowExpandAddCore(TRowExpandAddOp op,
     return op.emitOpError("expects the operand matching dst to use row-major layout");
   }
   Type elem = *elemOr;
-  bool supported = elem.isF16() || elem.isF32() || elem.isInteger(mlir::pto::kValue16) ||
+  bool supported = elem.isF16() || elem.isF32() ||
+                   (targetArch == PTOArch::A5 && elem.isBF16()) ||
+                   elem.isInteger(mlir::pto::kValue16) ||
                    elem.isInteger(mlir::pto::kValue32) ||
                    (targetArch == PTOArch::A5 && elem.isInteger(mlir::pto::kValue8));
   if (!supported) {
@@ -264,6 +270,7 @@ static FailureOr<Type> verifyTRowExpandReduceTypes(
     return failure();
   }
   bool supported = elem.isF16() || elem.isF32() ||
+                   (targetArch == PTOArch::A5 && allowIntegerTypes && elem.isBF16()) ||
                    (allowIntegerTypes &&
                     (elem.isInteger(mlir::pto::kValue16) || elem.isInteger(mlir::pto::kValue32) ||
                      (targetArch == PTOArch::A5 && elem.isInteger(mlir::pto::kValue8))));

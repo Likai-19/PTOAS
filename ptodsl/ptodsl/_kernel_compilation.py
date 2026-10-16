@@ -66,6 +66,11 @@ class CompiledKernelHandle(ModuleArtifact):
         grid, stream = parse_launch_spec(launch_spec)
         return LaunchHandle(self, grid, stream)
 
+    @property
+    def mode(self):
+        """Return the kernel's allocation mode."""
+        return self._module_spec.mode
+
     def native_library(self):
         """Build this specialization once and reuse the loaded library.
 

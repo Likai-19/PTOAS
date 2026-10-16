@@ -466,11 +466,47 @@ def _specs(op, parameter_names, dtype_name):
 
 
 def _expected_rendered_op(op, signature):
+    if op in {"pto.trowexpanddiv", "pto.tcolexpanddiv"} and signature[0] in {"ui8", "ui16", "ui32"}:
+        return "pto.vcmp"
     if op in FLOAT_REMAINDER_OPS and not any(
         dtype in FLOAT_REMAINDER_DTYPES for dtype in signature
     ):
         return "pto.vdiv"
     return CATALOG[op][1]
+
+
+def _declared_signature_specs(op, parameter_names, signature):
+    specs = {}
+    for operand, dtype_name in zip(parameter_names, signature):
+        if operand in SCALAR_OPERANDS:
+            specs[operand] = ScalarSpec(dtype=ScalarType(dtype_name), value=1)
+            continue
+        valid_shape = SPECIAL_VALID_SHAPES.get((op, operand), (8, 64))
+        if op in COLUMN_REDUCTIONS and operand == "dst":
+            valid_shape = (1, 64)
+        if op in ARG_COLUMN_REDUCTIONS and operand == "dst":
+            valid_shape = (1, 64)
+        if op in ROW_REDUCTIONS and operand == "dst":
+            valid_shape = (8, 1)
+        if (op, operand) in VIEW_OPERANDS:
+            specs[operand] = _view_spec_for(op, operand, dtype_name)
+            continue
+        if (op, operand) in SPECIAL_VECTOR_OPERANDS:
+            _, vector_shape = SPECIAL_VECTOR_OPERANDS[(op, operand)]
+            specs[operand] = VectorSpec(
+                shape=vector_shape,
+                dtype=ScalarType(dtype_name),
+            )
+            continue
+        specs[operand] = _tile_spec_for(op, operand, dtype_name)
+        if valid_shape != specs[operand].valid_shape:
+            specs[operand] = TileSpec(
+                shape=(8, 64),
+                dtype=ScalarType(dtype_name),
+                memory_space=SPECIAL_MEMORY_SPACES.get((op, operand), "ub"),
+                valid_shape=valid_shape,
+            )
+    return specs
 
 
 class TileLibCatalogTest(unittest.TestCase):
@@ -535,6 +571,8 @@ class TileLibCatalogTest(unittest.TestCase):
                     self.assertIn(shared_op, mlir)
                 if op not in OPS_WITHOUT_TILE_LOAD:
                     self.assertIn("pto.vlds", mlir)
+                if op == "pto.trowexpand":
+                    self.assertNotIn("pto.load", mlir)
                 if op not in OPS_ALLOWING_CASTPTR:
                     self.assertNotIn("pto.castptr", mlir)
 
@@ -688,48 +726,12 @@ class TileLibCatalogTest(unittest.TestCase):
             descriptor = select(op, "a5", first_specs, candidate_id=candidate_id)
             for signature in descriptor.metadata.dtypes:
                 with self.subTest(op=op, signature=signature):
-                    specs = {}
-                    for operand, dtype_name in zip(parameter_names, signature):
-                        if operand in SCALAR_OPERANDS:
-                            specs[operand] = ScalarSpec(
-                                dtype=ScalarType(dtype_name),
-                                value=1,
-                            )
-                            continue
-                        valid_shape = SPECIAL_VALID_SHAPES.get(
-                            (op, operand),
-                            (8, 64),
-                        )
-                        if op in COLUMN_REDUCTIONS and operand == "dst":
-                            valid_shape = (1, 64)
-                        if op in ARG_COLUMN_REDUCTIONS and operand == "dst":
-                            valid_shape = (1, 64)
-                        if op in ROW_REDUCTIONS and operand == "dst":
-                            valid_shape = (8, 1)
-                        if (op, operand) in VIEW_OPERANDS:
-                            specs[operand] = _view_spec_for(op, operand, dtype_name)
-                            continue
-                        if (op, operand) in SPECIAL_VECTOR_OPERANDS:
-                            _, vector_shape = SPECIAL_VECTOR_OPERANDS[(op, operand)]
-                            specs[operand] = VectorSpec(
-                                shape=vector_shape,
-                                dtype=ScalarType(dtype_name),
-                            )
-                            continue
-                        specs[operand] = _tile_spec_for(op, operand, dtype_name)
-                        if valid_shape != specs[operand].valid_shape:
-                            specs[operand] = TileSpec(
-                                shape=(8, 64),
-                                dtype=ScalarType(dtype_name),
-                                memory_space=SPECIAL_MEMORY_SPACES.get((op, operand), "ub"),
-                                valid_shape=valid_shape,
-                            )
+                    specs = _declared_signature_specs(op, parameter_names, signature)
                     selected = select(op, "a5", specs, candidate_id=candidate_id)
                     self.assertEqual(selected.name, descriptor.name)
-                    self.assertIn(
-                        _expected_rendered_op(op, signature),
-                        selected.specialize(**specs).mlir_text(),
-                    )
+                    mlir = selected.specialize(**specs).mlir_text()
+                    self.assertIn(_expected_rendered_op(op, signature), mlir)
+                    self._assert_unsigned_expand_division(op, signature, mlir)
 
     def test_simple_elementwise_vec_smoke_shapes_render(self):
         cases = (
@@ -1905,6 +1907,13 @@ class TileLibCatalogTest(unittest.TestCase):
                 selected = select("pto.tdequant", "a5", specs)
                 self.assertEqual(selected.name, expected_name)
                 self.assertIn("pto.vmul", selected.specialize(**specs).mlir_text())
+
+    def _assert_unsigned_expand_division(self, op, signature, mlir):
+        if op in {"pto.trowexpanddiv", "pto.tcolexpanddiv"} and signature[0] in {
+            "ui8", "ui16", "ui32"
+        }:
+            self.assertIn("pto.vsel", mlir)
+            self.assertNotIn("pto.vdiv", mlir)
 
 if __name__ == "__main__":
     unittest.main()

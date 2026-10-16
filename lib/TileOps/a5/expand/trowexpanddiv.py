@@ -11,12 +11,12 @@
 
 from ptodsl import pto
 
-from .._expand_binary import FLOAT_SIGNATURES, register_row_expand_binary
+from .._expand_binary import FLOAT_SIGNATURES, UNSIGNED_SIGNATURES, register_row_expand_binary
 
 
 template_trowexpanddiv = register_row_expand_binary(
     op="pto.trowexpanddiv",
     name="template_trowexpanddiv",
     vector_op=pto.vdiv,
-    dtypes=FLOAT_SIGNATURES,
+    dtypes=FLOAT_SIGNATURES + UNSIGNED_SIGNATURES,
 )
