@@ -95,10 +95,14 @@ static LogicalResult verifyTCmpSArch(TCmpSOp op, bool allowInt8) {
       return failure();
     }
     Type elemTy = getElemTy(srcTy);
+    // pto-isa A5 TCmps also lists bf16 (and the unsigned 8/16/32-bit forms,
+    // which the width checks below already accept); A2/A3 stays without bf16.
+    const bool bf16Ok = allowInt8 && elemTy.isBF16();
     if (!((allowInt8 && elemTy.isInteger(mlir::pto::kValue8)) || elemTy.isInteger(mlir::pto::kValue16) ||
-          elemTy.isInteger(mlir::pto::kValue32) || elemTy.isF16() || elemTy.isF32())) {
+          elemTy.isInteger(mlir::pto::kValue32) || elemTy.isF16() || elemTy.isF32() ||
+          bf16Ok)) {
         return op.emitOpError(
-            allowInt8 ? "expects A5 tcmps input element type to be i8/i16/i32/f16/f32" :
+            allowInt8 ? "expects A5 tcmps input element type to be i8/i16/i32/f16/bf16/f32" :
                         "expects A2/A3 tcmps input element type to be i16/i32/f16/f32");
     }
     if (!op.getScalar().getType().isIntOrIndexOrFloat()) {

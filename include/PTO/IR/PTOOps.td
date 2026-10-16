@@ -64,7 +64,10 @@ def TensorViewOrPartitionView :
             "TensorView or PartitionTensorView">;
 
 def ScalarType :
-  AnyTypeOf<[AnySignlessInteger, AnyFloat], "numeric (integer/float)">;
+  AnyTypeOf<[AnySignlessInteger, AnyUnsignedInteger, AnyFloat], "numeric (integer/float)">;
+
+def IntScalarType :
+  AnyTypeOf<[AnySignlessInteger, AnyUnsignedInteger], "integer scalar">;
 
 def ExpandScalarType :
   AnyTypeOf<[AnyInteger, AnyFloat], "numeric (integer/float)">;
@@ -3781,7 +3784,7 @@ def TAndSOp : PTO_TOp<"tands", [
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
 ]> {
   let summary = "TANDS(dst, src, scalar) bitwise-and tile with scalar";
-  let arguments = (ins PTODpsType:$src, AnySignlessInteger:$scalar, PTODpsType:$dst);
+  let arguments = (ins PTODpsType:$src, IntScalarType:$scalar, PTODpsType:$dst);
   let results = (outs);
 
   let assemblyFormat = [{
@@ -5307,7 +5310,7 @@ def TOrSOp: PTO_TOp<"tors", [
 
   let arguments = (ins
     PTODpsType:$src,
-    AnySignlessInteger:$scalar,
+    IntScalarType:$scalar,
     PTODpsType:$dst
   );
 
@@ -6839,7 +6842,7 @@ def TXorSOp: PTO_TOp<"txors", [
 
   let arguments = (ins
     PTODpsType:$src,
-    AnySignlessInteger:$scalar,
+    IntScalarType:$scalar,
     Optional<PTODpsType>:$tmp,
     PTODpsType:$dst
   );

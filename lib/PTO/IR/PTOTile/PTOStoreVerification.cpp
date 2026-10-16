@@ -122,21 +122,38 @@ LogicalResult TStoreOp::verify() {
   return dispatchVerifierByArch(getOperation(), verifyA2A3, verifyA5);
 }
 
-LogicalResult pto::TAbsOp::verify() {
-  Type srcTy = getSrc().getType();
-  Type dstTy = getDst().getType();
-  if (failed(verifyVecTileUnaryOp(*this, srcTy, dstTy, "src", "dst",
+static LogicalResult verifyTAbsArch(pto::TAbsOp op, PTOArch arch) {
+  const bool isA5 = arch == PTOArch::A5;
+  Type srcTy = op.getSrc().getType();
+  Type dstTy = op.getDst().getType();
+  if (failed(verifyVecTileUnaryOp(op, srcTy, dstTy, "src", "dst",
                                   /*allowBf16=*/false,
-                                  /*allowInt8=*/false)) ||
-      failed(verifyTileBufSameValidShape(*this, srcTy, dstTy, "src", "dst"))) {
+                                  /*allowInt8=*/isA5)) ||
+      failed(verifyTileBufSameValidShape(op, srcTy, dstTy, "src", "dst"))) {
     return failure();
   }
+  // pto-isa A5 TABS (vabs) supports i8/i16/i32/f16/f32; the A2/A3 TABS clause
+  // is float-only. bf16 is in neither clause, so it stays rejected.
   Type elemTy = getElemTy(srcTy);
-  if (!(elemTy.isF16() || elemTy.isF32())) {
-    return emitOpError() << "expects element type to be f16 or f32";
+  // The A5 clause lists the signed 8/16/32-bit forms, not the unsigned ones.
+  const bool supported =
+      isA5 ? (elemTy.isSignlessInteger(mlir::pto::kValue8) ||
+              elemTy.isSignlessInteger(mlir::pto::kValue16) ||
+              elemTy.isSignlessInteger(mlir::pto::kValue32) || elemTy.isF16() ||
+              elemTy.isF32())
+           : (elemTy.isF16() || elemTy.isF32());
+  if (!supported) {
+    return op.emitOpError()
+           << (isA5 ? "expects A5 element type to be i8, i16, i32, f16, or f32"
+                    : "expects A2/A3 element type to be f16 or f32");
   }
-
   return success();
+}
+
+LogicalResult pto::TAbsOp::verify() {
+  auto verifyA2A3 = [this]() { return verifyTAbsArch(*this, PTOArch::A3); };
+  auto verifyA5 = [this]() { return verifyTAbsArch(*this, PTOArch::A5); };
+  return dispatchVerifierByArch(getOperation(), verifyA2A3, verifyA5);
 }
 // PTO.cpp
 

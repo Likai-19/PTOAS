@@ -1,0 +1,23 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// issue #1606: the bitwise scalar ops are integral-only, so a float scalar is
+// rejected by the IntScalarType operand constraint.
+// RUN: not ptoas --pto-arch=a5 --emit-pto-ir %s 2>&1 | FileCheck %s
+
+module {
+  func.func private @tands_f16(
+      %src: !pto.tile_buf<vec, 8x32xf16>, %scalar: f16,
+      %dst: !pto.tile_buf<vec, 8x32xf16>) {
+    pto.tands ins(%src, %scalar : !pto.tile_buf<vec, 8x32xf16>, f16)
+              outs(%dst : !pto.tile_buf<vec, 8x32xf16>)
+    return
+  }
+}
+
+// CHECK: operand #1 must be integer scalar, but got 'f16'

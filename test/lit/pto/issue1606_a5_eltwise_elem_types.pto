@@ -1,0 +1,133 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Regression for issue #1606: the A5 tile eltwise verifiers/ODS were narrower
+// than the pto-isa A5 clauses, so dtype anchors that the ISA allows were
+// rejected during MLIR verification (before the VPTO simulation ever ran).
+// This locks the widened sets:
+//   pto.vabs   A5: i8-i32, f16, f32                      (PTOAS docs/isa/micro-isa/06-unary-vector-ops.md)
+//   pto.tand/tor A5: 1/2/4-byte integral types           (pto-isa docs/isa/TAND.md, TOR.md)
+//   pto.tands/tors/txors A5: 1/2/4-byte integral types   (pto-isa docs/isa/TANDS.md, TORS.md, TXORS.md)
+//   pto.tcmps/tfmods A5: also bf16 (and u8/u16/u32)      (pto-isa docs/isa/TCMPS.md, TFMODS.md)
+
+// RUN: ptoas --pto-arch=a5 --emit-pto-ir %s 2>&1 | FileCheck %s
+
+module {
+  // pto.vabs on A5 accepts the integer forms as well as f16/f32.
+  func.func private @tabs_i8(
+      %src: !pto.tile_buf<vec, 8x32xi8>, %dst: !pto.tile_buf<vec, 8x32xi8>) {
+    pto.tabs ins(%src : !pto.tile_buf<vec, 8x32xi8>) outs(%dst : !pto.tile_buf<vec, 8x32xi8>)
+    return
+  }
+  func.func private @tabs_i16(
+      %src: !pto.tile_buf<vec, 8x32xi16>, %dst: !pto.tile_buf<vec, 8x32xi16>) {
+    pto.tabs ins(%src : !pto.tile_buf<vec, 8x32xi16>) outs(%dst : !pto.tile_buf<vec, 8x32xi16>)
+    return
+  }
+  func.func private @tabs_i32(
+      %src: !pto.tile_buf<vec, 8x32xi32>, %dst: !pto.tile_buf<vec, 8x32xi32>) {
+    pto.tabs ins(%src : !pto.tile_buf<vec, 8x32xi32>) outs(%dst : !pto.tile_buf<vec, 8x32xi32>)
+    return
+  }
+
+  // The binary bitwise ops accept the 1/2/4-byte integral forms.
+  func.func private @tand_i16(
+      %a: !pto.tile_buf<vec, 8x32xi16>, %b: !pto.tile_buf<vec, 8x32xi16>,
+      %dst: !pto.tile_buf<vec, 8x32xi16>) {
+    pto.tand ins(%a, %b : !pto.tile_buf<vec, 8x32xi16>, !pto.tile_buf<vec, 8x32xi16>)
+              outs(%dst : !pto.tile_buf<vec, 8x32xi16>)
+    return
+  }
+  func.func private @tor_ui32(
+      %a: !pto.tile_buf<vec, 8x32xui32>, %b: !pto.tile_buf<vec, 8x32xui32>,
+      %dst: !pto.tile_buf<vec, 8x32xui32>) {
+    pto.tor ins(%a, %b : !pto.tile_buf<vec, 8x32xui32>, !pto.tile_buf<vec, 8x32xui32>)
+             outs(%dst : !pto.tile_buf<vec, 8x32xui32>)
+    return
+  }
+
+  // The scalar bitwise ops accept the integral scalar forms, including unsigned.
+  func.func private @tands_i16(
+      %src: !pto.tile_buf<vec, 8x32xi16>, %scalar: i16,
+      %dst: !pto.tile_buf<vec, 8x32xi16>) {
+    pto.tands ins(%src, %scalar : !pto.tile_buf<vec, 8x32xi16>, i16)
+              outs(%dst : !pto.tile_buf<vec, 8x32xi16>)
+    return
+  }
+  func.func private @tors_ui16(
+      %src: !pto.tile_buf<vec, 8x32xui16>, %scalar: ui16,
+      %dst: !pto.tile_buf<vec, 8x32xui16>) {
+    pto.tors ins(%src, %scalar : !pto.tile_buf<vec, 8x32xui16>, ui16)
+             outs(%dst : !pto.tile_buf<vec, 8x32xui16>)
+    return
+  }
+  func.func private @txors_i32(
+      %src: !pto.tile_buf<vec, 8x32xi32>, %scalar: i32,
+      %dst: !pto.tile_buf<vec, 8x32xi32>) {
+    pto.txors ins(%src, %scalar : !pto.tile_buf<vec, 8x32xi32>, i32)
+              outs(%dst : !pto.tile_buf<vec, 8x32xi32>)
+    return
+  }
+
+  // bf16 joins the A5 whitelist of the compare/remainder/fmod scalar ops.
+  func.func private @tcmps_bf16(
+      %src: !pto.tile_buf<vec, 8x32xbf16>, %scalar: bf16,
+      %dst: !pto.tile_buf<vec, 8x32xi8>) {
+    pto.tcmps ins(%src, %scalar {cmpMode = #pto<cmp lt>} : !pto.tile_buf<vec, 8x32xbf16>, bf16)
+              outs(%dst : !pto.tile_buf<vec, 8x32xi8>)
+    return
+  }
+  func.func private @trems_ui16(
+      %src: !pto.tile_buf<vec, 8x32xui16>, %scalar: ui16,
+      %tmp: !pto.tile_buf<vec, 8x32xui16>, %dst: !pto.tile_buf<vec, 8x32xui16>) {
+    pto.trems ins(%src, %scalar, %tmp : !pto.tile_buf<vec, 8x32xui16>, ui16, !pto.tile_buf<vec, 8x32xui16>)
+              outs(%dst : !pto.tile_buf<vec, 8x32xui16>)
+    return
+  }
+  func.func private @tfmods_bf16(
+      %src: !pto.tile_buf<vec, 8x32xbf16>, %scalar: bf16,
+      %dst: !pto.tile_buf<vec, 8x32xbf16>) {
+    pto.tfmods ins(%src, %scalar : !pto.tile_buf<vec, 8x32xbf16>, bf16)
+               outs(%dst : !pto.tile_buf<vec, 8x32xbf16>)
+    return
+  }
+
+  // An unsigned scalar on tcmps.
+  func.func private @tcmps_ui8(
+      %src: !pto.tile_buf<vec, 8x32xui8>, %scalar: ui8,
+      %dst: !pto.tile_buf<vec, 8x32xi8>) {
+    pto.tcmps ins(%src, %scalar {cmpMode = #pto<cmp lt>} : !pto.tile_buf<vec, 8x32xui8>, ui8)
+              outs(%dst : !pto.tile_buf<vec, 8x32xi8>)
+    return
+  }
+}
+
+// CHECK-LABEL: func.func private @tabs_i8
+// CHECK: pto.tabs
+// CHECK-LABEL: func.func private @tabs_i16
+// CHECK: pto.tabs
+// CHECK-LABEL: func.func private @tabs_i32
+// CHECK: pto.tabs
+// CHECK-LABEL: func.func private @tand_i16
+// CHECK: pto.tand
+// CHECK-LABEL: func.func private @tor_ui32
+// CHECK: pto.tor
+// CHECK-LABEL: func.func private @tands_i16
+// CHECK: pto.tands
+// CHECK-LABEL: func.func private @tors_ui16
+// CHECK: pto.tors
+// CHECK-LABEL: func.func private @txors_i32
+// CHECK: pto.txors
+// CHECK-LABEL: func.func private @tcmps_bf16
+// CHECK: pto.tcmps
+// CHECK-LABEL: func.func private @trems_ui16
+// CHECK: pto.trems
+// CHECK-LABEL: func.func private @tfmods_bf16
+// CHECK: pto.tfmods
+// CHECK-LABEL: func.func private @tcmps_ui8
+// CHECK: pto.tcmps

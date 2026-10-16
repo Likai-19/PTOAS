@@ -137,8 +137,9 @@ mlir::LogicalResult mlir::pto::TFModSOp::verify() {
     return success();
   };
   auto verifyA5 = [this, &elem]() -> LogicalResult {
-    if (!(elem.isInteger(32) || elem.isInteger(16) || elem.isF16() || elem.isF32())) {
-      return emitOpError("expects A5 tfmods element type to be i32/i16/f16/f32");
+    if (!(elem.isInteger(32) || elem.isInteger(16) || elem.isF16() ||
+          elem.isF32() || elem.isBF16())) {
+      return emitOpError("expects A5 tfmods element type to be i32/i16/f16/bf16/f32");
     }
     return success();
   };

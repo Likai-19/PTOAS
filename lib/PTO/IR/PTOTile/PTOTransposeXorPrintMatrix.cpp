@@ -161,15 +161,15 @@ static LogicalResult verifyTXorSArch(TXorSOp op, bool isA5) {
   Type elem = *elemResult;
   if (!isA5 && failed(verifyTXorSTmp(op, elem)))
     return failure();
-  auto integer = dyn_cast<IntegerType>(elem);
-  bool supported = integer &&
-                   (integer.getWidth() == 8 || integer.getWidth() == 16 ||
-                    (isA5 && integer.getWidth() == 32));
+  const bool supported =
+      hasBitwiseElementWidth(elem, isA5 ? ArrayRef<unsigned>{8, 16, 32}
+                                        : ArrayRef<unsigned>{8, 16});
   if (!supported)
-    return op.emitOpError(isA5
-        ? "expects A5 txors src and dst element type to be i8/i16/i32"
-        :
-          "expects A2/A3 txors src and dst element type to be i8/i16");
+    return op.emitOpError(
+        isA5 ? "expects A5 txors src and dst element type to be a 1/2/4-byte "
+               "integer"
+             : "expects A2/A3 txors src and dst element type to be a 1/2-byte "
+               "integer");
   return success();
 }
 

@@ -85,11 +85,13 @@ mlir::LogicalResult mlir::pto::TOrSOp::verify() {
         getOperation(), getSrc(), getDst(), "src", "dst");
     if (failed(elem))
       return failure();
-    return verifyIntegerWidths(
+    return verifyBitwiseElementWidth(
         getOperation(), *elem,
         isA5 ? ArrayRef<unsigned>{8, 16, 32} : ArrayRef<unsigned>{8, 16},
-        isA5 ? "expects A5 tors src and dst element type to be i8/i16/i32"
-             : "expects A2/A3 tors src and dst element type to be i8/i16");
+        isA5 ? "expects A5 tors src and dst element type to be a 1/2/4-byte "
+               "integer"
+             : "expects A2/A3 tors src and dst element type to be a 1/2-byte "
+               "integer");
   };
   auto verifyA2A3 = [&verifyFor]() { return verifyFor(false); };
   auto verifyA5 = [&verifyFor]() { return verifyFor(true); };

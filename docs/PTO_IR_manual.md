@@ -3362,7 +3362,7 @@ For each element (i, j):
 | Name | Type | Description |
 |------|------|-------------|
 | `src` | `pto.tile_buf` | Source tile buffer containing the input data |
-| `scalar` | `ScalarType` (signless integer / float) | Scalar value to add to each element |
+| `scalar` | `ScalarType` (integer / float) | Scalar value to add to each element |
 | `dst` | `pto.tile_buf` | Destination tile buffer for the result |
 
 **Results:** None. The operation writes results into `dst` following the Destination-Passing Style (DPS) pattern.
@@ -3422,7 +3422,7 @@ For each element (i, j):
 | Name | Type | Description |
 |------|------|-------------|
 | `src` | `pto.tile_buf` | Source tile buffer |
-| `scalar` | `ScalarType` (signless integer / float) | Scalar value to subtract |
+| `scalar` | `ScalarType` (integer / float) | Scalar value to subtract |
 | `dst` | `pto.tile_buf` | Destination tile buffer for the result |
 
 **Results:** None. Writes into `dst` via DPS pattern.
@@ -3481,7 +3481,7 @@ For each element (i, j):
 | Name | Type | Description |
 |------|------|-------------|
 | `src` | `pto.tile_buf` | Source tile buffer |
-| `scalar` | `ScalarType` (signless integer / float) | Scalar multiplier |
+| `scalar` | `ScalarType` (integer / float) | Scalar multiplier |
 | `dst` | `pto.tile_buf` | Destination tile buffer |
 
 **Results:** None. Writes into `dst` via DPS pattern.
@@ -3540,7 +3540,7 @@ For each element (i, j):
 | Name | Type | Description |
 |------|------|-------------|
 | `src` | `pto.tile_buf` | Source tile buffer |
-| `scalar` | `ScalarType` (signless integer / float) | Scalar multiplier |
+| `scalar` | `ScalarType` (integer / float) | Scalar multiplier |
 | `dst` | `pto.tile_buf` | Destination tile buffer, updated in place |
 
 **Results:** None. Writes into `dst` via DPS pattern.
@@ -3680,7 +3680,7 @@ For each element (i, j):
 | Name | Type | Description |
 |------|------|-------------|
 | `src` | `pto.tile_buf` | Source tile buffer |
-| `scalar` | `ScalarType` (signless integer / float) | Scalar value |
+| `scalar` | `ScalarType` (integer / float) | Scalar value |
 | `dst` | `pto.tile_buf` | Destination tile buffer |
 
 **Results:** None. Writes into `dst` via DPS pattern.
@@ -3739,7 +3739,7 @@ For each element (i, j):
 | Name | Type | Description |
 |------|------|-------------|
 | `src` | `pto.tile_buf` | Source tile buffer |
-| `scalar` | `ScalarType` (signless integer / float) | Scalar value |
+| `scalar` | `ScalarType` (integer / float) | Scalar value |
 | `dst` | `pto.tile_buf` | Destination tile buffer |
 
 **Results:** None. Writes into `dst` via DPS pattern.
@@ -3798,7 +3798,7 @@ For each element (i, j):
 | Name | Type | Description |
 |------|------|-------------|
 | `src` | `pto.tile_buf` | Source tile buffer |
-| `scalar` | `ScalarType` (signless integer / float) | Scalar divisor |
+| `scalar` | `ScalarType` (integer / float) | Scalar divisor |
 | `tmp` | `pto.tile_buf` | Temporary tile buffer required by the ISA API |
 | `dst` | `pto.tile_buf` | Destination tile buffer |
 
@@ -3823,7 +3823,7 @@ pto.trems ins(<src>, <scalar>, <tmp> : <src_type>, <scalar_type>, <tmp_type>)
   - `src` and `dst` must have the same `validRow/validCol`.
   - `tmp` must provide at least `1` valid row and `tmp.validCol >= dst.validCol`.
 - **Implementation checks (A5)**
-  - `src/dst` element type must match, and must be one of: `i32`, `i16`, `f16`, `f32`.
+  - `src/dst` element type must match, and must be one of: `i16`, `i32`, `ui16`, `ui32`, `f16`, `f32`.
   - `scalar` type must match the tile element type.
   - `src/dst` must use row-major layout (`blayout=row_major`).
   - `src` and `dst` must have the same `validRow/validCol`.
@@ -3991,7 +3991,7 @@ For each element (i, j):
 | Name | Type | Description |
 |------|------|-------------|
 | `src0` | `pto.tile_buf` | First source tile buffer |
-| `scalar` | `ScalarType` (signless integer / float) | Scalar value |
+| `scalar` | `ScalarType` (integer / float) | Scalar value |
 | `src1` | `pto.tile_buf` | Second source tile buffer |
 | `dst` | `pto.tile_buf` | Destination tile buffer |
 
@@ -4045,7 +4045,7 @@ For each element (i, j):
 | Name | Type | Description |
 |------|------|-------------|
 | `src0` | `pto.tile_buf` | First source tile buffer |
-| `scalar` | `ScalarType` (signless integer / float) | Scalar value |
+| `scalar` | `ScalarType` (integer / float) | Scalar value |
 | `src1` | `pto.tile_buf` | Second source tile buffer |
 | `dst` | `pto.tile_buf` | Destination tile buffer |
 
@@ -4129,7 +4129,7 @@ pto.tabs ins(<src> : <src_type>)
 **Constraints & Verification:**
 
 - **NPU constraints:**
-  - Tile element type must be one of: `f32` or `f16`;
+  - Tile element type must be one of: `f16` or `f32` on A2/A3, and `i8`, `i16`, `i32`, `f16`, or `f32` on A5;
   - `src` and `dst` must use `loc=vec`;
   - Valid bounds: `valid row <= rows` and `valid column <= cols`;
   - Runtime: `src` and `dst` must have the same valid region;
@@ -6498,7 +6498,7 @@ For each element (i, j):
 
 | Name | Type | Description |
 |------|------|-------------|
-| `scalar` | `ScalarType` (signless integer / float) | Scalar value to broadcast |
+| `scalar` | `ScalarType` (integer / float) | Scalar value to broadcast |
 | `dst` | `pto.tile_buf` | Destination tile buffer |
 
 **Results:** None. Writes into `dst` via DPS pattern.
@@ -6638,7 +6638,7 @@ For each element (i, j):
 | Name | Type | Description |
 |------|------|-------------|
 | `src` | `pto.tile_buf` | Tile operand |
-| `scalar` | `ScalarType` (signless integer / float)| Scalar value to compare against |
+| `scalar` | `ScalarType` (integer / float)| Scalar value to compare against |
 | `cmpMode` | `CmpModeAttr` (default: EQ) | Comparison mode |
 | `dst` | `pto.tile_buf` | Destination mask |
 
@@ -6647,12 +6647,12 @@ For each element (i, j):
 **Constraints & Verification:**
 
 - **Implementation checks (A2A3)**:
-  - Input type must be one of: `i32`, `f16`, `f32`, `i16`.
+  - Input type must be one of: `i16`, `i32`, `ui16`, `f16`, `f32`.
   - `src` and `dst` must use `loc=vec`.
   - Static valid bounds: `src valid row <= src.rows` and `src valid column <= src.cols`.
   - `src` and `dst` must have the same valid row.
 - **Implementation checks (A5)**:
-  - Input type must be one of: `i32`, `f16`, `f32`, `i16`, `i8`.
+  - Input type must be one of: `i8`, `i16`, `i32`, `ui8`, `ui16`, `ui32`, `f16`, `bf16`, `f32`.
   - `src` and `dst` must use `loc=vec`.
   - Static valid bounds: `src valid row <= src.rows`, `src valid column <= src.cols`, `dst valid row <= dst.rows`, and `dst valid column <= dst.cols`.
   - `src` and `dst` must have the same valid row.
@@ -6782,7 +6782,7 @@ pto.tsels ins(<mask>, <src>, <tmp>, <scalar> : <mask_type>, <src_type>, <tmp_typ
   - The shared element type must be `i16`, `i32`, `f16`, or `f32`.
   - `src` and `dst` must use row-major layout (`blayout=row_major`).
 - **Implementation checks (A5)**:
-  - The shared element type must be `i8`, `i16`, `i32`, `f16`, or `f32`.
+  - The shared element type must be `i8`, `i16`, `i32`, `ui8`, `ui16`, `ui32`, `f16`, or `f32`.
   - `mask`, `src`, and `dst` must use row-major layout (`blayout=row_major`).
 - The DPS form keeps a `tmp` operand, but PTO IR does not impose an extra tmp shape, valid-shape, or layout relation.
 - On A5, `tmp` may be a placeholder tile that is smaller than `src` / `dst`.
@@ -6859,13 +6859,13 @@ pto.tand ins(<src0>, <src1> : <src0_type>, <src1_type>)
 
 - **Implementation checks (A2A3)**:
   - `src0`, `src1`, and `dst` must have the same element type.
-  - The shared element type must be an 8-bit or 16-bit signless integer type supported by PTO IR: `i8`, `i16`.
+  - The shared element type must be a 1/2/4-byte integer type supported by PTO IR: `i8`, `ui8`, `i16`, `ui16`, `i32`, `ui32`.
   - `src0`, `src1`, and `dst` must use row-major layout (`blayout=row_major`).
   - `src0` and `dst` must have the same valid region: `src0 valid row == dst valid row` and `src0 valid column == dst valid column`.
   - `src1` and `dst` must have the same valid region: `src1 valid row == dst valid row` and `src1 valid column == dst valid column`.
 - **Implementation checks (A5)**:
   - `src0`, `src1`, and `dst` must have the same element type.
-  - The shared element type must be an 8-bit, 16-bit, or 32-bit signless integer type supported by PTO IR: `i8`, `i16`, `i32`.
+  - The shared element type must be a 1/2/4-byte integer type supported by PTO IR: `i8`, `ui8`, `i16`, `ui16`, `i32`, `ui32`.
   - `src0`, `src1`, and `dst` must use row-major layout (`blayout=row_major`).
   - `src0` and `dst` must have the same valid region: `src0 valid row == dst valid row` and `src0 valid column == dst valid column`.
   - `src1` and `dst` must have the same valid region: `src1 valid row == dst valid row` and `src1 valid column == dst valid column`.
@@ -6916,13 +6916,13 @@ For each element (i, j):
 
 - **Implementation checks (A2A3)**:
   - `src0`, `src1`, and `dst` must have the same element type.
-  - The shared element type must be an 8-bit or 16-bit signless integer type supported by PTO IR: `i8`, `i16`.
+  - The shared element type must be a 1/2/4-byte integer type supported by PTO IR: `i8`, `ui8`, `i16`, `ui16`, `i32`, `ui32`.
   - `src0`, `src1`, and `dst` must use row-major layout (`blayout=row_major`).
   - `src0` and `dst` must have the same valid region: `src0 valid row == dst valid row` and `src0 valid column == dst valid column`.
   - `src1` and `dst` must have the same valid region: `src1 valid row == dst valid row` and `src1 valid column == dst valid column`.
 - **Implementation checks (A5)**:
   - `src0`, `src1`, and `dst` must have the same element type.
-  - The shared element type must be an 8-bit, 16-bit, or 32-bit signless integer type supported by PTO IR: `i8`, `i16`, `i32`.
+  - The shared element type must be a 1/2/4-byte integer type supported by PTO IR: `i8`, `ui8`, `i16`, `ui16`, `i32`, `ui32`.
   - `src0`, `src1`, and `dst` must use row-major layout (`blayout=row_major`).
   - `src0` and `dst` must have the same valid region: `src0 valid row == dst valid row` and `src0 valid column == dst valid column`.
   - `src1` and `dst` must have the same valid region: `src1 valid row == dst valid row` and `src1 valid column == dst valid column`.
@@ -6977,11 +6977,11 @@ For each element (i, j):
 - `src0` and `dst` must have the same valid region.
 - `src1` and `dst` must have the same valid region.
 - **Implementation checks (A2/A3)**:
-  - The shared element type must be `i8` or `i16`.
+  - The shared element type must be a 1/2/4-byte integer type: `i8`, `ui8`, `i16`, `ui16`, `i32`, `ui32`.
   - `tmp` must have the same element type as `src0` / `src1` / `dst`.
   - `tmp` must use row-major layout and have the same valid region as `dst`.
 - **Implementation checks (A5)**:
-  - The shared element type must be `i8`, `i16`, or `i32`.
+  - The shared element type must be a 1/2/4-byte integer type: `i8`, `ui8`, `i16`, `ui16`, `i32`, `ui32`.
   - The with-`tmp` DPS form is retained, but PTO IR does not impose an extra tmp shape, valid-shape, or layout relation on A5.
 
 **Hardware Mapping:**
@@ -7228,7 +7228,7 @@ For each element (i, j):
 | Name | Type | Description |
 |------|------|-------------|
 | `src` | `pto.tile_buf` | Source tile buffer |
-| `scalar` | `AnySignlessInteger` | Scalar value |
+| `scalar` | `IntScalarType` (integer) | Scalar value |
 | `dst` | `pto.tile_buf` | Destination tile buffer |
 
 **Results:** None. Writes into `dst` via DPS pattern.
@@ -7238,12 +7238,12 @@ For each element (i, j):
 - Setting the source Tile and destination Tile to the same memory is **Unsupported**.
 - **Implementation checks (A2A3)**:
   - `src` and `dst` must have the same element type.
-  - The shared element type must be an 8-bit or 16-bit signless integer type supported by PTO IR: `i8`, `i16`.
+  - The shared element type must be a 1/2-byte integer type supported by PTO IR: `i8`, `ui8`, `i16`, `ui16`.
   - `src0`, and `dst` must use row-major layout (`blayout=row_major`).
   - `src0` and `dst` must have the same valid region: `src0 valid row == dst valid row` and `src0 valid column == dst valid column`.
 - **Implementation checks (A5)**:
   - `src0` and `dst` must have the same element type.
-  - The shared element type must be an 8-bit, 16-bit, or 32-bit signless integer type supported by PTO IR: `i8`, `i16`, `i32`.
+  - The shared element type must be a 1/2/4-byte integer type supported by PTO IR: `i8`, `ui8`, `i16`, `ui16`, `i32`, `ui32`.
   - `src0`and `dst` must use row-major layout (`blayout=row_major`).
   - `src0` and `dst` must have the same valid region: `src0 valid row == dst valid row` and `src0 valid column == dst valid column`.
 
@@ -7281,7 +7281,7 @@ For each element (i, j):
 | Name | Type | Description |
 |------|------|-------------|
 | `src` | `pto.tile_buf` | Source tile buffer |
-| `scalar` | `AnySignlessInteger` | Scalar value |
+| `scalar` | `IntScalarType` (integer) | Scalar value |
 | `dst` | `pto.tile_buf` | Destination tile buffer |
 
 **Results:** None. Writes into `dst` via DPS pattern.
@@ -7291,12 +7291,12 @@ For each element (i, j):
   - Setting the source Tile and destination Tile to the same memory is **Unsupported**.
 - **Implementation checks (A2A3)**:
   - `src0` and `dst` must have the same element type.
-  - The shared element type must be an 8-bit or 16-bit signless integer type supported by PTO IR: `i8`, `i16`.
+  - The shared element type must be a 1/2-byte integer type supported by PTO IR: `i8`, `ui8`, `i16`, `ui16`.
   - `src0` and `dst` must use row-major layout (`blayout=row_major`).
   - `src0` and `dst` must have the same valid region: `src0 valid row == dst valid row` and `src0 valid column == dst valid column`.
 - **Implementation checks (A5)**:
   - `src0`and `dst` must have the same element type.
-  - The shared element type must be an 8-bit, 16-bit, or 32-bit signless integer type supported by PTO IR: `i8`, `i16`, `i32`.
+  - The shared element type must be a 1/2/4-byte integer type supported by PTO IR: `i8`, `ui8`, `i16`, `ui16`, `i32`, `ui32`.
   - `src0` and `dst` must use row-major layout (`blayout=row_major`).
   - `src0` and `dst` must have the same valid region: `src0 valid row == dst valid row` and `src0 valid column == dst valid column`.
   
@@ -7336,7 +7336,7 @@ For each element (i, j):
 | Name | Type | Description |
 |------|------|-------------|
 | `src` | `pto.tile_buf` | Source tile buffer |
-| `scalar` | `AnySignlessInteger` | Scalar value |
+| `scalar` | `IntScalarType` (integer) | Scalar value |
 | `tmp` | `pto.tile_buf` | Workspace operand on A2/A3; placeholder operand on A5 |
 | `dst` | `pto.tile_buf` | Destination tile buffer |
 
@@ -7356,11 +7356,11 @@ pto.txors ins(<src>, <scalar>, <tmp> : <src_type>, <scalar_type>, <tmp_type>)
 - `src` and `dst` must use row-major layout (`blayout=row_major`).
 - `src` and `dst` must have the same valid region.
 - **Implementation checks (A2/A3)**:
-  - The shared element type must be `i8` or `i16`.
+  - The shared element type must be a 1/2-byte integer type: `i8`, `ui8`, `i16`, `ui16`.
   - `tmp` must have the same element type as `src` / `dst`.
   - `tmp` must use row-major layout.
 - **Implementation checks (A5)**:
-  - The shared element type must be `i8`, `i16`, or `i32`.
+  - The shared element type must be a 1/2/4-byte integer type: `i8`, `ui8`, `i16`, `ui16`, `i32`, `ui32`.
   - The current DPS form still carries `tmp`, but PTO IR does not impose an extra tmp shape, valid-shape, or layout relation on A5.
   
 **Hardware Mapping:**
@@ -8597,7 +8597,7 @@ dst[offset] = val
 |------|------|-------------|
 | `dst` | `pto.tile_buf` | Destination tile |
 | `offset` | `Index` | Linear element offset |
-| `val` | `ScalarType` (signless integer / float) | Scalar value to write |
+| `val` | `ScalarType` (integer / float) | Scalar value to write |
 
 **Results:** None. Writes into `dst` via DPS pattern.
 
@@ -10156,7 +10156,7 @@ printf(format, scalar);
 | Name | Type | Description |
 |------|------|-------------|
 | `format` | `StrAttr` | Compile-time format string (e.g. `"%+08.3f"`); must be a literal attribute |
-| `ScalarType` (signless integer / float) | Numeric value to print |
+| `ScalarType` (integer / float) | Numeric value to print |
 
 **Results:** None.
 

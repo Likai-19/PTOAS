@@ -46,6 +46,24 @@ static LogicalResult verifyIntegerWidths(Operation *op, Type type,
   return success();
 }
 
+// The pto-isa clauses for the bitwise ops are integral-only (docs/isa/TAND.md,
+// TOR.md, TANDS.md, TORS.md, TXORS.md). TAND/TOR accept 1/2/4-byte integral
+// element types on both arches; the scalar TANDS/TORS are 1/2-byte on A2/A3
+// and 1/2/4-byte on A5 (the A2/A3 scalar path is limited by its lowering).
+static bool hasBitwiseElementWidth(Type type, ArrayRef<unsigned> widths) {
+  auto intType = dyn_cast<IntegerType>(type);
+  return intType && llvm::is_contained(widths, intType.getWidth());
+}
+
+static LogicalResult verifyBitwiseElementWidth(Operation *op, Type type,
+                                               ArrayRef<unsigned> widths,
+                                               StringRef diagnostic) {
+  if (!hasBitwiseElementWidth(type, widths)) {
+    return op->emitOpError(diagnostic);
+  }
+  return success();
+}
+
 static LogicalResult verifyBitwiseBinaryOp(Operation *op, Type src0,
                                            Type src1, Type dst,
                                            StringRef opName) {
@@ -58,9 +76,9 @@ static LogicalResult verifyBitwiseBinaryOp(Operation *op, Type src0,
       return failure();
     std::string diagnostic =
         (Twine("expects ") + arch + " " + opName +
-         " src0, src1, and dst element type to be i8/i16/i32")
+         " src0, src1, and dst element type to be a 1/2/4-byte integer")
             .str();
-    return verifyIntegerWidths(op, *elem, {8, 16, 32}, diagnostic);
+    return verifyBitwiseElementWidth(op, *elem, {8, 16, 32}, diagnostic);
   };
   auto verifyA2A3 = [&verifyFor]() { return verifyFor("A2/A3"); };
   auto verifyA5 = [&verifyFor]() { return verifyFor("A5"); };
@@ -76,12 +94,13 @@ static LogicalResult verifyBitwiseScalarOp(Operation *op, Value src,
       return failure();
     std::string diagnostic =
         (Twine("expects ") + (isA5 ? "A5 " : "A2/A3 ") + opName +
-         " src, scalar, and dst element type to be " +
-         (isA5 ? "i8/i16/i32" : "i8/i16"))
+         " src, scalar, and dst element type to be a " +
+         (isA5 ? "1/2/4-byte integer" : "1/2-byte integer"))
             .str();
-    return verifyIntegerWidths(op, *elem, isA5 ? ArrayRef<unsigned>{8, 16, 32}
-                                               : ArrayRef<unsigned>{8, 16},
-                               diagnostic);
+    return verifyBitwiseElementWidth(op, *elem,
+                                     isA5 ? ArrayRef<unsigned>{8, 16, 32}
+                                          : ArrayRef<unsigned>{8, 16},
+                                     diagnostic);
   };
   auto verifyA2A3 = [&verifyFor]() { return verifyFor(false); };
   auto verifyA5 = [&verifyFor]() { return verifyFor(true); };
