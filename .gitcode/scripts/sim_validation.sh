@@ -561,6 +561,16 @@ if [[ -n "${LLVM_BUILD_DIR:-}" && -d "${LLVM_BUILD_DIR}/tools/mlir/python_packag
   echo "LLVM/MLIR python bindings match ${PYTHON_TAG}"
 fi
 
+# Keep this interpreter's packages ahead of the CANN installation: CANN's
+# setenv.bash prepends its python/site-packages to PYTHONPATH, which would
+# shadow identically named packages installed in this environment (pypto now,
+# ptoas next). Re-prepend ours after every other PYTHONPATH update so this
+# environment wins while the build's MLIR and PTO roots stay on the path.
+PURELIB="$("${PYTHON_BIN}" -c 'import sysconfig; print(sysconfig.get_paths().get("purelib") or "")')"
+if [[ -n "${PURELIB}" ]]; then
+  export PYTHONPATH="${PURELIB}${PYTHONPATH:+:${PYTHONPATH}}"
+fi
+
 PTOAS_BIN="${PTOAS_BIN:-${WORKSPACE}/build/tools/ptoas/ptoas}"
 [[ -x "${PTOAS_BIN}" ]] || {
   echo "ERROR: built ptoas is unavailable: ${PTOAS_BIN}" >&2

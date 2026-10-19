@@ -426,6 +426,16 @@ if [[ -n "${RESOLVED_PTOAS_BIN:-}" ]]; then
   prepend_path "$(dirname -- "${RESOLVED_PTOAS_BIN}")"
   export PTOAS_BIN="${RESOLVED_PTOAS_BIN}"
 fi
+
+# Keep this interpreter's packages ahead of the CANN installation: CANN's
+# setenv.bash prepends its python/site-packages to PYTHONPATH, which would
+# shadow identically named packages installed in this environment (pypto now,
+# ptoas next). Re-prepend ours after sourcing it so this environment wins.
+PURELIB="$("${RESOLVED_PYTHON_BIN}" -c 'import sysconfig; print(sysconfig.get_paths().get("purelib") or "")')"
+if [[ -n "${PURELIB}" ]]; then
+  export PYTHONPATH="${PURELIB}${PYTHONPATH:+:${PYTHONPATH}}"
+fi
+
 if ! python_can_import_ptodsl "${RESOLVED_PYTHON_BIN}"; then
   die "active Python environment cannot import ptodsl/ptoas.mlir.ir;" \
       "install the PTOAS wheel or use a preconfigured environment"
