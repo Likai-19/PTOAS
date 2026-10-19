@@ -1,0 +1,272 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Predicate algebra folds for the gated ops (semantics from
+// docs/isa/micro-isa/05-materialization-predicate.md):
+//   pand(src0, src1, mask) = mask ? (src0 & src1) : 0
+//   por (src0, src1, mask) = mask ? (src0 | src1) : 0
+//   pxor(src0, src1, mask) = mask ? (src0 ^ src1) : 0
+//   pnot(input, mask)      = mask ? (~input)      : 0
+//
+// The first group needs a PAT_ALL operand (identity folds). The "no PAT_ALL"
+// group only uses PAT_VL<k> / PAT_ALLF prefixes: static prefixes compose
+// through the gated AND/OR (AND keeps the minimum bound, OR keeps the mask and
+// the wider operand), an all-false mask or operand collapses the op, a repeated
+// pxor operand is zero under any mask, and pnot of an all-false input is its
+// mask.
+// RUN: pto-test-opt %s -vpto-mask-simplify | FileCheck %s
+
+module {
+  // ---- folds that need PAT_ALL ------------------------------------------
+
+  // pand(all, x, all) -> x
+  func.func @pand_all_true_operand() -> !pto.mask<b32> {
+    %all = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+    %x = pto.pset_b32 "PAT_VL32" : !pto.mask<b32>
+    %r = pto.pand %all, %x, %all
+        : !pto.mask<b32>, !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+
+  // por(all, x, all) -> all
+  func.func @por_all_true_operand() -> !pto.mask<b32> {
+    %all = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+    %x = pto.pset_b32 "PAT_VL32" : !pto.mask<b32>
+    %r = pto.por %all, %x, %all
+        : !pto.mask<b32>, !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+
+  // pand(x, x, all) -> x
+  func.func @pand_same_operand() -> !pto.mask<b32> {
+    %all = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+    %x = pto.pset_b32 "PAT_VL32" : !pto.mask<b32>
+    %r = pto.pand %x, %x, %all
+        : !pto.mask<b32>, !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+
+  // pnot(PAT_ALL, m) -> all-false for any mask
+  func.func @pnot_all_true_input() -> !pto.mask<b32> {
+    %all = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+    %m = pto.pset_b32 "PAT_VL32" : !pto.mask<b32>
+    %r = pto.pnot %all, %m : !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+
+  // ---- folds with no PAT_ALL anywhere -----------------------------------
+
+  // pand(PAT_VL64, PAT_VL4, PAT_VL32) -> PAT_VL4 (gated AND keeps the minimum)
+  func.func @pand_prefix_min() -> !pto.mask<b32> {
+    %m = pto.pset_b32 "PAT_VL32" : !pto.mask<b32>
+    %a = pto.pset_b32 "PAT_VL64" : !pto.mask<b32>
+    %b = pto.pset_b32 "PAT_VL4" : !pto.mask<b32>
+    %r = pto.pand %a, %b, %m
+        : !pto.mask<b32>, !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+
+  // pand(PAT_VL8, PAT_VL16, PAT_VL32) -> PAT_VL8
+  func.func @pand_prefix_min_mask_bound() -> !pto.mask<b32> {
+    %m = pto.pset_b32 "PAT_VL32" : !pto.mask<b32>
+    %a = pto.pset_b32 "PAT_VL8" : !pto.mask<b32>
+    %b = pto.pset_b32 "PAT_VL16" : !pto.mask<b32>
+    %r = pto.pand %a, %b, %m
+        : !pto.mask<b32>, !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+
+  // por(PAT_VL2, PAT_VL32, PAT_VL16) -> PAT_VL16 (the mask is the tighter bound)
+  func.func @por_prefix_max_mask_bound() -> !pto.mask<b32> {
+    %m = pto.pset_b32 "PAT_VL16" : !pto.mask<b32>
+    %a = pto.pset_b32 "PAT_VL2" : !pto.mask<b32>
+    %b = pto.pset_b32 "PAT_VL32" : !pto.mask<b32>
+    %r = pto.por %a, %b, %m
+        : !pto.mask<b32>, !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+
+  // por(PAT_VL32, PAT_VL16, PAT_VL8) -> PAT_VL8
+  func.func @por_prefix_mask_bound() -> !pto.mask<b32> {
+    %m = pto.pset_b32 "PAT_VL8" : !pto.mask<b32>
+    %a = pto.pset_b32 "PAT_VL32" : !pto.mask<b32>
+    %b = pto.pset_b32 "PAT_VL16" : !pto.mask<b32>
+    %r = pto.por %a, %b, %m
+        : !pto.mask<b32>, !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+
+  // pand(x, y, PAT_ALLF) -> all-false
+  func.func @pand_all_false_mask() -> !pto.mask<b32> {
+    %allf = pto.pset_b32 "PAT_ALLF" : !pto.mask<b32>
+    %a = pto.pset_b32 "PAT_VL32" : !pto.mask<b32>
+    %b = pto.pset_b32 "PAT_VL16" : !pto.mask<b32>
+    %r = pto.pand %a, %b, %allf
+        : !pto.mask<b32>, !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+
+  // pand(PAT_ALLF, y, m) -> all-false
+  func.func @pand_all_false_operand() -> !pto.mask<b32> {
+    %allf = pto.pset_b32 "PAT_ALLF" : !pto.mask<b32>
+    %b = pto.pset_b32 "PAT_VL16" : !pto.mask<b32>
+    %m = pto.pset_b32 "PAT_VL32" : !pto.mask<b32>
+    %r = pto.pand %allf, %b, %m
+        : !pto.mask<b32>, !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+
+  // pxor(x, x, m) -> all-false under any mask
+  func.func @pxor_same_operand() -> !pto.mask<b32> {
+    %m = pto.pset_b32 "PAT_VL8" : !pto.mask<b32>
+    %x = pto.pset_b32 "PAT_VL32" : !pto.mask<b32>
+    %r = pto.pxor %x, %x, %m
+        : !pto.mask<b32>, !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+
+  // pnot(PAT_ALLF, m) -> m
+  func.func @pnot_all_false_input() -> !pto.mask<b32> {
+    %allf = pto.pset_b32 "PAT_ALLF" : !pto.mask<b32>
+    %m = pto.pset_b32 "PAT_VL32" : !pto.mask<b32>
+    %r = pto.pnot %allf, %m : !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+
+  // por(x, y, PAT_ALLF) -> all-false
+  func.func @por_all_false_mask() -> !pto.mask<b32> {
+    %allf = pto.pset_b32 "PAT_ALLF" : !pto.mask<b32>
+    %a = pto.pset_b32 "PAT_VL32" : !pto.mask<b32>
+    %b = pto.pset_b32 "PAT_VL16" : !pto.mask<b32>
+    %r = pto.por %a, %b, %allf
+        : !pto.mask<b32>, !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+
+  // pxor(x, y, PAT_ALLF) -> all-false
+  func.func @pxor_all_false_mask() -> !pto.mask<b32> {
+    %allf = pto.pset_b32 "PAT_ALLF" : !pto.mask<b32>
+    %a = pto.pset_b32 "PAT_VL32" : !pto.mask<b32>
+    %b = pto.pset_b32 "PAT_VL16" : !pto.mask<b32>
+    %r = pto.pxor %a, %b, %allf
+        : !pto.mask<b32>, !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+
+  // pnot(x, PAT_ALLF) -> all-false
+  func.func @pnot_all_false_mask() -> !pto.mask<b32> {
+    %allf = pto.pset_b32 "PAT_ALLF" : !pto.mask<b32>
+    %x = pto.pset_b32 "PAT_VL32" : !pto.mask<b32>
+    %r = pto.pnot %x, %allf : !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+
+  // por(x, x, all) -> x
+  func.func @por_same_operand() -> !pto.mask<b32> {
+    %all = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+    %x = pto.pset_b32 "PAT_VL32" : !pto.mask<b32>
+    %r = pto.por %x, %x, %all
+        : !pto.mask<b32>, !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+
+  // Mixed mask granularities are outside the documented contract; the folds
+  // must leave the op alone instead of splicing a foreign result type.
+  func.func @mixed_granularity_survives() -> !pto.mask<b32> {
+    %all16 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+    %x16 = pto.pset_b16 "PAT_VL8" : !pto.mask<b16>
+    %all32 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+    %r = pto.pand %all16, %x16, %all32
+        : !pto.mask<b16>, !pto.mask<b16>, !pto.mask<b32> -> !pto.mask<b32>
+    return %r : !pto.mask<b32>
+  }
+}
+
+// CHECK-LABEL: func.func @pand_all_true_operand
+// CHECK-NOT: pto.pand
+// CHECK: %[[V0:.*]] = pto.pset_b32 "PAT_VL32"
+// CHECK: return %[[V0]]
+
+// CHECK-LABEL: func.func @por_all_true_operand
+// CHECK-NOT: pto.por
+// CHECK: %[[V1:.*]] = pto.pset_b32 "PAT_ALL"
+// CHECK: return %[[V1]]
+
+// CHECK-LABEL: func.func @pand_same_operand
+// CHECK-NOT: pto.pand
+// CHECK: %[[V2:.*]] = pto.pset_b32 "PAT_VL32"
+// CHECK: return %[[V2]]
+
+// CHECK-LABEL: func.func @pnot_all_true_input
+// CHECK-NOT: pto.pnot
+// CHECK: %[[V3:.*]] = pto.pset_b32 "PAT_ALLF"
+// CHECK: return %[[V3]]
+
+// CHECK-LABEL: func.func @pand_prefix_min
+// CHECK-NOT: pto.pand
+// CHECK: %[[V4:.*]] = pto.pset_b32 "PAT_VL4"
+// CHECK: return %[[V4]]
+
+// CHECK-LABEL: func.func @pand_prefix_min_mask_bound
+// CHECK-NOT: pto.pand
+// CHECK: %[[V5:.*]] = pto.pset_b32 "PAT_VL8"
+// CHECK: return %[[V5]]
+
+// CHECK-LABEL: func.func @por_prefix_max_mask_bound
+// CHECK-NOT: pto.por
+// CHECK: %[[V6:.*]] = pto.pset_b32 "PAT_VL16"
+// CHECK: return %[[V6]]
+
+// CHECK-LABEL: func.func @por_prefix_mask_bound
+// CHECK-NOT: pto.por
+// CHECK: %[[V7:.*]] = pto.pset_b32 "PAT_VL8"
+// CHECK: return %[[V7]]
+
+// CHECK-LABEL: func.func @pand_all_false_mask
+// CHECK-NOT: pto.pand
+// CHECK: %[[V8:.*]] = pto.pset_b32 "PAT_ALLF"
+// CHECK: return %[[V8]]
+
+// CHECK-LABEL: func.func @pand_all_false_operand
+// CHECK-NOT: pto.pand
+// CHECK: %[[V9:.*]] = pto.pset_b32 "PAT_ALLF"
+// CHECK: return %[[V9]]
+
+// CHECK-LABEL: func.func @pxor_same_operand
+// CHECK-NOT: pto.pxor
+// CHECK: %[[V10:.*]] = pto.pset_b32 "PAT_ALLF"
+// CHECK: return %[[V10]]
+
+// CHECK-LABEL: func.func @pnot_all_false_input
+// CHECK-NOT: pto.pnot
+// CHECK: %[[V11:.*]] = pto.pset_b32 "PAT_VL32"
+// CHECK: return %[[V11]]
+
+// CHECK-LABEL: func.func @por_all_false_mask
+// CHECK-NOT: pto.por
+// CHECK: %[[V12:.*]] = pto.pset_b32 "PAT_ALLF"
+// CHECK: return %[[V12]]
+
+// CHECK-LABEL: func.func @pxor_all_false_mask
+// CHECK-NOT: pto.pxor
+// CHECK: %[[V13:.*]] = pto.pset_b32 "PAT_ALLF"
+// CHECK: return %[[V13]]
+
+// CHECK-LABEL: func.func @pnot_all_false_mask
+// CHECK-NOT: pto.pnot
+// CHECK: %[[V14:.*]] = pto.pset_b32 "PAT_ALLF"
+// CHECK: return %[[V14]]
+
+// CHECK-LABEL: func.func @por_same_operand
+// CHECK-NOT: pto.por
+// CHECK: %[[V15:.*]] = pto.pset_b32 "PAT_VL32"
+// CHECK: return %[[V15]]
+
+// CHECK-LABEL: func.func @mixed_granularity_survives
+// CHECK: pto.pand
+// CHECK-SAME: !pto.mask<b16>, !pto.mask<b16>, !pto.mask<b32> -> !pto.mask<b32>

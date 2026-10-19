@@ -18,12 +18,16 @@
 // CHECK: func.func @TFILLPAD
 // CHECK-NOT: pto.tfillpad ins
 // CHECK: pto.vecscope
+// The pad mask is pto.pxor(dst_mask, src_mask, dst_mask) (see
+// lib/TileOps/a5/_fillpad.py). Here src and dst declare the same valid region
+// (v_row=8, v_col=48), so src_mask and dst_mask are the same value and
+// vpto-mask-simplify folds the xor to the all-false mask.
+// CHECK: pto.pset_b32 "PAT_ALLF"
 // CHECK: pto.castptr
-// The modern planner assigns src and dst the same tile address (in-place
-// fillpad), so the template's conservative fallback elides the self-copy of
-// the valid source region and only the pad stores remain.
+// The planner elides the self-copy of the valid source region, so only the pad
+// stores remain.
 // CHECK-NOT: pto.vlds
-// CHECK: pto.pxor
+// CHECK-NOT: pto.pxor
 // CHECK: pto.vdup
 // CHECK: pto.vsts
 // Note: vstus is not supported in TileLang DSL v1, so padding uses vsts instead
