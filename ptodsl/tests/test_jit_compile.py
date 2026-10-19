@@ -5242,7 +5242,15 @@ def _make_native_build_bisheng_fakes(launch_target_arches):
         )
         kernel_object.write_bytes(b"\x7fELF fake emitc kernel")
 
-    def fake_link_shared_library(launch_object, kernel_object, shared_library, *, kernel_kind):
+    def fake_link_shared_library(
+        launch_object,
+        kernel_object,
+        shared_library,
+        *,
+        kernel_kind,
+        host_objects=None,
+        link_flags=None,
+    ):
         expect(launch_object.is_file(), "native build should compile launch.cpp before linking")
         expect(kernel_object.is_file(), "native build should run ptoas before shared-library link")
         expect(
@@ -5280,7 +5288,7 @@ def _drive_native_build_variants(native_build_variants):
                 mock.patch.object(native_build_runtime, "_compile_emitc_kernel", side_effect=fake_compile_emitc_kernel)
             )
             stack.enter_context(
-                mock.patch.object(native_build_runtime, "_link_shared_library", side_effect=fake_link_shared_library)
+                mock.patch.object(native_build_runtime, "link_shared_library", side_effect=fake_link_shared_library)
             )
             stack.enter_context(
                 mock.patch.object(native_build_runtime, "runtime_library_flags", return_value=('-laclrt',))
@@ -5291,7 +5299,7 @@ def _drive_native_build_variants(native_build_variants):
             # the build loop below runs with every native-build seam patched
             for label, compiled, module_spec_override in native_build_variants:
                 module_spec = module_spec_override or getattr(compiled, "_module_spec")
-                lib, launch_symbol = native_build_runtime.build_native_library(
+                lib, _library_path, launch_symbol = native_build_runtime.build_native_library(
                     py_name=getattr(compiled, "_py_name"),
                     module_spec=module_spec,
                     kernel_signature=getattr(compiled, "_kernel_signature"),

@@ -83,6 +83,7 @@ add_mlir_dialect_library(PTOTransforms
   VPTO/VPTOOptimizeVcvt.cpp
   VPTO/VPTOMaskSimplify.cpp
   VPTOExpandMadOps.cpp
+  VPTO/VPTOExpandAsyncComm.cpp
   VPTO/VPTOExpandWrapperOps.cpp
   VPTOOptimizeCtrlState.cpp
   VPTO/VPTOSoftPostUpdate.cpp
@@ -371,7 +372,7 @@ target_compile_options(PTOTransforms PRIVATE -Wno-overloaded-virtual)
 # move assignment is inlined: moving the SyncModel temporary returned by
 # unified::buildSyncModel() into the member at PTOUnifiedSync.cpp triggers a bogus
 # "__builtin_memmove ... out of bounds" on the SmallVector<HiddenReservation>
-# inline storage. The access is in-bounds; GCC mis-models the small buffer. Keep
+# inline storage. The access is in-bounds; GCC models the small buffer wrongly. Keep
 # the warning visible but non-fatal for just this one unit, mirroring the project's
 # -Wno-error=deprecated-declarations policy for upstream/compiler churn. Clang does
 # not emit this, so scope it to GNU.

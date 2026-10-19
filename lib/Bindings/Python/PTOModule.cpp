@@ -137,56 +137,66 @@ static void populatePTODialectSubmodule(const pybind11::module &m) {
   (void)m;
 }
 
-static void registerPTOEnums1(py::module_ &m) {
+static void registerPTOEnums1(py::module_& m)
+{
     // [保留 HEAD]: AddressSpace 枚举定义
     py::enum_<MlirPTOAddressSpace>(m, "AddressSpace")
-    .value("Zero", MlirPTOAddressSpace::Zero)
-    .value("GM",   MlirPTOAddressSpace::GM)
-    .value("MAT",   MlirPTOAddressSpace::MAT)
-    .value("LEFT",  MlirPTOAddressSpace::LEFT)
-    .value("RIGHT",  MlirPTOAddressSpace::RIGHT)
-    .value("ACC",  MlirPTOAddressSpace::ACC)
-    .value("VEC",   MlirPTOAddressSpace::VEC)
-    .value("BIAS",   MlirPTOAddressSpace::BIAS)
-    .value("SCALING", MlirPTOAddressSpace::SCALING)
-    .export_values();
+        .value("Zero", MlirPTOAddressSpace::Zero)
+        .value("GM", MlirPTOAddressSpace::GM)
+        .value("MAT", MlirPTOAddressSpace::MAT)
+        .value("LEFT", MlirPTOAddressSpace::LEFT)
+        .value("RIGHT", MlirPTOAddressSpace::RIGHT)
+        .value("ACC", MlirPTOAddressSpace::ACC)
+        .value("VEC", MlirPTOAddressSpace::VEC)
+        .value("BIAS", MlirPTOAddressSpace::BIAS)
+        .value("SCALING", MlirPTOAddressSpace::SCALING)
+        .export_values();
     py::enum_<MlirPTOFenceScope>(m, "FenceScope")
-    .value("LocalMemory", MlirPTOFenceScope::LocalMemory)
-    .value("GM", MlirPTOFenceScope::GM)
-    .value("All", MlirPTOFenceScope::All)
-    .export_values();
+        .value("LocalMemory", MlirPTOFenceScope::LocalMemory)
+        .value("GM", MlirPTOFenceScope::GM)
+        .value("All", MlirPTOFenceScope::All)
+        .export_values();
     py::enum_<MlirPTOLoadCachePolicy>(m, "LoadCachePolicy")
-    .value("Default", MlirPTOLoadCachePolicy::Default)
-    .value("L2Bypass", MlirPTOLoadCachePolicy::L2Bypass);
+        .value("Default", MlirPTOLoadCachePolicy::Default)
+        .value("L2Bypass", MlirPTOLoadCachePolicy::L2Bypass);
     py::enum_<MlirPTOBLayout>(m, "BLayout")
-    .value("RowMajor", MlirPTOBLayout::RowMajor)
-    .value("ColMajor", MlirPTOBLayout::ColMajor);
+        .value("RowMajor", MlirPTOBLayout::RowMajor)
+        .value("ColMajor", MlirPTOBLayout::ColMajor);
 
     py::enum_<MlirPTOSLayout>(m, "SLayout")
-    .value("NoneBox", MlirPTOSLayout::NoneBox)
-    .value("RowMajor", MlirPTOSLayout::RowMajor)
-    .value("ColMajor", MlirPTOSLayout::ColMajor);
+        .value("NoneBox", MlirPTOSLayout::NoneBox)
+        .value("RowMajor", MlirPTOSLayout::RowMajor)
+        .value("ColMajor", MlirPTOSLayout::ColMajor);
 
     py::enum_<MlirPTOPadValue>(m, "PadValue")
-    .value("Null", MlirPTOPadValue::Null)
-    .value("Zero", MlirPTOPadValue::Zero)
-    .value("Max", MlirPTOPadValue::Max)
-    .value("Min", MlirPTOPadValue::Min);
+        .value("Null", MlirPTOPadValue::Null)
+        .value("Zero", MlirPTOPadValue::Zero)
+        .value("Max", MlirPTOPadValue::Max)
+        .value("Min", MlirPTOPadValue::Min);
 
     py::enum_<MlirPTOCompactMode>(m, "CompactMode")
-    .value("Null", MlirPTOCompactMode::Null)
-    .value("Normal", MlirPTOCompactMode::Normal)
-    .value("RowPlusOne", MlirPTOCompactMode::RowPlusOne);
+        .value("Null", MlirPTOCompactMode::Null)
+        .value("Normal", MlirPTOCompactMode::Normal)
+        .value("RowPlusOne", MlirPTOCompactMode::RowPlusOne);
 
     py::enum_<MlirPTORoundMode>(m, "RoundMode")
-    .value("NONE", MlirPTORoundMode::NONE)
-    .value("RINT", MlirPTORoundMode::RINT)
-    .value("ROUND", MlirPTORoundMode::ROUND)
-    .value("FLOOR", MlirPTORoundMode::FLOOR)
-    .value("CEIL", MlirPTORoundMode::CEIL)
-    .value("TRUNC", MlirPTORoundMode::TRUNC)
-    .value("ODD", MlirPTORoundMode::ODD)
-    .value("CAST_RINT", MlirPTORoundMode::CAST_RINT);
+        .value("NONE", MlirPTORoundMode::NONE)
+        .value("RINT", MlirPTORoundMode::RINT)
+        .value("ROUND", MlirPTORoundMode::ROUND)
+        .value("FLOOR", MlirPTORoundMode::FLOOR)
+        .value("CEIL", MlirPTORoundMode::CEIL)
+        .value("TRUNC", MlirPTORoundMode::TRUNC)
+        .value("ODD", MlirPTORoundMode::ODD)
+        .value("CAST_RINT", MlirPTORoundMode::CAST_RINT);
+}
+
+static void registerPTOEnums1b(py::module_& m)
+{
+    py::enum_<MlirPTODmaEngine>(m, "DmaEngine")
+        .value("Sdma", MlirPTODmaEngine_Sdma)
+        .value("Urma", MlirPTODmaEngine_Urma)
+        .value("Rdma", MlirPTODmaEngine_Rdma)
+        .export_values();
 }
 
 static void registerPTOEnums2(py::module_ &m) {
@@ -1263,10 +1273,9 @@ static void registerPTOTypes5(py::module_ &m) {
             py::arg("cls"), py::arg("context") = py::none());
 }
 
-static void registerPTOTypes6(py::module_ &m) {
-    mlir_type_subclass(
-        m, "AsyncEventType",
-        [](MlirType type) -> bool { return mlirPTOTypeIsAAsyncEventType(type); })
+static void registerPTOTypes6(py::module_& m)
+{
+    mlir_type_subclass(m, "AsyncEventType", [](MlirType type) -> bool { return mlirPTOTypeIsAAsyncEventType(type); })
         .def_classmethod(
             "get",
             [](py::object cls, MlirContext context) -> py::object {
@@ -1277,9 +1286,7 @@ static void registerPTOTypes6(py::module_ &m) {
 
     mlir_type_subclass(
         m, "PrefetchAsyncContextType",
-        [](MlirType type) -> bool {
-            return mlirPTOTypeIsAPrefetchAsyncContextType(type);
-        })
+        [](MlirType type) -> bool { return mlirPTOTypeIsAPrefetchAsyncContextType(type); })
         .def_classmethod(
             "get",
             [](py::object cls, MlirContext context) -> py::object {
@@ -1287,28 +1294,43 @@ static void registerPTOTypes6(py::module_ &m) {
                 return cls.attr("__call__")(t);
             },
             py::arg("cls"), py::arg("context") = py::none());
+}
 
-    mlir_type_subclass(
-        m, "HiF8Type",
-        [](MlirType type) -> bool { return mlirPTOTypeIsAHiF8Type(type); })
-        .def_classmethod(
-            "get",
-            [](py::object cls, MlirContext context) -> py::object {
-                MlirType t = mlirPTOHiF8TypeGet(context);
-                return cls.attr("__call__")(t);
-            },
-            py::arg("cls"), py::arg("context") = py::none());
+static void registerPTOTypes6b(py::module_& m)
+{
+    auto subclass = mlir_type_subclass(
+        m, "DmaSessionType", [](MlirType type) -> bool { return mlirPTOTypeIsADmaSessionType(type); });
+    subclass.def_classmethod(
+        "get",
+        [](py::object cls, MlirPTODmaEngine engine, MlirContext context) -> py::object {
+            MlirType t = mlirPTODmaSessionTypeGet(context, engine);
+            return cls.attr("__call__")(t);
+        },
+        py::arg("cls"), py::arg("engine"), py::arg("context") = py::none());
+    subclass.def_property_readonly(
+        "engine", [](MlirType self) -> MlirPTODmaEngine { return mlirPTODmaSessionTypeGetEngine(self); });
+}
 
-    mlir_type_subclass(
-        m, "F8E8M0Type",
-        [](MlirType type) -> bool { return mlirPTOTypeIsAF8E8M0Type(type); })
-        .def_classmethod(
-            "get",
-            [](py::object cls, MlirContext context) -> py::object {
-                MlirType t = mlirPTOF8E8M0TypeGet(context);
-                return cls.attr("__call__")(t);
-            },
-            py::arg("cls"), py::arg("context") = py::none());
+static void registerPTOTypes6c(py::module_& m)
+{
+    auto hiF8 = mlir_type_subclass(m, "HiF8Type", [](MlirType type) -> bool { return mlirPTOTypeIsAHiF8Type(type); });
+    hiF8.def_classmethod(
+        "get",
+        [](py::object cls, MlirContext context) -> py::object {
+            MlirType t = mlirPTOHiF8TypeGet(context);
+            return cls.attr("__call__")(t);
+        },
+        py::arg("cls"), py::arg("context") = py::none());
+
+    auto f8E8M0 =
+        mlir_type_subclass(m, "F8E8M0Type", [](MlirType type) -> bool { return mlirPTOTypeIsAF8E8M0Type(type); });
+    f8E8M0.def_classmethod(
+        "get",
+        [](py::object cls, MlirContext context) -> py::object {
+            MlirType t = mlirPTOF8E8M0TypeGet(context);
+            return cls.attr("__call__")(t);
+        },
+        py::arg("cls"), py::arg("context") = py::none());
 }
 
 static void registerPTOTypes7(py::module_ &m) {
@@ -1813,22 +1835,25 @@ static void registerConvTileBufType(pybind11::module_ &m) {
   addConvTileBufTypeAccessors(convTile, m);
 }
 
-
-void mlir::pto::python::populatePTODialectBindings(pybind11::module_ &m) {
-    // --------------------------------------------------------------------------
-    // Dialect registration helper
-    // --------------------------------------------------------------------------
+static void registerDialectHandle(py::module_& m)
+{
     m.def(
         "register_dialect",
         [](MlirContext context, bool load) {
             MlirDialectHandle handle = mlirGetDialectHandle__pto__();
             mlirDialectHandleRegisterDialect(handle, context);
             if (load) {
-              mlirDialectHandleLoadDialect(handle, context);
+                mlirDialectHandleLoadDialect(handle, context);
             }
         },
         py::arg("context"), py::arg("load") = true);
+}
+
+void mlir::pto::python::populatePTODialectBindings(pybind11::module_& m)
+{
+    registerDialectHandle(m);
     registerPTOEnums1(m);
+    registerPTOEnums1b(m);
     registerPTOEnums2(m);
     registerPTOEnums3(m);
     registerPTOEnums4(m);
@@ -1858,6 +1883,8 @@ void mlir::pto::python::populatePTODialectBindings(pybind11::module_ &m) {
     registerPTOTypes4b(m);
     registerPTOTypes5(m);
     registerPTOTypes6(m);
+    registerPTOTypes6b(m);
+    registerPTOTypes6c(m);
     registerPTOTypes7(m);
     registerPTOTypes8(m);
     registerPTOTypes9(m);

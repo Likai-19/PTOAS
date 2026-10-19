@@ -11,6 +11,7 @@
 #include "PTO/IR/PTOTypeUtils.h"
 #include "PTO/Transforms/Passes.h"
 #include "VPTOExpandMadOps.h"
+#include "VPTOExpandAsyncComm.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -35,7 +36,7 @@ using namespace mlir;
 
 namespace {
 
-enum class DmaArch { A2A3, A5 };
+using mlir::pto::expand_async::DmaArch;
 
 constexpr uint64_t kMxScaleAddressShift = 4;
 constexpr uint64_t kSubBlockShift = 18;
@@ -334,9 +335,9 @@ static Value materializeAccStoreClipPayload(Value value, Type destinationElement
   return rewriter.create<arith::AndIOp>(loc, widened, mask);
 }
 
-static Value getI64Constant(Location loc, PatternRewriter &rewriter,
-                            uint64_t value) {
-  return rewriter.create<arith::ConstantIntOp>(loc, value, mlir::pto::kValue64);
+static Value getI64Constant(Location loc, RewriterBase& rewriter, uint64_t value)
+{
+    return rewriter.create<arith::ConstantIntOp>(loc, value, mlir::pto::kValue64);
 }
 
 static Value deriveMxScaleDestination(Value dataDestination,
@@ -1929,55 +1930,51 @@ struct ExpandAtomicConfigPattern
   }
 };
 
-struct VPTOExpandWrapperOpsPass
-    : public pto::impl::VPTOExpandWrapperOpsBase<VPTOExpandWrapperOpsPass> {
-  using pto::impl::VPTOExpandWrapperOpsBase<
-      VPTOExpandWrapperOpsPass>::VPTOExpandWrapperOpsBase;
+struct VPTOExpandWrapperOpsPass : public pto::impl::VPTOExpandWrapperOpsBase<VPTOExpandWrapperOpsPass> {
+    using pto::impl::VPTOExpandWrapperOpsBase<VPTOExpandWrapperOpsPass>::VPTOExpandWrapperOpsBase;
 
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<arith::ArithDialect, func::FuncDialect, pto::PTODialect,
-                    scf::SCFDialect>();
-  }
-
-  void runOnOperation() override {
-    func::FuncOp func = getOperation();
-    if (func.isExternal()) {
-      return;
+    void getDependentDialects(DialectRegistry& registry) const override
+    {
+        registry.insert<arith::ArithDialect, func::FuncDialect, pto::PTODialect, scf::SCFDialect>();
     }
 
-    DmaArch dmaArch = getDmaArch(func->getParentOfType<ModuleOp>());
+    void runOnOperation() override
+    {
+        func::FuncOp func = getOperation();
+        if (func.isExternal()) {
+            return;
+        }
 
-    RewritePatternSet patterns(&getContext());
-    patterns.add(std::make_unique<ExpandDmaLoadPattern>(&getContext(), dmaArch));
-    patterns.add(std::make_unique<ExpandDmaStorePattern>(&getContext(), dmaArch));
-    patterns.add(
-        std::make_unique<ExpandA5Bf16VmulsPattern>(&getContext(), dmaArch));
-    patterns.add<ExpandUvldPattern,
-                 ExpandMteUbUbPattern, ExpandMteUbL1Pattern, ExpandCubeLoadPattern,
-                 ExpandCubeStorePattern, ExpandBiasLoadPattern,
-                 ExpandFpLoadPattern,
-                 ExpandCubeLoadFracPattern, ExpandLeftLoadPattern,
-                 ExpandRightLoadPattern, ExpandLeftLoadMxPattern,
-                 ExpandRightLoadMxPattern, ExpandAccStorePattern,
-                 ExpandAccStoreGmPattern,
-                 ExpandAccStoreUbPattern,
-                 ExpandRawFillL1Pattern,
-                 ExpandSimtLaunchPattern,
-                 ExpandAtomicConfigPattern<pto::SetAtomicAddOp>,
-                 ExpandAtomicConfigPattern<pto::SetAtomicMaxOp>,
-                 ExpandAtomicConfigPattern<pto::SetAtomicMinOp>,
-                 ExpandAtomicConfigPattern<pto::SetAtomicNoneOp>,
-                 ExpandAtomicConfigPattern<pto::SetAtomicF32Op>,
-                 ExpandAtomicConfigPattern<pto::SetAtomicF16Op>,
-                 ExpandAtomicConfigPattern<pto::SetAtomicBF16Op>,
-                 ExpandAtomicConfigPattern<pto::SetAtomicS32Op>,
-                 ExpandAtomicConfigPattern<pto::SetAtomicS16Op>,
-                 ExpandAtomicConfigPattern<pto::SetAtomicS8Op>>(&getContext());
-    pto::expand_mad::populateExpandMadPatterns(patterns);
-    if (failed(applyPatternsAndFoldGreedily(func, std::move(patterns)))) {
-      signalPassFailure();
+        DmaArch dmaArch = getDmaArch(func->getParentOfType<ModuleOp>());
+        // Ahead of the greedy patterns, because it needs a fixed order between
+        // session_init and the posts that read the session it builds. What it
+        // leaves behind is ordinary wrapper ops, which the patterns below then
+        // expand as usual.
+        if (failed(mlir::pto::expand_async::lowerAsyncSessions(func, dmaArch))) {
+            signalPassFailure();
+            return;
+        }
+
+        RewritePatternSet patterns(&getContext());
+        patterns.add(std::make_unique<ExpandDmaLoadPattern>(&getContext(), dmaArch));
+        patterns.add(std::make_unique<ExpandDmaStorePattern>(&getContext(), dmaArch));
+        patterns.add(std::make_unique<ExpandA5Bf16VmulsPattern>(&getContext(), dmaArch));
+        patterns.add<
+            ExpandUvldPattern, ExpandMteUbUbPattern, ExpandMteUbL1Pattern, ExpandCubeLoadPattern,
+            ExpandCubeStorePattern, ExpandBiasLoadPattern, ExpandFpLoadPattern, ExpandCubeLoadFracPattern,
+            ExpandLeftLoadPattern, ExpandRightLoadPattern, ExpandLeftLoadMxPattern, ExpandRightLoadMxPattern,
+            ExpandAccStorePattern, ExpandAccStoreGmPattern, ExpandAccStoreUbPattern, ExpandRawFillL1Pattern,
+            ExpandSimtLaunchPattern, ExpandAtomicConfigPattern<pto::SetAtomicAddOp>,
+            ExpandAtomicConfigPattern<pto::SetAtomicMaxOp>, ExpandAtomicConfigPattern<pto::SetAtomicMinOp>,
+            ExpandAtomicConfigPattern<pto::SetAtomicNoneOp>, ExpandAtomicConfigPattern<pto::SetAtomicF32Op>,
+            ExpandAtomicConfigPattern<pto::SetAtomicF16Op>, ExpandAtomicConfigPattern<pto::SetAtomicBF16Op>,
+            ExpandAtomicConfigPattern<pto::SetAtomicS32Op>, ExpandAtomicConfigPattern<pto::SetAtomicS16Op>,
+            ExpandAtomicConfigPattern<pto::SetAtomicS8Op>>(&getContext());
+        pto::expand_mad::populateExpandMadPatterns(patterns);
+        if (failed(applyPatternsAndFoldGreedily(func, std::move(patterns)))) {
+            signalPassFailure();
+        }
     }
-  }
 };
 
 } // namespace

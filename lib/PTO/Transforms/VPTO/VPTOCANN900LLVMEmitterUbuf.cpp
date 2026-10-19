@@ -148,40 +148,53 @@ ubufPackCopyUbToGmConfig1(Operation *anchor, ValueRange operands) {
   return packLoopPair(anchor, operands[6], operands[7]);
 }
 
-static FailureOr<Value>
-packCopyUbToGmCfgV220(Operation *anchor, ValueRange operands) {
-  return packCopyV220Config(anchor, operands, kUbToGmConfig0OperandCount);
+static FailureOr<Value> packCopyUbToGmCfgV220(Operation* anchor, ValueRange operands)
+{
+    return packCopyV220Config(anchor, operands, kUbToGmConfig0OperandCount);
 }
 
-static FailureOr<Value> buildUbufUnaryConfig(Operation *anchor,
-                                             ConversionPatternRewriter &rewriter,
-                                             Value repeat, Value dstBlockStride,
-                                             Value srcBlockStride,
-                                             Value dstRepeatStride,
-                                             Value srcRepeatStride) {
-  Type i64Type = rewriter.getI64Type();
-  Value repeatI64 = castIntegerLikeTo(anchor, repeat, i64Type);
-  Value dstBlockStrideI64 =
-      castIntegerLikeTo(anchor, dstBlockStride, i64Type);
-  Value srcBlockStrideI64 =
-      castIntegerLikeTo(anchor, srcBlockStride, i64Type);
-  Value dstRepeatStrideI64 =
-      castIntegerLikeTo(anchor, dstRepeatStride, i64Type);
-  Value srcRepeatStrideI64 =
-      castIntegerLikeTo(anchor, srcRepeatStride, i64Type);
-  if (!repeatI64 || !dstBlockStrideI64 || !srcBlockStrideI64 ||
-      !dstRepeatStrideI64 || !srcRepeatStrideI64) {
-    return failure();
-  }
+// Same field layout as the block-granular config above, but the length is
+// carried in bytes. Measured on c220: with nBurst at bit 4 and the length at
+// bit 16, asking for 4 bytes moves exactly 4 bytes, while the block-granular
+// form rounds anything under 32 bytes down to a transfer of nothing.
+static FailureOr<Value> packCopyUbToGmCfgAlignV220(Operation* anchor, ValueRange operands)
+{
+    if (operands.size() != 8) {
+        return failure();
+    }
 
-  return packMaskedI64Fields(
-      rewriter, anchor->getLoc(), getI64Constant(rewriter, anchor->getLoc(), 0),
-      {{repeatI64, kMoveVRepeatShift},
-       {dstBlockStrideI64, 0},
-       {srcBlockStrideI64, kMoveVSrcBlockStrideShift},
-       {dstRepeatStrideI64, kMoveVDstRepeatStrideShift},
-       {srcRepeatStrideI64, kMoveVSrcRepeatStrideShift}},
-      0xff);
+    OpBuilder builder(anchor);
+    builder.setInsertionPoint(anchor);
+
+    auto values = castIntegerLikeOperands(anchor, operands, {2u, 3u, 4u}, builder.getI64Type());
+    if (failed(values)) {
+        return failure();
+    }
+    return packShiftedI64Fields(builder, anchor->getLoc(), (*values)[0], {{(*values)[1], 4}, {(*values)[2], 16}});
+}
+
+static FailureOr<Value> buildUbufUnaryConfig(
+    Operation* anchor, ConversionPatternRewriter& rewriter, Value repeat, Value dstBlockStride, Value srcBlockStride,
+    Value dstRepeatStride, Value srcRepeatStride)
+{
+    Type i64Type = rewriter.getI64Type();
+    Value repeatI64 = castIntegerLikeTo(anchor, repeat, i64Type);
+    Value dstBlockStrideI64 = castIntegerLikeTo(anchor, dstBlockStride, i64Type);
+    Value srcBlockStrideI64 = castIntegerLikeTo(anchor, srcBlockStride, i64Type);
+    Value dstRepeatStrideI64 = castIntegerLikeTo(anchor, dstRepeatStride, i64Type);
+    Value srcRepeatStrideI64 = castIntegerLikeTo(anchor, srcRepeatStride, i64Type);
+    if (!repeatI64 || !dstBlockStrideI64 || !srcBlockStrideI64 || !dstRepeatStrideI64 || !srcRepeatStrideI64) {
+        return failure();
+    }
+
+    return packMaskedI64Fields(
+        rewriter, anchor->getLoc(), getI64Constant(rewriter, anchor->getLoc(), 0),
+        {{repeatI64, kMoveVRepeatShift},
+         {dstBlockStrideI64, 0},
+         {srcBlockStrideI64, kMoveVSrcBlockStrideShift},
+         {dstRepeatStrideI64, kMoveVDstRepeatStrideShift},
+         {srcRepeatStrideI64, kMoveVSrcRepeatStrideShift}},
+        0xff);
 }
 
 template <typename UBOp>
@@ -256,28 +269,45 @@ static StringRef buildCopyUbToGmCallee(MLIRContext *context,
 
 // Creates a call to a planned function and records the declaration that must
 // be emitted alongside the lowered module.
-static void planVPTOLLVMCall(Location loc, StringRef calleeName,
-                             TypeRange argTypes, ValueRange args,
-                             ConversionPatternRewriter &rewriter,
-                             LoweringState &state) {
-  auto funcType = rewriter.getFunctionType(argTypes, TypeRange{});
-  rewriter.create<func::CallOp>(loc, calleeName, TypeRange{}, args);
-  state.plannedDecls.push_back(PlannedDecl{calleeName.str(), funcType});
+static void planVPTOLLVMCall(
+    Location loc, StringRef calleeName, TypeRange argTypes, ValueRange args, ConversionPatternRewriter& rewriter,
+    LoweringState& state)
+{
+    auto funcType = rewriter.getFunctionType(argTypes, TypeRange{});
+    rewriter.create<func::CallOp>(loc, calleeName, TypeRange{}, args);
+    state.plannedDecls.push_back(PlannedDecl{calleeName.str(), funcType});
+}
+
+// The ordinary c220 UB->GM path carries its length in 32-byte units, so a
+// transfer shorter than a block rounds down to nothing at all. Callers that
+// need a byte-granular store, such as the 4-byte SDMA doorbell write, ask for
+// the ALIGN intrinsic instead. Both the callee and the config packing below
+// have to agree on that, so the decision is made in one place.
+template <typename CopyOp>
+static bool isByteGranularUbToGm(CopyOp op, const std::string& march)
+{
+    if constexpr (std::is_same_v<CopyOp, pto::CopyGmToUbufOp>) {
+        return false;
+    } else {
+        bool isC220 = march == "dav-c220-vec" || march == "dav-c220-cube";
+        return isC220 && op->hasAttr("vpto.byte_granular");
+    }
 }
 
 // Callee selection for the GM<->UBUF copy ops.
 template <typename CopyOp>
-static FailureOr<StringRef> getCopyOpCallee(CopyOp op,
-                                            const std::string &march,
-                                            [[maybe_unused]] bool hasPadding) {
-  if constexpr (std::is_same_v<CopyOp, pto::CopyGmToUbufOp>) {
-    return buildCopyGmToUbCallee(op.getContext(), op.getSource().getType(),
-                                 march, hasPadding);
-  } else {
-    // Padding is a GM->UB-only contract; other copy directions ignore it.
-    (void)hasPadding;
-    return buildCopyUbToGmCallee(op.getContext(), march);
-  }
+static FailureOr<StringRef> getCopyOpCallee(CopyOp op, const std::string& march, [[maybe_unused]] bool hasPadding)
+{
+    if constexpr (std::is_same_v<CopyOp, pto::CopyGmToUbufOp>) {
+        return buildCopyGmToUbCallee(op.getContext(), op.getSource().getType(), march, hasPadding);
+    } else {
+        // Padding is a GM->UB-only contract; other copy directions ignore it.
+        (void)hasPadding;
+        if (isByteGranularUbToGm(op, march)) {
+            return StringAttr::get(op.getContext(), "llvm.hivm.MOV.UB.TO.OUT.ALIGN.b32.V220").getValue();
+        }
+        return buildCopyUbToGmCallee(op.getContext(), march);
+    }
 }
 
 struct CopyGmUbConfigs {
@@ -289,32 +319,36 @@ struct CopyGmUbConfigs {
 // Materializes the packed config arguments for a GM<->UBUF copy op. The c220
 // signatures take a single config while CANN900 GM/UB copies use two configs.
 template <typename CopyOp>
-static FailureOr<CopyGmUbConfigs>
-materializeCopyGmUbConfigs(CopyOp op, typename CopyOp::Adaptor adaptor,
-                           const std::string &march, bool hasPadding) {
-  constexpr bool isGmUb = std::is_same_v<CopyOp, pto::CopyGmToUbufOp>;
-  bool isC220 = march == "dav-c220-vec" || march == "dav-c220-cube";
-  bool useA3NonPadded = isC220 && isGmUb && !hasPadding;
-  bool useA3UbGm = isC220 && !isGmUb;
-  bool useSingleConfig = useA3NonPadded || useA3UbGm;
-  FailureOr<Value> config0 = failure();
-  FailureOr<Value> config1 = failure();
-  if (useA3NonPadded)
-  {
-    config0 = packCopyGmToUbCfgV220(op, adaptor.getOperands());
-  } else if (useA3UbGm) {
-    config0 = packCopyUbToGmCfgV220(op, adaptor.getOperands());
-  } else if constexpr (isGmUb) {
-    config0 = ubufPackCopyGmToUbConfig0(op, adaptor.getOperands());
-    config1 = ubufPackCopyGmToUbConfig1(op, adaptor.getOperands());
-  } else {
-    config0 = ubufPackCopyUbToGmConfig0(op, adaptor.getOperands());
-    config1 = ubufPackCopyUbToGmConfig1(op, adaptor.getOperands());
-  }
-  if (failed(config0) || (!useSingleConfig && failed(config1)))
-    return failure();
-  return CopyGmUbConfigs{*config0, useSingleConfig ? Value() : *config1,
-                         useSingleConfig};
+static FailureOr<CopyGmUbConfigs> materializeCopyGmUbConfigs(
+    CopyOp op, typename CopyOp::Adaptor adaptor, const std::string& march, bool hasPadding)
+{
+    constexpr bool isGmUb = std::is_same_v<CopyOp, pto::CopyGmToUbufOp>;
+    bool isC220 = march == "dav-c220-vec" || march == "dav-c220-cube";
+    bool byteGranular = isByteGranularUbToGm(op, march);
+    bool useA3NonPadded = isC220 && isGmUb && !hasPadding;
+    bool useA3UbGm = isC220 && !isGmUb && !byteGranular;
+    bool useSingleConfig = useA3NonPadded || useA3UbGm;
+    FailureOr<Value> config0 = failure();
+    FailureOr<Value> config1 = failure();
+    if (byteGranular) {
+        config0 = packCopyUbToGmCfgAlignV220(op, adaptor.getOperands());
+        // Only exercised with both strides at zero, which is all a single-burst
+        // store needs.
+        config1 = packCopyUbToGmConfig1(op, adaptor.getOperands());
+    } else if (useA3NonPadded) {
+        config0 = packCopyGmToUbCfgV220(op, adaptor.getOperands());
+    } else if (useA3UbGm) {
+        config0 = packCopyUbToGmCfgV220(op, adaptor.getOperands());
+    } else if constexpr (isGmUb) {
+        config0 = ubufPackCopyGmToUbConfig0(op, adaptor.getOperands());
+        config1 = ubufPackCopyGmToUbConfig1(op, adaptor.getOperands());
+    } else {
+        config0 = ubufPackCopyUbToGmConfig0(op, adaptor.getOperands());
+        config1 = ubufPackCopyUbToGmConfig1(op, adaptor.getOperands());
+    }
+    if (failed(config0) || (!useSingleConfig && failed(config1)))
+        return failure();
+    return CopyGmUbConfigs{*config0, useSingleConfig ? Value() : *config1, useSingleConfig};
 }
 
 // Callee name builders for the ubuf shift/scalar/unary arithmetic families.

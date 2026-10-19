@@ -109,6 +109,16 @@ def _marshal_launch_args(kernel_signature, args):
     return marshaled
 
 
+def build_and_load_native_library(compiled: CompiledKernelHandle):
+    """Build this specialization if needed and return ``(library, path, symbol)``.
+
+    Delegates to ``CompiledKernelHandle.native_library()`` so launch handles and
+    host-symbol callers share one loaded library for the specialization.
+    """
+    library, launch_symbol = compiled.native_library()
+    return library, compiled.native_library_path(), launch_symbol
+
+
 class LaunchHandle:
     """Callable launch binding returned by ``compiled[grid, stream]``."""
 
@@ -130,14 +140,14 @@ class LaunchHandle:
         # persistent cache disabled (CompiledKernelHandle.native_library).
         lib, launch_symbol = self._compiled.native_library()
         fn = getattr(lib, launch_symbol)
-        fn.argtypes = _launch_argtypes(self._compiled._kernel_signature)
+        fn.argtypes = _launch_argtypes(self._compiled.kernel_signature)
         fn.restype = None
         self._launch_fn = fn
         self._launch_symbol = launch_symbol
 
     def __call__(self, *args):
         self._ensure_launch_fn()
-        marshaled = _marshal_launch_args(self._compiled._kernel_signature, args)
+        marshaled = _marshal_launch_args(self._compiled.kernel_signature, args)
         self._launch_fn(
             ctypes.c_uint32(self._grid),
             _normalize_stream_ptr(self._stream),
@@ -171,5 +181,6 @@ def parse_launch_spec(launch_spec) -> tuple[int, object]:
 
 __all__ = [
     "LaunchHandle",
+    "build_and_load_native_library",
     "parse_launch_spec",
 ]

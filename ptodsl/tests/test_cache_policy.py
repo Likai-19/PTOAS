@@ -37,10 +37,10 @@ class CachePolicyTest(unittest.TestCase):
         )
 
     @staticmethod
-    def _optin_dir(case):
-        optin_td = tempfile.TemporaryDirectory(prefix="ptodsl-optin-")
-        case.addCleanup(optin_td.cleanup)
-        return optin_td.name
+    def _opt_in_dir(case):
+        opt_in_td = tempfile.TemporaryDirectory(prefix="ptodsl-opt_in-")
+        case.addCleanup(opt_in_td.cleanup)
+        return opt_in_td.name
 
     def setUp(self):
         self._saved = dict(os.environ)
@@ -55,14 +55,14 @@ class CachePolicyTest(unittest.TestCase):
         self.assertFalse(cache.cache_enabled())
 
     def test_cache_dir_opts_in(self):
-        optin = self._optin_dir(self)
-        os.environ["PTODSL_CACHE_DIR"] = optin
+        opt_in = self._opt_in_dir(self)
+        os.environ["PTODSL_CACHE_DIR"] = opt_in
         self.assertTrue(cache.cache_enabled())
         artifacts = cache.artifact_paths("foo", "fn", "key")
-        self.assertTrue(str(artifacts.cache_dir).startswith(optin))
+        self.assertTrue(str(artifacts.cache_dir).startswith(opt_in))
 
     def test_no_cache_wins_over_cache_dir(self):
-        os.environ["PTODSL_CACHE_DIR"] = self._optin_dir(self)
+        os.environ["PTODSL_CACHE_DIR"] = self._opt_in_dir(self)
         os.environ["PTODSL_NO_CACHE"] = "1"
         self.assertFalse(cache.cache_enabled())
 
@@ -78,7 +78,7 @@ class CachePolicyTest(unittest.TestCase):
         sentinel = object()
         with mock.patch.object(native_build, "_materialize_native_library", side_effect=fake_materialize), \
                 mock.patch.object(native_build.ctypes, "CDLL", return_value=sentinel):
-            library, launch_symbol = native_build.build_native_library(
+            library, library_path, launch_symbol = native_build.build_native_library(
                 py_name="foo",
                 module_spec=self._module_spec(),
                 kernel_signature=SimpleNamespace(positional_parameters=[]),
@@ -86,6 +86,7 @@ class CachePolicyTest(unittest.TestCase):
                 specialization_key="key",
             )
         self.assertIs(library, sentinel)
+        self.assertTrue(str(library_path))
         self.assertTrue(launch_symbol.startswith("ptodsl_launch_"))
         self.assertFalse(
             captured["dir"].exists(),
@@ -105,7 +106,11 @@ class NativeLibraryReuseTest(unittest.TestCase):
 
         def fake_build(**kwargs):
             calls.append(kwargs)
-            return (SimpleNamespace(ptodsl_launch_fn=fake_launch), "ptodsl_launch_fn")
+            return (
+                SimpleNamespace(ptodsl_launch_fn=fake_launch),
+                "/tmp/fake.so",
+                "ptodsl_launch_fn",
+            )
 
         with mock.patch.object(native_build, "build_native_library", side_effect=fake_build):
             for _ in range(3):
@@ -118,7 +123,7 @@ class NativeLibraryReuseTest(unittest.TestCase):
 
         def fake_build(**kwargs):
             calls.append(kwargs)
-            return (object(), "launch_symbol")
+            return (object(), "/tmp/fake.so", "launch_symbol")
 
         with mock.patch.object(native_build, "build_native_library", side_effect=fake_build):
             first = handle.native_library()

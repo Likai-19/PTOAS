@@ -844,6 +844,24 @@ static void lowerPTOToVPTOBackend(PassManager &pm, ModuleOp module) {
   kernelModulePM.addPass(mlir::createCanonicalizerPass());
 }
 
+// The toolchain-detected version, unless --cann-output-version overrides it.
+// The override exists so a test can pin the version the VPTO backend lowers for
+// without a matching CANN install, which is the only way to exercise the
+// pre-beta.2 rejection path on a host that ships a newer toolchain.
+static pto::CANNVersion resolveEffectiveCANNVersion(const pto::CANNVersion& detected)
+{
+    if (cannOutputVersion.empty()) {
+        return detected;
+    }
+    std::optional<pto::CANNVersion> parsed = pto::parseCANNVersion(cannOutputVersion);
+    if (!parsed) {
+        llvm::errs() << "Warning: unable to parse --cann-output-version=" << cannOutputVersion
+                     << "; using the detected version.\n";
+        return detected;
+    }
+    return *parsed;
+}
+
 static pto::VPTOEmissionOptions
 buildVPTOEmissionOptions(const pto::CANNVersion &cannVersion,
                          llvm::StringRef targetArch) {
@@ -1531,8 +1549,8 @@ static LogicalResult finishVPTOMainPipeline(
     return failure();
   }
   handled = true;
-  exitCode = emitVPTOBackendResult(*module, result, emitVPTOHostStub,
-                                   context.getCANNVersionOrDefault());
+  exitCode = emitVPTOBackendResult(
+      *module, result, emitVPTOHostStub, resolveEffectiveCANNVersion(context.getCANNVersionOrDefault()));
   return success();
 }
 
@@ -1602,8 +1620,8 @@ static int runVPTOSkipMainlinePipeline(OwningOpRef<ModuleOp> &module,
   if (failed(runVPTOBackendPipeline(module, state.hasTileOpsToExpand))) {
     return 1;
   }
-  return emitVPTOBackendResult(*module, result, emitVPTOHostStub,
-                               context.getCANNVersionOrDefault());
+  return emitVPTOBackendResult(
+      *module, result, emitVPTOHostStub, resolveEffectiveCANNVersion(context.getCANNVersionOrDefault()));
 }
 
 static LogicalResult runEmitCPreparationPipeline(OwningOpRef<ModuleOp> &module,

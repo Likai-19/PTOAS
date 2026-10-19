@@ -12,43 +12,44 @@
 
 namespace mlir::pto {
 
-static bool supportsOfficialLowering(const VPTOEmissionOptions &options) {
-  const bool isC220 = options.march == "dav-c220-vec" ||
-                      options.march == "dav-c220-cube";
-  return isC220 ||
-         options.cannVersion >= kCANN900Beta2Version;
+static bool supportsOfficialLowering(const VPTOEmissionOptions& options)
+{
+    const bool isC220 = options.march == "dav-c220-vec" || options.march == "dav-c220-cube";
+    return isC220 || options.cannVersion >= kCANN900Beta2Version;
 }
 
-static bool containsLdStDev(ModuleOp module) {
-  bool found = false;
-  module.walk([&](Operation *op) {
-    if (isa<PTOLdDevOp, PTOStDevOp>(op)) {
-      found = true;
+// ld_dev is required on A2/A3 for SDMA descriptor reads. st_dev is A5-only:
+// A2/A3 cannot use it to ring the SDMA doorbell, and stores through that path
+// are not reliable on that generation. Other non-c220 targets still need the
+// 9.0.0 official lowering; the 9.0.0-beta.1 intrinsic set has not been checked.
+static bool containsOp(ModuleOp module, bool wantLdDev, bool wantStDev)
+{
+    bool found = false;
+    module.walk([&](Operation* op) {
+        if ((wantLdDev && isa<PTOLdDevOp>(op)) || (wantStDev && isa<PTOStDevOp>(op))) {
+            found = true;
+        }
+    });
+    return found;
+}
+
+static LogicalResult verifyLdStDevTarget(ModuleOp module, const VPTOEmissionOptions& options, llvm::raw_ostream& diagOS)
+{
+    const bool isC220 = options.march == "dav-c220-vec" || options.march == "dav-c220-cube";
+    if (isC220 && containsOp(module, false, true)) {
+        diagOS << "VPTO LLVM emission failed: pto.st_dev is not supported on A2/A3\n";
+        return failure();
     }
-  });
-  return found;
-}
+    if (!containsOp(module, true, true)) {
+        return success();
+    }
+    if (isC220 || supportsOfficialLowering(options)) {
+        return success();
+    }
 
-static LogicalResult verifyLdStDevTarget(ModuleOp module,
-                                         const VPTOEmissionOptions &options,
-                                         llvm::raw_ostream &diagOS) {
-  if (!containsLdStDev(module)) {
-    return success();
-  }
-
-  const bool isC220 = options.march == "dav-c220-vec" ||
-                      options.march == "dav-c220-cube";
-  if (isC220) {
-    diagOS << "VPTO LLVM emission failed: pto.ld_dev and pto.st_dev require "
-              "--pto-arch=a5\n";
-    return failure();
-  }
-  if (!supportsOfficialLowering(options)) {
     diagOS << "VPTO LLVM emission failed: pto.ld_dev and pto.st_dev require "
               "CANN 9.0.0-beta.2 or newer official lowering\n";
     return failure();
-  }
-  return success();
 }
 
 LogicalResult lowerVPTOModuleToLLVMModules(

@@ -77,6 +77,23 @@ def PTO_AddressSpaceAttr : PTO_Attr<"AddressSpace", "address_space"> {
 }
 
 //===----------------------------------------------------------------------===//
+// DMA engine
+//===----------------------------------------------------------------------===//
+
+def PTO_DmaEngine_Sdma : I32EnumAttrCase<"Sdma", 0, "sdma">;
+def PTO_DmaEngine_Urma : I32EnumAttrCase<"Urma", 1, "urma">;
+def PTO_DmaEngine_Rdma : I32EnumAttrCase<"Rdma", 2, "rdma">;
+
+// The engine that drives an asynchronous session. Numbered to match
+// MlirPTODmaEngine / !pto.dma_session<engine>.
+def PTO_DmaEngineEnum : PTO_I32Enum<
+  "DmaEngine", "DMA engine driving an async session", [
+    PTO_DmaEngine_Sdma,
+    PTO_DmaEngine_Urma,
+    PTO_DmaEngine_Rdma
+  ]>;
+
+//===----------------------------------------------------------------------===//
 // Tile load cache policy
 //===----------------------------------------------------------------------===//
 

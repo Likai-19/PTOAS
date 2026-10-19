@@ -114,6 +114,8 @@ add_mlir_dialect_library(PTOIR
   VPTO/dma/VPTOVldsx2.cpp
   VPTO/dma/VPTOVsts.cpp
   VPTO/dma/VPTOVstsx2.cpp
+  VPTO/dma/VPTOSessionInit.cpp
+  VPTO/dma/VPTOSdmaGmGm.cpp
   VPTO/mad/VPTOMadOp.cpp
   VPTO/mad/VPTOMadAccOp.cpp
   VPTO/mad/VPTOMadBiasOp.cpp

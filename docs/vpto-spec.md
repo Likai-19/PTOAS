@@ -1373,6 +1373,7 @@ the linked files.
 | 16 | [Cube Matrix Multiply](isa/micro-isa/16-cube-matmul.md) | GM↔L1 (`l1`/cbuf) staging, L1 raw fill and L1 (`l1`)↔UB/BT/FB side moves, L1→L0A/L0B loads, L0C (`l0c`) matmul, and FIXPIPE MTE writeback | 20 | `pto.mte_gm_l1`, `pto.raw_fill_l1`, `pto.mte_l1_ub`, `pto.mte_gm_l1_frac`, `pto.mte_l1_bt`, `pto.mte_l1_fb`, `pto.mte_l1_l0a`, `pto.mte_l1_l0b`, `pto.mte_l1_l0a_mx`, `pto.mte_l1_l0b_mx`, `pto.mad`, `pto.mad_acc`, `pto.mad_bias`, `pto.mad_mx`, `pto.mad_mx_acc`, `pto.mad_mx_bias`, `pto.mte_l0c_l1`, `pto.mte_l0c_gm`, `pto.mte_l0c_ub` |
 | 17 | [SIMT Ops](isa/micro-isa/17-simt.md) | SIMT launch, thread/lane queries, vote/shuffle/redux, cache-controlled GM access, atomics, target-specific scalar forms, conversion, synchronization, and state preservation | ~63 | `pto.store_vfsimt_info`, `pto.simt_launch`, `pto.get_tid_x`, `pto.get_laneid`, `pto.vote_*`, `pto.shuffle_*`, `pto.redux_*`, `pto.ldg`, `pto.stg`, `pto.atomic_*`, SIMT-controlled `pto.cast` conversions, `pto.syncthreads`, `pto.keep`, `pto.resume`, etc. |
 | 18 | [Special Scalar Operations](isa/micro-isa/18-special-scalar.md) | PTO scalar runtime queries, typed pointer/address calculation, scalar-pipeline memory, and AICore GM L1-bypass access | 11 | `pto.get_block_idx`, `pto.get_subblock_idx`, `pto.get_block_num`, `pto.get_subblock_num`, `pto.get_l2_cache_offset`, `pto.castptr`, `pto.addptr`, `pto.load`, `pto.store`, `pto.ld_dev`, `pto.st_dev` |
+| 19 | [Async Comm](isa/micro-isa/19-async-comm.md) | Async GM↔GM SDMA copy; session filled from a host template | 2 | `pto.session_init`, `pto.sdma_gm_gm` |
 
 ---
 
@@ -1399,6 +1400,7 @@ the linked files.
 | Scatter | 3 | `pto.vscatter` |
 | Ordinary typed scalar/packed access | 18 | `pto.load`, `pto.store` |
 | Scalar GM access bypassing local L1 data cache | 18 | `pto.ld_dev`, `pto.st_dev` |
+| GM→GM SDMA copy | 19 | `pto.sdma_gm_gm` |
 
 ### Compute Operations
 
@@ -1432,9 +1434,9 @@ the linked files.
 
 Group 14 covers the common PTO scalar value operations. Group 18 catalogs PTO
 scalar queries, pointer/address operations,
-and ordinary scalar-memory operations. Workitem-dependent and target-specific
-SIMT operations remain in Group 17, while shared structured-control semantics
-remain in Group 15.
+and ordinary scalar-memory operations. Group 19 covers session fill and GM↔GM
+SDMA copies. Workitem-dependent and target-specific SIMT operations remain in
+Group 17, while shared structured-control semantics remain in Group 15.
 
 | Operation | Group | Description |
 |-----------|-------|-------------|

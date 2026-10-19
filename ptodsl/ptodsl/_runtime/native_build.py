@@ -25,6 +25,7 @@ from .cache import (
     is_native_build_current,
     write_manifest,
 )
+from .._native_options import EMPTY_NATIVE_OPTIONS, NativeBuildOptions
 from .codegen import generate_launch_cpp, launch_symbol_name
 from .toolchain import (
     aicore_arch_for_kernel_kind,
@@ -102,7 +103,38 @@ def _resolve_ptoas_backend(module_spec, ptoas_overrides: dict) -> str | None:
     return ptoas_overrides.get("backend") or getattr(module_spec, "backend", None)
 
 
-def _compile_config_text(
+def native_options_of(module_spec) -> NativeBuildOptions:
+    """Read the kernel's host-side build additions, defaulting to none.
+
+    Read defensively because a module spec reaches this layer from several
+    frontends, and one that predates the option should build as it always did.
+    """
+    return getattr(module_spec, "native_options", None) or EMPTY_NATIVE_OPTIONS
+
+
+def _host_source_config_lines(native_options: NativeBuildOptions) -> list[str]:
+    """Cache identity for the host sources compiled into the library.
+
+    Both the path and the file's contents, because a host source is an input to
+    this build like the MLIR is. Digesting the path alone would reuse a library
+    built from an older version of the same file, which is the failure mode a
+    caller iterating on a shim would hit first.
+
+    A source that cannot be read yields no digest instead of an error: the build
+    reports the missing file with the command that needed it, and this function
+    only decides whether the previous build still counts.
+    """
+    lines = [f"include_dir={path}" for path in native_options.include_dirs]
+    for source in native_options.host_sources:
+        try:
+            digest = _content_digest(source.read_text(encoding="utf-8"))
+        except OSError:
+            digest = "unreadable"
+        lines.append(f"host_source={source}:{digest}")
+    return lines
+
+
+def compile_config_text(
     *,
     module_spec,
     effective_insert_sync: bool,
@@ -118,12 +150,13 @@ def _compile_config_text(
             f"pto_level={effective_pto_level}",
             f"backend={ptoas_overrides.get('backend')}",
             "enable_tile_op_expand=True",
+            *_host_source_config_lines(native_options_of(module_spec)),
         ]
     )
 
 
-def _host_compile_flags() -> list[str]:
-    return common_include_flags() + [
+def _host_compile_flags(include_dirs: tuple[Path, ...] = ()) -> list[str]:
+    return common_include_flags() + [f"-I{path}" for path in include_dirs] + [
         "-std=gnu++17",
         "-O2",
         "-Wno-macro-redefined",
@@ -209,12 +242,70 @@ def _compile_emitc_kernel(
     )
 
 
-def _link_shared_library(
+def _host_object_path(cache_dir: Path, index: int, source: Path) -> Path:
+    """Object path for one extra host source.
+
+    Indexed as well as named, because two sources in different directories may
+    share a stem and would otherwise overwrite each other's object.
+    """
+    return cache_dir / f"host_{index}_{source.stem}.o"
+
+
+def compile_host_sources(
+    native_options: NativeBuildOptions,
+    cache_dir: Path,
+) -> list[Path]:
+    """Compile each ``native_options['host_sources']`` entry to an object file."""
+    if not native_options.host_sources:
+        return []
+
+    # Every source is checked before the toolchain is resolved, so a mistyped
+    # path reports itself rather than whichever environment variable the
+    # compiler lookup happens to want first. The paths were resolved against the
+    # declaring file, so naming one in full is the useful part of the message.
+    missing = [source for source in native_options.host_sources if not source.is_file()]
+    if missing:
+        listed = ", ".join(str(path) for path in missing)
+        raise FileNotFoundError(
+            f"@pto.jit native_options['host_sources'] does not exist: {listed}"
+        )
+
+    bisheng = resolve_bisheng()
+    flags = _host_compile_flags(native_options.include_dirs)
+    objects = []
+    for index, source in enumerate(native_options.host_sources):
+        host_object = _host_object_path(cache_dir, index, source)
+        _run([bisheng, *flags, "-c", str(source), "-o", str(host_object)])
+        objects.append(host_object)
+    return objects
+
+
+def extra_link_flags(native_options: NativeBuildOptions) -> list[str]:
+    """Library search paths and library names contributed by ``native_options``.
+
+    Each search path also becomes an rpath entry, matching how the CANN runtime
+    directories are added: a caller who had to name a directory to link against
+    needs it found again at load time.
+    """
+    flags: list[str] = []
+    for lib_dir in native_options.library_dirs:
+        flags.extend([f"-L{lib_dir}", f"-Wl,-rpath,{lib_dir}"])
+    flags.extend(f"-l{name}" for name in native_options.link_libraries)
+    # bisheng --cce-fatobj-link does not pull the C++ runtime. Host C++ objects
+    # that use std::string, operator new, or static guards need it on the line.
+    if native_options.host_sources and "stdc++" not in native_options.link_libraries:
+        flags.append("-lstdc++")
+    return flags
+
+
+def link_shared_library(
     launch_object: Path,
     kernel_object: Path,
     shared_library: Path,
     *,
     kernel_kind: str | None,
+    host_objects: list[Path] | None = None,
+    link_flags: list[str] | None = None,
 ) -> None:
     bisheng = resolve_bisheng()
     soname = shared_library.name
@@ -232,7 +323,13 @@ def _link_shared_library(
             str(shared_library),
             str(launch_object),
             str(kernel_object),
+            *[str(path) for path in host_objects or []],
             *runtime_library_flags(sim_mode=sim_mode),
+            # After the runtime flags, so a host source may depend on a runtime
+            # symbol. -Wl,--no-undefined is on, so anything still unresolved here
+            # is a missing entry in native_options rather than a load-time
+            # surprise.
+            *(link_flags or []),
         ]
     )
 
@@ -305,19 +402,23 @@ def _native_build_config(module_spec):
     )
     effective_pto_level = _effective_pto_level(mode=module_spec.mode)
     ptoas_overrides = _source_ptoas_overrides(module_spec)
-    compile_config_text = _compile_config_text(
+    config_text = compile_config_text(
         module_spec=module_spec,
         effective_insert_sync=effective_insert_sync,
         effective_pto_level=effective_pto_level,
         ptoas_overrides=ptoas_overrides,
     )
+    native_options = native_options_of(module_spec)
+    link_flags = extra_link_flags(native_options)
     sim_mode = bool(os.environ.get("MSPROF_SIMULATOR_MODE"))
-    link_config_text = "\n".join(runtime_library_flags(sim_mode=sim_mode))
+    link_config_text = "\n".join(
+        [*runtime_library_flags(sim_mode=sim_mode), *link_flags]
+    )
     return {
         "insert_sync": effective_insert_sync,
         "pto_level": effective_pto_level,
         "ptoas_overrides": ptoas_overrides,
-        "compile_config": compile_config_text,
+        "compile_config": config_text,
         "link_config": link_config_text,
     }
 
@@ -338,11 +439,16 @@ def _compile_native_artifacts(artifacts, module_spec, *, effective_insert_sync, 
         target_arch=module_spec.target_arch,
         export_macro=f"{module_spec.function_name}_EXPORTS",
     )
-    _link_shared_library(
+    native_options = native_options_of(module_spec)
+    link_flags = extra_link_flags(native_options)
+    host_objects = compile_host_sources(native_options, artifacts.cache_dir)
+    link_shared_library(
         launch_object,
         artifacts.kernel_object,
         artifacts.shared_library,
         kernel_kind=module_spec.kernel_kind,
+        host_objects=host_objects,
+        link_flags=link_flags,
     )
 
 
@@ -353,7 +459,7 @@ def _write_native_manifest(
     launch_symbol,
     mlir_text,
     launch_cpp_text,
-    compile_config_text,
+    compile_config,
     link_config_text,
 ):
     write_manifest(
@@ -362,7 +468,7 @@ def _write_native_manifest(
         launch_symbol=launch_symbol,
         mlir_digest=_content_digest(mlir_text),
         launch_cpp_digest=_content_digest(launch_cpp_text),
-        compile_config_digest=_content_digest(compile_config_text),
+        compile_config_digest=_content_digest(compile_config),
         link_config_digest=_content_digest(link_config_text),
     )
 
@@ -383,13 +489,13 @@ def _materialize_native_library(
         kernel_signature=kernel_signature,
     )
     build_config = _native_build_config(module_spec)
-    compile_config_text = build_config["compile_config"]
+    compile_config = build_config["compile_config"]
     link_config_text = build_config["link_config"]
     if persistent_cache and is_native_build_current(
         artifacts,
         mlir_text=mlir_text,
         launch_cpp_text=launch_cpp_text,
-        compile_config_text=compile_config_text,
+        compile_config_text=compile_config,
         link_config_text=link_config_text,
     ):
         return artifacts.shared_library
@@ -412,7 +518,7 @@ def _materialize_native_library(
             launch_symbol=launch_symbol,
             mlir_text=mlir_text,
             launch_cpp_text=launch_cpp_text,
-            compile_config_text=compile_config_text,
+            compile_config=compile_config,
             link_config_text=link_config_text,
         )
     return artifacts.shared_library
@@ -425,8 +531,8 @@ def build_native_library(
     kernel_signature,
     mlir_text: str,
     specialization_key,
-) -> tuple[ctypes.CDLL, str]:
-    """Build, load and return the shared library for one specialization.
+) -> tuple[ctypes.CDLL, str, str]:
+    """Build, load and return ``(CDLL, library_path, launch_symbol)``.
 
     With the cache disabled the build happens inside a standard
     tempfile.TemporaryDirectory and the library is loaded while that directory
@@ -451,7 +557,8 @@ def build_native_library(
             mlir_text=mlir_text,
             persistent_cache=scratch is None,
         )
-        return ctypes.CDLL(str(library)), launch_symbol
+        library_path = str(library)
+        return ctypes.CDLL(library_path), library_path, launch_symbol
     finally:
         if scratch is not None:
             scratch.cleanup()
@@ -461,5 +568,10 @@ __all__ = [
     "NativeBuildArtifacts",
     "artifact_paths",
     "build_native_library",
+    "compile_config_text",
+    "compile_host_sources",
+    "extra_link_flags",
     "is_native_build_current",
+    "link_shared_library",
+    "native_options_of",
 ]
