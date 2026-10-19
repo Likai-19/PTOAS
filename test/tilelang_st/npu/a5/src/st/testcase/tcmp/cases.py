@@ -137,4 +137,15 @@ CASES = [
         "cmp_mode": "le",
         "eps": 0,
     },
+    # Case 12: f16 8x32 GT with valid 8x12 (non-multiple-of-8 valid columns:
+    # the last packed predicate byte is only partially used)
+    {
+        "name": "f16_8x32_gt",
+        "dtype": np.float16,
+        "shape": (8, 32),
+        "valid_shape": (8, 12),
+        "dst_dtype": np.int8,
+        "cmp_mode": "gt",
+        "eps": 0,
+    },
 ]

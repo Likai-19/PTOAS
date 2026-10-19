@@ -31,14 +31,14 @@ def main():
         valid_shape = case["valid_shape"]
         vr, vc = valid_shape
 
-        # Only compare the packed mask region: rows x (cols//8)
-        packed_cols = vc // 8
-
+        # The packed-mask contract defines the whole valid dst row: packed
+        # predicate bytes (ceil(cols/8), LSB-first) followed by zero padding,
+        # so the comparison covers [0, valid_cols) byte-exactly.
         golden = np.fromfile(os.path.join(case_dir, "golden.bin"), dtype=dst_dtype).reshape(shape)
         output = np.fromfile(os.path.join(case_dir, "output.bin"), dtype=dst_dtype).reshape(shape)
 
-        # Compare packed mask output in valid region
-        ok = result_cmp(golden[:vr, :packed_cols], output[:vr, :packed_cols], case["eps"])
+        # Compare the full valid dst row (packed bytes + zero padding)
+        ok = result_cmp(golden[:vr, :vc], output[:vr, :vc], case["eps"])
         if ok:
             print(style_pass(f"[INFO] {case['name']}: compare passed"))
         else:

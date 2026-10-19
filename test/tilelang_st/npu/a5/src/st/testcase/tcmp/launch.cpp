@@ -88,3 +88,9 @@ extern "C" __global__ AICORE void TCMP_i16_77x96_le(__gm__ int16_t *a, __gm__ in
 void LaunchTCMP_i16_77x96_le(int16_t *a, int16_t *b, int8_t *c, void *stream) {
     TCMP_i16_77x96_le<<<1, nullptr, stream>>>((__gm__ int16_t *)a, (__gm__ int16_t *)b, (__gm__ int8_t *)c);
 }
+// Case 12: f16 8x32 gt with valid 8x12 (partial packed byte)
+extern "C" __global__ AICORE void TCMP_f16_8x32_gt(__gm__ uint16_t *a, __gm__ uint16_t *b, __gm__ int8_t *c);
+
+void LaunchTCMP_f16_8x32_gt(uint16_t *a, uint16_t *b, int8_t *c, void *stream) {
+    TCMP_f16_8x32_gt<<<1, nullptr, stream>>>((__gm__ uint16_t *)a, (__gm__ uint16_t *)b, (__gm__ int8_t *)c);
+}

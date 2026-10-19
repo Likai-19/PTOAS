@@ -83,6 +83,62 @@ def _emit_tcmp_1d(src0, src1, dst):
             )
 
 
+def _static_valid_cols(tile):
+    """Return the tile's static valid column count, or None when dynamic."""
+    static_valid_shape = getattr(tile, "_template_static_valid_shape", None)
+    if static_valid_shape is None:
+        static_valid_shape = getattr(tile, "static_valid_shape", None)
+    if static_valid_shape is not None and static_valid_shape[1] is not None:
+        return static_valid_shape[1]
+    return None
+
+
+def _needs_row_tail_fill(static_cols, elements_per_store, bytes_per_store):
+    """Statically decide whether a dst valid row extends past the store span.
+
+    Comparing traced surface values would emit runtime compares, so the gate
+    only uses plain Python ints. A dynamic valid shape returns True and lets
+    the fill loop take zero trips at runtime when the stores already cover
+    the whole valid row.
+    """
+    if static_cols is None:
+        return True
+    store_span = (
+        (static_cols + elements_per_store - 1) // elements_per_store
+    ) * bytes_per_store
+    return store_span < static_cols
+
+
+@rewrite_jit_function
+def _emit_tcmp_2d_tail_fill(dst_ptr, dst_stride, valid_rows, store_span, valid_cols):
+    """Zero the dst valid-row bytes that the predicate stores do not cover.
+
+    A predicate store writes a fixed span selected by DIST (PK 16B / NORM 32B
+    on A5) regardless of how many predicate bits are valid. When a valid row
+    is wider than the stores' total span, the tail bytes would otherwise keep
+    whatever the UB held before the compare, so they are zeroed here to honor
+    the packed-mask contract (packed bits, LSB-first, then zero padding).
+
+    The fill reuses PK predicate stores of an all-inactive mask: one 16-byte
+    zero payload per store, at the same 16-byte address granularity the
+    packed PK stores already use (a vector store would need 32-byte-aligned
+    addresses and cannot express the 16-byte offset). The final chunk ends at
+    round_up_16(valid_cols), which never crosses the row end because dst rows
+    are 32-byte aligned and at least valid_cols wide. Bounds may be static
+    ints or traced runtime values; the loop is zero-trip when the predicate
+    stores already cover the whole valid row.
+    """
+    zero_mask = pto.pset_b8(pto.PAT.ALLF)
+    for row in range(0, valid_rows, 1):
+        for offset in range(store_span, valid_cols, 16):
+            pto.psts(
+                zero_mask,
+                dst_ptr,
+                row * dst_stride + offset,
+                dist=pto.PredicateDist.PK,
+            )
+
+
 @rewrite_jit_function
 def _emit_tcmp_2d_f32(src0, src1, dst, cmp_mode):
     dtype = src0.dtype
@@ -131,6 +187,10 @@ def _emit_tcmp_2d_f32(src0, src1, dst, cmp_mode):
                 store_offset,
                 dist=pto.PredicateDist.PK,
             )
+    if _needs_row_tail_fill(_static_valid_cols(src0), lanes * 2, 16):
+        _emit_tcmp_2d_tail_fill(
+            dst_ptr, dst_stride, valid_rows, iterations * 16, valid_cols
+        )
 
 
 @rewrite_jit_function
@@ -160,6 +220,10 @@ def _emit_tcmp_2d_narrow(src0, src1, dst, cmp_mode, packed):
                 store_offset,
                 dist=dist,
             )
+    if _needs_row_tail_fill(_static_valid_cols(src0), lanes, bytes_per_iter):
+        _emit_tcmp_2d_tail_fill(
+            dst_ptr, dst_stride, valid_rows, iterations * bytes_per_iter, valid_cols
+        )
 
 
 @rewrite_jit_function

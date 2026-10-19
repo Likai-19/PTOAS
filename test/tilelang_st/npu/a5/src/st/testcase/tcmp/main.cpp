@@ -34,6 +34,7 @@ void LaunchTCMP_i32_77x96_eq(int32_t *a, int32_t *b, int8_t *c, void *stream);
 void LaunchTCMP_i32_32x32_eq(int32_t *a, int32_t *b, int8_t *c, void *stream);
 void LaunchTCMP_i16_32x32_eq(int16_t *a, int16_t *b, int8_t *c, void *stream);
 void LaunchTCMP_i16_77x96_le(int16_t *a, int16_t *b, int8_t *c, void *stream);
+void LaunchTCMP_f16_8x32_gt(uint16_t *a, uint16_t *b, int8_t *c, void *stream);
 
 struct TestCase {
     const char *name;
@@ -67,6 +68,10 @@ static const TestCase kCases[] = {
     {"i16_32x32_eq", (void (*)(void*, void*, void*, void*))LaunchTCMP_i16_32x32_eq, 32, 32, sizeof(int16_t), sizeof(int8_t)},
     // Case 11: i16 77x96 le with valid 32x32 (int16_77x96_32x32)
     {"i16_77x96_le", (void (*)(void*, void*, void*, void*))LaunchTCMP_i16_77x96_le, 77, 96, sizeof(int16_t), sizeof(int8_t)},
+    // Case 12: f16 8x32 gt with valid 8x12 (partial packed byte)
+    {"f16_8x32_gt",
+     (void (*)(void*, void*, void*, void*))LaunchTCMP_f16_8x32_gt,
+     8, 32, sizeof(uint16_t), sizeof(int8_t)},
 };
 static constexpr size_t kNumCases = sizeof(kCases) / sizeof(kCases[0]);
 

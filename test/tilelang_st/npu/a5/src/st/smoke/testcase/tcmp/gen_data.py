@@ -52,7 +52,7 @@ for case in CASES:
     golden = np.zeros(shape, dtype=np.uint8)
 
     # Pack mask bits: each byte stores 8 comparison results (1 bit each)
-    packed_cols = vc // 8  # number of byte columns that store actual packed data
+    packed_cols = (vc + 7) // 8  # packed predicate bytes: ceil(cols/8), last byte partial
 
     for row in range(vr):
         for col_byte in range(packed_cols):
