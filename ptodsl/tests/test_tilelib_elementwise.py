@@ -10,6 +10,7 @@
 """Element-wise template selection, traversal, and scope acceptance tests."""
 
 import ast
+import itertools
 import unittest
 from pathlib import Path
 
@@ -606,7 +607,70 @@ def _select_specs(
     }
 
 
+_ISSUE1607_ARITH_FAMILIES = (
+    ("tdiv", ("i16", "ui16", "ui32"), _binary_specs, "pto.vdiv"),
+    ("tfmod", ("i32", "ui32", "ui16"), _binary_specs, "pto.vdiv"),
+    ("trem", ("i16", "ui16", "ui32"), _binary_tmp_specs, "pto.vdiv"),
+    ("trems", ("i16", "i32"), _scalar_tmp_specs, "pto.vdiv"),
+    ("tneg", ("ui16", "ui32"), _unary_specs, "pto.vmuls"),
+)
+
+_ISSUE1607_PREDICATE_FAMILIES = (
+    ("pto.tsel", ("bf16", "i16", "i32", "ui8", "ui16", "ui32"), _select_specs),
+    ("pto.tcmp", ("bf16", "ui16", "ui32"), _compare_specs),
+)
+
+_TRAVERSAL_SUFFIXES = ("", "_1d")
+
+
+def _expand_dtype_families(families, suffixes):
+    """Expand ``(key, dtypes, *rest)`` rows into one case per dtype and suffix.
+
+    Flattened once here so each test body stays a single loop.
+    """
+    cases = []
+    for row in families:
+        key, dtypes, rest = row[0], row[1], tuple(row[2:])
+        for dtype, suffix in itertools.product(dtypes, suffixes):
+            cases.append((key, dtype, suffix) + rest)
+    return tuple(cases)
+
+
+_ISSUE1607_ARITH_CASES = _expand_dtype_families(_ISSUE1607_ARITH_FAMILIES, _TRAVERSAL_SUFFIXES)
+
+_ISSUE1607_DIVS_CASES = tuple(
+    itertools.product(("i16", "ui16", "ui32"), (False, True), _TRAVERSAL_SUFFIXES)
+)
+
+_ISSUE1607_PREDICATE_CASES = _expand_dtype_families(
+    _ISSUE1607_PREDICATE_FAMILIES, _TRAVERSAL_SUFFIXES
+)
+
+
+def _payload_mask_width(dtype):
+    if dtype == "ui8":
+        return 8
+    if dtype in {"i32", "ui32"}:
+        return 32
+    return 16
+
+
 class TileLibElementwiseTest(unittest.TestCase):
+    def test_issue1607_integer_arithmetic_candidates_render(self):
+        for op, dtype, suffix, make_specs, vector_op in _ISSUE1607_ARITH_CASES:
+            with self.subTest(op=op, dtype=dtype, suffix=suffix):
+                self._assert_arith_renders(op, dtype, suffix, make_specs, vector_op)
+
+    def test_issue1607_divs_both_scalar_positions_render(self):
+        for dtype, scalar_lhs, suffix in _ISSUE1607_DIVS_CASES:
+            with self.subTest(dtype=dtype, scalar_lhs=scalar_lhs, suffix=suffix):
+                self._assert_divs_renders(dtype, scalar_lhs, suffix)
+
+    def test_issue1607_predicates_follow_payload_width(self):
+        for op, dtype, suffix, make_specs in _ISSUE1607_PREDICATE_CASES:
+            with self.subTest(op=op, dtype=dtype, suffix=suffix):
+                self._assert_predicate_width(op, dtype, suffix, make_specs)
+
     def test_issue_scope_catalog_has_ranked_1d_and_2d_coverage(self):
         family_sizes = sum(
             len(operations)
@@ -1927,6 +1991,34 @@ class TileLibElementwiseTest(unittest.TestCase):
             ["template_tdiv"],
         )
         self.assertEqual(candidates[0].metadata.loop_depth, 2)
+
+    def _assert_arith_renders(self, op, dtype, suffix, make_specs, vector_op):
+        specs = make_specs(dtype, shape=(1, 256))
+        descriptor = select("pto." + op, "a5", specs,
+                            candidate_id="template_" + op + suffix)
+        text = descriptor.specialize(**specs).mlir_text()
+        self.assertIn(vector_op, text)
+        if op == "tneg":
+            self.assertNotIn("pto.vneg", text)
+
+    def _assert_divs_renders(self, dtype, scalar_lhs, suffix):
+        specs = _scalar_specs(dtype, shape=(1, 256))
+        if scalar_lhs:
+            specs = {"scalar": specs["scalar"], "src": specs["src"], "dst": specs["dst"]}
+        side = "scalar_tile" if scalar_lhs else "tile_scalar"
+        descriptor = select("pto.tdivs", "a5", specs,
+                            candidate_id="template_tdivs_" + side + suffix)
+        self.assertIn("pto.vdiv", descriptor.specialize(**specs).mlir_text())
+
+    def _assert_predicate_width(self, op, dtype, suffix, make_specs):
+        specs = make_specs(op, dtype)
+        descriptor = select(op, "a5", specs,
+                            candidate_id="template_" + op[4:] + suffix)
+        text = descriptor.specialize(**specs).mlir_text()
+        width = _payload_mask_width(dtype)
+        self.assertIn("!pto.mask<b" + str(width) + ">", text)
+        if width == 32:
+            self.assertIn("pto.pintlv" if op == "pto.tsel" else "pto.pdintlv", text)
 
 
 if __name__ == "__main__":

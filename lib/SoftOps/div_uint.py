@@ -33,3 +33,22 @@ def div_uint_soft(lhs, rhs, mask, dtype):
         quotient_bit = pto.vshls(one, bit, mask)
         quotient = pto.vsel(pto.vor(quotient, quotient_bit, mask), quotient, ge)
     return quotient
+
+
+# The SoftLib vdiv ABI traces a three-argument helper (lhs, rhs, mask), so the
+# element type is bound here rather than passed through. Both widths share the
+# restoring loop above instead of carrying a second unsigned algorithm: only
+# that loop reaches ui8, which the expand templates need, and the alternative
+# borrowed the signed primitive, which has no i8 form to extend.
+#
+# The loop reads its operand width from ``str(dtype)``; the expand templates
+# hand it a tile dtype, and these entry points have only vregs, so they pass
+# the element type name directly.
+def div_ui16_soft(vec, divisor, mask):
+    """Divide unsigned 16-bit vectors, including values with the top bit set."""
+    return div_uint_soft(vec, divisor, mask, "ui16")
+
+
+def div_ui32_soft(vec, divisor, mask):
+    """Divide unsigned 32-bit vectors, including values with the top bit set."""
+    return div_uint_soft(vec, divisor, mask, "ui32")

@@ -144,6 +144,10 @@ pto.<op> ins(%src : !pto.tile_buf<...>)
 
 - `src` and `dst` must have the same valid region.
 - These ops are numeric Tile Instruction ops on `loc=vec`.
+- On unsigned element types `pto.tneg` is the negation modulo the element
+  width, which is the only meaning available: the A5 `pto.vneg` element types
+  do not include unsigned, so the template multiplies by the all-ones scalar
+  instead, matching how `vneg` itself maps onto `RV_VMULS`.
 - **Undefined behavior** on out-of-domain inputs: `tlog(<=0)`, `tsqrt(<0)`, `trsqrt(<=0)`, `trecip(0)`.
 - Selected unary math ops additionally accept op-specific `precisionType` attrs:
   `#pto<exp_precision default|high_precision>` for `pto.texp`,

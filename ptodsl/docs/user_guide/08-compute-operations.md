@@ -137,23 +137,40 @@ pto.tile.mov(p_tile, p_mat)
 #### `pto.tile.fmod(src0: Tile, src1: Tile, dst: Tile, *, precision: Precision = Precision.Default) -> None`
 #### `pto.tile.fmods(src: Tile, scalar: ScalarType, dst: Tile) -> None`
 
-**Description**: Computes the element-wise remainder using truncation toward
-zero for the quotient. The binary form uses two tiles; the scalar form divides
+**Description**: Computes the element-wise remainder. `rem`/`rems` floor the
+quotient, `fmod`/`fmods` truncate it toward zero; on integer element types the
+two families coincide. The binary form uses two tiles; the scalar form divides
 each source element by the scalar.
 
 **Semantics**:
 
 ```text
-rem(src0, src1): dst[i,j] = src0[i,j] - trunc(src0[i,j] / src1[i,j]) * src1[i,j]
-rems(src, scalar): dst[i,j] = src[i,j] - trunc(src[i,j] / scalar) * scalar
-fmod(src0, src1): dst[i,j] = src0[i,j] - trunc(src0[i,j] / src1[i,j]) * src1[i,j]
-fmods(src, scalar): dst[i,j] = src[i,j] - trunc(src[i,j] / scalar) * scalar
+rem(src0, src1):   dst[i,j] = src0[i,j] - floor(src0[i,j] / src1[i,j]) * src1[i,j]
+rems(src, scalar): dst[i,j] = src[i,j]  - floor(src[i,j]  / scalar)   * scalar
+fmod(src0, src1):  dst[i,j] = src0[i,j] - trunc(src0[i,j] / src1[i,j]) * src1[i,j]
+fmods(src, scalar):dst[i,j] = src[i,j]  - trunc(src[i,j]  / scalar)   * scalar
 ```
 
-For floating-point inputs, `rem` and `rems` preserve the sign of the dividend
-for ordinary finite, non-zero operands. Integer support is target-dependent.
-The A5 public surface currently covers the floating-point forms used by the
-validated A5 cases (`f16` and `f32`).
+On floating-point element types the two families differ in sign: `rem`/`rems`
+floor the quotient, so the remainder takes the sign of the **divisor**, while
+`fmod`/`fmods` truncate and the remainder takes the sign of the **dividend**.
+
+On integer element types `rem`/`rems` and `fmod`/`fmods` produce identical
+results: integer division already truncates toward zero and no rounding step is
+applied, so both families compute the truncated remainder and the result takes
+the sign of the dividend.
+
+A5 element type support:
+
+| Operation | A5 element types |
+|-----------|------------------|
+| `rem` | `f32`, `f16`, `i16`, `ui16`, `i32`, `ui32` |
+| `rems` | `f32`, `f16`, `i16`, `i32` |
+| `fmod` | `f32`, `f16`, `i16`, `ui16`, `i32`, `ui32` |
+| `fmods` | `f32`, `f16`, `i16`, `i32` |
+
+The scalar forms exclude unsigned element types because the op's scalar operand
+rejects them during verification, not because the templates are missing.
 
 **Parameters**:
 

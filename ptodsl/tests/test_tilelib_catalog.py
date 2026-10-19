@@ -468,6 +468,8 @@ def _specs(op, parameter_names, dtype_name):
 def _expected_rendered_op(op, signature):
     if op in {"pto.trowexpanddiv", "pto.tcolexpanddiv"} and signature[0] in {"ui8", "ui16", "ui32"}:
         return "pto.vcmp"
+    if op == "pto.tneg" and signature[0] in {"ui16", "ui32"}:
+        return "pto.vmuls"
     if op in FLOAT_REMAINDER_OPS and not any(
         dtype in FLOAT_REMAINDER_DTYPES for dtype in signature
     ):

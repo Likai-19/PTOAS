@@ -25,9 +25,8 @@ from ._elementwise import (
 
 
 _DTYPES = [
-    ("i8", "f32", "f32", "f32", "f32"),
-    ("i8", "f16", "f16", "f16", "f16"),
-    ("i8", "i8", "i8", "i8", "i8"),
+    ("i8", dtype, dtype, dtype, dtype)
+    for dtype in ("f32", "i32", "ui32", "f16", "bf16", "i16", "ui16", "i8", "ui8")
 ]
 
 
@@ -79,7 +78,7 @@ def _tsel_emit_1d_f32pair(operands):
 
 @rewrite_jit_function
 def _tsel_emit_1d_linear(operands):
-    """Emit the single-register select loop for f16/i8 payloads."""
+    """Emit the single-register select loop for 16/8-bit payloads."""
     mask_ptr = operands.mask_ptr
     src0_ptr = operands.src0_ptr
     src1_ptr = operands.src1_ptr
@@ -88,12 +87,12 @@ def _tsel_emit_1d_linear(operands):
     total_elements = operands.total_elements
     lanes = pto.elements_per_vreg(dtype)
     remained = total_elements
-    is_f16 = str(dtype) == "f16"
+    is_b16 = str(dtype) in {"f16", "bf16", "i16", "ui16"}
     for offset in range(0, total_elements, lanes):
         pred, remained = pto.make_mask(dtype, remained)
-        dist = pto.PredicateDist.US if is_f16 else pto.PredicateDist.NORM
+        dist = pto.PredicateDist.US if is_b16 else pto.PredicateDist.NORM
         select_mask = pto.plds(mask_ptr, offset // 8, dist=dist)
-        if is_f16:
+        if is_b16:
             select_mask = pto.pbitcast(select_mask, pto.mask_b16)
         lhs = pto.vlds(src0_ptr, offset)
         rhs = pto.vlds(src1_ptr, offset)
@@ -119,7 +118,7 @@ def _emit_tsel_1d(mask, src0, src1, dst):
         total_elements,
     )
 
-    if str(dtype) == "f32":
+    if str(dtype) in {"f32", "i32", "ui32"}:
         _tsel_emit_1d_f32pair(operands)
     else:
         _tsel_emit_1d_linear(operands)
@@ -127,25 +126,25 @@ def _emit_tsel_1d(mask, src0, src1, dst):
 
 @rewrite_jit_function
 def _tsel_emit_2d_linear(mask, src0, src1, dst):
-    """Emit the per-row single-register select loop for f16/i8 payloads."""
+    """Emit the per-row single-register select loop for 16/8-bit payloads."""
     dtype = dst.dtype
     valid_rows, valid_cols = dst.valid_shape
     lanes = pto.elements_per_vreg(dtype)
     mask_ptr = pto.castptr(mask.as_ptr(), pto.ptr(pto.ui8, "ub"))
     mask_stride = mask.shape[1]
-    is_f16 = str(dtype) == "f16"
+    is_b16 = str(dtype) in {"f16", "bf16", "i16", "ui16"}
     for row in range(0, valid_rows, 1):
         remained = valid_cols
         for col in range(0, valid_cols, lanes):
             pred, remained = pto.make_mask(dtype, remained)
             mask_offset = row * mask_stride + col // 8
-            dist = pto.PredicateDist.US if is_f16 else pto.PredicateDist.NORM
+            dist = pto.PredicateDist.US if is_b16 else pto.PredicateDist.NORM
             select_mask = pto.plds(
                 mask_ptr,
                 mask_offset,
                 dist=dist,
             )
-            if is_f16:
+            if is_b16:
                 select_mask = pto.pbitcast(select_mask, pto.mask_b16)
             lhs = pto.vlds(src0[row, col:])
             rhs = pto.vlds(src1[row, col:])
@@ -154,7 +153,7 @@ def _tsel_emit_2d_linear(mask, src0, src1, dst):
 
 
 def _tsel_emit_2d_f32(mask, src0, src1, dst):
-    """Emit the per-row paired + tail select loops for f32 payloads."""
+    """Emit the per-row paired + tail select loops for 32-bit payloads."""
     dtype = dst.dtype
     valid_rows, valid_cols = dst.valid_shape
     lanes = pto.elements_per_vreg(dtype)
@@ -195,7 +194,7 @@ def _tsel_emit_2d_f32(mask, src0, src1, dst):
 @rewrite_jit_function
 def _emit_tsel_2d(mask, src0, src1, dst):
     dtype = dst.dtype
-    if str(dtype) == "f32":
+    if str(dtype) in {"f32", "i32", "ui32"}:
         _tsel_emit_2d_f32(mask, src0, src1, dst)
     else:
         _tsel_emit_2d_linear(mask, src0, src1, dst)

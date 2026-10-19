@@ -23,10 +23,15 @@ from ._elementwise import (
 )
 
 
-FMOD_DTYPES = [("f32", "f32", "f32"), ("f16", "f16", "f16"), ("i16", "i16", "i16"), ("ui16", "ui16", "ui16")]
-FMODS_DTYPES = [("f32", "f32", "f32"), ("f16", "f16", "f16"), ("i32", "i32", "i32"), ("i16", "i16", "i16")]
-REM_DTYPES = [("f32", "f32", "f32", "f32"), ("f16", "f16", "f16", "f16"), ("i32", "i32", "i32", "i32")]
-REMS_DTYPES = [("f32", "f32", "f32", "f32"), ("f16", "f16", "f16", "f16")]
+# The scalar forms stop at the signed integer types on purpose: the scalar
+# operand of pto.tfmods and pto.trems rejects unsigned element types during
+# verification ("operand #1 must be numeric (integer/float), but got 'ui16'"),
+# so registering ui16/ui32 templates for them would be unreachable. The binary
+# forms take that operand as a tile and are unaffected.
+FMOD_DTYPES = [(dtype,) * 3 for dtype in ("f32", "f16", "i16", "ui16", "i32", "ui32")]
+FMODS_DTYPES = [(dtype,) * 3 for dtype in ("f32", "f16", "i32", "i16")]
+REM_DTYPES = [(dtype,) * 4 for dtype in ("f32", "f16", "i16", "ui16", "i32", "ui32")]
+REMS_DTYPES = [(dtype,) * 4 for dtype in ("f32", "f16", "i16", "i32")]
 
 
 def _remainder(lhs, rhs, mask, *, round_mode, dtype):

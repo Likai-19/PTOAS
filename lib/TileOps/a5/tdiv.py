@@ -13,15 +13,10 @@ from ptodsl import pto
 import ptodsl.tilelib as tilelib
 
 from ._elementwise import emit_binary_1d, emit_binary_2d, traversal_metadata
-from .elementwise.div_hp import _div_ieee754_f32_impl, _div_ieee754_f16_impl
-from SoftOps import div_i32_soft
+from .elementwise.div_dispatch import DIV_DTYPES, divide as _divide
 
 
-_DTYPES = [
-    ("f16", "f16", "f16"),
-    ("f32", "f32", "f32"),
-    ("i32", "i32", "i32"),
-]
+_DTYPES = DIV_DTYPES
 
 
 def _emit_tdiv(src0, src1, dst, traversal):
@@ -31,13 +26,7 @@ def _emit_tdiv(src0, src1, dst, traversal):
     precision_type = pto.get_op_attr("precisionType", "default")
 
     def divide(lhs, rhs, mask):
-        if str(dtype) == "i32":
-            return div_i32_soft(lhs, rhs, mask)
-        if precision_type == "high_precision":
-            if str(dtype) == "f32":
-                return _div_ieee754_f32_impl(lhs, rhs, mask)
-            return _div_ieee754_f16_impl(lhs, rhs, mask)
-        return pto.vdiv(lhs, rhs, mask)
+        return _divide(lhs, rhs, dtype, mask, precision_type)
 
     if traversal == "1d":
         emit_binary_1d(src0, src1, dst, divide)

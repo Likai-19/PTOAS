@@ -48,7 +48,7 @@ static constexpr llvm::StringLiteral kSoftLibInstanceAttr =
     "pto.softlib.instance";
 
 // Element widths the A5 Software Library implements for pto.vdiv.  Signed and
-// signless forms are both accepted; unsigned vectors are intentionally not.
+// signless forms and unsigned forms are accepted.
 static bool isSoftLibVdivIntegerVReg(Type type) {
   auto vreg = dyn_cast<VRegType>(type);
   if (!vreg) {
@@ -59,8 +59,7 @@ static bool isSoftLibVdivIntegerVReg(Type type) {
     return false;
   }
   return (integer.getWidth() == mlir::pto::kValue16 ||
-          integer.getWidth() == mlir::pto::kValue32) &&
-         (integer.isSigned() || integer.isSignless());
+          integer.getWidth() == mlir::pto::kValue32);
 }
 
 // A5 high-precision floating division and integer division use SoftOps.
@@ -85,7 +84,7 @@ static bool isIntegerVdiv(Operation *op) {
 static std::string getIntegerDtype(VdivOp op) {
   auto vreg = cast<VRegType>(op.getLhs().getType());
   auto integer = cast<IntegerType>(vreg.getElementType());
-  return (integer.isSigned() ? "si" : "i") + std::to_string(integer.getWidth());
+  return (integer.isUnsigned() ? "ui" : (integer.isSigned() ? "si" : "i")) + std::to_string(integer.getWidth());
 }
 
 static std::string buildVdivRequestJson(VdivOp op) {
@@ -320,8 +319,8 @@ struct PTOExpandSoftLibPass
     }
     vdiv.emitError() << "A5 integer pto.vdiv is not supported for "
                      << vdiv.getResult().getType() << " with mask "
-                     << vdiv.getMask().getType() << "; only signed or "
-                     << "signless i16 vectors with a b16 mask and i32 "
+                     << vdiv.getMask().getType() << "; only signed, signless or "
+                     << "unsigned 16-bit vectors with a b16 mask and 32-bit "
                      << "vectors with a b32 mask are materialized through "
                      << "the A5 Software Library, and f16/f32 pto.vdiv "
                      << "uses the native vector instruction";

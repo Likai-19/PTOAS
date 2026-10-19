@@ -1,0 +1,46 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Full-range unsigned division must expand to the SoftLib restoring loop and
+// never reach an integer HiVM VDIV. The ".u" fragments also pin the premise the
+// loop depends on: on an unsigned vreg the compare and the shift lower to their
+// unsigned forms, so the quotient bits and the remainder compare are unsigned.
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto-llvm-ir %s -o - \
+// RUN:   | FileCheck %s --implicit-check-not=llvm.hivm.vdiv
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @issue1607_vdiv_ui16(%lhs: !pto.vreg<128xui16>,
+      %rhs: !pto.vreg<128xui16>, %dst: !pto.ptr<ui16, ub>,
+      %mask: !pto.mask<b16>) attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    %q = pto.vdiv %lhs, %rhs, %mask :
+      !pto.vreg<128xui16>, !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
+    pto.vsts %q, %dst[%c0], %mask : !pto.vreg<128xui16>, !pto.ptr<ui16, ub>, !pto.mask<b16>
+    return
+  }
+  func.func @issue1607_vdiv_ui32(%lhs: !pto.vreg<64xui32>,
+      %rhs: !pto.vreg<64xui32>, %dst: !pto.ptr<ui32, ub>,
+      %mask: !pto.mask<b32>) attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    %q = pto.vdiv %lhs, %rhs, %mask :
+      !pto.vreg<64xui32>, !pto.vreg<64xui32>, !pto.mask<b32> -> !pto.vreg<64xui32>
+    pto.vsts %q, %dst[%c0], %mask : !pto.vreg<64xui32>, !pto.ptr<ui32, ub>, !pto.mask<b32>
+    return
+  }
+}
+
+// CHECK-LABEL: define void @issue1607_vdiv_ui16_mix_aiv
+// CHECK-DAG: @llvm.hivm.vshrs.u.x.v128i16
+// CHECK-DAG: @llvm.hivm.vcmp.ge.u.z.v128i16
+// CHECK-DAG: @llvm.hivm.vcmps.ge.u.z.v128i16
+// CHECK-DAG: @llvm.hivm.vsub.u.x.v128i16
+// CHECK-LABEL: define void @issue1607_vdiv_ui32_mix_aiv
+// CHECK-DAG: @llvm.hivm.vshrs.u.x.v64i32
+// CHECK-DAG: @llvm.hivm.vcmp.ge.u.z.v64i32
+// CHECK-DAG: @llvm.hivm.vcmps.ge.u.z.v64i32
+// CHECK-DAG: @llvm.hivm.vsub.u.x.v64i32

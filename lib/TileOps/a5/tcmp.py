@@ -17,12 +17,8 @@ from ._elementwise import _ub_or_vec_row_major, traversal_metadata
 
 
 _DTYPES = [
-    ("f32", "f32", "i8"),
-    ("i32", "i32", "i8"),
-    ("f16", "f16", "i8"),
-    ("i16", "i16", "i8"),
-    ("i8", "i8", "i8"),
-    ("ui8", "ui8", "i8"),
+    (dtype, dtype, "i8")
+    for dtype in ("f32", "i32", "ui32", "f16", "bf16", "i16", "ui16", "i8", "ui8")
 ]
 
 
@@ -37,7 +33,7 @@ def _emit_tcmp_1d(src0, src1, dst):
     src1_ptr = src1.as_ptr()
     dst_ptr = dst.as_ptr()
 
-    if str(dtype) in {"f32", "i32"}:
+    if str(dtype) in {"f32", "i32", "ui32"}:
         remained = total_elements
         for offset in range(0, total_elements, lanes * 2):
             first_mask, remained = pto.make_mask(dtype, remained)
@@ -54,7 +50,7 @@ def _emit_tcmp_1d(src0, src1, dst):
 
             packed_low, _ = pto.pdintlv_b8(first_cmp_b8, second_cmp_b8)
             pto.psts(packed_low, dst_ptr, offset // 8, dist=pto.PredicateDist.PK)
-    elif str(dtype) in {"f16", "i16"}:
+    elif str(dtype) in {"f16", "bf16", "i16", "ui16"}:
         remained = total_elements
         for offset in range(0, total_elements, lanes):
             mask, remained = pto.make_mask(dtype, remained)
@@ -230,10 +226,10 @@ def _emit_tcmp_2d_narrow(src0, src1, dst, cmp_mode, packed):
 def _emit_tcmp_2d(src0, src1, dst):
     dtype = src0.dtype
     cmp_mode = pto.get_op_attr("cmp_mode", "eq")
-    if str(dtype) in {"f32", "i32"}:
+    if str(dtype) in {"f32", "i32", "ui32"}:
         _emit_tcmp_2d_f32(src0, src1, dst, cmp_mode)
     else:
-        _emit_tcmp_2d_narrow(src0, src1, dst, cmp_mode, str(dtype) in {"f16", "i16"})
+        _emit_tcmp_2d_narrow(src0, src1, dst, cmp_mode, str(dtype) in {"f16", "bf16", "i16", "ui16"})
 
 
 def _register_tcmp(*, name, traversal):

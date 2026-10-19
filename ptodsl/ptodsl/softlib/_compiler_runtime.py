@@ -34,23 +34,27 @@ class _SoftLibTraceRuntime(CallbackTracingRuntime):
         self._result = unwrap_surface_value(self._callback(*args))
 
 
-_INTEGER_VDIV_DTYPES = {"i16", "si16", "i32", "si32"}
+_INTEGER_VDIV_DTYPES = {"i16", "si16", "ui16", "i32", "si32", "ui32"}
 
 
 def _integer_vdiv_dtype(dtype):
-    if dtype == "si16":
-        return pto.si16
-    if dtype == "si32":
-        return pto.si32
-    return pto.i32 if dtype == "i32" else pto.i16
+    resolved = getattr(pto, dtype, None)
+    if resolved is None:
+        raise ValueError(f"no PTODSL element type named {dtype!r} for integer vdiv")
+    return resolved
 
 
 def _resolve_integer_vdiv_request(specs):
     dtype = specs["dtype"]
-    lanes = int(specs.get("lanes", 128 if dtype in {"i16", "si16"} else 64))
-    mask_bits = specs.get("mask", "b16" if dtype in {"i16", "si16"} else "b32")
-    module_name = "div_i16_soft" if dtype in {"i16", "si16"} else "div_i32_soft"
-    helper = getattr(importlib.import_module("SoftOps"), module_name)
+    is_16bit = dtype in {"i16", "si16", "ui16"}
+    lanes = int(specs.get("lanes", 128 if is_16bit else 64))
+    mask_bits = specs.get("mask", "b16" if is_16bit else "b32")
+    helper_dtype = dtype.replace("si", "i")
+    module_name = f"div_{helper_dtype}_soft"
+    # Resolved from the hosting submodule, like the div_vector helper below, so
+    # that lib/SoftOps/__init__.py only re-exports the long-standing helpers.
+    source = "div_uint" if helper_dtype.startswith("ui") else "div_int"
+    helper = getattr(importlib.import_module(f"SoftOps.{source}"), module_name)
     vreg = vreg_type(lanes, _integer_vdiv_dtype(dtype))
     arg_types = [vreg, vreg, mask_type(mask_bits)]
     return module_name, helper, arg_types, [vreg]

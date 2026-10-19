@@ -85,8 +85,9 @@ for (int i = 0; i < N; i++)
 ### `pto.vdiv`
 
 - **syntax:** `%result = pto.vdiv %lhs, %rhs, %mask : !pto.vreg<NxT>, !pto.vreg<NxT>, !pto.mask<G> -> !pto.vreg<NxT>`
-- **A5 types:** f16, f32; only signed or signless i16/i32 are materialized
-  through the A5 software library.
+- **A5 types:** f16, f32, and integer i16/ui16/i32/ui32 vectors with the
+  matching b16 or b32 mask; integer forms are materialized through the A5
+  software library.
 
 ```c
 for (int i = 0; i < N; i++)
@@ -112,12 +113,13 @@ for (int i = 0; i < N; i++)
   is applied consistently throughout the operation.
   Unlike tile division, this operation consumes and returns register values
   without requiring a destination tile.
-- **constraints and limitations:** i16 and i32 division is rounded toward zero
+- **constraints and limitations:** i16, ui16, i32 and ui32 division is rounded toward zero
   and is exact for every nonzero denominator, including values outside f32's
   exact range. It is expanded late to a PTODSL SoftOps implementation because
   the released BiSheng toolchain cannot lower the integer HiVM intrinsic
-  reliably; unsigned integer variants (ui16/ui32) and other integer element
-  widths are rejected at compile time on A5 rather than reaching the
+  reliably. Unsigned division supports the full ui16/ui32 range, including
+  values with the top bit set. Other integer element widths are rejected at
+  compile time on A5 rather than reaching the
   unsupported integer HiVM path. The overflowing
   pairs `INT16_MIN / -1` and `INT32_MIN / -1` follow the target's
   two's-complement result representation. Division by zero is undefined.
