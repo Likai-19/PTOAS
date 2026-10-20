@@ -536,10 +536,15 @@ LogicalResult PTOIRTranslator::UpdateAllocTileOpMemInfo(pto::AllocTileOp op) {
       }
   }
 
+  // An unresolved explicit local address may overlap any allocation in the
+  // same address space. Unlike an address-free allocation, its SSA root does
+  // not identify independent storage (issue #1620).
+  const bool aliasesUnknownRange = op.getAddr() && !knownPhysicalAddress && isLocalAddressSpace(space);
+
   // 3. 注册 Buffer 信息
   auto newMemInfo = std::make_unique<BaseMemInfo>(
       res, res, space, SmallVector<uint64_t>{baseAddr}, sizeInBytes,
-      knownPhysicalAddress.has_value() && isLocalAddressSpace(space));
+      knownPhysicalAddress.has_value() && isLocalAddressSpace(space), aliasesUnknownRange);
 
   buffer2MemInfoMap_[res].emplace_back(newMemInfo->clone());
   return success();

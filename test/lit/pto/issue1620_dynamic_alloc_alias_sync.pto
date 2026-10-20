@@ -1,0 +1,168 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a3 --pto-level=level3 --enable-insert-sync %s -o - | FileCheck %s
+// Explicit dynamic local addresses may overlap other allocation roots. Unknown
+// ranges must stay conservative, including through subviews and in both hazard
+// directions. Static disjoint ranges and different address spaces stay separate.
+
+!wide = !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=128, v_row=1, v_col=128, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+!half = !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=64, v_row=1, v_col=64, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+!mat = !pto.tile_buf<loc=mat, dtype=f32, rows=1, cols=128, v_row=1, v_col=128, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+!part = !pto.partition_tensor_view<1x128xf32>
+
+module attributes {pto.target_arch = "a2a3"} {
+  // #1620: load [131328, 131840), then read one lane's 256-byte half
+  // through an independent allocation at 131328 + lane * 64 * 4.
+  // CHECK-LABEL: AICORE void static_load_dynamic_read(
+  // CHECK: TLOAD(
+  // CHECK: set_flag(PIPE_MTE2, PIPE_V, EVENT_ID[[RAW:[0-9]+]]);
+  // CHECK: wait_flag(PIPE_MTE2, PIPE_V, EVENT_ID[[RAW]]);
+  // CHECK: TEXP(
+  func.func @static_load_dynamic_read(%src: !part, %lane: i32) {
+    %base = arith.constant 131328 : i64
+    %base_idx = arith.constant 131328 : index
+    %out_addr = arith.constant 131072 : i64
+    %c64 = arith.constant 64 : index
+    %c4 = arith.constant 4 : index
+    %lane_idx = arith.index_cast %lane : i32 to index
+    %elements = arith.muli %lane_idx, %c64 : index
+    %bytes = arith.muli %elements, %c4 : index
+    %addr_idx = arith.addi %base_idx, %bytes : index
+    %addr = arith.index_cast %addr_idx : index to i64
+    %loaded = pto.alloc_tile addr = %base : !wide
+    %alias = pto.alloc_tile addr = %addr : !half
+    %out = pto.alloc_tile addr = %out_addr : !half
+    pto.tload ins(%src : !part) outs(%loaded : !wide)
+    pto.texp ins(%alias : !half) outs(%out : !half)
+    return
+  }
+
+  // An unknown producer address may overlap a statically addressed consumer.
+  // CHECK-LABEL: AICORE void dynamic_load_static_read(
+  // CHECK: TLOAD(
+  // CHECK: set_flag(PIPE_MTE2, PIPE_V, EVENT_ID[[PRODUCER:[0-9]+]]);
+  // CHECK: wait_flag(PIPE_MTE2, PIPE_V, EVENT_ID[[PRODUCER]]);
+  // CHECK: TEXP(
+  func.func @dynamic_load_static_read(%src: !part, %addr: i64) {
+    %base = arith.constant 131328 : i64
+    %out_addr = arith.constant 131072 : i64
+    %loaded = pto.alloc_tile addr = %addr : !wide
+    %alias = pto.alloc_tile addr = %base : !half
+    %out = pto.alloc_tile addr = %out_addr : !half
+    pto.tload ins(%src : !part) outs(%loaded : !wide)
+    pto.texp ins(%alias : !half) outs(%out : !half)
+    return
+  }
+
+  // Independent dynamic expressions can evaluate to overlapping addresses.
+  // CHECK-LABEL: AICORE void dynamic_load_dynamic_read(
+  // CHECK: TLOAD(
+  // CHECK: set_flag(PIPE_MTE2, PIPE_V, EVENT_ID[[DYNAMIC:[0-9]+]]);
+  // CHECK: wait_flag(PIPE_MTE2, PIPE_V, EVENT_ID[[DYNAMIC]]);
+  // CHECK: TEXP(
+  func.func @dynamic_load_dynamic_read(%src: !part, %addr0: i64, %addr1: i64) {
+    %out_addr = arith.constant 131072 : i64
+    %loaded = pto.alloc_tile addr = %addr0 : !wide
+    %alias = pto.alloc_tile addr = %addr1 : !half
+    %out = pto.alloc_tile addr = %out_addr : !half
+    pto.tload ins(%src : !part) outs(%loaded : !wide)
+    pto.texp ins(%alias : !half) outs(%out : !half)
+    return
+  }
+
+  // Refining a subview's relative offset must preserve the unknown root range.
+  // CHECK-LABEL: AICORE void dynamic_subview_read(
+  // CHECK: TLOAD(
+  // CHECK: set_flag(PIPE_MTE2, PIPE_V, EVENT_ID[[VIEW:[0-9]+]]);
+  // CHECK: wait_flag(PIPE_MTE2, PIPE_V, EVENT_ID[[VIEW]]);
+  // CHECK: TEXP(
+  func.func @dynamic_subview_read(%src: !part, %addr: i64) {
+    %base = arith.constant 131328 : i64
+    %out_addr = arith.constant 131072 : i64
+    %c0 = arith.constant 0 : index
+    %c64 = arith.constant 64 : index
+    %loaded = pto.alloc_tile addr = %base : !wide
+    %alias = pto.alloc_tile addr = %addr : !wide
+    %view = pto.subview %alias[%c0, %c64] sizes [1, 64] : !wide -> !half
+    %out = pto.alloc_tile addr = %out_addr : !half
+    pto.tload ins(%src : !part) outs(%loaded : !wide)
+    pto.texp ins(%view : !half) outs(%out : !half)
+    return
+  }
+
+  // A dynamic V write must wait for an earlier asynchronous MTE3 read.
+  // CHECK-LABEL: AICORE void static_store_dynamic_write(
+  // CHECK: TSTORE(
+  // CHECK: set_flag(PIPE_MTE3, PIPE_V, EVENT_ID[[WAR:[0-9]+]]);
+  // CHECK: wait_flag(PIPE_MTE3, PIPE_V, EVENT_ID[[WAR]]);
+  // CHECK: TEXP(
+  func.func @static_store_dynamic_write(%dst: !part, %addr: i64) {
+    %base = arith.constant 131328 : i64
+    %in_addr = arith.constant 131072 : i64
+    %stored = pto.alloc_tile addr = %base : !wide
+    %input = pto.alloc_tile addr = %in_addr : !half
+    %alias = pto.alloc_tile addr = %addr : !half
+    pto.tstore ins(%stored : !wide) outs(%dst : !part)
+    pto.texp ins(%input : !half) outs(%alias : !half)
+    return
+  }
+
+  // Known adjacent byte intervals still need no MTE2-to-V synchronization.
+  // CHECK-LABEL: AICORE void static_disjoint_ranges(
+  // CHECK: TLOAD(
+  // CHECK-NOT: set_flag(PIPE_MTE2, PIPE_V,
+  // CHECK-NOT: wait_flag(PIPE_MTE2, PIPE_V,
+  // CHECK: TEXP(
+  func.func @static_disjoint_ranges(%src: !part) {
+    %base = arith.constant 131328 : i64
+    %alias_addr = arith.constant 131840 : i64
+    %out_addr = arith.constant 131072 : i64
+    %loaded = pto.alloc_tile addr = %base : !wide
+    %alias = pto.alloc_tile addr = %alias_addr : !half
+    %out = pto.alloc_tile addr = %out_addr : !half
+    pto.tload ins(%src : !part) outs(%loaded : !wide)
+    pto.texp ins(%alias : !half) outs(%out : !half)
+    return
+  }
+
+  // A runtime base does not invalidate disjoint offsets within one allocation.
+  // CHECK-LABEL: AICORE void dynamic_root_disjoint_subviews(
+  // CHECK: TLOAD(
+  // CHECK-NOT: set_flag(PIPE_MTE2, PIPE_V,
+  // CHECK-NOT: wait_flag(PIPE_MTE2, PIPE_V,
+  // CHECK: TEXP(
+  func.func @dynamic_root_disjoint_subviews(
+      %src: !pto.partition_tensor_view<1x64xf32>, %addr: i64) {
+    %c0 = arith.constant 0 : index
+    %c64 = arith.constant 64 : index
+    %root = pto.alloc_tile addr = %addr : !wide
+    %first = pto.subview %root[%c0, %c0] sizes [1, 64] : !wide -> !half
+    %second = pto.subview %root[%c0, %c64] sizes [1, 64] : !wide -> !half
+    pto.tload ins(%src : !pto.partition_tensor_view<1x64xf32>) outs(%first : !half)
+    pto.texp ins(%second : !half) outs(%second : !half)
+    return
+  }
+
+  // An unknown VEC address must not alias a load into MAT memory.
+  // CHECK-LABEL: AICORE void different_address_spaces(
+  // CHECK: TLOAD(
+  // CHECK-NOT: set_flag(PIPE_MTE2, PIPE_V,
+  // CHECK-NOT: wait_flag(PIPE_MTE2, PIPE_V,
+  // CHECK: TEXP(
+  func.func @different_address_spaces(%src: !part, %addr: i64) {
+    %base = arith.constant 131328 : i64
+    %out_addr = arith.constant 131072 : i64
+    %loaded = pto.alloc_tile addr = %base : !mat
+    %alias = pto.alloc_tile addr = %addr : !half
+    %out = pto.alloc_tile addr = %out_addr : !half
+    pto.tload ins(%src : !part) outs(%loaded : !mat)
+    pto.texp ins(%alias : !half) outs(%out : !half)
+    return
+  }
+}

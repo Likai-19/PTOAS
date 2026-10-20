@@ -106,9 +106,9 @@ struct BaseMemInfo {
   // PlanMemory materializes static local allocations as physical addresses.
   // This distinguishes their physical addresses from root-relative offsets.
   bool hasKnownPhysicalAddresses;
-  // Address-preserving provenance can be lost when a pointer is round-tripped
-  // through integer IR. When set, this memory object aliases any range in the
-  // same address space.
+  // An explicit dynamic local allocation address or an integer-to-pointer cast
+  // can refer to an unknown physical range. This object and its views may alias
+  // other roots in the same address space; shared-root offsets remain usable.
   bool aliasesUnknownRange;
  
   bool areVectorEqual(const SmallVector<uint64_t>& vec1,

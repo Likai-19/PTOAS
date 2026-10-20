@@ -191,13 +191,19 @@ bool MemoryDependentAnalyzer::MemAlias(const BaseMemInfo *a,
     return false;
   }
 
-  if (a->aliasesUnknownRange || b->aliasesUnknownRange) {
+  // An unknown physical address cannot establish independence across roots.
+  // Views of the same tile allocation can still have disjoint relative ranges.
+  // Keep integer-to-pointer casts conservative even when their roots match.
+  const bool hasUnknownRange = a->aliasesUnknownRange || b->aliasesUnknownRange;
+  const bool sharesTileRoot = a->rootBuffer && a->rootBuffer == b->rootBuffer &&
+                              a->rootBuffer.getDefiningOp<pto::AllocTileOp>();
+  if (hasUnknownRange && !sharesTileRoot) {
     if (isTraceEnabled()) {
       llvm::errs() << "    -> Unknown range in same scope. True.\n";
     }
     return true;
   }
- 
+
   // 1. GM 内存
   if (as == pto::AddressSpace::GM) {
     return isGMBufferOverlap(a, b);
