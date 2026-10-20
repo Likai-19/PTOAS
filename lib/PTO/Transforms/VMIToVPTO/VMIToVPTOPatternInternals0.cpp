@@ -649,9 +649,20 @@ FailureOr<Value> createScalarOffsetConstant(Location loc, Type type,
                                             int64_t value,
                                             PatternRewriter &rewriter) {
   if (auto intType = dyn_cast<IntegerType>(type)) {
+    // arith.constant only accepts signless integer result types.  VCI bases
+    // may retain signed/unsigned semantics, so materialize the offset in a
+    // signless type and cast it back before using it in the arithmetic op.
+    Type signlessType = rewriter.getIntegerType(intType.getWidth());
+    Value constant = rewriter
+                         .create<arith::ConstantOp>(
+                             loc, IntegerAttr::get(signlessType, value))
+                         .getResult();
+    if (intType.isSignless()) {
+      return constant;
+    }
     return rewriter
-        .create<arith::ConstantOp>(loc, IntegerAttr::get(intType, value))
-        .getResult();
+        .create<UnrealizedConversionCastOp>(loc, TypeRange{intType}, constant)
+        .getResult(0);
   }
   if (auto floatType = dyn_cast<FloatType>(type)) {
     return rewriter
@@ -673,10 +684,36 @@ FailureOr<Value> createIotaChunkBase(Location loc, Value base,
     return failure();
   }
   if (isa<IntegerType>(base.getType())) {
-    if (order == "DESC") {
-      return rewriter.create<arith::SubIOp>(loc, base, *offset).getResult();
+    auto intType = cast<IntegerType>(base.getType());
+    Type signlessType = rewriter.getIntegerType(intType.getWidth());
+    Value signlessBase = base;
+    Value signlessOffset = *offset;
+    if (!intType.isSignless()) {
+      signlessBase = rewriter
+                         .create<UnrealizedConversionCastOp>(
+                             loc, TypeRange{signlessType}, base)
+                         .getResult(0);
+      signlessOffset = rewriter
+                           .create<UnrealizedConversionCastOp>(
+                               loc, TypeRange{signlessType}, *offset)
+                           .getResult(0);
     }
-    return rewriter.create<arith::AddIOp>(loc, base, *offset).getResult();
+    Value result;
+    if (order == "DESC") {
+      result = rewriter
+                   .create<arith::SubIOp>(loc, signlessBase, signlessOffset)
+                   .getResult();
+    } else {
+      result = rewriter
+                   .create<arith::AddIOp>(loc, signlessBase, signlessOffset)
+                   .getResult();
+    }
+    if (intType.isSignless()) {
+      return result;
+    }
+    return rewriter
+        .create<UnrealizedConversionCastOp>(loc, TypeRange{intType}, result)
+        .getResult(0);
   }
   if (isa<FloatType>(base.getType())) {
     if (order == "DESC") {
@@ -901,6 +938,38 @@ FailureOr<std::optional<Value>> createPowerOfTwoSubVLChunk(
   return std::optional<Value>(
       rewriter.create<VaddsOp>(loc, resultType, rem, base, allMask).getResult());
 }
+static Value negateResidualOffset(Location loc, Value zeroScalar,
+                                  Value offsetScalar,
+                                  PatternRewriter &rewriter) {
+  Type type = offsetScalar.getType();
+  if (isa<FloatType>(type)) {
+    return rewriter.create<arith::NegFOp>(loc, offsetScalar).getResult();
+  }
+  auto intType = cast<IntegerType>(type);
+  Type signlessType = rewriter.getIntegerType(intType.getWidth());
+  Value signlessZero = zeroScalar;
+  Value signlessOffset = offsetScalar;
+  if (!intType.isSignless()) {
+    signlessZero = rewriter
+                       .create<UnrealizedConversionCastOp>(
+                           loc, TypeRange{signlessType}, zeroScalar)
+                       .getResult(0);
+    signlessOffset = rewriter
+                         .create<UnrealizedConversionCastOp>(
+                             loc, TypeRange{signlessType}, offsetScalar)
+                         .getResult(0);
+  }
+  Value negOffset =
+      rewriter.create<arith::SubIOp>(loc, signlessZero, signlessOffset)
+          .getResult();
+  if (intType.isSignless()) {
+    return negOffset;
+  }
+  return rewriter
+      .create<UnrealizedConversionCastOp>(loc, TypeRange{intType}, negOffset)
+      .getResult(0);
+}
+
 /// Pack group-periodic ramps inside one physical VL when S < physVL and
 /// physVL % S == 0 (e.g. i32 L=64,group=2 → [base..base+31 | base..base+31]).
 /// Preferred recipes (O(1), independent of G = physVL/S):
@@ -929,17 +998,11 @@ static FailureOr<Value> materializeResidualSubVLGroup(
                                       allMask)
                      .getResult();
     } else {
-      Value negOffset = isa<FloatType>(base.getType())
-                            ? rewriter.create<arith::NegFOp>(
-                                  loc, *offsetScalar)
-                                  .getResult()
-                            : rewriter
-                                  .create<arith::SubIOp>(loc, zeroScalar,
-                                                         *offsetScalar)
-                                  .getResult();
-      adjusted = rewriter
-                     .create<VaddsOp>(loc, resultType, full, negOffset, allMask)
-                     .getResult();
+      Value negOffset =
+          negateResidualOffset(loc, zeroScalar, *offsetScalar, rewriter);
+      adjusted =
+          rewriter.create<VaddsOp>(loc, resultType, full, negOffset, allMask)
+              .getResult();
     }
   }
   FailureOr<Value> laneMask = createLaneRangeMask(

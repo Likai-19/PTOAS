@@ -1,0 +1,86 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | \
+// RUN:   FileCheck %s --implicit-check-not='arith.addi{{.*}}: si32' \
+// RUN:     --implicit-check-not='arith.subi{{.*}}: si32' \
+// RUN:     --implicit-check-not='arith.addi{{.*}}: ui32'
+// RUN: ptoas --pto-backend=vpto --pto-arch=a5 --emit-vpto %s -o /dev/null
+
+module {
+  func.func @vmi_to_vpto_iota_signed_base_64(
+      %base: si32, %dst: !pto.ptr<si32, ub>) {
+    %c0 = arith.constant 0 : index
+    %idx = pto.vmi.vci %base : si32 -> !pto.vmi.vreg<64xsi32>
+    pto.vmi.vstore %idx, %dst[%c0]
+        : !pto.vmi.vreg<64xsi32>, !pto.ptr<si32, ub>
+    return
+  }
+
+  func.func @vmi_to_vpto_iota_signed_base_split(
+      %base: si32, %dst: !pto.ptr<si32, ub>) {
+    %c0 = arith.constant 0 : index
+    %idx = pto.vmi.vci %base : si32 -> !pto.vmi.vreg<128xsi32>
+    pto.vmi.vstore %idx, %dst[%c0]
+        : !pto.vmi.vreg<128xsi32>, !pto.ptr<si32, ub>
+    return
+  }
+
+  func.func @vmi_to_vpto_iota_signed_base_desc_split(
+      %base: si32, %dst: !pto.ptr<si32, ub>) {
+    %c0 = arith.constant 0 : index
+    %idx = pto.vmi.vci %base {order = "DESC"}
+        : si32 -> !pto.vmi.vreg<128xsi32>
+    pto.vmi.vstore %idx, %dst[%c0]
+        : !pto.vmi.vreg<128xsi32>, !pto.ptr<si32, ub>
+    return
+  }
+
+  func.func @vmi_to_vpto_iota_signed_base_256(
+      %base: si32, %dst: !pto.ptr<si32, ub>) {
+    %c0 = arith.constant 0 : index
+    %idx = pto.vmi.vci %base : si32 -> !pto.vmi.vreg<256xsi32>
+    pto.vmi.vstore %idx, %dst[%c0]
+        : !pto.vmi.vreg<256xsi32>, !pto.ptr<si32, ub>
+    return
+  }
+
+  func.func @vmi_to_vpto_iota_unsigned_base_256(
+      %base: ui32, %dst: !pto.ptr<ui32, ub>) {
+    %c0 = arith.constant 0 : index
+    %idx = pto.vmi.vci %base : ui32 -> !pto.vmi.vreg<256xui32>
+    pto.vmi.vstore %idx, %dst[%c0]
+        : !pto.vmi.vreg<256xui32>, !pto.ptr<ui32, ub>
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @vmi_to_vpto_iota_signed_base_64
+// CHECK: pto.vci
+// CHECK-LABEL: func.func @vmi_to_vpto_iota_signed_base_split
+// CHECK: arith.constant 64 : i32
+// CHECK: arith.addi {{.*}}, {{.*}} : i32
+// CHECK: builtin.unrealized_conversion_cast {{.*}} : i32 to si32
+// CHECK: pto.vci
+// CHECK-NOT: arith.constant 64 : si32
+// CHECK-LABEL: func.func @vmi_to_vpto_iota_signed_base_desc_split
+// CHECK: arith.constant 64 : i32
+// CHECK: arith.subi {{.*}}, {{.*}} : i32
+// CHECK: builtin.unrealized_conversion_cast {{.*}} : i32 to si32
+// CHECK-LABEL: func.func @vmi_to_vpto_iota_signed_base_256
+// CHECK: arith.constant 192 : i32
+// CHECK: arith.constant 128 : i32
+// CHECK: arith.constant 64 : i32
+// CHECK: pto.vci
+// CHECK-LABEL: func.func @vmi_to_vpto_iota_unsigned_base_256
+// CHECK: arith.constant 192 : i32
+// CHECK: arith.constant 128 : i32
+// CHECK: arith.constant 64 : i32
+// CHECK: arith.addi {{.*}}, {{.*}} : i32
+// CHECK: builtin.unrealized_conversion_cast {{.*}} : i32 to ui32
+// CHECK: pto.vci
