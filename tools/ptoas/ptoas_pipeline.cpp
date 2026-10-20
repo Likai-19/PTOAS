@@ -820,6 +820,8 @@ static void lowerPTOToVPTOBackend(PassManager &pm, ModuleOp module) {
       opFusionEnabled && moduleArchAttr && moduleArchAttr.getValue() == "a5";
 
   kernelModulePM.addNestedPass<mlir::func::FuncOp>(
+      pto::createLowerPTOTensorDumpPass());
+  kernelModulePM.addNestedPass<mlir::func::FuncOp>(
       pto::createLowerPTOToUBufOpsPass());
   if (isA2A3) {
     kernelModulePM.addNestedPass<mlir::func::FuncOp>(

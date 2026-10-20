@@ -1,0 +1,40 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// RUN: ptoas --pto-arch=a3 --pto-backend=vpto --emit-vpto-llvm-ir %s -o - 2>&1 | FileCheck %s
+
+module attributes {pto.target_arch = "a3", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @tdump_bf16_header(%out: !pto.ptr<bf16, gm>) attributes {pto.aicore} {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c4 = arith.constant 4 : index
+    %c16 = arith.constant 16 : index
+    %tile = pto.alloc_tile : !pto.tile_buf<loc=vec, dtype=bf16, rows=4, cols=16, v_row=4, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %view = pto.make_tensor_view %out,
+                shape = [%c4, %c16], strides = [%c16, %c1]
+                {layout = #pto.layout<nd>}
+              : !pto.tensor_view<?x?xbf16>
+    %part = pto.partition_view %view,
+                offsets = [%c0, %c0], sizes = [%c4, %c16]
+              : !pto.tensor_view<?x?xbf16>
+                -> !pto.partition_tensor_view<4x16xbf16>
+    pto.tdump ins(%tile : !pto.tile_buf<loc=vec, dtype=bf16, rows=4, cols=16, v_row=4, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>)
+              outs(%part : !pto.partition_tensor_view<4x16xbf16>)
+    return
+  }
+}
+
+// CHECK-LABEL: define void @tdump_bf16_header
+// CHECK: call void @llvm.hivm.MOV.UB.TO.OUT.v220.1
+// CHECK: [[SIZE:%[0-9]+]] = getelementptr i32, ptr addrspace(1) {{.*}}, i64 2
+// CHECK-NEXT: call void @llvm.hivm.stg.cache.b32(ptr addrspace(1) [[SIZE]], i32 2, i32 0)
+// CHECK: [[TYPE:%[0-9]+]] = getelementptr i32, ptr addrspace(1) {{.*}}, i64 3
+// CHECK-NEXT: call void @llvm.hivm.stg.cache.b32(ptr addrspace(1) [[TYPE]], i32 2, i32 0)
+// CHECK: [[SHAPE:%[0-9]+]] = getelementptr i32, ptr addrspace(1) {{.*}}, i64 5
+// CHECK-NEXT: call void @llvm.hivm.stg.cache.b32(ptr addrspace(1) [[SHAPE]], i32 4, i32 0)
+// CHECK: [[VALID:%[0-9]+]] = getelementptr i32, ptr addrspace(1) {{.*}}, i64 7
+// CHECK-NEXT: call void @llvm.hivm.stg.cache.b32(ptr addrspace(1) [[VALID]], i32 4, i32 0)

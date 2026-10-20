@@ -42,7 +42,8 @@ void markIllegalVPTOSimtOps(ConversionTarget &target) {
       pto::ShuffleUpOp, pto::ShuffleDownOp, pto::ShuffleBflyOp, pto::ReduxAddIOp, pto::ReduxAddFOp,
       pto::ReduxMaxIOp, pto::ReduxMaxFOp, pto::ReduxMinIOp, pto::ReduxMinFOp,
       pto::AtomicCasOp, pto::AtomicExchOp, pto::AtomicAddOp, pto::AtomicSubOp, pto::AtomicMinOp, pto::AtomicMaxOp,
-      pto::AtomicAndOp, pto::AtomicOrOp, pto::AtomicXorOp, pto::TrapOp, pto::PrmtOp, pto::MulhiOp, pto::MulI32ToI64Op,
+      pto::AtomicAndOp, pto::AtomicOrOp, pto::AtomicXorOp, pto::TrapOp, pto::AssertOp, pto::PrmtOp,
+      pto::MulhiOp, pto::MulI32ToI64Op,
       pto::SqrtOp, pto::AbsFOp, pto::ExpOp, pto::LogOp, pto::CeilOp, pto::FloorOp, pto::RintOp, pto::RoundOp,
       pto::PowOp, pto::FmaOp, pto::FToFOp, pto::FToIOp, pto::IToFOp, pto::SyncthreadsOp, pto::ThreadfenceOp,
       pto::ThreadfenceBlockOp, pto::KeepOp, pto::ResumeOp>();
@@ -111,7 +112,9 @@ void configureVPTOOpLoweringTarget(ConversionTarget &target, StringRef march) {
                         pto::UBVgatherbOp, pto::UBVgatherOp, pto::UBSetMaskOp, pto::UBSetMaskCountOp,
                         pto::UBSetMaskNormOp>();
   }
-  target.markUnknownOpDynamicallyLegal([](Operation *op) { return !isa<pto::TrapOp>(op); });
+  target.markUnknownOpDynamicallyLegal([](Operation *op) {
+    return !isa<pto::TrapOp, pto::AssertOp, pto::TensorDumpOp>(op);
+  });
 }
 
 void populateVPTOStructuralTypePatterns(VPTOTypeConverter &typeConverter, RewritePatternSet &patterns,

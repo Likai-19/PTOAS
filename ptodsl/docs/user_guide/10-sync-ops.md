@@ -537,19 +537,54 @@ In auto mode, users can still write sync operations directly — `set_flag`/`wai
 
 ### `pto.trap()`
 
-**Description**: Unconditionally terminates execution of the current device-side
-execution instance. This is useful for fail-fast paths in lowered assertions or
-debug-only guards.
+**Description**: Unconditionally requests a device trap. Actual termination of
+the current execution instance or kernel depends on the target/runtime.
 
 `pto.trap()` is a device operation emitted while the kernel is being traced. It
 is not a Python exception and must not be replaced with Python `raise` or
 `assert`, which execute during host-side tracing instead of on the device.
 
-**Returns**: None. Execution does not continue after the trap at runtime.
+**Returns**: None. This PR does not guarantee that execution stops after the
+trap or that the host receives an error. The existing trap operation is not
+changed; this limitation also applies when it is used by `pto.assert_`.
 
 <!-- ptodsl-doc-test: {"mode":"compile_fragment","fixture":"sync_ops.trap","symbol":"sync_ops_trap_probe","compile":{}} -->
 ```python
 # The condition and any diagnostic reporting are normally emitted by a
 # higher-level assertion helper; trap itself is unconditional.
 pto.trap()
+```
+
+## 10.8 Device-side conditional assert
+
+### `pto.assert_(cond, message=None)`
+
+**Description**: Requests a device trap when the scalar `i1` condition `cond`
+is false. This is a conditional diagnostic interface, not a portable
+fail-fast guarantee.
+
+`cond` may be a Python `bool`, a 0/1 integer, or an `i1` scalar (e.g. a
+comparison result). The optional `message` string is a diagnostic consumed
+only by the EmitC backend (printed before the trap request); the VPTO backend
+ignores it.
+
+`pto.assert_` is a device operation emitted while the kernel is being traced.
+It must not be replaced with Python `assert`, which executes during host-side
+tracing instead of on the device.
+
+**Returns**: None. When `cond` is true, no trap is requested and execution
+continues. When it is false, kernel termination and host error reporting
+depend on the target/runtime and are not guaranteed.
+
+**Current limitation**: Reliable failure termination is not provided by this
+change. Supported local simulator configurations have continued with later
+device writes after a false assertion. Do not use `pto.assert_` as the only
+guard against invalid memory accesses or other unsafe work; use explicit
+control flow to prevent those operations.
+
+<!-- ptodsl-doc-test: {"mode":"compile_fragment","fixture":"sync_ops.assert","symbol":"sync_ops_assert_probe","compile":{}} -->
+```python
+# Runtime predicate, e.g. a bounds check on the workitem id.
+cond = pto.get_tid_x() < pto.get_block_dim_x()
+pto.assert_(cond, "tid out of range")
 ```

@@ -252,6 +252,7 @@ using pto::TDeInterleaveOp;
 using pto::TDequantOp;
 using pto::TDivOp;
 using pto::TDivSOp;
+using pto::TensorDumpOp;
 using pto::TensorViewType;
 using pto::TestAsyncEventOp;
 using pto::TExpandsOp;

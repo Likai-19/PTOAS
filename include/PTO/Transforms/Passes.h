@@ -150,6 +150,7 @@ std::unique_ptr<Pass> createFoldTileBufIntrinsicsPass(llvm::StringRef foldMode);
 std::unique_ptr<Pass> createPTOCanonicalizeIRPass();
 std::unique_ptr<Pass> createPTOArithRangeOptimizePass();
 std::unique_ptr<Pass> createLowerPTOToUBufOpsPass();
+std::unique_ptr<Pass> createLowerPTOTensorDumpPass();
 std::unique_ptr<Pass>
 createPTOInlineLibCallPass(const PTOInlineLibCallOptions &options = {});
 std::unique_ptr<Pass> createPTOInlineBackendHelpersPass(

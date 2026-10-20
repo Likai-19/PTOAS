@@ -90,19 +90,7 @@ struct PTOPrintOpToEmitC : public OpConversionPattern<pto::PrintOp> {
     std::string fmt = op.getFormat().str();
     if (fmt.empty())
       fmt = "%f";
-    std::string quoted = "\"";
-    for (char c : fmt) {
-      if (c == '"' || c == '\\') {
-        quoted += '\\';
-      } else if (c == '\n') {
-        quoted += "\\n";
-      } else if (c == '\t') {
-        quoted += "\\t";
-      } else {
-        quoted += c;
-      }
-    }
-    quoted += "\"";
+    std::string quoted = escapeCStringLiteral(fmt);
 
     Value scalar = adaptor.getScalar();
     auto argsAttr = rewriter.getArrayAttr(
@@ -135,11 +123,41 @@ struct PTOTrapOpToEmitC : public OpConversionPattern<pto::TrapOp> {
   }
 };
 
+// pto.assert -> DEBUG_CHECK(condition, "message")
+struct PTOAssertOpToEmitC : public OpConversionPattern<pto::AssertOp> {
+  using OpConversionPattern<pto::AssertOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(pto::AssertOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+
+    std::string msg =
+        op.getMessage() ? op.getMessage()->str() : "pto.assert failed";
+    std::string quoted = escapeCStringLiteral(msg);
+
+    // args encodes the call-site order: the index 0 refers to operand #0
+    // (the condition), followed by the literal message string.
+    auto argsAttr = rewriter.getArrayAttr(
+        {IntegerAttr::get(IndexType::get(ctx), 0),
+         emitc::OpaqueAttr::get(ctx, quoted)});
+    rewriter.create<emitc::CallOpaqueOp>(
+        loc, TypeRange{}, "DEBUG_CHECK",
+        /*args=*/argsAttr,
+        /*templateArgs=*/ArrayAttr{},
+        /*operands=*/ValueRange{adaptor.getCondition()});
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 void populateReduceTPrintTrapPatterns(RewritePatternSet &patterns,
                         TypeConverter &typeConverter, MLIRContext *ctx) {
   patterns.add<PTOPrintToTPRINT>(typeConverter, ctx);
   patterns.add<PTOPrintOpToEmitC>(typeConverter, ctx);
   patterns.add<PTOTrapOpToEmitC>(typeConverter, ctx);
+  patterns.add<PTOAssertOpToEmitC>(typeConverter, ctx);
 }
 
 } // namespace pto

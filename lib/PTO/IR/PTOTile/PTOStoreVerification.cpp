@@ -122,6 +122,110 @@ LogicalResult TStoreOp::verify() {
   return dispatchVerifierByArch(getOperation(), verifyA2A3, verifyA5);
 }
 
+static LogicalResult verifyTensorDumpElemType(TensorDumpOp op,
+                                              pto::TileBufType srcTile) {
+  Type elem = srcTile.getElementType();
+  const bool dumpable = elem.isF16() || elem.isBF16() || elem.isF32() ||
+                        elem.isInteger(8) || elem.isInteger(16) ||
+                        elem.isInteger(32) || elem.isInteger(64);
+  if (!dumpable) {
+    return op.emitOpError(
+        "expects dumpable tile element type (f16/bf16/f32/i8/i16/i32/i64)");
+  }
+  return success();
+}
+
+/// The dump copies one destination row per valid tile row, using the tile's row
+/// pitch as the source stride, so every destination dimension must match the
+/// tile valid shape. Comparing element counts alone is not enough: a same-count
+/// reshaped destination (for example 64x1 against a 4x16 valid shape) still
+/// walks past the tile.
+///
+/// The frontend normalises a 2-D view to the pto-isa 5-D form by prepending
+/// unit dimensions (8x16 becomes 1x1x1x8x16), so compare the trailing
+/// dimensions and require any extra leading ones to be unit.
+static LogicalResult verifyTensorDumpDstShape(
+    TensorDumpOp op, pto::PartitionTensorViewType dstPart,
+    pto::TileBufType srcTile) {
+  const auto dstShape = dstPart.getShape();
+  const auto validShape = srcTile.getValidShape();
+  if (failed(verifyShapeSign(op, dstShape, "dst shape", true))) {
+    return failure();
+  }
+  const bool dstRankTooSmall = dstShape.size() < validShape.size();
+  if (dstRankTooSmall) {
+    return op.emitOpError() << "expects dst rank (" << dstShape.size()
+                            << ") to be at least the src valid_shape rank ("
+                            << validShape.size() << ")";
+  }
+  const size_t leading = dstShape.size() - validShape.size();
+  for (size_t i = 0; i < leading; ++i) {
+    if (dstShape[i] != 1) {
+      return op.emitOpError()
+             << "expects dst shape[" << i << "] (" << dstShape[i]
+             << ") to be 1: the dump covers exactly the tile valid region";
+    }
+  }
+  for (auto [idx, dims] :
+       llvm::enumerate(llvm::zip(dstShape.drop_front(leading), validShape))) {
+    auto [dstDim, validDim] = dims;
+    const bool dstDynamic = dstDim == ShapedType::kDynamic;
+    const bool validDynamic = validDim == ShapedType::kDynamic;
+    if (dstDynamic != validDynamic) {
+      return op.emitOpError()
+             << "expects dst shape[" << idx + leading
+             << "] and src valid_shape[" << idx
+             << "] to both be static or both be dynamic";
+    }
+    const bool mismatched = !dstDynamic && dstDim != validDim;
+    if (mismatched) {
+      return op.emitOpError()
+             << "expects dst shape[" << idx + leading << "] (" << dstDim
+             << ") to match src valid_shape[" << idx << "] (" << validDim << ")";
+    }
+  }
+  return success();
+}
+
+LogicalResult TensorDumpOp::verify() {
+  auto srcTile = dyn_cast<pto::TileBufType>(getSrc().getType());
+  auto dstPart = dyn_cast<pto::PartitionTensorViewType>(getDst().getType());
+  if (!srcTile) {
+    return emitOpError("expects src to be !pto.tile_buf");
+  }
+  if (!dstPart) {
+    return emitOpError("expects dst to be !pto.partition_tensor_view");
+  }
+  if (failed(verifyTensorDumpElemType(*this, srcTile))) {
+    return failure();
+  }
+  const bool sameElementSize = getElemByteSize(srcTile.getElementType()) ==
+                               getElemByteSize(dstPart.getElementType());
+  if (!sameElementSize) {
+    return emitOpError("expects src and dst element types to have the same "
+                       "bitwidth: destination strides use the tile element size");
+  }
+  const auto shape = srcTile.getShape();
+  const bool rank2 = shape.size() == kLogicalTileRank &&
+                     srcTile.getValidShape().size() == kLogicalTileRank;
+  if (!rank2) {
+    return emitOpError("expects rank-2 src shape and valid_shape");
+  }
+  for (int64_t dim : shape) {
+    const bool fitsHeader = dim > 0 && static_cast<uint64_t>(dim) <= UINT32_MAX;
+    if (!fitsHeader) {
+      return emitOpError("expects static positive src shape dimensions that "
+                         "fit in the 32-bit dump header");
+    }
+  }
+  auto space = getPTOMemorySpaceEnum(getSrc().getType());
+  if (!space || *space != pto::AddressSpace::VEC) {
+    return emitOpError("v1 expects a vec-space (UB) tile; "
+                       "mat/acc dumps are not yet supported");
+  }
+  return verifyTensorDumpDstShape(*this, dstPart, srcTile);
+}
+
 static LogicalResult verifyTAbsArch(pto::TAbsOp op, PTOArch arch) {
   const bool isA5 = arch == PTOArch::A5;
   Type srcTy = op.getSrc().getType();

@@ -3300,8 +3300,8 @@ endif()
         mem_base_define = "MEMORY_BASE"
 
     # CCE printing support is gated behind `--cce-enable-print` on some bisheng
-    # toolchains. Only enable it when kernels emit printf.
-    needs_cce_print = bool(re.search(r"\b(?:bisheng::)?cce::printf\s*\(", raw_kernel_for_analysis))
+    # toolchains. DEBUG_CHECK expands to printf in pto/common/debug.h.
+    needs_cce_print = bool(re.search(r"\b(?:(?:bisheng::)?cce::printf|DEBUG_CHECK)\s*\(", raw_kernel_for_analysis))
     cce_enable_print_opt = "    --cce-enable-print" if needs_cce_print else ""
     cce_print_define_opt = "    -DPTOAS_ENABLE_CCE_PRINT=1" if needs_cce_print else ""
 

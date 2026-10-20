@@ -621,6 +621,13 @@ struct EmitPTOManualPass
     LLVM_DEBUG(llvm::dbgs() << "DEBUG: Start PTOToEmitC Pass\n");
     MLIRContext *ctx = &getContext();
     ModuleOp mop = getOperation();
+    const WalkResult dumpResult = mop.walk([](pto::TensorDumpOp op) {
+      op.emitOpError("is supported only by the VPTO backend; use --pto-backend=vpto");
+      return WalkResult::interrupt();
+    });
+    if (dumpResult.wasInterrupted()) {
+      return signalPassFailure();
+    }
     if (failed(validateAndAnnotate(mop))) {
       return signalPassFailure();
     }
@@ -695,9 +702,13 @@ struct EmitPTOManualPass
     bool globalTensorData = false;
     bool bitcast = false;
     bool convTileInit = false;
+    bool debugHeader = false;
   };
 
   static void setHelperFlagsForOp(Operation *op, HelperFlags &flags) {
+    if (isa<mlir::pto::AssertOp>(op)) {
+      flags.debugHeader = true;
+    }
     if (isa<mlir::pto::DeclareEventIdArrayOp>(op))
       flags.eventIdArray = true;
     if (isa<mlir::pto::TRandomOp>(op))
@@ -745,6 +756,10 @@ struct EmitPTOManualPass
     Location loc = mop->getLoc();
     builder.create<emitc::IncludeOp>(
         loc, "pto/pto-inst.hpp", /*is_standard_include=*/false);
+    if (flags.debugHeader) {
+      builder.create<emitc::IncludeOp>(
+          loc, "pto/common/debug.h", /*is_standard_include=*/false);
+    }
     builder.create<emitc::VerbatimOp>(
         loc, builder.getStringAttr("using namespace pto;"));
 

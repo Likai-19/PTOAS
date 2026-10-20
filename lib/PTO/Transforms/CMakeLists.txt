@@ -149,6 +149,7 @@ add_mlir_dialect_library(PTOTransforms
   TileOp/InsertTemplateAttributes.cpp
   TileOp/ExpandTileOp.cpp
   TileOp/FoldTileBufIntrinsics.cpp
+  Lowering/LowerPTOTensorDump.cpp
   Lowering/LowerPTOToUBufOps.cpp
   TileOp/PTOLowerToOpLibCalls.cpp
   TileOp/PTOInstantiateAndInlineOpLib.cpp

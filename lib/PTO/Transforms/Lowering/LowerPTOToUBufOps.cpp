@@ -18,6 +18,7 @@
 #include "PTO/IR/PTO.h"
 #include "PTO/IR/PTOTypeUtils.h"
 #include "PTO/Transforms/Passes.h"
+#include "PTO/Transforms/DirectDmaUtils.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -1291,13 +1292,7 @@ private:
   // tload → mte_gm_ub / tstore → mte_ub_gm
   //===--------------------------------------------------------------------===//
 
-  struct DmaViewInfo {
-    Value gmPtr;
-    Value linearOffset;
-    SmallVector<Value> sizes;
-    SmallVector<Value> strides;
-    SmallVector<Value> offsets;
-  };
+  using DmaViewInfo = pto::dma::DmaViewInfo;
 
   static bool hasUnitInnermostStride(Value view) {
     while (Operation *def = view.getDefiningOp()) {
@@ -1335,66 +1330,16 @@ private:
     return !strides.empty() && strides.back() == 1;
   }
 
-  static FailureOr<DmaViewInfo>
-  extractDirectDmaViewInfo(Value view, Operation *consumer) {
-    SmallVector<pto::PartitionViewOp> partitions;
-    Value root = view;
-    while (auto partition = root.getDefiningOp<pto::PartitionViewOp>()) {
-      partitions.push_back(partition);
-      root = partition.getSource();
-    }
-    if (partitions.empty()) {
-      return failure();
-    }
-
-    auto makeView = root.getDefiningOp<pto::MakeTensorViewOp>();
-    if (!makeView) {
-      return failure();
-    }
-
-    DmaViewInfo info;
-    info.gmPtr = makeView.getPtr();
-    info.sizes.assign(partitions.front().getSizes().begin(),
-                      partitions.front().getSizes().end());
-    info.strides.assign(makeView.getStrides().begin(),
-                        makeView.getStrides().end());
-    if (info.strides.empty() ||
-        !matchPattern(info.strides.back(), m_One())) {
-      consumer->emitError(
-          "A2/A3 DMA lowering requires a unit innermost stride");
-      return failure();
-    }
-
-    info.offsets.assign(partitions.front().getOffsets().begin(),
-                        partitions.front().getOffsets().end());
-    OpBuilder builder(consumer);
-    for (pto::PartitionViewOp partition :
-         llvm::drop_begin(partitions)) {
-      if (partition.getOffsets().size() != info.offsets.size() ||
-          partition.getSizes().size() != info.sizes.size()) {
-        consumer->emitError(
-            "A2/A3 DMA lowering requires rank-preserving nested partitions");
-        return failure();
-      }
-      for (auto [index, offset] :
-           llvm::enumerate(partition.getOffsets())) {
-        info.offsets[index] = builder.create<arith::AddIOp>(
-            consumer->getLoc(), info.offsets[index], offset);
-      }
-    }
-    return info;
-  }
-
   static FailureOr<DmaViewInfo> extractDmaViewInfo(pto::TLoadOp op) {
     if (op.getSrc().getDefiningOp<pto::PartitionViewOp>()) {
-      return extractDirectDmaViewInfo(op.getSrc(), op.getOperation());
+      return pto::dma::extractDirectDmaViewInfo(op.getSrc(), op.getOperation());
     }
     return extractDmaMemRefViewInfo(op.getLoc(), op.getSrc(), op.getContext());
   }
 
   static FailureOr<DmaViewInfo> extractDmaViewInfo(pto::TStoreOp op) {
     if (op.getDst().getDefiningOp<pto::PartitionViewOp>()) {
-      return extractDirectDmaViewInfo(op.getDst(), op.getOperation());
+      return pto::dma::extractDirectDmaViewInfo(op.getDst(), op.getOperation());
     }
     return extractDmaMemRefViewInfo(op.getLoc(), op.getDst(), op.getContext());
   }
@@ -1498,142 +1443,18 @@ private:
     return b.create<pto::CastPtrOp>(loc, origPtrTy, offsetBytePtr);
   }
 
-  Value i64Cast(Location loc, OpBuilder &b, Value indexVal) const {
-    return b.create<arith::IndexCastOp>(loc, b.getI64Type(), indexVal)
-        .getResult();
+  LogicalResult emitMteGmUb(Location loc, OpBuilder &b, Value src,
+                            Value dst, const DmaViewInfo &viewInfo,
+                            Type elemTy, ArrayRef<int64_t> tileShape) const {
+    return pto::dma::emitMteGmUb(loc, b, src, dst, viewInfo,
+                                  getElementSize(elemTy), tileShape);
   }
 
-  // i64 byte-stride of a GM view dimension (index-typed stride x elemSize).
-  Value strideBytes(Location loc, OpBuilder &b, Value idxStride,
-                    unsigned elemSize) const {
-    return b.create<arith::MulIOp>(loc, i64Cast(loc, b, idxStride),
-                                   i64c(elemSize, loc, b)).getResult();
-  }
-
-  // i64 byte-length of the innermost (contiguous) burst dimension.
-  Value burstBytes(Location loc, OpBuilder &b, Value lenBurstElts,
-                   unsigned elemSize) const {
-    return b.create<arith::MulIOp>(loc, i64Cast(loc, b, lenBurstElts),
-                                   i64c(elemSize, loc, b)).getResult();
-  }
-
-  // Product (in elements) of all dims below `i`, used as the UB-side stride
-  // of loop level `i` (the UB tile is dense).
-  Value innerDimElems(Location loc, OpBuilder &b, const DmaViewInfo &viewInfo,
-                      int i) const {
-    Value innerElems = i64c1(loc, b);
-    for (int j = i + 1; j < static_cast<int>(viewInfo.sizes.size()); ++j) {
-      innerElems = b.create<arith::MulIOp>(loc, innerElems,
-          i64Cast(loc, b, viewInfo.sizes[j])).getResult();
-    }
-    return innerElems;
-  }
-
-  // Shared burst-transfer geometry validated by both GM<->UB emitters:
-  // UB tile row span in bytes plus the view's rank, with the same shape and
-  // rank guards the emitters historically applied inline.
-  struct BurstGeometry {
-    int64_t ubCols;
-    unsigned elemSize;
-    unsigned nd;
-  };
-
-  static std::optional<BurstGeometry>
-  getBurstGeometry(const DmaViewInfo &viewInfo, Type elemTy,
-                   ArrayRef<int64_t> tileShape) {
-    if (tileShape.size() < mlir::pto::kValue2) {
-      return std::nullopt;
-    }
-    BurstGeometry g;
-    g.ubCols = tileShape[1];
-    g.elemSize = getElementSize(elemTy);
-    g.nd = viewInfo.sizes.size();
-    if (g.nd < mlir::pto::kValue2) {
-      return std::nullopt;
-    }
-    return g;
-  }
-
-  // The innermost-burst operands shared by both GM<->UB directions: burst
-  // length and the dense UB row stride.
-  struct BurstPlan {
-    Value lenBurst;
-    Value ubRowStride;
-  };
-
-  BurstPlan buildBurstPlan(Location loc, OpBuilder &b,
-                           const DmaViewInfo &viewInfo,
-                           const BurstGeometry &g) const {
-    // The burst length covers one innermost view dim; the UB row stride is
-    // the full UB tile row.
-    Value lenBurst = burstBytes(loc, b, viewInfo.sizes[g.nd - 1], g.elemSize);
-    Value ubRowStride = b.create<arith::MulIOp>(loc, i64c(g.ubCols, loc, b),
-                                                i64c(g.elemSize, loc, b)).getResult();
-    return {lenBurst, ubRowStride};
-  }
-
-  LogicalResult emitMteGmUb(Location loc, OpBuilder &b, Value gmPtr,
-                            Value ubPtr, const DmaViewInfo &viewInfo,
-                            Type elemTy,
-                            ArrayRef<int64_t> tileShape) const {
-    auto geometry = getBurstGeometry(viewInfo, elemTy, tileShape);
-    if (!geometry) {
-      return failure();
-    }
-    BurstPlan plan = buildBurstPlan(loc, b, viewInfo, *geometry);
-
-    // GM -> UB: the burst reads a contiguous GM run and writes a dense UB row.
-    pto::DmaLoopConfig nburst{
-        i64Cast(loc, b, viewInfo.sizes[geometry->nd - 2]),
-        strideBytes(loc, b, viewInfo.strides[geometry->nd - 2],
-                    geometry->elemSize),
-        plan.ubRowStride};
-
-    SmallVector<pto::DmaLoopConfig> loops;
-    for (int i = geometry->nd - 3; i >= 0; --i) {
-      Value count = i64Cast(loc, b, viewInfo.sizes[i]);
-      Value srcStride = strideBytes(loc, b, viewInfo.strides[i],
-                                    geometry->elemSize);
-      Value dstStride = b.create<arith::MulIOp>(
-          loc, innerDimElems(loc, b, viewInfo, i),
-          i64c(geometry->elemSize, loc, b)).getResult();
-      loops.push_back({count, srcStride, dstStride});
-    }
-    b.create<pto::MteGmUbOp>(loc, gmPtr, ubPtr, i64c0(loc, b),
-                             plan.lenBurst, nburst,
-                             llvm::ArrayRef(loops), std::nullopt);
-    return success();
-  }
-
-  LogicalResult emitMteUbGm(Location loc, OpBuilder &b, Value ubPtr,
-                            Value gmPtr, const DmaViewInfo &viewInfo,
-                            Type elemTy,
-                            ArrayRef<int64_t> tileShape) const {
-    auto geometry = getBurstGeometry(viewInfo, elemTy, tileShape);
-    if (!geometry) {
-      return failure();
-    }
-    BurstPlan plan = buildBurstPlan(loc, b, viewInfo, *geometry);
-
-    // UB -> GM: the burst reads a dense UB row and writes a strided GM run.
-    pto::DmaLoopConfig nburst{
-        i64Cast(loc, b, viewInfo.sizes[geometry->nd - 2]), plan.ubRowStride,
-        strideBytes(loc, b, viewInfo.strides[geometry->nd - 2],
-                    geometry->elemSize)};
-
-    SmallVector<pto::DmaLoopConfig> loops;
-    for (int i = geometry->nd - 3; i >= 0; --i) {
-      Value count = i64Cast(loc, b, viewInfo.sizes[i]);
-      Value srcStride = b.create<arith::MulIOp>(
-          loc, innerDimElems(loc, b, viewInfo, i),
-          i64c(geometry->elemSize, loc, b)).getResult();
-      Value dstStride = strideBytes(loc, b, viewInfo.strides[i],
-                                    geometry->elemSize);
-      loops.push_back({count, srcStride, dstStride});
-    }
-    b.create<pto::MteUbGmOp>(loc, ubPtr, gmPtr, plan.lenBurst, nburst,
-                             Value{}, llvm::ArrayRef(loops));
-    return success();
+  LogicalResult emitMteUbGm(Location loc, OpBuilder &b, Value src,
+                            Value dst, const DmaViewInfo &viewInfo,
+                            Type elemTy, ArrayRef<int64_t> tileShape) const {
+    return pto::dma::emitMteUbGm(loc, b, src, dst, viewInfo,
+                                  getElementSize(elemTy), tileShape);
   }
 
   // Shared prologue of lowerTLoad/lowerTStore: validates that the UB-side

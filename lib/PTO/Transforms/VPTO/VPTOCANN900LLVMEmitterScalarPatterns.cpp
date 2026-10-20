@@ -11,6 +11,8 @@
 #include "VPTOCANN900LLVMEmitterScalarTemplates.h"
 #include "VPTOCANN900LLVMEmitterTemplates.h"
 
+#include "PTO/Transforms/VPTOAssertLowering.h"
+
 namespace mlir::pto::detail {
 
 /// Resolve the concrete pipe of a buffer sync pattern to its immediate value.
@@ -56,6 +58,8 @@ public:
 private:
   LoweringState &state;
 };
+
+using AssertOpPattern = mlir::pto::LowerAssertOpPattern<LoweringState>;
 
 static LogicalResult appendVcvtImmediate(pto::VcvtOp op, StringRef name, std::optional<uint64_t> immediate,
                                          SmallVectorImpl<Value> &callArgs, SmallVectorImpl<Type> &argTypes,
@@ -1859,6 +1863,7 @@ static void populateVPTOSIMTAndScalarPatterns(const VPTOTypeConverter &typeConve
       LowerAtomicBinaryOpPattern<pto::AtomicSubOp>, LowerAtomicBinaryOpPattern<pto::AtomicMinOp>,
       LowerAtomicBinaryOpPattern<pto::AtomicMaxOp>, LowerAtomicBinaryOpPattern<pto::AtomicAndOp>,
       LowerAtomicBinaryOpPattern<pto::AtomicOrOp>, LowerAtomicBinaryOpPattern<pto::AtomicXorOp>, LowerTrapOpPattern,
+      AssertOpPattern,
       LowerScalarIntrinsicOpPattern<pto::PrmtOp>, LowerMulhiOpPattern, LowerMulI32ToI64OpPattern, LowerSqrtOpPattern,
       LowerUnaryScalarMathOpPattern<pto::AbsFOp>, LowerUnaryScalarMathOpPattern<pto::ExpOp>,
       LowerUnaryScalarMathOpPattern<pto::LogOp>, LowerUnaryScalarMathOpPattern<pto::CeilOp>,

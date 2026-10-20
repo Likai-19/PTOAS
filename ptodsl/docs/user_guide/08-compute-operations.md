@@ -1748,6 +1748,73 @@ pto.tile.print(src_tile)
 pto.tile.print(src_tile, print_format="width10_precision6")
 ```
 
+### `pto.tile.dump(src, dst)`
+
+**Description**: Persistent tensor dump for post-mortem inspection. Writes the
+tile contents to the host-passed GM view `dst` as a 64-byte little-endian
+metadata header (magic `"PTD0"`, version, element size/type, ndim, shape,
+valid_shape, data offset) followed by the tile valid region in row-major order.
+This maps to `pto.tdump`. Unlike `pto.tile.print`, it writes binary data to GM
+rather than text output and does not abort execution. After normal kernel
+completion and the necessary synchronization, the host can read the buffer.
+Static valid dimensions are self-describing; actual dynamic valid extents
+must be provided separately to the host decoder. `tdump` is currently
+supported only by the VPTO backend.
+
+**Parameters**:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `src` | `Tile` | Source UB tile (loc=vec) to dump |
+| `dst` | `PartitionTensorView` | GM destination; header is written at the view base |
+
+**Constraints**:
+
+- Source and destination element types must have the same bitwidth; the
+  payload preserves raw tile bits without numeric conversion.
+- The source tile must have a static positive 2-D full shape whose dimensions
+  fit in the 32-bit header. The valid shape must also be 2-D; dynamic valid
+  dimensions are encoded as `0xFFFFFFFF` in the header, and the caller must
+  ensure destination sizes equal the runtime valid dimensions. The sentinel
+  means unknown, not an actual extent; full tile shape cannot replace the
+  runtime valid shape when decoding the payload.
+- v1 supports `loc=vec` tiles with dumpable element types
+  (`f16`, `bf16`, `f32`, `i8`, `i16`, `i32`, `i64`).
+- `dst` must have one dimension per tile valid dimension, with the same static
+  extents: a same-element-count reshape (`64x1` for a `4x16` valid region) is
+  rejected.
+- Each destination dimension must be both static or both dynamic with the
+  matching tile valid dimension. Padded destination rows are unsupported: the
+  destination row stride must equal its row width, in elements; a dynamic
+  stride and width must be provably equal. Static valid dimensions require
+  matching constant destination size operands. Any extra leading normalized
+  destination dimensions must have constant size operands equal to 1.
+- The destination address must be 4-byte aligned, because the header is written
+  with 32-bit stores. Dynamic offsets are accepted only when their strides
+  preserve this alignment; the caller must ensure the buffer base is aligned.
+- The backing buffer must reserve space for the 64-byte header plus the
+  complete payload beyond the destination view base.
+- The destination buffer must be unique per block. Every block executing the dump
+  writes the same header and payload (last-writer-wins), so a multi-block kernel
+  must derive the destination from the block id instead of sharing one buffer.
+  Each block's reserved region must include both the 64-byte header and its
+  complete payload.
+- The caller allocates the buffer and transfers its contents to the host;
+  `tdump` does not allocate storage, copy to host memory, or save a file.
+- A complete or host-readable dump is not guaranteed after `pto.assert_`
+  fails, `pto.trap()` executes, or the kernel otherwise terminates abnormally.
+- `tdump` is not supported by the EmitC backend; use `@pto.jit(..., backend="vpto")`.
+
+**Example**:
+
+<!-- ptodsl-doc-test: {"mode":"compile_fragment","fixture":"compute_ops.tdump","symbol":"compute_ops_tdump_probe","compile":{}} -->
+```python
+view = pto.make_tensor_view(out, shape=[8, 16], strides=[16, 1])
+part = pto.partition_view(view, offsets=[0, 0], sizes=[8, 16])
+tile = pto.alloc_tile(shape=[8, 16], dtype=pto.f32)
+pto.tile.dump(tile, part)
+```
+
 ---
 
 ## 8.2 Vector compute (L3 — `@pto.tileop`)

@@ -78,5 +78,5 @@ repos:
         language: system
         pass_filenames: true
         types_or: [c, c++, python]
-        stages: [commit]
+        stages: [pre-commit]
         verbose: true

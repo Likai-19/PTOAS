@@ -10165,6 +10165,8 @@ printf(format, scalar);
 - `format` is a string attribute; it is not a pointer operand.
 - `scalar` must be a numeric type (index / signless integer / f32).
 - The op is side-effecting (marked with `MemWrite`) to prevent CSE from removing it.
+- Generated C string literals preserve and escape embedded quotes and backslashes;
+  these characters are not dropped during EmitC lowering.
 
 **Hardware Mapping:**
 
@@ -10181,12 +10183,13 @@ pto.print ins("%+08.3f", %v : f32)
 
 ##### `pto.trap` - Trap / Abort Execution
 
-**Summary:** Unconditionally aborts execution at runtime. Intended for assertions and debug-only fail-fast paths.
+**Summary:** Unconditionally requests a device trap. Actual termination and
+host error reporting depend on the target/runtime.
 
 **Semantics:**
 
 ```c
-trap(); // does not return
+trap(); // target/runtime behavior
 ```
 
 **Arguments:** None.
@@ -10195,7 +10198,9 @@ trap(); // does not return
 
 **Constraints & Verification:**
 
-- May be used anywhere; terminates the current kernel or program as implementation-defined.
+- May be used anywhere; the target/runtime determines whether it terminates
+  the current execution instance, kernel, or program. Reliable termination is
+  not guaranteed by this PR.
 - Typically combined with `pto.print` or higher-level assertions for diagnostics.
 
 **Hardware Mapping:**
@@ -10207,6 +10212,161 @@ trap(); // does not return
 ```mlir
 // Debug-only guard, e.g. in a lowered assertion.
 pto.trap
+```
+
+##### `pto.assert` - Conditional Trap Request
+
+**Summary:** Emits a conditional trap request when a scalar `i1` condition is
+false. It is useful for device diagnostics, but it does not provide a
+portable fail-fast or host-error contract.
+
+**Semantics:**
+
+```c
+if (!condition) {
+  trap(); // target/runtime behavior
+}
+```
+
+**Arguments:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `condition` | `i1` | Scalar predicate; a trap is requested when it is false |
+| `message` | optional string attr | Diagnostic text. Consumed only by the
+EmitC backend (printed before the trap request); the VPTO backend ignores it |
+
+**Results:** None.
+
+**Constraints & Verification:**
+
+- The condition must be a scalar `i1` (enforced by the ODS type constraint; no extra verifier).
+- The `MemoryEffects` trait marks the op as side-effecting so it is never CSE'd or DCE'd.
+- A false condition does not guarantee that later device instructions are not
+  issued, that the kernel stops, or that the host receives a trap error.
+- Reliable failure termination is not provided by this change. Do not rely on
+  this operation to prevent invalid memory access or other unsafe work; guard
+  such operations with explicit control flow.
+
+**Backend Behavior:**
+
+- VPTO backend: requests a device trap when the condition is false; the
+  optional message is ignored.
+- EmitC backend: prints the diagnostic message and requests a device trap when
+  the condition is false.
+- Kernel termination and host error reporting depend on the target/runtime;
+  neither is guaranteed by this interface.
+
+**Basic Example:**
+
+```mlir
+// Request a diagnostic trap when the pointer is null.
+%is_nonzero = arith.cmpi ne, %ptr, %zero : i32
+pto.assert %is_nonzero {message = "null pointer"} : i1
+```
+
+##### `pto.tdump` - Persistent Tensor Dump
+
+**Summary:** Writes a TileBuf to a host-passed GM buffer as a 64-byte
+little-endian metadata header followed by the tile valid region. A dump with
+static valid dimensions is self-describing. Dynamic valid dimensions are
+marked unknown, so the host must obtain their actual extents separately.
+VPTO backend only. Unlike `pto.tprint`, this operation produces binary data
+in GM rather than text output; it does not abort execution.
+
+**Semantics:**
+
+```c
+// Header (16 x u32, little-endian) at the buffer base, then row-major data.
+header[0] = 0x30445450;             // magic "PTD0" (bytes 50 54 44 30)
+header[1] = 1;                      // header version
+header[2] = element size in bytes;
+header[3] = element type code;      // 1=f16 2=bf16 3=f32 4=i8 5=i16 6=i32 7=i64
+header[4] = ndim;                   // 2
+header[5..6] = shape[0..1];         // full tile shape
+header[7..8] = valid_shape[0..1];   // kDynamic encoded as 0xFFFFFFFF
+header[9] = 64;                     // data offset in bytes
+header[10..15] = 0;                 // reserved
+data = tile valid region, row-major, read with the tile's row pitch;
+```
+
+**Arguments:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `src` | `pto.tile_buf` (loc=vec) | UB tile whose contents are dumped |
+| `dst` | `pto.partition_tensor_view` | GM destination; the header is written at the view base |
+
+**Results:** None.
+
+**Constraints & Verification:**
+
+- Source and destination element types must have the same bitwidth; the
+  payload preserves raw tile bits without numeric conversion.
+- The source tile must have a static positive 2-D full shape whose dimensions
+  fit in the 32-bit header. The valid shape must also be 2-D; dynamic valid
+  dimensions are encoded as `0xFFFFFFFF` in the header, and the caller must
+  ensure destination sizes equal the runtime valid dimensions. This sentinel
+  is not an actual extent: the host must be given each dynamic valid extent
+  separately to decode the payload. Full tile shape is not a substitute for
+  the runtime valid shape.
+- v1 restricts `src` to vec-space (UB) tiles with dumpable element types
+  (f16/bf16/f32/i8/i16/i32/i64); MAT/ACC staging is not yet supported.
+- `dst` must be a GM `partition_tensor_view` with a unit innermost stride.
+- The destination row stride must equal its row width, in elements. Padded
+  destination rows are rejected because the payload is contiguous row-major
+  data. A dynamic row stride and width must be provably equal.
+- Every static `dst` dimension must equal the matching `src` valid_shape
+  dimension; a destination that is only the same element count (for example
+  `64x1` against a `4x16` valid region) is rejected, because the copy walks one
+  destination row per valid tile row.
+- Each matching dimension must be both static or both dynamic. Static valid
+  dimensions require matching constant destination size operands; a dynamic
+  size cannot override a static valid extent. Any extra leading destination
+  dimensions must have constant size operands equal to 1.
+- The destination address must be 4-byte aligned, since the header is written
+  with 32-bit stores. Alignment of the buffer base is the caller's
+  responsibility; a statically known view offset that breaks it is rejected at
+  compile time. Dynamic view offsets are accepted only when their byte strides
+  preserve 4-byte alignment.
+- The backing buffer must have space for the 64-byte header plus the complete
+  payload beyond the destination view base; the logical view describes only
+  the payload dimensions, not the additional header storage.
+- The destination buffer must be unique per block. Every block that executes the
+  op writes the same header and payload, so a multi-block kernel has to derive
+  the destination from the block id instead of sharing one buffer; otherwise the
+  result is last-writer-wins. Each block's reserved region must include both
+  the 64-byte header and its complete payload, not just the payload bytes.
+- The caller allocates the GM buffer and copies it to host memory after normal
+  kernel completion and the necessary synchronization. The operation does not
+  allocate storage, transfer data to the host, or save a file automatically.
+- Persistence means the completed dump remains in the caller-owned GM buffer.
+  It does not guarantee a complete or host-readable dump after a subsequent
+  `pto.assert` failure, `pto.trap`, or other abnormal kernel termination.
+- Supported by the VPTO backend only; the EmitC backend rejects `pto.tdump`.
+
+**Behavior:**
+
+- The payload copy runs on the MTE3 pipe; tile-level synchronization is
+  inserted automatically like `pto.tstore`. The header uses scalar GM stores.
+- The payload begins 64 bytes after the destination view base and copies one
+  destination row per valid tile row using the tile's full row pitch.
+- No GM cache invalidation is issued (same visibility caveat as
+  `pto.tstore`); a host reader on real hardware may need an explicit CMO.
+
+**Hardware Mapping:**
+
+- Header: 16 scalar GM stores (`llvm.hivm.stg.cache.b32`).
+- Data: UB-to-GM DMA (`llvm.hivm.MOV.UB.TO.OUT.*`).
+
+**Basic Example:**
+
+```mlir
+// Dump the intermediate tile for post-mortem inspection.
+pto.tdump ins(%tile : !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=16,
+                    v_row=8, v_col=16, blayout=row_major, slayout=none_box,
+                    fractal=512, pad=0>)
+          outs(%part : !pto.partition_tensor_view<8x16xf32>)
 ```
 
 ---

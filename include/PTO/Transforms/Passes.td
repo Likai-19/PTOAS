@@ -701,6 +701,22 @@ def LowerPTOToUBufOps : Pass<"pto-lower-to-ubuf-ops", "mlir::func::FuncOp"> {
   ];
 }
 
+def LowerPTOTensorDump : Pass<"pto-lower-tensor-dump", "mlir::func::FuncOp"> {
+  let summary = "Lower pto.tdump to a metadata header (pto.stg) plus pto.mte_ub_gm";
+  let description = [{
+    Converts pto.tdump to a 64-byte little-endian metadata header written via
+    pto.stg (wrapped in a 1x1x1 pto.section.simt that is later outlined to a
+    blocking simt_launch) followed by a pto.mte_ub_gm copy of the raw tile
+    data. Runs on the VPTO backend before architecture-specific tile lowering.
+  }];
+  let constructor = "mlir::pto::createLowerPTOTensorDumpPass()";
+  let dependentDialects = [
+    "mlir::pto::PTODialect",
+    "mlir::func::FuncDialect",
+    "mlir::arith::ArithDialect"
+  ];
+}
+
 def PTOInlineLibCall : Pass<"pto-inline-libcall", "ModuleOp"> {
   let summary = "Materialize OP-Lib instance bodies and inline OP-Lib calls";
   let description = [{

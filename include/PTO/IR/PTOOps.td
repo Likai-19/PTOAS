@@ -802,6 +802,72 @@ def TStoreOp: PTO_TOp<"tstore", [
   }];
 }
 
+def TensorDumpOp : PTO_TOp<"tdump", [
+  OpPipeInterface,
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+]> {
+  let summary = "Persistent tensor dump: write a TileBuf to a host-passed GM "
+                "buffer with a metadata header.";
+  let description = [{
+    VPTO-only debug op. Writes a 64-byte little-endian metadata header
+    (magic "PTD0", version, element size/type, ndim, shape, valid_shape, data
+    offset) followed by the tile valid region in row-major order, using the
+    tile's row pitch as the source stride. Static valid dimensions make the
+    dump self-describing; dynamic valid dimensions are marked unknown and
+    their runtime extents must be supplied separately to the host decoder.
+    Unlike tprint, this writes binary data rather than text output and does
+    not abort execution. Not supported by the EmitC backend.
+
+    DPS form:
+      pto.tdump ins(%tile_buf) outs(%partition_view)
+
+    Contract:
+    - Src and dst element types must have the same bitwidth; the payload
+      preserves raw tile bits without numeric conversion.
+    - Src shape and valid_shape must be rank 2. Full shape dimensions must
+      be static, positive, and fit in the 32-bit header. Dynamic valid_shape
+      dimensions are encoded as 0xFFFFFFFF, not their runtime extents. The
+      caller must ensure destination sizes equal the runtime valid dimensions.
+    - Every destination dimension must equal the matching src valid_shape
+      dimension; each dimension must be both static or both dynamic. The
+      destination cannot be a same-element-count reshape of the valid region.
+    - The destination's row stride must equal its row width. Padded rows are
+      unsupported because the dump header describes a contiguous payload.
+    - The destination address must be 4-byte aligned: the header is written
+      with 32-bit stores. Dynamic offsets are accepted only when their strides
+      preserve this alignment; a statically known offset that breaks alignment
+      is rejected. Alignment of the buffer base is the caller's responsibility.
+    - The destination buffer must be unique per block. Every block executing
+      the op writes the same header and payload, so a multi-block kernel has to
+      derive the destination from the block id (for example by offsetting the
+      partition view) instead of sharing one buffer; otherwise the result is
+      last-writer-wins. Each block's region must reserve the 64-byte header
+      plus the entire payload.
+    - The caller allocates the buffer and reads it on the host after normal
+      kernel completion and the necessary synchronization. This op does not
+      allocate storage or transfer data to the host. A complete dump is not
+      guaranteed after an assert failure, trap, or other abnormal termination.
+  }];
+
+  let arguments = (ins
+    PTODpsType:$src,
+    PTODpsType:$dst
+  );
+
+  let results = (outs);
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = [{
+    `ins` `(` $src `:` qualified(type($src)) `)`
+    `outs` `(` $dst `:` qualified(type($dst)) `)` attr-dict
+  }];
+
+  let extraClassDeclaration = [{
+    ::mlir::pto::PIPE getPipe() { return ::mlir::pto::PIPE::PIPE_MTE3; }
+  }];
+}
+
 def TTransOp : PTO_TOp<"ttrans", [
   PTO_DpsInitOpInterface,
   OpPipeInterface,
@@ -3168,6 +3234,26 @@ def TrapOp : PTO_Op<"trap", [MicroOpInterface, SimtOpInterface]> {
   let arguments = (ins);
   let results = (outs);
   let assemblyFormat = "attr-dict";
+}
+
+// The unbound write effect preserves this observable trap request from DCE/CSE;
+// assert does not write a particular memory operand.
+def AssertOp : PTO_Op<"assert", [MicroOpInterface, SimtOpInterface,
+                                 MemoryEffects<[MemWrite]>]> {
+  let summary = "Assert: request a trap when a scalar i1 condition is false.";
+  let description = [{
+    Conditional device-side trap request. If `condition` is false, the backend
+    emits its trap operation. Whether the device or simulator stops the
+    current kernel, and which host-side status is reported, is target- and
+    runtime-dependent and is not guaranteed by this operation.
+    The optional `message` attribute is only consumed by the EmitC backend
+    (printed by DEBUG_CHECK before the trap); the VPTO backend ignores it
+    because it has no device printf channel.
+    Format in IR: `pto.assert %cond {message = "..."} : i1`
+  }];
+  let arguments = (ins I1:$condition, OptionalAttr<StrAttr>:$message);
+  let results = (outs);
+  let assemblyFormat = "$condition attr-dict `:` type($condition)";
 }
 
 // ---- tile-world TOp version (with 't') ----

@@ -117,14 +117,9 @@ inline Value coerceToU64Address(ConversionPatternRewriter &rewriter,
   return value;
 }
 
-// pto-isa's tile instrinsics take their scalar operands as `uint64_t`
-// (preQuantScalar) and `uint16_t` (indexRow/indexCol) while every scalar the
-// EmitC pass materialises is `int64_t`. Emitting the raw int64_t operands
-// makes C++ overload resolution prefer the no-quant overloads: the trailing
-// index then binds to the unconstrained `WaitEvents&...` pack by identity,
-// where the scalar-quant candidate needs an integral conversion, so the scale
-// silently narrows into indexRow. Wrap each scalar in a static_cast to the
-// wrapper's exact parameter type so the intended overload is selected.
+// pto-isa tile intrinsics use exact scalar parameter types for quantization
+// and indices. EmitC materializes scalar values as int64_t, so cast them to
+// the wrapper type before overload resolution.
 inline Value castScalarToCppType(ConversionPatternRewriter &rewriter,
                                  Location loc, Value value,
                                  const char *cppType) {
@@ -138,6 +133,34 @@ inline Value castScalarToCppType(ConversionPatternRewriter &rewriter,
                                        {emitc::OpaqueAttr::get(ctx, cppType)}),
                                    ValueRange{value})
       .getResult(0);
+}
+
+// Render `text` as a C string literal for an opaque EmitC call, escaping the
+// characters that would otherwise end the literal early or change its
+// meaning: backslash, double quote and control bytes. Shared by the debug ops
+// that forward an MLIR string attribute to the device (pto.print ->
+// cce::printf, pto.assert -> DEBUG_CHECK).
+inline std::string escapeCStringLiteral(StringRef text) {
+  std::string quoted = "\"";
+  for (unsigned char character : text) {
+    if (character == '"' || character == '\\') {
+      quoted += '\\';
+      quoted += character;
+    } else if (character == '\n') {
+      quoted += "\\n";
+    } else if (character == '\t') {
+      quoted += "\\t";
+    } else if (character < 32 || character == 127) {
+      quoted += '\\';
+      quoted += static_cast<char>('0' + ((character >> 6) & 7));
+      quoted += static_cast<char>('0' + ((character >> 3) & 7));
+      quoted += static_cast<char>('0' + (character & 7));
+    } else {
+      quoted += character;
+    }
+  }
+  quoted += "\"";
+  return quoted;
 }
 
 inline constexpr llvm::StringLiteral kGlobalTensorStridesAttrName =
@@ -410,4 +433,3 @@ private:
 
 } // namespace pto
 } // namespace mlir
-
