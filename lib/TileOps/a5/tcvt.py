@@ -93,6 +93,52 @@ def _part_mode(token):
     return None
 
 
+def _pack_byte_index_ramp():
+    """Byte index ramp (0, 4, 8, ...) shared by the 4:1 and FP8 pack paths."""
+
+    idx_mask_b8 = pto.pset_b8(pto.PAT.ALL)
+    idx_mask_b16 = pto.pbitcast(idx_mask_b8, pto.mask_b16)
+    v_idx = pto.vci(pto.i8(0), "ASC")
+    v_idx_i16 = pto.vbitcast(v_idx, pto.i16)
+    v_idx_i16 = pto.vmuls(v_idx_i16, pto.i16(4), idx_mask_b16)
+    return pto.vbitcast(v_idx_i16, pto.ui8)
+
+
+def _convert_and_pack_low_precision(vec, dst_dtype, mask, rnd_sat, v_idx_ui8):
+    """Convert to a low-precision type and pack the scattered bytes with vselr."""
+
+    rnd, sat = rnd_sat
+    converted = pto.vcvt(
+        vec,
+        dst_dtype,
+        mask,
+        rnd=rnd,
+        sat=sat,
+        part=pto.VcvtPartMode.P0,
+    )
+    result = _vselr_low_precision(converted, v_idx_ui8)
+    pto.mem_bar(pto.BarrierType.VST_VST)
+    return result
+
+
+def _store_packed_bytes(result, dst_ptr, offset, store_mask):
+    """Store one packed byte chunk; the b8 mask counts this chunk's bytes."""
+
+    pto.vsts(
+        result,
+        dst_ptr,
+        offset,
+        store_mask,
+        dist=pto.VStoreDist.NORM_B8,
+    )
+
+
+def _emit_packed_bytes_1d(dst, src_dtype, emit_chunk):
+    """Flattened loop whose chunks also receive their byte count."""
+
+    _emit_tcvt_1d(dst, src_dtype, src_dtype, 1, emit_chunk, with_count=True)
+
+
 def _vselr_low_precision(src, idx):
     raw_src = unwrap_surface_value(src)
     return wrap_surface_value(_pto.VselrOp(raw_src.type, raw_src, unwrap_surface_value(idx)).result)
@@ -131,7 +177,7 @@ def _tcvt_store_2d(converted, dst, row, col, mask, dist):
 
 
 @rewrite_jit_function
-def _emit_tcvt_1d(dst, step_dtype, mask_dtype, remaining_scale, emit_chunk):
+def _emit_tcvt_1d(dst, step_dtype, mask_dtype, remaining_scale, emit_chunk, *, with_count=False):
     """Run one conversion vector loop over the flattened destination range."""
 
     valid_rows, valid_cols = dst.valid_shape
@@ -139,8 +185,12 @@ def _emit_tcvt_1d(dst, step_dtype, mask_dtype, remaining_scale, emit_chunk):
     lanes = pto.elements_per_vreg(step_dtype)
     remained = total_elements * remaining_scale
     for offset in range(0, total_elements, lanes):
+        before = remained
         mask, remained = pto.make_mask(mask_dtype, remained)
-        emit_chunk(offset, mask)
+        if with_count:
+            emit_chunk(offset, mask, before - remained)
+        else:
+            emit_chunk(offset, mask)
 
 
 @rewrite_jit_function
@@ -1006,6 +1056,34 @@ template_tcvt_ui32_to_ui16 = _register_tcvt(
 )
 
 
+@rewrite_jit_function
+def _render_tcvt_8_to_32(src: pto.Tile, dst: pto.Tile):
+    valid_rows, valid_cols = dst.valid_shape
+    b8_mask = pto.make_mask(pto.ui8, pto.PAT.ALL)
+    v_zero = pto.vbitcast(pto.vdup(pto.i8(0), b8_mask), pto.ui8)
+    lanes_i16 = pto.elements_per_vreg(pto.i16)
+    lanes_i32 = pto.elements_per_vreg(pto.i32)
+    src_dtype = src.dtype
+    dst_dtype = dst.dtype
+    for row in range(0, valid_rows, 1):
+        remained = valid_cols
+        next_remained = valid_cols - lanes_i32
+        for col in range(0, valid_cols, lanes_i16):
+            mask_b16_cur, remained = pto.make_mask(pto.i16, remained)
+            mask_b16_next, next_remained = pto.make_mask(pto.i16, next_remained)
+            mask_b32_cur = pto.punpack(mask_b16_cur, pto.PredicatePart.LOWER, to_type=pto.mask_b32)
+            mask_b32_next = pto.punpack(mask_b16_next, pto.PredicatePart.LOWER, to_type=pto.mask_b32)
+            vec_8_0 = pto.vlds(src[row, col:], dist="UNPK_B8")
+            vec_ui8_0 = pto.vbitcast(vec_8_0, pto.ui8)
+            vec_ui8_1, vec_ui8_2 = pto.vintlv(vec_ui8_0, v_zero)
+            vec_8_1 = pto.vbitcast(vec_ui8_1, src_dtype)
+            vec_8_2 = pto.vbitcast(vec_ui8_2, src_dtype)
+            output_0 = pto.vcvt(vec_8_1, dst_dtype, b8_mask, part=pto.VcvtPartMode.P0)
+            output_1 = pto.vcvt(vec_8_2, dst_dtype, b8_mask, part=pto.VcvtPartMode.P0)
+            pto.vsts(output_0, dst[row, col:], mask_b32_cur, dist=pto.VStoreDist.NORM_B32)
+            pto.vsts(output_1, dst[row, col + lanes_i32:], mask_b32_next, dist=pto.VStoreDist.NORM_B32)
+
+
 @tilelib.tile_template(
     op="pto.tcvt",
     target="a5",
@@ -1021,33 +1099,12 @@ template_tcvt_ui32_to_ui16 = _register_tcvt(
     tags=("convert", "rowwise"),
 )
 def template_tcvt_si8_to_i32(src: pto.Tile, dst: pto.Tile):
-    valid_rows, valid_cols = dst.valid_shape
-    b8_mask = pto.make_mask(pto.ui8, pto.PAT.ALL)
-    v_zero = pto.vbitcast(pto.vdup(pto.i8(0), b8_mask), pto.ui8)
-    lanes_i16 = pto.elements_per_vreg(pto.i16)
-    lanes_i32 = pto.elements_per_vreg(pto.i32)
-    for row in range(0, valid_rows, 1):
-        remained = valid_cols
-        next_remained = valid_cols - lanes_i32
-        for col in range(0, valid_cols, lanes_i16):
-            mask_b16_cur, remained = pto.make_mask(pto.i16, remained)
-            mask_b16_next, next_remained = pto.make_mask(pto.i16, next_remained)
-            mask_b32_cur = pto.punpack(mask_b16_cur, pto.PredicatePart.LOWER, to_type=pto.mask_b32)
-            mask_b32_next = pto.punpack(mask_b16_next, pto.PredicatePart.LOWER, to_type=pto.mask_b32)
-            vec_si8_0 = pto.vlds(src[row, col:], dist="UNPK_B8")
-            vec_ui8_0 = pto.vbitcast(vec_si8_0, pto.ui8)
-            vec_ui8_1, vec_ui8_2 = pto.vintlv(vec_ui8_0, v_zero)
-            vec_si8_1 = pto.vbitcast(vec_ui8_1, pto.si8)
-            vec_si8_2 = pto.vbitcast(vec_ui8_2, pto.si8)
-            output_0 = pto.vcvt(vec_si8_1, pto.i32, b8_mask, part=pto.VcvtPartMode.P0)
-            output_1 = pto.vcvt(vec_si8_2, pto.i32, b8_mask, part=pto.VcvtPartMode.P0)
-            pto.vsts(output_0, dst[row, col:], mask_b32_cur, dist=pto.VStoreDist.NORM_B32)
-            pto.vsts(output_1, dst[row, col + lanes_i32:], mask_b32_next, dist=pto.VStoreDist.NORM_B32)
+    _render_tcvt_8_to_32(src, dst)
 
 
 @rewrite_jit_function
-def _emit_tcvt_si8_to_i32_chunks(dst, emit_chunk):
-    """Interleaved si8->i32 conversion loop over the flattened destination range."""
+def _emit_tcvt_8_to_32_chunks(dst, emit_chunk):
+    """Interleaved 8-bit -> 32-bit conversion loop over the flattened destination range."""
 
     valid_rows, valid_cols = dst.valid_shape
     total_elements = valid_rows * valid_cols
@@ -1071,53 +1128,31 @@ def _emit_tcvt_si8_to_i32_chunks(dst, emit_chunk):
         emit_chunk(offset, mask_b32_cur, mask_b32_next)
 
 
-def _render_tcvt_si8_to_i32_1d(src: pto.Tile, dst: pto.Tile):
+def _render_tcvt_8_to_32_1d(src: pto.Tile, dst: pto.Tile):
     src_ptr = src.as_ptr()
     dst_ptr = dst.as_ptr()
     b8_mask = pto.make_mask(pto.ui8, pto.PAT.ALL)
     v_zero = pto.vbitcast(pto.vdup(pto.i8(0), b8_mask), pto.ui8)
     lanes_i32 = pto.elements_per_vreg(pto.i32)
+    src_dtype = src.dtype
+    dst_dtype = dst.dtype
 
     def emit_chunk(offset, mask_b32_cur, mask_b32_next):
-        vec_si8_0 = pto.vlds(src_ptr, offset, dist="UNPK_B8")
-        vec_ui8_0 = pto.vbitcast(vec_si8_0, pto.ui8)
+        vec_8_0 = pto.vlds(src_ptr, offset, dist="UNPK_B8")
+        vec_ui8_0 = pto.vbitcast(vec_8_0, pto.ui8)
         vec_ui8_1, vec_ui8_2 = pto.vintlv(vec_ui8_0, v_zero)
-        vec_si8_1 = pto.vbitcast(vec_ui8_1, pto.si8)
-        vec_si8_2 = pto.vbitcast(vec_ui8_2, pto.si8)
-        output_0 = pto.vcvt(
-            vec_si8_1,
-            pto.i32,
-            b8_mask,
-            part=pto.VcvtPartMode.P0,
-        )
-        output_1 = pto.vcvt(
-            vec_si8_2,
-            pto.i32,
-            b8_mask,
-            part=pto.VcvtPartMode.P0,
-        )
-        pto.vsts(
-            output_0,
-            dst_ptr,
-            offset,
-            mask_b32_cur,
-            dist=pto.VStoreDist.NORM_B32,
-        )
-        pto.vsts(
-            output_1,
-            dst_ptr,
-            offset + lanes_i32,
-            mask_b32_next,
-            dist=pto.VStoreDist.NORM_B32,
-        )
+        output_0 = pto.vcvt(pto.vbitcast(vec_ui8_1, src_dtype), dst_dtype, b8_mask, part=pto.VcvtPartMode.P0)
+        output_1 = pto.vcvt(pto.vbitcast(vec_ui8_2, src_dtype), dst_dtype, b8_mask, part=pto.VcvtPartMode.P0)
+        pto.vsts(output_0, dst_ptr, offset, mask_b32_cur, dist=pto.VStoreDist.NORM_B32)
+        pto.vsts(output_1, dst_ptr, offset + lanes_i32, mask_b32_next, dist=pto.VStoreDist.NORM_B32)
 
-    _emit_tcvt_si8_to_i32_chunks(dst, emit_chunk)
+    _emit_tcvt_8_to_32_chunks(dst, emit_chunk)
 
 
 template_tcvt_si8_to_i32_1d = _register_tcvt_1d(
     name="template_tcvt_si8_to_i32",
     dtypes=("si8", "i32"),
-    renderer=_render_tcvt_si8_to_i32_1d,
+    renderer=_render_tcvt_8_to_32_1d,
 )
 
 
@@ -1125,20 +1160,18 @@ template_tcvt_si8_to_i32_1d = _register_tcvt_1d(
 def _render_32_to_ui8(src: pto.Tile, dst: pto.Tile):
     valid_rows, valid_cols = dst.valid_shape
     full_mask = pto.make_mask(src.dtype, pto.PAT.ALL)
-    idx_mask_b8 = pto.pset_b8(pto.PAT.ALL)
-    idx_mask_b16 = pto.pbitcast(idx_mask_b8, pto.mask_b16)
     lanes = pto.elements_per_vreg(src.dtype)
-    v_idx = pto.vci(pto.i8(0), "ASC")
-    v_idx_i16 = pto.vbitcast(v_idx, pto.i16)
-    v_idx_i16 = pto.vmuls(v_idx_i16, pto.i16(4), idx_mask_b16)
-    v_idx_ui8 = pto.vbitcast(v_idx_i16, pto.ui8)
+    v_idx_ui8 = _pack_byte_index_ramp()
     for row in range(0, valid_rows, 1):
         remained = valid_cols
         for col in range(0, valid_cols, lanes):
-            # One source register contributes only 64 compacted bytes. Building
-            # this directly as a b8 mask would consume up to 256 elements.
-            iteration_mask, remained = pto.make_mask(src.dtype, remained)
-            store_mask = pto.pbitcast(iteration_mask, pto.mask_b8)
+            # One source register contributes at most one compacted byte per
+            # element, so the b8 store mask must count bytes, not 32-bit lanes:
+            # a b32 -> b8 pbitcast would only enable every fourth byte.
+            _, next_remained = pto.make_mask(src.dtype, remained)
+            chunk = remained - next_remained
+            store_mask, _ = pto.make_mask(pto.ui8, chunk)
+            remained = next_remained
             vec = pto.vlds(src[row, col:])
             converted = pto.vcvt(
                 vec,
@@ -1156,16 +1189,13 @@ def _render_32_to_ui8_1d(src: pto.Tile, dst: pto.Tile):
     src_ptr = src.as_ptr()
     dst_ptr = dst.as_ptr()
     full_mask = pto.make_mask(src.dtype, pto.PAT.ALL)
-    idx_mask_b8 = pto.pset_b8(pto.PAT.ALL)
-    idx_mask_b16 = pto.pbitcast(idx_mask_b8, pto.mask_b16)
-    v_idx = pto.vci(pto.i8(0), "ASC")
-    v_idx_i16 = pto.vbitcast(v_idx, pto.i16)
-    v_idx_i16 = pto.vmuls(v_idx_i16, pto.i16(4), idx_mask_b16)
-    v_idx_ui8 = pto.vbitcast(v_idx_i16, pto.ui8)
+    v_idx_ui8 = _pack_byte_index_ramp()
 
-    def emit_chunk(offset, iteration_mask):
-        # Preserve the 64-element b32 loop granularity for the b8 store.
-        store_mask = pto.pbitcast(iteration_mask, pto.mask_b8)
+    def emit_chunk(offset, _iteration_mask, chunk_count):
+        # Preserve the 64-element b32 loop granularity for the b8 store, but
+        # build the store mask in bytes: pbitcast(b32 -> b8) would enable only
+        # every fourth byte and leave the packed tail unwritten.
+        store_mask, _ = pto.make_mask(pto.ui8, chunk_count)
         vec = pto.vlds(src_ptr, offset)
         converted = pto.vcvt(
             vec,
@@ -1176,15 +1206,9 @@ def _render_32_to_ui8_1d(src: pto.Tile, dst: pto.Tile):
         )
         result = pto.vselr(converted, v_idx_ui8)
         pto.mem_bar(pto.BarrierType.VST_VST)
-        pto.vsts(
-            result,
-            dst_ptr,
-            offset,
-            store_mask,
-            dist=pto.VStoreDist.NORM_B8,
-        )
+        _store_packed_bytes(result, dst_ptr, offset, store_mask)
 
-    _emit_tcvt_1d(dst, src.dtype, src.dtype, 1, emit_chunk)
+    _emit_packed_bytes_1d(dst, src.dtype, emit_chunk)
 
 
 @tilelib.tile_template(
@@ -1233,6 +1257,32 @@ template_tcvt_ui32_to_ui8_1d = _register_tcvt_1d(
     name="template_tcvt_ui32_to_ui8",
     dtypes=("ui32", "ui8"),
     renderer=_render_32_to_ui8_1d,
+)
+
+
+@tilelib.tile_template(
+    op="pto.tcvt",
+    target="a5",
+    name="template_tcvt_fp8_to_f32",
+    dtypes=[("f8e4m3", "f32"), ("f8e5m2", "f32")],
+    iteration_axis="none",
+    op_engine="vector",
+    op_class="other",
+    constraints=[_rowwise],
+    id=38,
+    loop_depth=2,
+    is_post_update=False,
+    tags=("convert", "rowwise", "low_precision"),
+)
+def template_tcvt_fp8_to_f32(src: pto.Tile, dst: pto.Tile):
+    _render_tcvt_8_to_32(src, dst)
+
+
+template_tcvt_fp8_to_f32_1d = _register_tcvt_1d(
+    name="template_tcvt_fp8_to_f32",
+    dtypes=(("f8e4m3", "f32"), ("f8e5m2", "f32")),
+    renderer=_render_tcvt_8_to_32_1d,
+    tags=("low_precision",),
 )
 
 
@@ -1484,6 +1534,30 @@ template_tcvt_i64_to_i32_1d = _register_tcvt_1d(
 )
 
 
+@rewrite_jit_function
+def _render_tcvt_f32_to_f8(src: pto.Tile, dst: pto.Tile, *, rnd, sat):
+    valid_rows, valid_cols = dst.valid_shape
+    dst_dtype = dst.dtype
+    lanes_f32 = pto.elements_per_vreg(src.dtype)
+    src_mask = pto.make_mask(src.dtype, pto.PAT.ALL)
+    v_idx_ui8 = _pack_byte_index_ramp()
+    for row in range(0, valid_rows, 1):
+        remained = valid_cols
+        for col in range(0, valid_cols, lanes_f32):
+            # One f32 element produces one byte, so build the b8 store mask for
+            # this chunk in bytes: consuming a byte mask of the whole row
+            # starves every chunk after the first.
+            _, next_remained = pto.make_mask(src.dtype, remained)
+            chunk = remained - next_remained
+            dst_mask, _ = pto.make_mask(dst_dtype, chunk)
+            remained = next_remained
+            vec = pto.vlds(src[row, col:])
+            result = _convert_and_pack_low_precision(
+                vec, dst_dtype, src_mask, (rnd, sat), v_idx_ui8
+            )
+            pto.vsts(result, dst[row, col:], dst_mask, dist=pto.VStoreDist.NORM_B8)
+
+
 @tilelib.tile_template(
     op="pto.tcvt",
     target="a5",
@@ -1499,67 +1573,29 @@ template_tcvt_i64_to_i32_1d = _register_tcvt_1d(
     tags=("convert", "rowwise", "low_precision"),
 )
 def template_tcvt_f32_to_fp8(src: pto.Tile, dst: pto.Tile):
-    valid_rows, valid_cols = dst.valid_shape
-    dst_dtype = dst.dtype
-    lanes_f32 = pto.elements_per_vreg(src.dtype)
-    src_mask = pto.make_mask(src.dtype, pto.PAT.ALL)
-    idx_mask_b8 = pto.pset_b8(pto.PAT.ALL)
-    idx_mask_b16 = pto.pbitcast(idx_mask_b8, pto.mask_b16)
-    v_idx = pto.vci(pto.i8(0), "ASC")
-    v_idx_i16 = pto.vbitcast(v_idx, pto.i16)
-    v_idx_i16 = pto.vmuls(v_idx_i16, pto.i16(4), idx_mask_b16)
-    v_idx_ui8 = pto.vbitcast(v_idx_i16, pto.ui8)
-    for row in range(0, valid_rows, 1):
-        remained = valid_cols
-        for col in range(0, valid_cols, lanes_f32):
-            dst_mask, remained = pto.make_mask(dst_dtype, remained)
-            vec = pto.vlds(src[row, col:])
-            converted = pto.vcvt(
-                vec,
-                dst_dtype,
-                src_mask,
-                rnd=_round_mode(),
-                sat=pto.VcvtSatMode.SAT,
-                part=pto.VcvtPartMode.P0,
-            )
-            result = _vselr_low_precision(converted, v_idx_ui8)
-            pto.mem_bar(pto.BarrierType.VST_VST)
-            pto.vsts(result, dst[row, col:], dst_mask, dist=pto.VStoreDist.NORM_B8)
+    _render_tcvt_f32_to_f8(src, dst, rnd=_round_mode(), sat=pto.VcvtSatMode.SAT)
 
 
-def _render_tcvt_f32_to_fp8_1d(src: pto.Tile, dst: pto.Tile):
+def _render_tcvt_f32_to_f8_1d(src: pto.Tile, dst: pto.Tile, *, rnd, sat):
     src_ptr = src.as_ptr()
     dst_ptr = dst.as_ptr()
     dst_dtype = dst.dtype
     src_mask = pto.make_mask(src.dtype, pto.PAT.ALL)
-    idx_mask_b8 = pto.pset_b8(pto.PAT.ALL)
-    idx_mask_b16 = pto.pbitcast(idx_mask_b8, pto.mask_b16)
-    v_idx = pto.vci(pto.i8(0), "ASC")
-    v_idx_i16 = pto.vbitcast(v_idx, pto.i16)
-    v_idx_i16 = pto.vmuls(v_idx_i16, pto.i16(4), idx_mask_b16)
-    v_idx_ui8 = pto.vbitcast(v_idx_i16, pto.ui8)
+    v_idx_ui8 = _pack_byte_index_ramp()
 
-    def emit_chunk(offset, dst_mask):
+    def emit_chunk(offset, _iteration_mask, chunk_count):
+        store_mask, _ = pto.make_mask(dst_dtype, chunk_count)
         vec = pto.vlds(src_ptr, offset)
-        converted = pto.vcvt(
-            vec,
-            dst_dtype,
-            src_mask,
-            rnd=_round_mode(),
-            sat=pto.VcvtSatMode.SAT,
-            part=pto.VcvtPartMode.P0,
+        result = _convert_and_pack_low_precision(
+            vec, dst_dtype, src_mask, (rnd, sat), v_idx_ui8
         )
-        result = _vselr_low_precision(converted, v_idx_ui8)
-        pto.mem_bar(pto.BarrierType.VST_VST)
-        pto.vsts(
-            result,
-            dst_ptr,
-            offset,
-            dst_mask,
-            dist=pto.VStoreDist.NORM_B8,
-        )
+        _store_packed_bytes(result, dst_ptr, offset, store_mask)
 
-    _emit_tcvt_1d(dst, src.dtype, dst_dtype, 1, emit_chunk)
+    _emit_packed_bytes_1d(dst, src.dtype, emit_chunk)
+
+
+def _render_tcvt_f32_to_fp8_1d(src: pto.Tile, dst: pto.Tile):
+    _render_tcvt_f32_to_f8_1d(src, dst, rnd=_round_mode(), sat=pto.VcvtSatMode.SAT)
 
 
 template_tcvt_f32_to_fp8_1d = _register_tcvt_1d(
@@ -1585,67 +1621,11 @@ template_tcvt_f32_to_fp8_1d = _register_tcvt_1d(
     tags=("convert", "rowwise", "low_precision"),
 )
 def template_tcvt_f32_to_hif8(src: pto.Tile, dst: pto.Tile):
-    valid_rows, valid_cols = dst.valid_shape
-    dst_dtype = dst.dtype
-    lanes_f32 = pto.elements_per_vreg(src.dtype)
-    src_mask = pto.make_mask(src.dtype, pto.PAT.ALL)
-    idx_mask_b8 = pto.pset_b8(pto.PAT.ALL)
-    idx_mask_b16 = pto.pbitcast(idx_mask_b8, pto.mask_b16)
-    v_idx = pto.vci(pto.i8(0), "ASC")
-    v_idx_i16 = pto.vbitcast(v_idx, pto.i16)
-    v_idx_i16 = pto.vmuls(v_idx_i16, pto.i16(4), idx_mask_b16)
-    v_idx_ui8 = pto.vbitcast(v_idx_i16, pto.ui8)
-    for row in range(0, valid_rows, 1):
-        remained = valid_cols
-        for col in range(0, valid_cols, lanes_f32):
-            dst_mask, remained = pto.make_mask(dst_dtype, remained)
-            vec = pto.vlds(src[row, col:])
-            converted = pto.vcvt(
-                vec,
-                dst_dtype,
-                src_mask,
-                rnd=pto.VcvtRoundMode.A,
-                sat=pto.VcvtSatMode.NOSAT,
-                part=pto.VcvtPartMode.P0,
-            )
-            result = _vselr_low_precision(converted, v_idx_ui8)
-            pto.mem_bar(pto.BarrierType.VST_VST)
-            pto.vsts(result, dst[row, col:], dst_mask, dist=pto.VStoreDist.NORM_B8)
+    _render_tcvt_f32_to_f8(src, dst, rnd=pto.VcvtRoundMode.A, sat=pto.VcvtSatMode.NOSAT)
 
 
 def _render_tcvt_f32_to_hif8_1d(src: pto.Tile, dst: pto.Tile):
-    src_ptr = src.as_ptr()
-    dst_ptr = dst.as_ptr()
-    dst_dtype = dst.dtype
-    src_mask = pto.make_mask(src.dtype, pto.PAT.ALL)
-    idx_mask_b8 = pto.pset_b8(pto.PAT.ALL)
-    idx_mask_b16 = pto.pbitcast(idx_mask_b8, pto.mask_b16)
-    v_idx = pto.vci(pto.i8(0), "ASC")
-    v_idx_i16 = pto.vbitcast(v_idx, pto.i16)
-    v_idx_i16 = pto.vmuls(v_idx_i16, pto.i16(4), idx_mask_b16)
-    v_idx_ui8 = pto.vbitcast(v_idx_i16, pto.ui8)
-
-    def emit_chunk(offset, dst_mask):
-        vec = pto.vlds(src_ptr, offset)
-        converted = pto.vcvt(
-            vec,
-            dst_dtype,
-            src_mask,
-            rnd=pto.VcvtRoundMode.A,
-            sat=pto.VcvtSatMode.NOSAT,
-            part=pto.VcvtPartMode.P0,
-        )
-        result = _vselr_low_precision(converted, v_idx_ui8)
-        pto.mem_bar(pto.BarrierType.VST_VST)
-        pto.vsts(
-            result,
-            dst_ptr,
-            offset,
-            dst_mask,
-            dist=pto.VStoreDist.NORM_B8,
-        )
-
-    _emit_tcvt_1d(dst, src.dtype, dst_dtype, 1, emit_chunk)
+    _render_tcvt_f32_to_f8_1d(src, dst, rnd=pto.VcvtRoundMode.A, sat=pto.VcvtSatMode.NOSAT)
 
 
 template_tcvt_f32_to_hif8_1d = _register_tcvt_1d(
@@ -1745,17 +1725,19 @@ def template_tcvt_bf16_to_fp4(src: pto.Tile, dst: pto.Tile):
     dst_dtype = dst.dtype
     lanes_bf16 = pto.elements_per_vreg(src.dtype)
     dst_chunk_cols = lanes_bf16 // 2
-    idx_mask_b8 = pto.pset_b8(pto.PAT.ALL)
-    idx_mask_b16 = pto.pbitcast(idx_mask_b8, pto.mask_b16)
-    v_idx = pto.vci(pto.i8(0), "ASC")
-    v_idx_i16 = pto.vbitcast(v_idx, pto.i16)
-    v_idx_i16 = pto.vmuls(v_idx_i16, pto.i16(4), idx_mask_b16)
-    v_idx_ui8 = pto.vbitcast(v_idx_i16, pto.ui8)
+    v_idx_ui8 = _pack_byte_index_ramp()
     for row in range(0, valid_rows, 1):
         remained = valid_cols
         src_remained = valid_cols * 2
+            # A chunk converts 2 * dst_chunk_cols source values into
+            # dst_chunk_cols packed pairs (one byte each).  Count the store mask
+            # in this chunk's bytes; a whole-row b8 mask would starve every later
+            # chunk.  A b32 predicate has exactly dst_chunk_cols lanes.
         for col in range(0, valid_cols, dst_chunk_cols):
-            dst_mask, remained = pto.make_mask(dst_dtype, remained)
+            _, next_remained = pto.make_mask(pto.i32, remained)
+            chunk = remained - next_remained
+            dst_mask, _ = pto.make_mask(pto.ui8, chunk)
+            remained = next_remained
             src_mask, src_remained = pto.make_mask(src.dtype, src_remained)
             vec = pto.vlds(src[row, col * 2:])
             converted = pto.vcvt(
@@ -1779,16 +1761,15 @@ def _render_tcvt_bf16_to_fp4_1d(src: pto.Tile, dst: pto.Tile):
     dst_dtype = dst.dtype
     lanes_bf16 = pto.elements_per_vreg(src.dtype)
     dst_chunk_cols = lanes_bf16 // 2
-    idx_mask_b8 = pto.pset_b8(pto.PAT.ALL)
-    idx_mask_b16 = pto.pbitcast(idx_mask_b8, pto.mask_b16)
-    v_idx = pto.vci(pto.i8(0), "ASC")
-    v_idx_i16 = pto.vbitcast(v_idx, pto.i16)
-    v_idx_i16 = pto.vmuls(v_idx_i16, pto.i16(4), idx_mask_b16)
-    v_idx_ui8 = pto.vbitcast(v_idx_i16, pto.ui8)
+    v_idx_ui8 = _pack_byte_index_ramp()
     remained = total_destination_elements
     src_remained = total_destination_elements * 2
     for offset in range(0, total_destination_elements, dst_chunk_cols):
-        dst_mask, remained = pto.make_mask(dst_dtype, remained)
+        # Same per-chunk byte accounting as the 2D template above.
+        _, next_remained = pto.make_mask(pto.i32, remained)
+        chunk = remained - next_remained
+        dst_mask, _ = pto.make_mask(pto.ui8, chunk)
+        remained = next_remained
         src_mask, src_remained = pto.make_mask(src.dtype, src_remained)
         vec = pto.vlds(src_ptr, offset * 2)
         converted = pto.vcvt(

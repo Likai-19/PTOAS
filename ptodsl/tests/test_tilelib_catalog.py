@@ -511,6 +511,27 @@ def _declared_signature_specs(op, parameter_names, signature):
     return specs
 
 
+def _tcvt_specs_for(src_dtype, dst_dtype):
+    """Build legal tile specs for one tcvt dtype signature.
+
+    Packed fp4 pairs occupy one byte for two values, so those signatures need a
+    2:1 shape ratio; every other pair is elementwise.
+    """
+
+    def _packed(name):
+        return name.startswith("f4")
+
+    src_shape, dst_shape = (8, 64), (8, 64)
+    if _packed(src_dtype):
+        src_shape, dst_shape = (8, 32), (8, 64)
+    elif _packed(dst_dtype):
+        src_shape, dst_shape = (8, 64), (8, 32)
+    return {
+        "src": TileSpec(shape=src_shape, dtype=ScalarType(src_dtype), valid_shape=src_shape),
+        "dst": TileSpec(shape=dst_shape, dtype=ScalarType(dst_dtype), valid_shape=dst_shape),
+    }
+
+
 class TileLibCatalogTest(unittest.TestCase):
     def test_tilelib_does_not_duplicate_the_public_ptodsl_surface(self):
         for name in (
@@ -962,6 +983,26 @@ class TileLibCatalogTest(unittest.TestCase):
         self.assertIn("pto.constant 0.000000e+00 : f32", mlir)
         self.assertNotIn("pto.constant -1.000000e+00 : f32", mlir)
 
+    def test_tcvt_fp8_widening_pairs_and_signed_narrowing_gaps(self):
+        # Issue #1612: f8e4m3/f8e5m2 -> f32 widened pairs are catalogued, while
+        # i32/ui32 -> si8 has no A5 intrinsic and must stay unmatched.
+        for src_dtype in ("f8e4m3", "f8e5m2"):
+            specs = {
+                "src": TileSpec(shape=(8, 64), dtype=ScalarType(src_dtype)),
+                "dst": TileSpec(shape=(8, 64), dtype=ScalarType("f32")),
+            }
+            with self.subTest(signature=(src_dtype, "f32")):
+                selected = select("pto.tcvt", "a5", specs)
+                self.assertTrue(selected.name.startswith("template_tcvt_fp8_to_f32"))
+        for src_dtype in ("i32", "ui32"):
+            specs = {
+                "src": TileSpec(shape=(8, 64), dtype=ScalarType(src_dtype)),
+                "dst": TileSpec(shape=(8, 64), dtype=ScalarType("si8")),
+            }
+            with self.subTest(signature=(src_dtype, "si8")):
+                with self.assertRaises(tilelib.NoMatchingTemplate):
+                    select("pto.tcvt", "a5", specs)
+
     def test_tcvt_contiguous_versions_select_flattened_candidates(self):
         signatures = {
             ("i32", "f32"): "template_tcvt_i32_to_f32",
@@ -1070,9 +1111,13 @@ class TileLibCatalogTest(unittest.TestCase):
                         expected_name.replace("i32", src_dtype),
                     )
                     self.assertEqual(selected.metadata.loop_depth, loop_depth)
+                    # Issue #1612: the b8 store mask counts the chunk's valid
+                    # bytes, so it is built with plt_b8 from the source chunk
+                    # count; folding the b32 element mask with pbitcast enabled
+                    # only every fourth byte.
                     self.assertIn("pto.plt_b32", mlir)
                     self.assertIn("pto.pbitcast", mlir)
-                    self.assertNotIn("pto.plt_b8", mlir)
+                    self.assertIn("pto.plt_b8", mlir)
 
     def test_tcvt_partial_multi_row_ranges_retain_2d_fallbacks(self):
         cases = (
@@ -1167,17 +1212,35 @@ class TileLibCatalogTest(unittest.TestCase):
         ]
         by_id = {descriptor.metadata.id: descriptor for descriptor in candidates}
 
-        self.assertEqual(len(candidates), 76)
-        self.assertEqual(set(by_id), set(range(76)))
-        for fallback_id in range(38):
+        self.assertEqual(len(candidates), 78)
+        self.assertEqual(set(by_id), set(range(78)))
+        for fallback_id in range(39):
             with self.subTest(fallback_id=fallback_id):
                 fallback = by_id[fallback_id]
-                flattened = by_id[38 + fallback_id]
+                flattened = by_id[39 + fallback_id]
                 self.assertEqual(fallback.metadata.loop_depth, 2)
                 self.assertEqual(fallback.metadata.priority, 0)
                 self.assertEqual(flattened.metadata.loop_depth, 1)
                 self.assertEqual(flattened.metadata.priority, 10)
                 self.assertEqual(flattened.name, f"{fallback.name}_1d")
+
+    def test_tcvt_every_registered_candidate_materializes(self):
+        # Issue #1612: a misplaced @tilelib.tile_template decorator left two 2D
+        # entry points uncallable and no numeric case noticed, because only the
+        # flattened candidates had coverage.  Materializing every candidate keeps
+        # that class of registration failure visible without a numeric case.
+        # Loading is lazy, so trigger it explicitly: this test must not depend on
+        # another test having selected a tcvt candidate first.
+        select("pto.tcvt", "a5", _tcvt_specs_for("f32", "i32"))
+        candidates = list(tilelib.default_registry().lookup("pto.tcvt", "a5"))
+        self.assertTrue(candidates)
+        for descriptor in candidates:
+            src_dtype, dst_dtype = descriptor.metadata.dtypes[0]
+            specs = _tcvt_specs_for(src_dtype, dst_dtype)
+            with self.subTest(candidate=descriptor.name):
+                selected = select("pto.tcvt", "a5", specs, candidate_id=descriptor.name)
+                mlir = selected.specialize(**specs).mlir_text()
+                self.assertIn(f"func.func @{descriptor.name}", mlir)
 
     def test_tcvt_templates_use_native_python_loop_syntax(self):
         from ptodsl.tilelib.templates.a5 import tcvt

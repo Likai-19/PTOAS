@@ -1,0 +1,28 @@
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --enable-tile-op-expand --emit-vpto %s -o - | FileCheck %s
+
+// Issue #1612 problem 1b: the 4:1 i32 -> ui8 narrowing packs bytes with vselr
+// and must build its b8 store mask from the chunk's byte count.  Folding the b32
+// element mask with pbitcast only enabled every fourth byte, so the packed tail
+// was never written.
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @tcvt_i32_to_ui8_8x32(%src: !pto.ptr<i32, gm>, %dst: !pto.ptr<ui8, gm>) attributes {pto.entry} {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c8 = arith.constant 8 : index
+    %c32 = arith.constant 32 : index
+    %src_view = pto.make_tensor_view %src, shape = [%c8, %c32], strides = [%c32, %c1] : !pto.tensor_view<?x?xi32>
+    %src_part = pto.partition_view %src_view, offsets = [%c0, %c0], sizes = [%c8, %c32] : !pto.tensor_view<?x?xi32> -> !pto.partition_tensor_view<8x32xi32>
+    %src_tile = pto.alloc_tile : !pto.tile_buf<vec, 8x32xi32>
+    %dst_tile = pto.alloc_tile : !pto.tile_buf<vec, 8x32xui8>
+    pto.tload ins(%src_part : !pto.partition_tensor_view<8x32xi32>) outs(%src_tile : !pto.tile_buf<vec, 8x32xi32>)
+    pto.tcvt ins(%src_tile {rmode = #pto<round_mode NONE>, satmode = #pto<saturation_mode ON>} : !pto.tile_buf<vec, 8x32xi32>) outs(%dst_tile : !pto.tile_buf<vec, 8x32xui8>)
+    return
+  }
+}
+
+// The old implementation folded the b32 element mask into the store mask with
+// pbitcast, which is only caught before the first positive match.
+// CHECK-NOT: pbitcast %{{.*}} : !pto.mask<b32> -> !pto.mask<b8>
+// CHECK: pto.plt_b8
+// CHECK: pto.vselr
+// CHECK: pto.vsts

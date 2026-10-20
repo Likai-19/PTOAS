@@ -1667,14 +1667,19 @@ private:
 };
 
 static FailureOr<Type> getVselrIntrinsicResultType(pto::VselrOp op, Type resultType, PatternRewriter &rewriter) {
-  auto resultVectorType = dyn_cast<VectorType>(resultType);
-  if (!resultVectorType) {
+  // Low-precision payloads convert to LLVM fixed vectors rather than builtin
+  // vectors, so accept every vector-like result here (the payload carrier is
+  // selected below).
+  Type elementType = getElementTypeFromVectorLike(resultType);
+  if (!elementType || !getElementCountFromVectorLike(resultType)) {
     return failure();
   }
   Type intrinsicResultType = resultType;
-  if (auto floatType = dyn_cast<FloatType>(resultVectorType.getElementType()); floatType && floatType.isF32()) {
-    intrinsicResultType =
-        VectorType::get(resultVectorType.getShape(), rewriter.getI32Type(), resultVectorType.getScalableDims());
+  if (auto floatType = dyn_cast<FloatType>(elementType); floatType && floatType.isF32()) {
+    if (auto resultVectorType = dyn_cast<VectorType>(resultType)) {
+      intrinsicResultType =
+          VectorType::get(resultVectorType.getShape(), rewriter.getI32Type(), resultVectorType.getScalableDims());
+    }
   }
   if (Type carrierType = getLowpPayloadCarrierType(op.getResult().getType(), rewriter.getContext())) {
     intrinsicResultType = carrierType;

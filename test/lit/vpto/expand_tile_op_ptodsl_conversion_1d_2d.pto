@@ -17,7 +17,7 @@
 // META-LABEL: func.func @TCVT_F32_I16_1D
 // META: pto.tcvt
 // META-SAME: candidates = [{
-// META-SAME: id = 53 : i64
+// META-SAME: id = 54 : i64
 // META-SAME: loop_depth = 1 : i64
 // META-SAME: name = "template_tcvt_f32_to_i16_1d"
 // META-SAME: }, {
