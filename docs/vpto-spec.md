@@ -1567,9 +1567,8 @@ For the boundary between Tile Instruction and the micro instruction surface (whe
 
 ### Part I
 
-1. **mem_bar as pto op:** Should `pto.mem_bar` be a formal pto dialect op, or is there an existing mechanism?
-2. **UB size parameterization:** Is 256KB always fixed, or should spec allow for architecture variants?
-3. **MERGING predication:** Intentionally omitted (SW-emulated, perf overhead). Revisit if needed later.
+1. **UB size parameterization:** Is 256KB always fixed, or should spec allow for architecture variants?
+2. **MERGING predication:** Intentionally omitted (SW-emulated, perf overhead). Revisit if needed later.
 
 ### Part II
 

@@ -148,7 +148,7 @@ Example (SIMT double-buffering with `iter & 1`):
 mem_bar(barrier_type);
 ```
 
-**Barrier types** are organized into three families by the scope of prior vs. subsequent instructions:
+**Barrier types** are organized into four families by the scope of prior vs. subsequent instructions:
 
 | Family | Barrier type | Prior instructions | Subsequent instructions |
 |--------|-------------|-------------------|------------------------|
@@ -164,6 +164,10 @@ mem_bar(barrier_type);
 | | `ST_VLD` | All scalar store | All vector load |
 | | `LD_VST` | All scalar load | All vector store |
 | | `ST_VST` | All scalar store | All vector store |
+| **SS** (scalar→scalar) | `SS_ALL` | All scalar load/store | All scalar load/store |
+| | `ST_LD` | All scalar store | All scalar load |
+| | `LD_ST` | All scalar load | All scalar store |
+| | `ST_ST` | All scalar store | All scalar store |
 
 **Example:** Ensure vector stores are visible before subsequent vector loads to the same UB region:
 ```mlir
@@ -171,6 +175,21 @@ pto.vsts %v0, %ub[%c0] : !pto.vreg<64xf32>, !pto.ptr<f32, ub>
 pto.mem_bar "VST_VLD"
 %v1 = pto.vlds %ub[%c0] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
 ```
+
+**Scope and provision of barriers.** `pto.mem_bar` only orders operations inside a single `__VEC_SCOPE__` region. Making one vecscope's UB writes visible to a later sibling vecscope is a cross-region ordering concern and must be managed with `pto.set_flag` / `pto.wait_flag` (or `pto.get_buf` / `pto.rls_buf`); a `pto.mem_bar` cannot express it.
+
+Barrier insertion modes:
+
+- **Manual:** written in the source. In the ordinary automatic mode, the ordering established by a manual barrier counts as already provided when its type and placement cover the dependency. An adjacent barrier can be combined with a newly required barrier of the same family into that family’s `ALL` barrier. The current insertion pass does not generally remove standalone redundant manual barriers. Conservative insertion can add barriers even when a manual barrier already orders the accesses.
+- **Automatic insertion (VPTO):** `--enable-vecscope-mem-bar` is enabled by default. PTOAS analyzes UB access footprints and inserts barriers where overlapping accesses still require ordering. Scalar-to-scalar accesses are ordered by the scalar pipeline and do not require automatically inserted barriers; use `--enable-vecscope-mem-bar=false` to disable it.
+- **Conservative insertion (VPTO):** `--enable-vecscope-mem-bar-all` defaults to off and takes precedence over the ordinary mode when enabled. It inserts `SV_ALL` and `VV_ALL` before each UB vector access, and only `VS_ALL` before each UB scalar access. Scalar-to-scalar accesses are already ordered by the scalar pipeline, so no `SS_ALL` is inserted. This mode performs no dependence, footprint, or redundancy analysis and preserves manual barriers.
+
+**Device-compiler automatic synchronization.** The device compiler (Bisheng) can also insert vector-pipeline synchronization on its own. Who owns that insertion depends on the compilation route:
+
+- When the kernel is compiled through the VMI tile-fusion pipeline (`--enable-vmi` with `--enable-op-fusion=true` on the A5 VPTO backend at `--pto-level=level2` or `level3`), the program PTOAS emits already carries its synchronization, so PTOAS disables the device compiler's automatic vector-pipeline synchronization and its own vector-fusion transformations for that device compilation.
+- On every other route, the device compiler's default behavior applies.
+- `--bisheng-vf-auto-sync=off|fused|global` requests a specific device-compiler synchronization mode. An explicit choice is honored on any route, including the VMI route.
+- `--bisheng-vec-misched=auto|on|off` selects the device compiler's vector-instruction scheduling policy: `off` disables the vector scheduler, `on` keeps the device compiler's default scheduling, and `auto` (the default) keeps default scheduling and retries with the scheduler disabled when compilation fails or the reported vector-stack usage is nonzero, preferring the smaller vector stack. On the VMI tile-fusion route the scheduler likewise defaults to off; an explicit choice is honored on any route.
 
 ---
 

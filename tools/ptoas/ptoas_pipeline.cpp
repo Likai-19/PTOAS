@@ -733,6 +733,15 @@ static void prepareVPTOForEmission(PassManager &pm,
       createVPTOExpandWrapperOpsPass());
   kernelModulePM.addNestedPass<func::FuncOp>(
       pto::createPTOInferVPTOVecScopePass());
+  // Insert after vecscope inference and before scheduling.
+  if (enableVecScopeMemBar) {
+    kernelModulePM.addNestedPass<func::FuncOp>(
+        pto::createPTOInsertVecScopeMemBarPass());
+  }
+  if (enableVecScopeMemBarAll) {
+    kernelModulePM.addNestedPass<func::FuncOp>(
+        pto::createPTOInsertVecScopeMemBarAllPass());
+  }
   if (enableSoftPostUpdate) {
     kernelModulePM.addPass(pto::createVPTOSoftPostUpdatePass());
   }

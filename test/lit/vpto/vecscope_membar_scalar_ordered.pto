@@ -1,0 +1,39 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt --pto-insert-vecscope-membar %s | FileCheck %s
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s -o - | FileCheck %s
+
+// Scalar RAW, WAR and WAW, including loop-carried dependencies, need no fence.
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @scalar_ordered(%n: index) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %addr = arith.constant 0 : i64
+    %one = arith.constant 1.0 : f32
+    %two = arith.constant 2.0 : f32
+    %ub = pto.castptr %addr : i64 -> !pto.ptr<f32, ub>
+    pto.vecscope {
+      pto.store %one, %ub[%c0] : !pto.ptr<f32, ub>, f32
+      %x = pto.load %ub[%c0] : !pto.ptr<f32, ub> -> f32
+      pto.store %two, %ub[%c0] : !pto.ptr<f32, ub>, f32
+      pto.store %x, %ub[%c0] : !pto.ptr<f32, ub>, f32
+      scf.for %i = %c0 to %n step %c1 {
+        %y = pto.load %ub[%c0] : !pto.ptr<f32, ub> -> f32
+        pto.store %one, %ub[%c0] : !pto.ptr<f32, ub>, f32
+        pto.store %y, %ub[%c0] : !pto.ptr<f32, ub>, f32
+      }
+    }
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @scalar_ordered
+// CHECK-NOT: pto.mem_bar
+// CHECK: return

@@ -63,6 +63,14 @@ add_mlir_dialect_library(PTOTransforms
   TileFusion/PTOVexpdifFusion.cpp
   TileFusion/PTOUnrollAfterLoopFusion.cpp
   TileFusion/PTOFlattenFusionRegion.cpp
+  VecScopeMemBar/VecScopeMemoryFootprint.cpp
+  VecScopeMemBar/VecScopeMemBarIR.cpp
+  VecScopeMemBar/VecScopeMemBarAnalysis.cpp
+  VecScopeMemBar/VecScopeMemBarPlacement.cpp
+  VecScopeMemBar/VecScopeMemBarRedundancy.cpp
+  VecScopeMemBar/VecScopeMemBarCodegen.cpp
+  VecScopeMemBar/PTOInsertVecScopeMemBarPass.cpp
+  VecScopeMemBar/PTOInsertVecScopeMemBarAllPass.cpp
   VPTO/VPTOCANN900LLVMEmitterCommon.cpp
   VPTO/VPTOCANN900LLVMEmitterUbuf.cpp
   VPTO/VPTOCANN900LLVMEmitter.cpp

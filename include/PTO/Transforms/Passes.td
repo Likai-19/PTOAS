@@ -1141,6 +1141,29 @@ def PTOInferVPTOVecScope
                            "mlir::scf::SCFDialect"];
 }
 
+def PTOInsertVecScopeMemBar : Pass<"pto-insert-vecscope-membar", "func::FuncOp"> {
+  let summary = "Insert vecscope memory barriers for vector-scope regions";
+  let description = [{
+    Analyzes vector-scope regions and inserts memory barriers at the
+    boundaries where memory footprint ordering is required. Runs after
+    vecscope inference so the regions exist, and before VPTO emission.
+  }];
+  let constructor = "mlir::pto::createPTOInsertVecScopeMemBarPass()";
+  let dependentDialects = ["mlir::pto::PTODialect"];
+}
+
+def PTOInsertVecScopeMemBarAll : Pass<"pto-insert-vecscope-membar-all", "func::FuncOp"> {
+  let summary = "Insert all vecscope memory barriers (conservative mode)";
+  let description = [{
+    Inserts SV_ALL and VV_ALL before each UB vector access, and VS_ALL before
+    each UB scalar access inside vecscopes, without dependence or footprint
+    analysis. Scalar-to-scalar accesses are ordered by the scalar pipeline.
+    This is a conservative correctness mode and preserves existing barriers.
+  }];
+  let constructor = "mlir::pto::createPTOInsertVecScopeMemBarAllPass()";
+  let dependentDialects = ["mlir::pto::PTODialect"];
+}
+
 def PTOValidateVPTOIR : Pass<"pto-validate-vpto-ir", "ModuleOp"> {
   let summary =
       "Validate authoring-stage VPTO legality before ptr-boundary canonicalization";

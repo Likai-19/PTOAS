@@ -142,6 +142,8 @@ extern llvm::cl::opt<bool> enableVmiFastmath;
 extern llvm::cl::opt<bool> enableBufidSync;
 extern llvm::cl::opt<bool> enableBufidSyncDebug;
 extern llvm::cl::opt<bool> enableInjectBarrierAllSync;
+extern llvm::cl::opt<bool> enableVecScopeMemBar;
+extern llvm::cl::opt<bool> enableVecScopeMemBarAll;
 extern llvm::cl::opt<llvm::cl::boolOrDefault> enableOpFusion;
 extern llvm::cl::opt<bool> enableUnrollAfterLoopFusion;
 extern llvm::cl::opt<bool> enableVexpdifFusion;

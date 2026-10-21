@@ -296,6 +296,15 @@ llvm::cl::opt<bool> enableInjectBarrierAllSync(
                    "pto.barrier PIPE_ALL before memory-effecting PTO pipe ops"),
     llvm::cl::init(false));
 
+llvm::cl::opt<bool> enableVecScopeMemBar(
+    "enable-vecscope-mem-bar", llvm::cl::desc("Insert memory barriers for VPTO vecscope hazards"),
+    llvm::cl::init(true));
+
+llvm::cl::opt<bool> enableVecScopeMemBarAll(
+    "enable-vecscope-mem-bar-all",
+    llvm::cl::desc("Insert family-wide barriers before vecscope UB vector and scalar accesses"),
+    llvm::cl::init(false));
+
 static llvm::cl::opt<bool> enableTileOpExpand(
     "enable-tile-op-expand",
     llvm::cl::desc(

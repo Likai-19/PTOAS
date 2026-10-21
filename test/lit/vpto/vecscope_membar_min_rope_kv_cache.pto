@@ -1,0 +1,113 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --pto-level=level3 --emit-vpto --enable-vecscope-mem-bar --enable-op-fusion=false %s -o - 2>/dev/null | FileCheck %s
+
+// Single-row vec lanes: f32 for the arithmetic, bf16 for the packed
+// writeback into the destination cache.
+!line_f32 = !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=64, v_row=?, v_col=?, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+!line_bf16 = !pto.tile_buf<loc=vec, dtype=bf16, rows=1, cols=64, v_row=?, v_col=?, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @kv_cache_rotate_barriers(%dst : !pto.ptr<bf16>, %src : !pto.ptr<f32>, %wtab : !pto.ptr<f32>, %src_row : index, %dst_row : index) attributes {pto.kernel_kind = #pto.kernel_kind<vector>} {
+    %c0_index = arith.constant 0 : index
+    %c1_index = arith.constant 1 : index
+    %c6_index = arith.constant 6 : index
+    %c12_index = arith.constant 12 : index
+    %c64_index = arith.constant 64 : index
+    %c96_index = arith.constant 96 : index
+    %c192_index = arith.constant 192 : index
+    %c288_index = arith.constant 288 : index
+    %c320_index = arith.constant 320 : index
+    %c352_index = arith.constant 352 : index
+    %c608_index = arith.constant 608 : index
+    %c131072_index = arith.constant 131072 : index
+    %c448_i64 = arith.constant 448 : i64
+    %c576_i64 = arith.constant 576 : i64
+    %c704_i64 = arith.constant 704 : i64
+    %c832_i64 = arith.constant 832 : i64
+    %c2112_i64 = arith.constant 2112 : i64
+    %c2624_i64 = arith.constant 2624 : i64
+    %c3136_i64 = arith.constant 3136 : i64
+    %c3648_i64 = arith.constant 3648 : i64
+    %c4160_i64 = arith.constant 4160 : i64
+
+    %src_v = pto.make_tensor_view %src, shape = [%c12_index, %c608_index], strides = [%c608_index, %c1_index] {layout = #pto.layout<nd>} : !pto.tensor_view<?x?xf32>
+    %wtab_v = pto.make_tensor_view %wtab, shape = [%c1_index, %c352_index], strides = [%c352_index, %c1_index] {layout = #pto.layout<nd>} : !pto.tensor_view<?x?xf32>
+    %dst_v = pto.make_tensor_view %dst, shape = [%c131072_index, %c320_index], strides = [%c320_index, %c1_index] {layout = #pto.layout<nd>} : !pto.tensor_view<?x?xbf16>
+
+    // Rotation tables are loop invariant: stage all four once up front, one
+    // 64-lane slice per quarter of the table.
+    %w0_pv = pto.partition_view %wtab_v, offsets = [%c0_index, %c0_index], sizes = [%c1_index, %c64_index] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x64xf32>
+    %w0_t = pto.alloc_tile addr = %c448_i64 valid_row = %c1_index valid_col = %c64_index : !line_f32
+    pto.tload ins(%w0_pv : !pto.partition_tensor_view<1x64xf32>) outs(%w0_t : !line_f32)
+    %w1_pv = pto.partition_view %wtab_v, offsets = [%c0_index, %c96_index], sizes = [%c1_index, %c64_index] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x64xf32>
+    %w1_t = pto.alloc_tile addr = %c576_i64 valid_row = %c1_index valid_col = %c64_index : !line_f32
+    pto.tload ins(%w1_pv : !pto.partition_tensor_view<1x64xf32>) outs(%w1_t : !line_f32)
+    %w2_pv = pto.partition_view %wtab_v, offsets = [%c0_index, %c192_index], sizes = [%c1_index, %c64_index] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x64xf32>
+    %w2_t = pto.alloc_tile addr = %c704_i64 valid_row = %c1_index valid_col = %c64_index : !line_f32
+    pto.tload ins(%w2_pv : !pto.partition_tensor_view<1x64xf32>) outs(%w2_t : !line_f32)
+    %w3_pv = pto.partition_view %wtab_v, offsets = [%c0_index, %c288_index], sizes = [%c1_index, %c64_index] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x64xf32>
+    %w3_t = pto.alloc_tile addr = %c832_i64 valid_row = %c1_index valid_col = %c64_index : !line_f32
+    pto.tload ins(%w3_pv : !pto.partition_tensor_view<1x64xf32>) outs(%w3_t : !line_f32)
+
+    scf.for %blk = %c0_index to %c6_index step %c1_index {
+      %col_off = arith.muli %blk, %c96_index : index
+      %src_a_pv = pto.partition_view %src_v, offsets = [%src_row, %col_off], sizes = [%c1_index, %c64_index] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x64xf32>
+      %src_a = pto.alloc_tile addr = %c2112_i64 valid_row = %c1_index valid_col = %c64_index : !line_f32
+      pto.tload ins(%src_a_pv : !pto.partition_tensor_view<1x64xf32>) outs(%src_a : !line_f32)
+      %col_off_b = arith.addi %col_off, %c64_index : index
+      %src_b_pv = pto.partition_view %src_v, offsets = [%src_row, %col_off_b], sizes = [%c1_index, %c64_index] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x64xf32>
+      %src_b = pto.alloc_tile addr = %c2624_i64 valid_row = %c1_index valid_col = %c64_index : !line_f32
+      pto.tload ins(%src_b_pv : !pto.partition_tensor_view<1x64xf32>) outs(%src_b : !line_f32)
+      %prod_p = pto.alloc_tile addr = %c3136_i64 valid_row = %c1_index valid_col = %c64_index : !line_f32
+      pto.tmul ins(%src_a, %w0_t : !line_f32, !line_f32) outs(%prod_p : !line_f32)
+      %prod_q = pto.alloc_tile addr = %c3648_i64 valid_row = %c1_index valid_col = %c64_index : !line_f32
+      pto.tmul ins(%src_b, %w1_t : !line_f32, !line_f32) outs(%prod_q : !line_f32)
+      %rot_a = pto.alloc_tile addr = %c3136_i64 valid_row = %c1_index valid_col = %c64_index : !line_f32
+      pto.tsub ins(%prod_p, %prod_q : !line_f32, !line_f32) outs(%rot_a : !line_f32)
+      %prod_r = pto.alloc_tile addr = %c2624_i64 valid_row = %c1_index valid_col = %c64_index : !line_f32
+      pto.tmul ins(%src_b, %w2_t : !line_f32, !line_f32) outs(%prod_r : !line_f32)
+      %prod_s = pto.alloc_tile addr = %c2112_i64 valid_row = %c1_index valid_col = %c64_index : !line_f32
+      pto.tmul ins(%src_a, %w3_t : !line_f32, !line_f32) outs(%prod_s : !line_f32)
+      %rot_b = pto.alloc_tile addr = %c2112_i64 valid_row = %c1_index valid_col = %c64_index : !line_f32
+      pto.tadd ins(%prod_r, %prod_s : !line_f32, !line_f32) outs(%rot_b : !line_f32)
+      %row_base = arith.addi %dst_row, %col_off : index
+      %dst0_pv = pto.partition_view %dst_v, offsets = [%row_base, %c0_index], sizes = [%c1_index, %c64_index] : !pto.tensor_view<?x?xbf16> -> !pto.partition_tensor_view<1x64xbf16>
+      %pack_a = pto.alloc_tile addr = %c4160_i64 valid_row = %c1_index valid_col = %c64_index : !line_bf16
+      pto.tcvt ins(%rot_a {rmode = #pto<round_mode TRUNC>} : !line_f32) outs(%pack_a : !line_bf16)
+      pto.tstore ins(%pack_a : !line_bf16) outs(%dst0_pv : !pto.partition_tensor_view<1x64xbf16>)
+      %dst1_pv = pto.partition_view %dst_v, offsets = [%row_base, %c64_index], sizes = [%c1_index, %c64_index] : !pto.tensor_view<?x?xbf16> -> !pto.partition_tensor_view<1x64xbf16>
+      %pack_b = pto.alloc_tile addr = %c4160_i64 valid_row = %c1_index valid_col = %c64_index : !line_bf16
+      pto.tcvt ins(%rot_b {rmode = #pto<round_mode TRUNC>} : !line_f32) outs(%pack_b : !line_bf16)
+      pto.tstore ins(%pack_b : !line_bf16) outs(%dst1_pv : !pto.partition_tensor_view<1x64xbf16>)
+    }
+    return
+  }
+}
+
+
+// The two VST_VLD cuts cover the RAW and intervening WAW hazards.
+// The final load reads rot_lo (UB byte 1536), whose write precedes the
+// second cut; the intervening rot_hi store writes UB byte 1024.
+// A third VST_VLD before the rot_lo load is therefore redundant.
+
+// CHECK-LABEL: func.func @kv_cache_rotate_barriers
+// CHECK: pto.vecscope
+// CHECK: pto.vsts
+// CHECK: pto.mem_bar "VST_VLD"
+// CHECK: pto.vlds
+// CHECK: pto.vsts
+// CHECK: pto.mem_bar "VST_VLD"
+// CHECK: pto.vlds
+// CHECK: pto.vsts
+// The trailing store runs in its own vecscope on this pipeline, so the
+// follow-up loads are not textually adjacent to the stores above.
+// CHECK: %{{.*}} = pto.vlds
+// CHECK-NOT: pto.mem_bar
+// CHECK: return
