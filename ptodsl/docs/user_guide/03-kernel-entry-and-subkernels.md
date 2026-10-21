@@ -894,7 +894,10 @@ doesn't fuse as aggressively as you need.
   need C++ codegen.
 - **`backend="emitc"`** generates C++ through the EmitC pipeline. It only
   works with `mode="auto"` — if you try `mode="explicit"` with it, PTODSL
-  raises an error at decoration time.
+  raises an error at decoration time. Register-level `pto.mad` and `pto.vmi.*`
+  operations have no EmitC lowering and are rejected during tracing/compile,
+  before a native build. Use VPTO for those operations, or supported Tile
+  operations for an EmitC compute module.
 
 ### Choosing a backend
 
@@ -920,6 +923,14 @@ constrain the callee. Common patterns:
 The compiler resolves cross-backend calls automatically — when an `emitc`
 entry calls a `vpto` module, the linker wires them together into the final
 binary. You just write the Python call; the toolchain handles the rest.
+
+Cube/Vector `entry=False` modules retain their physical `kernel_kind` on the
+imported function for both backends, so local-pipe initialization can verify
+the function's placement. With multiple child modules, the compiler builds
+and links fat objects even when every child uses EmitC. An output filename
+ending in `.cpp` does not request textual C++ for that container: native-build
+integrations must consume its object output rather than compile ELF bytes as
+C++ source.
 
 ### Mixed-backend: compilation model and current limitations
 

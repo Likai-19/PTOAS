@@ -16,6 +16,9 @@
 #ifndef MLIR_DIALECT_PTO_TRANSFORMS_PASSES_H
 #define MLIR_DIALECT_PTO_TRANSFORMS_PASSES_H
 
+#include <string>
+#include <vector>
+
 #include "PTO/IR/PTO.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Support/LLVM.h"
@@ -70,6 +73,11 @@ std::unique_ptr<Pass> createEmitPTOManualPass(PTOArch arch);
 
 
 std::unique_ptr<Pass> createPTOLowerGenericOpsPass();
+
+// Operation-family support for PTODSL's early EmitC diagnostic. This is not
+// complete operand/type legality checking; conversion still validates those.
+std::vector<std::string> getPTOGenericLoweringOperationNames(MLIRContext *context);
+std::vector<std::string> getEmitCSupportedOperationNames(MLIRContext *context);
 
 /// Create a pass to infer, propagate, and add memory scope information to
 /// PTO Ops.

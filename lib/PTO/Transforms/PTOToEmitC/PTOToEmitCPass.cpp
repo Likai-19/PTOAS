@@ -10,6 +10,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "PTOToEmitCPatterns.h"
+#include "PTO/Transforms/Passes.h"
+#include <set>
 
 #include "mlir/Target/Cpp/CppEmitter.h"
 
@@ -591,6 +593,40 @@ void populatePTOToEmitCPatterns(RewritePatternSet &patterns,
   // Keep CFG-style branches type-consistent when block argument types are
   // converted (e.g. after lowering scf.while to cf.br/cf.cond_br).
   populateBranchOpInterfaceTypeConversionPattern(patterns, typeConverter);
+}
+
+std::vector<std::string> getEmitCSupportedOperationNames(MLIRContext *context) {
+  std::set<std::string> names;
+  for (PTOArch arch : {PTOArch::A3, PTOArch::A5}) {
+    PTOToEmitCTypeConverter converter(context, arch);
+    RewritePatternSet patterns(context);
+    populatePTOToEmitCPatterns(patterns, converter, context, arch);
+    for (const auto &pattern : patterns.getNativePatterns()) {
+      if (auto root = pattern->getRootKind())
+        names.insert(root->getStringRef().str());
+    }
+  }
+  for (const auto &name : getPTOGenericLoweringOperationNames(context))
+    names.insert(name);
+  // Tile operations may expand before conversion. Frontend pipe contracts and
+  // persistent buffer handles are also resolved by the shared driver pipeline.
+  for (auto op : context->getRegisteredOperations()) {
+    if (op.hasInterface<TileOpInterface>())
+      names.insert(op.getStringRef().str());
+  }
+  for (StringRef name : {
+           AllocMultiTileOp::getOperationName(),
+           MultiTileGetOp::getOperationName(),
+           ReserveBufferOp::getOperationName(),
+           ImportReservedBufferOp::getOperationName(),
+           AicInitializePipeOp::getOperationName(),
+           AivInitializePipeOp::getOperationName(),
+           TAllocToAicOp::getOperationName(), TAllocToAivOp::getOperationName(),
+           TPushToAicOp::getOperationName(), TPushToAivOp::getOperationName(),
+           TPopFromAicOp::getOperationName(), TPopFromAivOp::getOperationName(),
+           TFreeFromAicOp::getOperationName(), TFreeFromAivOp::getOperationName()})
+    names.insert(name.str());
+  return {names.begin(), names.end()};
 }
 
 } // namespace pto

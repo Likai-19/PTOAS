@@ -18,6 +18,8 @@
 #include <string>
 
 #include "PTOModule.h"
+#include "PTO/Transforms/Passes.h"
+#include "mlir/CAPI/IR.h"
 #include "mlir-c/BuiltinAttributes.h"
 #include "mlir-c/BuiltinTypes.h"
 #include "mlir-c/IR.h"
@@ -1849,9 +1851,20 @@ static void registerDialectHandle(py::module_& m)
         py::arg("context"), py::arg("load") = true);
 }
 
+static void registerEmitCSupportQuery(py::module_& m)
+{
+    m.def(
+        "get_emitc_supported_operations",
+        [](MlirContext context) {
+            return mlir::pto::getEmitCSupportedOperationNames(unwrap(context));
+        },
+        py::arg("context"));
+}
+
 void mlir::pto::python::populatePTODialectBindings(pybind11::module_& m)
 {
     registerDialectHandle(m);
+    registerEmitCSupportQuery(m);
     registerPTOEnums1(m);
     registerPTOEnums1b(m);
     registerPTOEnums2(m);

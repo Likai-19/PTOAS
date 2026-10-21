@@ -11,6 +11,10 @@
 
 from __future__ import annotations
 
+from ptoas import _core
+from ptoas.mlir.dialects import func
+from ptoas.mlir.ir import InsertionPoint, Location
+
 from .active import activate_runtime, activate_session, require_active_session
 from .module_builder import create_kernel_module
 from .session import TraceSession
@@ -18,8 +22,26 @@ from .._diagnostics import kernel_module_return_value_error
 from .._context import make_context
 from .._types import _resolve
 
-from ptoas.mlir.dialects import func
-from ptoas.mlir.ir import InsertionPoint, Location
+
+def _validate_emitc_operations(operation, backend=None, supported=None):
+    """Reject register-level operations before native EmitC compilation."""
+    if operation.name == "builtin.module" and "pto.backend" in operation.attributes:
+        backend = str(operation.attributes["pto.backend"]).strip('"')
+    name = operation.name
+    if backend != "emitc" and name != "builtin.module":
+        return
+    if backend == "emitc" and supported is None:
+        supported = frozenset(_core.get_emitc_supported_operations(operation.context))
+    if backend == "emitc" and name.startswith("pto.") and name not in supported:
+        raise RuntimeError(
+            f"backend='emitc' does not support operation '{name}'; "
+            "use backend='vpto' for register-level operations, "
+            "or use supported Tile operations with EmitC"
+        )
+    for region in operation.regions:
+        for block in region.blocks:
+            for child in block.operations:
+                _validate_emitc_operations(child.operation, backend, supported)
 
 
 class TracingRuntime:
@@ -49,6 +71,7 @@ class TracingRuntime:
 
     def verify_module(self, module):
         """Verify the completed module."""
+        _validate_emitc_operations(module.operation, self.module_spec.backend)
         module.operation.verify()
 
     def create_session(self, module, entry_function):

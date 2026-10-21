@@ -911,30 +911,34 @@ struct LowerFmaToMathPattern final : OpRewritePattern<pto::FmaOp> {
   }
 };
 
+static void populateGenericPatterns(RewritePatternSet &patterns) {
+  patterns.add<
+      LowerConstantPattern, LowerAddIPattern, LowerAddFPattern,
+      LowerSubIPattern, LowerSubFPattern, LowerMulIPattern, LowerMulFPattern,
+      LowerAddUIExtendedPattern, LowerMulExtendedPattern, LowerNegIPattern,
+      LowerNegFPattern, LowerDivFPattern, LowerDivPattern,
+      LowerFloorDivPattern, LowerCeilDivPattern, LowerRemPattern,
+      LowerRemFPattern, LowerAndPattern, LowerOrPattern, LowerXorPattern,
+      LowerShlPattern, LowerShrPattern, LowerCmpIPattern, LowerCmpFPattern,
+      LowerMaxIPattern, LowerMaxFPattern, LowerMinIPattern, LowerMinFPattern,
+      LowerMaximumPattern, LowerMinimumPattern, LowerAbsIPattern,
+      LowerAbsFPattern, LowerExtIPattern, LowerTruncIPattern,
+      LowerIToFPattern, LowerFToIPattern, LowerFToFPattern,
+      LowerIndexCastPattern, LowerSelectPattern, LowerValueBitcastPattern,
+      LowerScalarMathPattern<pto::ExpOp, math::ExpOp>,
+      LowerScalarMathPattern<pto::LogOp, math::LogOp>,
+      LowerScalarMathPattern<pto::SqrtOp, math::SqrtOp>,
+      LowerBinaryScalarMathPattern<pto::PowOp, math::PowFOp>,
+      LowerFmaToMathPattern>(patterns.getContext());
+}
+
 struct PTOLowerGenericOpsPass final
     : pto::impl::PTOLowerGenericOpsBase<PTOLowerGenericOpsPass> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(PTOLowerGenericOpsPass)
 
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
-    patterns.add<
-        LowerConstantPattern, LowerAddIPattern, LowerAddFPattern,
-        LowerSubIPattern, LowerSubFPattern, LowerMulIPattern, LowerMulFPattern,
-        LowerAddUIExtendedPattern, LowerMulExtendedPattern, LowerNegIPattern,
-        LowerNegFPattern, LowerDivFPattern, LowerDivPattern,
-        LowerFloorDivPattern, LowerCeilDivPattern, LowerRemPattern,
-        LowerRemFPattern, LowerAndPattern, LowerOrPattern, LowerXorPattern,
-        LowerShlPattern, LowerShrPattern, LowerCmpIPattern, LowerCmpFPattern,
-        LowerMaxIPattern, LowerMaxFPattern, LowerMinIPattern, LowerMinFPattern,
-        LowerMaximumPattern, LowerMinimumPattern, LowerAbsIPattern,
-        LowerAbsFPattern, LowerExtIPattern, LowerTruncIPattern,
-        LowerIToFPattern, LowerFToIPattern, LowerFToFPattern,
-        LowerIndexCastPattern, LowerSelectPattern, LowerValueBitcastPattern,
-        LowerScalarMathPattern<pto::ExpOp, math::ExpOp>,
-        LowerScalarMathPattern<pto::LogOp, math::LogOp>,
-        LowerScalarMathPattern<pto::SqrtOp, math::SqrtOp>,
-        LowerBinaryScalarMathPattern<pto::PowOp, math::PowFOp>,
-        LowerFmaToMathPattern>(&getContext());
+    populateGenericPatterns(patterns);
     if (failed(applyPatternsAndFoldGreedily(getOperation(),
                                             std::move(patterns)))) {
       signalPassFailure();
@@ -961,4 +965,16 @@ struct PTOLowerGenericOpsPass final
 
 std::unique_ptr<Pass> mlir::pto::createPTOLowerGenericOpsPass() {
   return std::make_unique<PTOLowerGenericOpsPass>();
+}
+
+std::vector<std::string>
+mlir::pto::getPTOGenericLoweringOperationNames(MLIRContext *context) {
+  RewritePatternSet patterns(context);
+  populateGenericPatterns(patterns);
+  std::vector<std::string> names;
+  for (const auto &pattern : patterns.getNativePatterns()) {
+    if (auto root = pattern->getRootKind())
+      names.push_back(root->getStringRef().str());
+  }
+  return names;
 }
