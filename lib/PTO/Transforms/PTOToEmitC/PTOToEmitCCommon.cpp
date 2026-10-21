@@ -1006,40 +1006,47 @@ std::optional<std::string> getEmitCTileTypeString(pto::TileBufType type) {
          tileBufCompactToken(configAttr) + ">";
 }
 
-std::optional<std::string> getEmitCConvTileBufTypeString(pto::ConvTileBufType type) {
-  auto shape = type.getShape();
-  if (shape.empty() || shape.size() > 6)
-    return std::nullopt;
+std::optional<std::string> getEmitCConvTileBufTypeString(pto::ConvTileBufType type)
+{
+    auto shape = type.getShape();
+    if (shape.empty() || shape.size() > 6)
+        return std::nullopt;
 
-  Type elemTy = type.getElementType();
-  auto layoutAttr = dyn_cast_or_null<pto::ConvLayoutAttr>(type.getLayout());
-  if (!layoutAttr) {
-    layoutAttr = pto::ConvLayoutAttr::get(type.getContext(), pto::ConvLayout::NC1HWC0);
-  }
+    Type elemTy = type.getElementType();
+    auto layoutAttr = dyn_cast_or_null<pto::ConvLayoutAttr>(type.getLayout());
+    if (!layoutAttr) {
+        layoutAttr = pto::ConvLayoutAttr::get(type.getContext(), pto::ConvLayout::NC1HWC0);
+    }
 
-  std::string shapeType = "pto::ConvTileShape<" + joinIntTemplateParams(shape) + ">";
-  return std::string("ConvTile<") +
-         tileRoleToken(type.getMemorySpace(), elemTy) + ", " +
-         getEmitCScalarTypeToken(elemTy) + ", " +
-         std::to_string(type.getBufferSizeValue()) + ", " +
-         convLayoutToEmitCString(layoutAttr.getValue()) + ", " +
-         shapeType + ">";
+    std::string shapeType = "pto::ConvTileShape<" + joinIntTemplateParams(shape) + ">";
+    std::string result = std::string("ConvTile<") + tileRoleToken(type.getMemorySpace(), elemTy) + ", " +
+                         getEmitCScalarTypeToken(elemTy) + ", " + std::to_string(type.getBufferSizeValue()) + ", " +
+                         convLayoutToEmitCString(layoutAttr.getValue()) + ", " + shapeType;
+    // The runtime's sixth ConvTile parameter (ValidShape_) defaults to
+    // Shape_; emit it only when the tile declares a strictly smaller logical
+    // extent, so everything else still compiles against pto-isa versions
+    // predating the ValidShape_ parameter.
+    auto validShape = type.getValidShape();
+    if (!validShape.empty()) {
+        result += ", pto::ConvTileShape<" + joinIntTemplateParams(validShape) + ">";
+    }
+    result += ">";
+    return result;
 }
 
-Type getEmitCVariableResultType(Type valueType) {
-  return valueType;
-}
+Type getEmitCVariableResultType(Type valueType) { return valueType; }
 
-FailureOr<std::string> getFixpipeLayoutToken(FixpipeLayout layout) {
-  switch (layout) {
-  case FixpipeLayout::NZ2ND:
-    return std::string("LayoutMode_t::NZ2ND");
-  case FixpipeLayout::NZ2DN:
-    return std::string("LayoutMode_t::NZ2DN");
-  case FixpipeLayout::NZ2NZ:
-    return std::string("LayoutMode_t::NZ2NZ");
-  }
-  return failure();
+FailureOr<std::string> getFixpipeLayoutToken(FixpipeLayout layout)
+{
+    switch (layout) {
+        case FixpipeLayout::NZ2ND:
+            return std::string("LayoutMode_t::NZ2ND");
+        case FixpipeLayout::NZ2DN:
+            return std::string("LayoutMode_t::NZ2DN");
+        case FixpipeLayout::NZ2NZ:
+            return std::string("LayoutMode_t::NZ2NZ");
+    }
+    return failure();
 }
 
 FailureOr<std::string> getFixpipeQuantToken(FixpipeQuant quant) {

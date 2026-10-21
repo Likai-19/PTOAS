@@ -803,11 +803,12 @@ void mlir::pto::TileBufType::print(mlir::AsmPrinter &odsPrinter) const {
 namespace {
 
 struct ParsedConvTileFields {
-  std::string locStr;
-  SmallVector<int64_t, 6> shape;
-  Type dtype;
-  IntegerAttr bufferSize;
-  ConvLayoutAttr layoutAttr;
+    std::string locStr;
+    SmallVector<int64_t, 6> shape;
+    Type dtype;
+    IntegerAttr bufferSize;
+    ConvLayoutAttr layoutAttr;
+    SmallVector<int64_t, 6> validShape;
 };
 
 static std::optional<int64_t> computeConvTileBufferSize(ArrayRef<int64_t> shape) {
@@ -944,11 +945,53 @@ static bool isTileSideConvLayout(ConvLayout layout) {
          layout == ConvLayout::FRACTAL_Z_3D;
 }
 
-static SmallVector<size_t, mlir::pto::kValue2>
-expectedRanksForConvLayout(ConvLayout layout) {
-  SmallVector<size_t, mlir::pto::kValue2> ranks;
-  appendExpectedRanksForConvLayout(layout, ranks);
-  return ranks;
+// Valid shape follows the strict model validated on both runtime
+// generations (the a2a3/golden TTRANS tests and the CPU simulator): only
+// the non-blocked (outer) dims may shrink relative to the declared shape.
+// The blocked minor dims are hardware-fixed and never shrink, so each
+// valid tail dim must equal its declared tail verbatim.
+static LogicalResult verifyConvTileValidShape(
+    function_ref<InFlightDiagnostic()> emitError, ConvLayout layout, ArrayRef<int64_t> shape,
+    ArrayRef<int64_t> validShape)
+{
+    if (validShape.empty()) {
+        return success();
+    }
+    if (validShape.size() != shape.size()) {
+        return emitError() << "conv_tile valid_shape must have the same rank as "
+                              "shape ("
+                           << shape.size() << "), got " << validShape.size();
+    }
+    auto tailIdxMustMatch = [&](size_t index) {
+        return index < validShape.size() && validShape[index] == shape[index];
+    };
+    const size_t last = shape.size() - 1;
+    bool tailOk = true;
+    if (layout == ConvLayout::NC1HWC0 || layout == ConvLayout::NDC1HWC0) {
+        tailOk = tailIdxMustMatch(last);
+    } else if ((layout == ConvLayout::FRACTAL_Z || layout == ConvLayout::FRACTAL_Z_3D) && shape.size() == 4) {
+        tailOk = tailIdxMustMatch(2) && tailIdxMustMatch(3);
+    } else if (layout == ConvLayout::FRACTAL_Z && shape.size() == 5) {
+        tailOk = tailIdxMustMatch(4);
+    }
+    if (!tailOk) {
+        return emitError() << "conv_tile valid_shape must keep the blocked minor "
+                              "dims equal to the declared shape";
+    }
+    for (size_t i = 0; i < shape.size(); ++i) {
+        if (validShape[i] < 1 || validShape[i] > shape[i]) {
+            return emitError() << "conv_tile valid_shape dim " << i << " must be in [1, " << shape[i] << "], got "
+                               << validShape[i];
+        }
+    }
+    return success();
+}
+
+static SmallVector<size_t, mlir::pto::kValue2> expectedRanksForConvLayout(ConvLayout layout)
+{
+    SmallVector<size_t, mlir::pto::kValue2> ranks;
+    appendExpectedRanksForConvLayout(layout, ranks);
+    return ranks;
 }
 
 static bool isExpectedRankForConvLayout(ConvLayout layout, size_t rank) {
@@ -996,61 +1039,61 @@ resolveConvTileStorageFacets(AsmParser &parser,
 
   auto memorySpace = resolveTileBufMemorySpace(fields.locStr);
   if (!memorySpace.has_value()) {
-    emitError() << "unknown loc: " << fields.locStr;
-    return std::nullopt;
+      emitError() << "unknown loc: " << fields.locStr;
+      return std::nullopt;
   }
   if (*memorySpace != AddressSpace::MAT) {
-    emitError() << "conv_tile only supports loc=mat";
-    return std::nullopt;
+      emitError() << "conv_tile only supports loc=mat";
+      return std::nullopt;
   }
   return memorySpace;
 }
 
-static Type buildConvTileBufType(AsmParser &parser,
-                              const ParsedConvTileFields &fields) {
-  MLIRContext *ctx = parser.getContext();
-  auto emitError = [&]() -> InFlightDiagnostic {
-    return parser.emitError(parser.getNameLoc());
-  };
+static Type buildConvTileBufType(AsmParser& parser, const ParsedConvTileFields& fields)
+{
+    MLIRContext* ctx = parser.getContext();
+    auto emitError = [&]() -> InFlightDiagnostic { return parser.emitError(parser.getNameLoc()); };
 
-  IntegerAttr bufferSize = fields.bufferSize;
-  auto memorySpace =
-      resolveConvTileStorageFacets(parser, fields, bufferSize);
-  if (!memorySpace) {
-    return Type();
-  }
+    IntegerAttr bufferSize = fields.bufferSize;
+    auto memorySpace = resolveConvTileStorageFacets(parser, fields, bufferSize);
+    if (!memorySpace) {
+        return Type();
+    }
 
-  auto layoutAttr = fields.layoutAttr;
-  if (!layoutAttr) {
-    emitError() << "layout must be a pto.conv_layout attr";
-    return Type();
-  }
-  if (!isTileSideConvLayout(layoutAttr.getValue())) {
-    emitError() << "conv_tile layout " << layoutAttr
-                << " is a GM view layout; a conv tile can only use "
-                   "nc1hwc0/ndc1hwc0/fractal_z/fractal_z_3d";
-    return Type();
-  }
-  if (failed(verifyConvTileBlockedDims(emitError, layoutAttr.getValue(),
-                                       fields.shape, fields.dtype,
-                                       bufferSize))) {
-    return Type();
-  }
-  SmallVector<size_t, mlir::pto::kValue2> expectedRanks =
-      expectedRanksForConvLayout(layoutAttr.getValue());
-  if (!llvm::is_contained(expectedRanks, fields.shape.size())) {
-    emitError() << "conv_tile layout " << layoutAttr << " requires rank "
-                << llvm::join(llvm::map_range(expectedRanks,
-                                              [](size_t r) {
-                                                return std::to_string(r);
-                                              }),
-                              " or ")
-                << ", got " << fields.shape.size();
-    return Type();
-  }
-  return ConvTileBufType::get(ctx, fields.shape, fields.dtype, bufferSize,
-                           AddressSpaceAttr::get(ctx, *memorySpace),
-                           layoutAttr);
+    auto layoutAttr = fields.layoutAttr;
+    if (!layoutAttr) {
+        emitError() << "layout must be a pto.conv_layout attr";
+        return Type();
+    }
+    if (!isTileSideConvLayout(layoutAttr.getValue())) {
+        emitError() << "conv_tile layout " << layoutAttr
+                    << " is a GM view layout; a conv tile can only use "
+                       "nc1hwc0/ndc1hwc0/fractal_z/fractal_z_3d";
+        return Type();
+    }
+    if (failed(verifyConvTileBlockedDims(emitError, layoutAttr.getValue(), fields.shape, fields.dtype, bufferSize))) {
+        return Type();
+    }
+    if (failed(verifyConvTileValidShape(emitError, layoutAttr.getValue(), fields.shape, fields.validShape))) {
+        return Type();
+    }
+    SmallVector<size_t, mlir::pto::kValue2> expectedRanks = expectedRanksForConvLayout(layoutAttr.getValue());
+    if (!llvm::is_contained(expectedRanks, fields.shape.size())) {
+        emitError() << "conv_tile layout " << layoutAttr << " requires rank "
+                    << llvm::join(llvm::map_range(expectedRanks, [](size_t r) { return std::to_string(r); }), " or ")
+                    << ", got " << fields.shape.size();
+        return Type();
+    }
+    // Canonical form: an explicitly written valid_shape equal to shape is
+    // stored as "unspecified", so a tile has exactly one textual and in-memory
+    // representation for the valid == declared case.
+    SmallVector<int64_t, 6> canonicalValid = fields.validShape;
+    if (canonicalValid == fields.shape) {
+        canonicalValid.clear();
+    }
+    return ConvTileBufType::get(
+        ctx, fields.shape, fields.dtype, bufferSize, AddressSpaceAttr::get(ctx, *memorySpace), layoutAttr,
+        canonicalValid);
 }
 
 } // namespace
@@ -1058,247 +1101,272 @@ static Type buildConvTileBufType(AsmParser &parser,
 namespace {
 
 struct ParsedConvTileKeywords {
-  ConvLayoutAttr layout;
-  IntegerAttr bufferSize;
+    ConvLayoutAttr layout;
+    IntegerAttr bufferSize;
+    SmallVector<int64_t, 6> validShape;
 };
 
-static LogicalResult parseConvTileLayoutKey(AsmParser &parser, bool &seen,
-                                            ConvLayoutAttr &layout) {
-  Attribute attr;
-  if (failed(parseConvTileLayoutField(parser, attr))) {
-    return failure();
-  }
-  layout = llvm::dyn_cast<ConvLayoutAttr>(attr);
-  if (!layout) {
-    parser.emitError(parser.getCurrentLocation())
-        << "conv_tile layout must be a pto.conv_layout attr";
-    return failure();
-  }
-  if (seen) {
-    parser.emitError(parser.getCurrentLocation())
-        << "conv_tile layout may be specified only once";
-    return failure();
-  }
-  seen = true;
-  return success();
+static LogicalResult parseConvTileLayoutKey(AsmParser& parser, bool& seen, ConvLayoutAttr& layout)
+{
+    Attribute attr;
+    if (failed(parseConvTileLayoutField(parser, attr))) {
+        return failure();
+    }
+    layout = llvm::dyn_cast<ConvLayoutAttr>(attr);
+    if (!layout) {
+        parser.emitError(parser.getCurrentLocation()) << "conv_tile layout must be a pto.conv_layout attr";
+        return failure();
+    }
+    if (seen) {
+        parser.emitError(parser.getCurrentLocation()) << "conv_tile layout may be specified only once";
+        return failure();
+    }
+    seen = true;
+    return success();
 }
 
-static LogicalResult parseConvTileBufferSizeKey(AsmParser &parser, bool &seen,
-                                                IntegerAttr &bufferSize) {
-  Attribute attr;
-  if (failed(parser.parseAttribute(attr))) {
-    return failure();
-  }
-  bufferSize = llvm::dyn_cast_or_null<IntegerAttr>(attr);
-  if (!bufferSize || seen) {
-    return failure();
-  }
-  seen = true;
-  return success();
+static LogicalResult parseConvTileBufferSizeKey(AsmParser& parser, bool& seen, IntegerAttr& bufferSize)
+{
+    Attribute attr;
+    if (failed(parser.parseAttribute(attr))) {
+        return failure();
+    }
+    bufferSize = llvm::dyn_cast_or_null<IntegerAttr>(attr);
+    if (!bufferSize || seen) {
+        return failure();
+    }
+    seen = true;
+    return success();
 }
 
-static LogicalResult parseConvTileBufTypeKeywords(AsmParser &parser,
-                                               ParsedConvTileKeywords &kw) {
-  bool parsedGreater = false;
-  bool seenLayout = false;
-  bool seenBufferSize = false;
-  while (!parsedGreater) {
-    if (succeeded(parser.parseOptionalGreater())) {
-      parsedGreater = true;
-      break;
-    }
-    if (failed(parser.parseComma())) {
-      return failure();
-    }
-
-    StringRef key;
-    if (failed(parser.parseKeyword(&key)) || failed(parser.parseEqual())) {
-      return failure();
-    }
-
-    if (key == "layout") {
-      if (failed(parseConvTileLayoutKey(parser, seenLayout, kw.layout))) {
+static LogicalResult parseConvTileValidShapeKey(AsmParser& parser, bool& seen, SmallVectorImpl<int64_t>& validShape)
+{
+    // Dimension list without a trailing x and without dynamic dims: the
+    // valid shape is static, mirroring the declared-shape rules.
+    if (failed(parser.parseDimensionList(validShape, false, false))) {
         return failure();
-      }
-    } else if (key == "buffer_size") {
-      if (failed(
-              parseConvTileBufferSizeKey(parser, seenBufferSize, kw.bufferSize))) {
-        return failure();
-      }
-    } else {
-      parser.emitError(parser.getCurrentLocation(),
-                       "unknown key in conv_tile syntax (config moved to the "
-                       "allocating op): ")
-          << key;
-      return failure();
     }
-  }
-  return success();
+    if (seen) {
+        parser.emitError(parser.getCurrentLocation()) << "conv_tile valid_shape may be specified only once";
+        return failure();
+    }
+    seen = true;
+    return success();
+}
+
+static LogicalResult parseConvTileBufTypeKeywords(AsmParser& parser, ParsedConvTileKeywords& kw)
+{
+    bool parsedGreater = false;
+    bool seenLayout = false;
+    bool seenBufferSize = false;
+    bool seenValidShape = false;
+    while (!parsedGreater) {
+        if (succeeded(parser.parseOptionalGreater())) {
+            parsedGreater = true;
+            break;
+        }
+        if (failed(parser.parseComma())) {
+            return failure();
+        }
+
+        StringRef key;
+        if (failed(parser.parseKeyword(&key)) || failed(parser.parseEqual())) {
+            return failure();
+        }
+
+        if (key == "layout") {
+            if (failed(parseConvTileLayoutKey(parser, seenLayout, kw.layout))) {
+                return failure();
+            }
+        } else if (key == "buffer_size") {
+            if (failed(parseConvTileBufferSizeKey(parser, seenBufferSize, kw.bufferSize))) {
+                return failure();
+            }
+        } else if (key == "valid_shape") {
+            if (failed(parseConvTileValidShapeKey(parser, seenValidShape, kw.validShape))) {
+                return failure();
+            }
+        } else {
+            parser.emitError(
+                parser.getCurrentLocation(), "unknown key in conv_tile syntax (config moved to the "
+                                             "allocating op): ")
+                << key;
+            return failure();
+        }
+    }
+    return success();
 }
 
 } // namespace
 
-Type ConvTileBufType::parse(AsmParser &parser) {
-  if (failed(parser.parseLess())) {
-    return Type();
-  }
-
-  std::string firstToken;
-  if (failed(parser.parseKeywordOrString(&firstToken))) {
-    return Type();
-  }
-
-  ParsedConvTileFields fields;
-  fields.locStr = firstToken;
-
-  if (failed(parser.parseComma())) {
-    return Type();
-  }
-
-  if (failed(parser.parseDimensionList(fields.shape, /*allowDynamic=*/false,
-                                       /*withTrailingX=*/true))) {
-    return Type();
-  }
-
-  if (failed(parser.parseType(fields.dtype))) {
-    return Type();
-  }
-
-  ParsedConvTileKeywords kw;
-  if (failed(parseConvTileBufTypeKeywords(parser, kw))) {
-    return Type();
-  }
-
-  if (!kw.layout) {
-    kw.layout = ConvLayoutAttr::get(parser.getContext(), ConvLayout::NC1HWC0);
-  }
-  if (!kw.bufferSize) {
-    auto defaultBufferSize = computeConvTileBufferSize(fields.shape);
-    if (!defaultBufferSize) {
-      parser.emitError(
-          parser.getCurrentLocation(),
-          "conv_tile shape must have a positive, overflow-free element count");
-      return Type();
+Type ConvTileBufType::parse(AsmParser& parser)
+{
+    if (failed(parser.parseLess())) {
+        return Type();
     }
-    kw.bufferSize =
-        IntegerAttr::get(parser.getBuilder().getI64Type(), *defaultBufferSize);
-  }
 
-  return buildConvTileBufType(parser, {fields.locStr, fields.shape, fields.dtype,
-                                    kw.bufferSize, kw.layout});
+    std::string firstToken;
+    if (failed(parser.parseKeywordOrString(&firstToken))) {
+        return Type();
+    }
+
+    ParsedConvTileFields fields;
+    fields.locStr = firstToken;
+
+    if (failed(parser.parseComma())) {
+        return Type();
+    }
+
+    // Static dims only; the trailing x separates the shape from the
+    // element type that follows.
+    if (failed(parser.parseDimensionList(fields.shape, false, true))) {
+        return Type();
+    }
+
+    if (failed(parser.parseType(fields.dtype))) {
+        return Type();
+    }
+
+    ParsedConvTileKeywords kw;
+    if (failed(parseConvTileBufTypeKeywords(parser, kw))) {
+        return Type();
+    }
+
+    if (!kw.layout) {
+        kw.layout = ConvLayoutAttr::get(parser.getContext(), ConvLayout::NC1HWC0);
+    }
+    if (!kw.bufferSize) {
+        auto defaultBufferSize = computeConvTileBufferSize(fields.shape);
+        if (!defaultBufferSize) {
+            parser.emitError(
+                parser.getCurrentLocation(), "conv_tile shape must have a positive, overflow-free element count");
+            return Type();
+        }
+        kw.bufferSize = IntegerAttr::get(parser.getBuilder().getI64Type(), *defaultBufferSize);
+    }
+
+    return buildConvTileBufType(
+        parser, {fields.locStr, fields.shape, fields.dtype, kw.bufferSize, kw.layout, kw.validShape});
 }
 
-void ConvTileBufType::print(AsmPrinter &printer) const {
-  printer << "<";
-  printer << stringifyLocFromMemorySpace(getMemorySpace());
-  printer << ", ";
-  auto shape = getShape();
-  for (auto it = shape.begin(); it != shape.end(); ++it) {
-    if (it != shape.begin()) {
-      printer << "x";
+void ConvTileBufType::print(AsmPrinter& printer) const
+{
+    printer << "<";
+    printer << stringifyLocFromMemorySpace(getMemorySpace());
+    printer << ", ";
+    auto shape = getShape();
+    for (auto it = shape.begin(); it != shape.end(); ++it) {
+        if (it != shape.begin()) {
+            printer << "x";
+        }
+        printTileBufDim(printer, *it);
     }
-    printTileBufDim(printer, *it);
-  }
-  printer << "x";
-  printer.printType(getElementType());
-  printer << ", buffer_size=";
-  printer.printAttribute(getBufferSize());
-  printer << ", ";
-  printConvTileLayoutField(printer, getLayout());
-  printer << ">";
+    printer << "x";
+    printer.printType(getElementType());
+    printer << ", buffer_size=";
+    printer.printAttribute(getBufferSize());
+    printer << ", ";
+    printConvTileLayoutField(printer, getLayout());
+    auto validShape = getValidShape();
+    if (!validShape.empty()) {
+        printer << ", valid_shape=";
+        for (auto it = validShape.begin(); it != validShape.end(); ++it) {
+            if (it != validShape.begin()) {
+                printer << "x";
+            }
+            printTileBufDim(printer, *it);
+        }
+    }
+    printer << ">";
 }
 
 // Invoked by getChecked (CAPI and Python bindings); the parser enforces the
 // same rules itself in buildConvTileBufType before the plain get() call.
 LogicalResult ConvTileBufType::verify(
-    function_ref<InFlightDiagnostic()> emitError, ArrayRef<int64_t> shape,
-    mlir::Type elementType, mlir::IntegerAttr bufferSize,
-    mlir::pto::AddressSpaceAttr memorySpace, mlir::pto::ConvLayoutAttr layout) {
-  if (!layout) {
-    return emitError() << "conv_tile layout must be a pto.conv_layout attr";
-  }
-  if (!isTileSideConvLayout(layout.getValue())) {
-    return emitError() << "conv_tile layout " << layout
-                       << " is a GM view layout; a conv tile can only use "
-                          "nc1hwc0/ndc1hwc0/fractal_z/fractal_z_3d";
-  }
-  if (!isExpectedRankForConvLayout(layout.getValue(), shape.size())) {
-    SmallVector<size_t, mlir::pto::kValue2> expectedRanks =
-        expectedRanksForConvLayout(layout.getValue());
-    return emitError() << "conv_tile layout " << layout << " requires rank "
-                       << llvm::join(llvm::map_range(expectedRanks,
-                                                     [](size_t rank) {
-                                                       return std::to_string(rank);
-                                                     }),
-                                     " or ")
-                       << ", got " << shape.size();
-  }
-  if (!memorySpace ||
-      memorySpace.getAddressSpace() != AddressSpace::MAT) {
-    return emitError() << "conv_tile only supports loc=mat";
-  }
-  if (!elementType) {
-    return emitError() << "conv_tile element type must be non-null";
-  }
-  for (int64_t dim : shape) {
-    if (dim <= 0) {
-      return emitError() << "conv_tile shape must be static and positive, got "
-                         << dim;
+    function_ref<InFlightDiagnostic()> emitError, ArrayRef<int64_t> shape, mlir::Type elementType,
+    mlir::IntegerAttr bufferSize, mlir::pto::AddressSpaceAttr memorySpace, mlir::pto::ConvLayoutAttr layout,
+    ArrayRef<int64_t> validShape)
+{
+    if (!layout) {
+        return emitError() << "conv_tile layout must be a pto.conv_layout attr";
     }
-  }
-  if (!bufferSize || bufferSize.getInt() < 0) {
-    return emitError() << "conv_tile buffer_size must be a non-negative i64";
-  }
-  // Blocked layouts move data in C0=32-byte blocks, so the last dim of an
-  // NC1HWC0 tile and the [16, C0] tail of a rank-4 FRACTAL_Z tile are
-  // hardware-fixed; the capacity must cover the padded element count the
-  // runtime actually touches, not merely the declared shape product.
-  if (failed(verifyConvTileBlockedDims(emitError, layout.getValue(), shape,
-                                       elementType, bufferSize))) {
-    return failure();
-  }
-  return success();
+    if (!isTileSideConvLayout(layout.getValue())) {
+        return emitError() << "conv_tile layout " << layout
+                           << " is a GM view layout; a conv tile can only use "
+                              "nc1hwc0/ndc1hwc0/fractal_z/fractal_z_3d";
+    }
+    if (!isExpectedRankForConvLayout(layout.getValue(), shape.size())) {
+        SmallVector<size_t, mlir::pto::kValue2> expectedRanks = expectedRanksForConvLayout(layout.getValue());
+        return emitError() << "conv_tile layout " << layout << " requires rank "
+                           << llvm::join(
+                               llvm::map_range(expectedRanks, [](size_t rank) { return std::to_string(rank); }),
+                               " or ")
+                           << ", got " << shape.size();
+    }
+    if (!memorySpace || memorySpace.getAddressSpace() != AddressSpace::MAT) {
+        return emitError() << "conv_tile only supports loc=mat";
+    }
+    if (!elementType) {
+        return emitError() << "conv_tile element type must be non-null";
+    }
+    for (int64_t dim : shape) {
+        if (dim <= 0) {
+            return emitError() << "conv_tile shape must be static and positive, got " << dim;
+        }
+    }
+    if (!bufferSize || bufferSize.getInt() < 0) {
+        return emitError() << "conv_tile buffer_size must be a non-negative i64";
+    }
+    // Blocked layouts move data in C0=32-byte blocks, so the last dim of an
+    // NC1HWC0 tile and the [16, C0] tail of a rank-4 FRACTAL_Z tile are
+    // hardware-fixed; the capacity must cover the padded element count the
+    // runtime actually touches, not merely the declared shape product.
+    if (failed(verifyConvTileBlockedDims(emitError, layout.getValue(), shape, elementType, bufferSize))) {
+        return failure();
+    }
+    // A valid shape equal to the declared shape is accepted here for
+    // robustness; the construction paths (parser and CAPI) canonicalize it
+    // away so a tile has exactly one representation in practice.
+    return verifyConvTileValidShape(emitError, layout.getValue(), shape, validShape);
 }
 
 // ---- MultiTileBufType custom asm ----
 LogicalResult MultiTileBufType::verify(
-    function_ref<InFlightDiagnostic()> emitError,
-    mlir::pto::TileBufType slotType, uint32_t count) {
-  if (!slotType) {
-    return emitError() << "multi_tile_buf slot type must be non-null";
-  }
-  if (count < kPtoMultiBufferMinNum) {
-    return emitError() << "multi_tile_buf count must be >= "
-                       << kPtoMultiBufferMinNum << " (got " << count << ")";
-  }
-  if (count > kPtoMultiBufferMaxNum) {
-    return emitError() << "multi_tile_buf count must be <= "
-                       << kPtoMultiBufferMaxNum << " (got " << count << ")";
-  }
-  return success();
+    function_ref<InFlightDiagnostic()> emitError, mlir::pto::TileBufType slotType, uint32_t count)
+{
+    if (!slotType) {
+        return emitError() << "multi_tile_buf slot type must be non-null";
+    }
+    if (count < kPtoMultiBufferMinNum) {
+        return emitError() << "multi_tile_buf count must be >= " << kPtoMultiBufferMinNum << " (got " << count << ")";
+    }
+    if (count > kPtoMultiBufferMaxNum) {
+        return emitError() << "multi_tile_buf count must be <= " << kPtoMultiBufferMaxNum << " (got " << count << ")";
+    }
+    return success();
 }
 
 namespace {
 // Parse a trailing `, count = N` clause. The caller has already parsed the
 // per-slot tile_buf description; we must now consume the count and the
 // closing `>`.
-static LogicalResult parseMultiTileBufCount(AsmParser &parser,
-                                            uint32_t &count) {
-  if (failed(parser.parseComma())) {
-    return failure();
-  }
-  if (failed(parser.parseKeyword("count"))) {
-    return failure();
-  }
-  if (failed(parser.parseEqual())) {
-    return failure();
-  }
-  uint32_t parsed = 0;
-  if (failed(parseTileBufUInt32Value(parser, "count", parsed))) {
-    return failure();
-  }
-  count = parsed;
-  return success();
+static LogicalResult parseMultiTileBufCount(AsmParser& parser, uint32_t& count)
+{
+    if (failed(parser.parseComma())) {
+        return failure();
+    }
+    if (failed(parser.parseKeyword("count"))) {
+        return failure();
+    }
+    if (failed(parser.parseEqual())) {
+        return failure();
+    }
+    uint32_t parsed = 0;
+    if (failed(parseTileBufUInt32Value(parser, "count", parsed))) {
+        return failure();
+    }
+    count = parsed;
+    return success();
 }
 } // namespace
 

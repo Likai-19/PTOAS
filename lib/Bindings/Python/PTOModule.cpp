@@ -1771,70 +1771,69 @@ static void registerConvTileConfigAttr(pybind11::module_ &m) {
 }
 
 static void addConvTileBufTypeGetMethods(pure_subclass &c) {
-  c
-      .def_classmethod(
-          "get",
-          [](py::object cls, std::vector<int64_t> shape, MlirType elementType,
-             MlirAttribute bufferSize, MlirAttribute memorySpace,
-             MlirAttribute layout,
-             MlirContext ctx) -> py::object {
+    c.def_classmethod(
+        "get",
+        // `context` stays the trailing positional argument: callers written
+        // against the pre-valid_shape signature bind it positionally.
+        [](py::object cls, std::vector<int64_t> shape, MlirType elementType, MlirAttribute bufferSize,
+            MlirAttribute memorySpace, MlirAttribute layout, MlirContext ctx,
+            std::optional<std::vector<int64_t>> validShape) -> py::object {
             ctx = inferContextFromElementType(ctx, elementType);
-            MlirType ty = mlirPTOConvTileBufTypeGet(
-                ctx, static_cast<intptr_t>(shape.size()), shape.data(),
-                elementType, bufferSize, memorySpace, layout);
+            std::vector<int64_t> valid = validShape ? *validShape : std::vector<int64_t>{};
+            MlirType ty = mlirPTOConvTileBufTypeGetWithValid(
+                ctx, static_cast<intptr_t>(shape.size()), shape.data(), elementType, bufferSize, memorySpace, layout,
+                static_cast<intptr_t>(valid.size()), valid.data());
             if (mlirTypeIsNull(ty)) {
-              return py::none();
+                return py::none();
             }
             return cls(ty);
-          },
-          py::arg("cls"), py::arg("shape"), py::arg("element_type"),
-          py::arg("buffer_size"), py::arg("memory_space"), py::arg("layout"),
-          py::arg("context") = py::none())
-      .def_classmethod(
-          "upcast_type",
-          [](py::object cls, MlirType t) -> py::object {
-            if (mlirPTOTypeIsAConvTileBufType(t)) {
-              return cls(t);
-            }
-            return py::none();
-          },
-          py::arg("cls"), py::arg("type"));
+        },
+        py::arg("cls"), py::arg("shape"), py::arg("element_type"), py::arg("buffer_size"), py::arg("memory_space"),
+        py::arg("layout"), py::arg("context") = py::none(), py::arg("valid_shape") = py::none())
+        .def_classmethod(
+        "upcast_type",
+            [](py::object cls, MlirType t) -> py::object {
+                if (mlirPTOTypeIsAConvTileBufType(t)) {
+                    return cls(t);
+                }
+                return py::none();
+            },
+        py::arg("cls"), py::arg("type"));
 }
 
 static void addConvTileBufTypeAccessors(pure_subclass &c, pybind11::module_ &m) {
-  c
-      .def_property_readonly(
-          "rank",
-          [](MlirType self) -> intptr_t {
-            return mlirPTOConvTileBufTypeGetRank(self);
-          })
-      .def_property_readonly(
-          "element_type",
-          [](MlirType self) -> MlirType {
-            return mlirPTOConvTileBufTypeGetElementType(self);
-          })
-      .def_property_readonly(
-          "shape",
-          [](MlirType self) -> py::list {
-            intptr_t n = 0;
-            const int64_t *d = mlirPTOConvTileBufTypeGetShape(self, &n);
-            return shapeToPyList(d, n);
-          })
-      .def_property_readonly(
-          "layout",
-          [m](MlirType self) -> py::object {
+    c.def_property_readonly("rank", [](MlirType self) -> intptr_t { return mlirPTOConvTileBufTypeGetRank(self); })
+        .def_property_readonly(
+        "element_type", [](MlirType self) -> MlirType { return mlirPTOConvTileBufTypeGetElementType(self); })
+        .def_property_readonly(
+        "shape",
+            [](MlirType self) -> py::list {
+                intptr_t n = 0;
+                const int64_t* d = mlirPTOConvTileBufTypeGetShape(self, &n);
+                return shapeToPyList(d, n);
+            })
+        .def_property_readonly(
+        "valid_shape",
+            [](MlirType self) -> py::object {
+                intptr_t n = 0;
+                const int64_t* d = mlirPTOConvTileBufTypeGetValidShape(self, &n);
+                if (d == nullptr) {
+                    return py::none();
+                }
+                return shapeToPyList(d, n);
+            })
+        .def_property_readonly("layout", [m](MlirType self) -> py::object {
             MlirAttribute attr = mlirPTOConvTileBufTypeGetLayout(self);
             return wrapAttributeAs(m, "ConvLayoutAttr", attr);
-          });
+        });
 }
 
-static void registerConvTileBufType(pybind11::module_ &m) {
-  pure_subclass convTile = mlir_type_subclass(
-      m, "ConvTileBufType", [](MlirType t) -> bool {
-        return mlirPTOTypeIsAConvTileBufType(t);
-      });
-  addConvTileBufTypeGetMethods(convTile);
-  addConvTileBufTypeAccessors(convTile, m);
+static void registerConvTileBufType(pybind11::module_& m)
+{
+    pure_subclass convTile =
+        mlir_type_subclass(m, "ConvTileBufType", [](MlirType t) -> bool { return mlirPTOTypeIsAConvTileBufType(t); });
+    addConvTileBufTypeGetMethods(convTile);
+    addConvTileBufTypeAccessors(convTile, m);
 }
 
 static void registerDialectHandle(py::module_& m)

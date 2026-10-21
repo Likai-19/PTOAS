@@ -572,33 +572,49 @@ MlirType mlirPTOConvTileBufTypeGet(MlirContext ctx, intptr_t rank,
                                 MlirAttribute bufferSize,
                                 MlirAttribute memorySpace,
                                 MlirAttribute layout) {
-  MLIRContext *c = unwrap(ctx);
-  auto shp = llvm::ArrayRef<int64_t>(shape, rank);
-  auto bufferSizeAttr = mlir::dyn_cast<mlir::IntegerAttr>(unwrap(bufferSize));
-  auto memorySpaceAttr =
-      mlir::dyn_cast<mlir::pto::AddressSpaceAttr>(unwrap(memorySpace));
-  auto layoutAttr = mlir::dyn_cast<mlir::pto::ConvLayoutAttr>(unwrap(layout));
-  if (!bufferSizeAttr || !memorySpaceAttr || !layoutAttr) {
-    return MlirType{nullptr};
-  }
+    // Zero-length valid shape means "valid == declared".
+    return mlirPTOConvTileBufTypeGetWithValid(
+        ctx, rank, shape, elementType, bufferSize, memorySpace, layout, 0, nullptr);
+}
 
-  // getChecked runs ConvTileBufType::verify, so rank/layout/memory-space
-  // consistency holds for CAPI and Python-built types too; on failure the
-  // diagnostics go to the UnknownLoc and the returned type is null. The
-  // conv geometry config is not part of the type; it rides on the
-  // allocating op.
-  auto ty = mlir::pto::ConvTileBufType::getChecked(
-      [c]() { return mlir::emitError(mlir::UnknownLoc::get(c)); }, c, shp,
-      unwrap(elementType), bufferSizeAttr, memorySpaceAttr, layoutAttr);
-  return wrap(ty);
+MlirType mlirPTOConvTileBufTypeGetWithValid(
+    MlirContext ctx, intptr_t rank, const int64_t* shape, MlirType elementType, MlirAttribute bufferSize,
+    MlirAttribute memorySpace, MlirAttribute layout, intptr_t validRank, const int64_t* validShape)
+{
+    MLIRContext* c = unwrap(ctx);
+    auto shp = llvm::ArrayRef<int64_t>(shape, rank);
+    auto vshp = llvm::ArrayRef<int64_t>(validShape, validRank);
+    auto bufferSizeAttr = mlir::dyn_cast<mlir::IntegerAttr>(unwrap(bufferSize));
+    auto memorySpaceAttr = mlir::dyn_cast<mlir::pto::AddressSpaceAttr>(unwrap(memorySpace));
+    auto layoutAttr = mlir::dyn_cast<mlir::pto::ConvLayoutAttr>(unwrap(layout));
+    if (!bufferSizeAttr || !memorySpaceAttr || !layoutAttr) {
+        return MlirType{nullptr};
+    }
+    // Canonicalize like the parser does: a valid shape equal to the declared
+    // shape is stored as "unspecified", so the API and the textual path build
+    // the identical type instead of the API one failing verification.
+    if (vshp == shp) {
+        vshp = llvm::ArrayRef<int64_t>();
+    }
+
+    // getChecked runs ConvTileBufType::verify, so rank/layout/memory-space
+    // consistency holds for CAPI and Python-built types too; on failure the
+    // diagnostics go to the UnknownLoc and the returned type is null. The
+    // conv geometry config is not part of the type; it rides on the
+    // allocating op.
+    auto ty = mlir::pto::ConvTileBufType::getChecked(
+        [c]() { return mlir::emitError(mlir::UnknownLoc::get(c)); }, c, shp, unwrap(elementType), bufferSizeAttr,
+        memorySpaceAttr, layoutAttr, vshp);
+    return wrap(ty);
 }
 
 intptr_t mlirPTOConvTileBufTypeGetRank(MlirType type) {
   return mlir::cast<mlir::pto::ConvTileBufType>(unwrap(type)).getRank();
 }
 
-MlirType mlirPTOConvTileBufTypeGetElementType(MlirType type) {
-  return wrap(mlir::cast<mlir::pto::ConvTileBufType>(unwrap(type)).getElementType());
+MlirType mlirPTOConvTileBufTypeGetElementType(MlirType type)
+{
+    return wrap(mlir::cast<mlir::pto::ConvTileBufType>(unwrap(type)).getElementType());
 }
 
 const int64_t *mlirPTOConvTileBufTypeGetShape(MlirType type,
@@ -614,14 +630,26 @@ MlirAttribute mlirPTOConvTileBufTypeGetLayout(MlirType type) {
   return wrap(mlir::cast<mlir::pto::ConvTileBufType>(unwrap(type)).getLayout());
 }
 
-bool mlirPTOAttrIsABLayoutAttr(MlirAttribute attr) {
-  return mlir::isa<mlir::pto::BLayoutAttr>(unwrap(attr));
+const int64_t* mlirPTOConvTileBufTypeGetValidShape(MlirType type, intptr_t* numDimsOut)
+{
+    static thread_local llvm::SmallVector<int64_t, 8> shape;
+    auto dims = mlir::cast<mlir::pto::ConvTileBufType>(unwrap(type)).getValidShape();
+    if (dims.empty()) {
+        *numDimsOut = 0;
+        return nullptr;
+    }
+    shape.assign(dims.begin(), dims.end());
+    *numDimsOut = static_cast<intptr_t>(shape.size());
+    return shape.data();
 }
 
-MlirAttribute mlirPTOBLayoutAttrGet(MlirContext ctx, int32_t value) {
-  auto *c = unwrap(ctx);
-  auto v = static_cast<mlir::pto::BLayout>(value);
-  return wrap(mlir::pto::BLayoutAttr::get(c, v));
+bool mlirPTOAttrIsABLayoutAttr(MlirAttribute attr) { return mlir::isa<mlir::pto::BLayoutAttr>(unwrap(attr)); }
+
+MlirAttribute mlirPTOBLayoutAttrGet(MlirContext ctx, int32_t value)
+{
+    auto* c = unwrap(ctx);
+    auto v = static_cast<mlir::pto::BLayout>(value);
+    return wrap(mlir::pto::BLayoutAttr::get(c, v));
 }
 
 int32_t mlirPTOBLayoutAttrGetValue(MlirAttribute attr) {

@@ -181,11 +181,24 @@ MLIR_CAPI_EXPORTED MlirType mlirPTOConvTileBufTypeGet(
     MlirType elementType, MlirAttribute bufferSize,
     MlirAttribute memorySpace, MlirAttribute layout);
 
+// Same as mlirPTOConvTileBufTypeGet but declares the logical valid shape
+// the tile holds (validRank == 0 means "valid == declared"). The valid
+// shape only shrinks non-blocked dims; the blocked minor dims must equal
+// the declared ones.
+MLIR_CAPI_EXPORTED MlirType mlirPTOConvTileBufTypeGetWithValid(
+    MlirContext ctx, intptr_t rank, const int64_t *shape,
+    MlirType elementType, MlirAttribute bufferSize,
+    MlirAttribute memorySpace, MlirAttribute layout,
+    intptr_t validRank, const int64_t *validShape);
+
 MLIR_CAPI_EXPORTED intptr_t mlirPTOConvTileBufTypeGetRank(MlirType type);
 MLIR_CAPI_EXPORTED MlirType mlirPTOConvTileBufTypeGetElementType(MlirType type);
 MLIR_CAPI_EXPORTED const int64_t *mlirPTOConvTileBufTypeGetShape(MlirType type,
                                                                intptr_t *numDimsOut);
 MLIR_CAPI_EXPORTED MlirAttribute mlirPTOConvTileBufTypeGetLayout(MlirType type);
+// Returns nullptr when the tile has no valid shape (valid == declared).
+MLIR_CAPI_EXPORTED const int64_t *mlirPTOConvTileBufTypeGetValidShape(
+    MlirType type, intptr_t *numDimsOut);
 // ---- Enum attrs helpers (BLayout/SLayout/PadValue in mlir::pto) ----
 MLIR_CAPI_EXPORTED bool mlirPTOAttrIsABLayoutAttr(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirAttribute mlirPTOBLayoutAttrGet(MlirContext ctx, int32_t value);

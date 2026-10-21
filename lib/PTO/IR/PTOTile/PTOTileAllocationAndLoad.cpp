@@ -349,46 +349,126 @@ static LogicalResult checkConvConvertDims(TLoadOp op,
   return success();
 }
 
-static LogicalResult
-verifyTLoadConvA5ConvertShapes(TLoadOp op, pto::PartitionTensorViewType srcPart,
-                               pto::ConvTileBufType dstCT, pto::ConvLayout src) {
-  auto dstCL = dyn_cast_or_null<pto::ConvLayoutAttr>(dstCT.getLayout());
-  if (!dstCL) {
+// N/H/W-style pairs: the src dim must not exceed its valid counterpart.
+static LogicalResult convValidFitDims(TLoadOp op, ArrayRef<int64_t> srcShape, ArrayRef<int64_t> valid,
+                                      ArrayRef<std::pair<size_t, size_t>> fits)
+{
+    for (auto [srcIdx, validIdx] : fits) {
+        if (convShapeDimDynamic(srcShape, srcIdx) || validIdx >= valid.size()) {
+            continue;
+        }
+        if (srcShape[srcIdx] > valid[validIdx]) {
+            return op.emitOpError() << "tload source dim " << srcIdx << " (" << srcShape[srcIdx]
+                                    << ") exceeds the tile valid dim " << valid[validIdx]
+                                    << "; data outside valid_shape is dead";
+        }
+    }
     return success();
-  }
-  return checkConvConvertDims(op, srcPart.getShape(), dstCT.getShape(), src,
-                              dstCL.getValue());
 }
 
-
-static FailureOr<TLoadOperandTypes>
-verifyTLoadOperandTypes(TLoadOp op, bool allowLowPrecision) {
-  auto srcPart = dyn_cast<pto::PartitionTensorViewType>(op.getSrc().getType());
-  Type dstTy = op.getDst().getType();
-  if (!srcPart || !isa<pto::TileBufType, pto::ConvTileBufType>(dstTy)) {
-    op.emitOpError("expects src to be !pto.partition_tensor_view and dst to be "
-                   "!pto.tile_buf or !pto.conv_tile");
-    return failure();
-  }
-  if (failed(verifyTileLikeCommon(op, dstTy, "dst", allowLowPrecision))) {
-    return failure();
-  }
-
-  auto srcShape = srcPart.getShape();
-  for (unsigned i = 0; i < srcShape.size(); ++i) {
-    if (srcShape[i] != ShapedType::kDynamic && srcShape[i] <= 0) {
-      op.emitOpError() << "expects src shape[" << i << "] to be positive";
-      return failure();
+// Channel-capacity pairs: the src channel count must fit valid C1 * C0.
+static LogicalResult convValidFitChannelCaps(TLoadOp op, ArrayRef<int64_t> srcShape, pto::ConvTileBufType dstCT,
+                                             ArrayRef<int64_t> valid, ArrayRef<std::pair<size_t, size_t>> cCaps)
+{
+    const int64_t elemBytes = getPTOStorageElemByteSize(dstCT.getElementType());
+    const std::optional<int64_t> c0Opt = pto::convC0ForElemBytes(elemBytes);
+    if (!c0Opt) {
+        return success();
     }
-  }
-  auto dstValid = getValidShapeVec(dstTy);
-  for (unsigned i = 0; i < dstValid.size(); ++i) {
-    if (dstValid[i] != ShapedType::kDynamic && dstValid[i] < 0) {
-      op.emitOpError() << "expects dst valid_shape[" << i << "] to be non-negative";
-      return failure();
+    for (auto [srcIdx, c1Idx] : cCaps) {
+        if (convShapeDimDynamic(srcShape, srcIdx) || c1Idx >= valid.size()) {
+            continue;
+        }
+        if (srcShape[srcIdx] > valid[c1Idx] * *c0Opt) {
+            return op.emitOpError() << "tload source dim " << srcIdx << " (" << srcShape[srcIdx]
+                                    << ") exceeds the tile valid channel capacity " << valid[c1Idx] * *c0Opt
+                                    << " (valid_shape)";
+        }
     }
-  }
-  return TLoadOperandTypes(srcPart, dstTy);
+    return success();
+}
+
+// With a declared valid shape, everything the GM source contributes must
+// fit inside the valid box: extents beyond it are dead for valid-aware
+// consumers. For the N/H/W dims the transfer itself pins src == declared
+// (checkConvConvertDims above), so a shrunk valid dim there contradicts
+// the load; for the C capacity the bound is src C <= valid C1 * C0.
+static LogicalResult checkConvConvertValidFit(
+    TLoadOp op, ArrayRef<int64_t> srcShape, pto::ConvTileBufType dstCT, pto::ConvLayout src)
+{
+    using CL = pto::ConvLayout;
+    if (!dstCT.hasValidShape()) {
+        return success();
+    }
+    const auto dstCL = dyn_cast_or_null<pto::ConvLayoutAttr>(dstCT.getLayout());
+    if (!dstCL) {
+        return success();
+    }
+    ArrayRef<int64_t> valid = dstCT.getValidOrShape();
+    // (srcIdx, validIdx) pairs that must satisfy src <= valid.
+    SmallVector<std::pair<size_t, size_t>> fits;
+    // (srcIdx, c1Idx) pairs that must satisfy src C <= valid[c1Idx] * c0.
+    SmallVector<std::pair<size_t, size_t>> cCaps;
+    if (src == CL::NHWC && dstCL.getValue() == CL::NC1HWC0) {
+        fits = {{0, 0}, {1, 2}, {2, 3}};
+        cCaps = {{3, 1}};
+    } else if (src == CL::NCHW && dstCL.getValue() == CL::NC1HWC0) {
+        fits = {{0, 0}, {2, 2}, {3, 3}};
+        cCaps = {{1, 1}};
+    } else if (src == CL::NCDHW && dstCL.getValue() == CL::NDC1HWC0) {
+        fits = {{0, 0}, {2, 1}, {3, 3}, {4, 4}};
+        cCaps = {{1, 2}};
+    } else {
+        return success();
+    }
+    if (failed(convValidFitDims(op, srcShape, valid, fits))) {
+        return failure();
+    }
+    return convValidFitChannelCaps(op, srcShape, dstCT, valid, cCaps);
+}
+
+static LogicalResult verifyTLoadConvA5ConvertShapes(
+    TLoadOp op, pto::PartitionTensorViewType srcPart, pto::ConvTileBufType dstCT, pto::ConvLayout src)
+{
+    auto dstCL = dyn_cast_or_null<pto::ConvLayoutAttr>(dstCT.getLayout());
+    if (!dstCL) {
+        return success();
+    }
+    if (failed(checkConvConvertDims(op, srcPart.getShape(), dstCT.getShape(), src, dstCL.getValue()))) {
+        return failure();
+    }
+    return checkConvConvertValidFit(op, srcPart.getShape(), dstCT, src);
+}
+
+static FailureOr<TLoadOperandTypes> verifyTLoadOperandTypes(TLoadOp op, bool allowLowPrecision)
+{
+    auto srcPart = dyn_cast<pto::PartitionTensorViewType>(op.getSrc().getType());
+    Type dstTy = op.getDst().getType();
+    if (!srcPart || !isa<pto::TileBufType, pto::ConvTileBufType>(dstTy)) {
+        op.emitOpError(
+            "expects src to be !pto.partition_tensor_view and dst to be "
+            "!pto.tile_buf or !pto.conv_tile");
+        return failure();
+    }
+    if (failed(verifyTileLikeCommon(op, dstTy, "dst", allowLowPrecision))) {
+        return failure();
+    }
+
+    auto srcShape = srcPart.getShape();
+    for (unsigned i = 0; i < srcShape.size(); ++i) {
+        if (srcShape[i] != ShapedType::kDynamic && srcShape[i] <= 0) {
+            op.emitOpError() << "expects src shape[" << i << "] to be positive";
+            return failure();
+        }
+    }
+    auto dstValid = getValidShapeVec(dstTy);
+    for (unsigned i = 0; i < dstValid.size(); ++i) {
+        if (dstValid[i] != ShapedType::kDynamic && dstValid[i] < 0) {
+            op.emitOpError() << "expects dst valid_shape[" << i << "] to be non-negative";
+            return failure();
+        }
+    }
+    return TLoadOperandTypes(srcPart, dstTy);
 }
 
 static LogicalResult verifyTLoadA2A3Types(TLoadOp op) {

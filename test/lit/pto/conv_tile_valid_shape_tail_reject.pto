@@ -1,0 +1,22 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not ptoas --pto-arch=a5 --emit-pto-ir %s 2>&1 | FileCheck %s
+
+// Strict model: the blocked minor dims are hardware-fixed 32-byte block
+// geometry, so valid_shape may not shrink them even though it stays below
+// the declared extent.
+
+module attributes {"pto.target_arch" = "a5"} {
+  func.func @valid_shrinks_blocked_tail() {
+    %t = pto.alloc_tile : !pto.conv_tile_buf<mat, 1x1x3x8x16xf16, buffer_size=384 : i64, layout=#pto.conv_layout<nc1hwc0>, valid_shape=1x1x3x8x8>
+    return
+  }
+}
+
+// CHECK: conv_tile valid_shape must keep the blocked minor dims equal to the declared shape

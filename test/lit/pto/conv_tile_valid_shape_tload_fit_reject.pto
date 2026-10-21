@@ -1,0 +1,37 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not ptoas --pto-arch=a5 --emit-pto-ir %s 2>&1 | FileCheck %s
+
+// The GM source of a converting tload must fit inside the tile's valid
+// box: extents beyond valid_shape are dead for valid-aware consumers, so
+// loading them hides a frontend inconsistency. Here the NHWC view's W=8
+// matches the declared W (the runtime equality holds) but exceeds the
+// declared valid W=5.
+
+module attributes {"pto.target_arch" = "a5"} {
+  func.func @tload_exceeds_valid_w(%fmap: !pto.ptr<f16>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c3 = arith.constant 3 : index
+    %c5 = arith.constant 5 : index
+    %c8 = arith.constant 8 : index
+    %c16 = arith.constant 16 : index
+    %c128 = arith.constant 128 : index
+    %c384 = arith.constant 384 : index
+
+    %fmap_tv = pto.make_tensor_view %fmap, shape = [%c1, %c3, %c8, %c16], strides = [%c384, %c128, %c16, %c1] : !pto.tensor_view<1x3x8x16xf16, #pto.conv_layout<nhwc>>
+    %fmap_view = pto.partition_view %fmap_tv, offsets = [%c0, %c0, %c0, %c0], sizes = [%c1, %c3, %c8, %c16] : !pto.tensor_view<1x3x8x16xf16, #pto.conv_layout<nhwc>> -> !pto.partition_tensor_view<1x3x8x16xf16, #pto.conv_layout<nhwc>>
+
+    %t = pto.alloc_tile : !pto.conv_tile_buf<mat, 1x1x3x8x16xf16, buffer_size=384 : i64, layout=#pto.conv_layout<nc1hwc0>, valid_shape=1x1x3x5x16>
+    pto.tload ins(%fmap_view : !pto.partition_tensor_view<1x3x8x16xf16, #pto.conv_layout<nhwc>>) outs(%t : !pto.conv_tile_buf<mat, 1x1x3x8x16xf16, buffer_size=384 : i64, layout=#pto.conv_layout<nc1hwc0>, valid_shape=1x1x3x5x16>)
+    return
+  }
+}
+
+// CHECK: tload source dim 2 (8) exceeds the tile valid dim 5

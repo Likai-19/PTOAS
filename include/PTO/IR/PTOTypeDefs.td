@@ -252,7 +252,8 @@ def ConvTileBufType : TypeDef<PTO_Dialect, "ConvTileBuf"> {
     "mlir::Type":$elementType,
     "mlir::IntegerAttr":$bufferSize,
     "mlir::pto::AddressSpaceAttr":$memorySpace,
-    "mlir::pto::ConvLayoutAttr":$layout
+    "mlir::pto::ConvLayoutAttr":$layout,
+    ArrayRefParameter<"int64_t">:$validShape
   );
 
   let hasCustomAssemblyFormat = 1;
@@ -273,6 +274,16 @@ def ConvTileBufType : TypeDef<PTO_Dialect, "ConvTileBuf"> {
     }
 
     int64_t getBufferSizeValue() const { return getBufferSize().getInt(); }
+
+    // validShape is the logical tensor the tile actually holds, mirroring
+    // the runtime ConvTile ValidShape_ template parameter. The empty list
+    // is the canonical "valid == declared" form; a non-empty list shrinks
+    // only the non-blocked (outer) dims -- the blocked minor dims are
+    // hardware-fixed and never shrink.
+    bool hasValidShape() const { return !getValidShape().empty(); }
+    ArrayRef<int64_t> getValidOrShape() const {
+      return getValidShape().empty() ? getShape() : getValidShape();
+    }
   }];
 }
 
