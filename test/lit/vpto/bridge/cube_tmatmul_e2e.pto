@@ -1,0 +1,72 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// ptoas-driven Cube bridge: a routed pto.tmatmul takes its tiles and planned
+// addresses from the real pipeline, each AccPhase is its own specialization,
+// and the rendered C++ carries the prototype and template arguments.
+//
+// RUN: echo 'version: 1' > %t.policy
+// RUN: echo 'families:' >> %t.policy
+// RUN: echo '  cube: { enabled_ops: [pto.tmatmul] }' >> %t.policy
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --vpto-bridge-policy=%t.policy --emit-vpto %s -o - 2>/dev/null | FileCheck %s --check-prefix=VPTO
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --vpto-bridge-policy=%t.policy --emit-vpto %s -o - 2>/dev/null | FileCheck %s --check-prefix=WRAPPER
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --vpto-bridge-policy=%t.policy --emit-vpto-llvm-ir %s -o - 2>/dev/null | FileCheck %s --check-prefix=LLVM
+//
+// Without the policy the op keeps the regular ExpandTileOp path.
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s -o - 2>/dev/null | FileCheck %s --check-prefix=UNROUTED
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<cube>} {
+  func.func @tmatmul_phases() attributes {pto.kernel} {
+    %lhs = pto.alloc_tile
+      : !pto.tile_buf<loc=left, dtype=f16, rows=16, cols=16, v_row=16, v_col=16,
+                      blayout=col_major, slayout=row_major, fractal=512, pad=0>
+    %rhs = pto.alloc_tile
+      : !pto.tile_buf<loc=right, dtype=f16, rows=16, cols=16, v_row=16, v_col=16,
+                      blayout=row_major, slayout=col_major, fractal=512, pad=0>
+    %acc = pto.alloc_tile
+      : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=16, v_col=16,
+                      blayout=col_major, slayout=row_major, fractal=1024, pad=0>
+
+    pto.tmatmul ins(%lhs, %rhs : !pto.tile_buf<loc=left, dtype=f16, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=512, pad=0>, !pto.tile_buf<loc=right, dtype=f16, rows=16, cols=16, v_row=16, v_col=16, blayout=row_major, slayout=col_major, fractal=512, pad=0>)
+                outs(%acc : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>)
+                {accPhase = #pto<acc_phase partial>}
+    pto.tmatmul ins(%lhs, %rhs : !pto.tile_buf<loc=left, dtype=f16, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=512, pad=0>, !pto.tile_buf<loc=right, dtype=f16, rows=16, cols=16, v_row=16, v_col=16, blayout=row_major, slayout=col_major, fractal=512, pad=0>)
+                outs(%acc : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>)
+                {accPhase = #pto<acc_phase final>}
+    return
+  }
+}
+
+// Two phases, two instances, both on the cube core.
+// VPTO-DAG: pto.bridge.instance @[[P:pto_vpto_tmatmul__[0-9]+]] <cube_tmatmul> core <cube> {spec = #pto.bridge_cube_spec<{{.*}}accPhase = partial>}
+// VPTO-DAG: pto.bridge.instance @[[F:pto_vpto_tmatmul__[0-9]+]] <cube_tmatmul> core <cube> {spec = #pto.bridge_cube_spec<{{.*}}accPhase = final>}
+// VPTO-NOT: pto.tmatmul
+// VPTO: pto.bridge.call <cube_tmatmul>
+// VPTO-SAME: instance = @[[P]]
+// VPTO: pto.bridge.call <cube_tmatmul>
+// VPTO-SAME: instance = @[[F]]
+
+// The rendered wrapper: descriptor-derived prototype, tile template arguments
+// from the tile types, and the non-default AccPhase as a template argument.
+// WRAPPER: pto.vpto.bridge.wrappers
+// WRAPPER-SAME: renderer = "cube_direct"
+// WRAPPER-SAME: extern \22C\22 [aicore] void pto_vpto_tmatmul__0(uint64_t dstAddress, uint64_t lhsAddress, uint64_t rhsAddress)
+// WRAPPER-SAME: using Dst = pto::Tile<pto::TileType::Acc, float, 16, 16, pto::BLayout::ColMajor, 16, 16, pto::SLayout::RowMajor, 1024>;
+// WRAPPER-SAME: using Lhs = pto::Tile<pto::TileType::Left, half, 16, 16, pto::BLayout::ColMajor, 16, 16, pto::SLayout::RowMajor, 512>;
+// WRAPPER-SAME: using Rhs = pto::Tile<pto::TileType::Right, half, 16, 16, pto::BLayout::RowMajor, 16, 16, pto::SLayout::ColMajor, 512>;
+// WRAPPER-SAME: pto::TMATMUL<pto::AccPhase::Partial>(dst, lhs, rhs);
+// WRAPPER-SAME: pto::TMATMUL<pto::AccPhase::Final>(dst, lhs, rhs);
+
+// The call survives into the device LLVM IR with the descriptor's signature.
+// LLVM-DAG: declare void @pto_vpto_tmatmul__0(i64, i64, i64)
+// LLVM-DAG: declare void @pto_vpto_tmatmul__1(i64, i64, i64)
+// LLVM: define void @tmatmul_phases
+// LLVM: call void @pto_vpto_tmatmul__0(
+// LLVM: call void @pto_vpto_tmatmul__1(
+
+// UNROUTED-NOT: pto.bridge
+// UNROUTED-NOT: pto_vpto_tmatmul

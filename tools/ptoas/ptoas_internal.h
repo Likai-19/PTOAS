@@ -120,6 +120,8 @@ enum class VPTOSchedulerCLIMode { Off, Analyze, On };
 // Command-line options defined in ptoas.cpp and read by the pipeline TU.
 extern llvm::cl::opt<VPTOSchedulerCLIMode> vptoSchedulerMode;
 extern llvm::cl::opt<bool> vptoSchedulerTrace;
+extern llvm::cl::opt<std::string> vptoBridgePolicy;
+extern llvm::cl::opt<std::string> vptoPrintDTData;
 extern llvm::cl::opt<bool> vptoSchedulerRemat;
 extern llvm::cl::opt<bool> dumpSyncExtract;
 extern llvm::cl::opt<bool> enableUnifiedSync;

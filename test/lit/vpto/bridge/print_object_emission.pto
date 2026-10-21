@@ -1,0 +1,77 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// Object emission of a printing kernel: the print wrapper and the device
+// module are compiled with CCE print support, and the hidden DTData argument
+// is named for the CCE frontend only under the implicit convention. A stub
+// toolchain stands in for Bisheng.
+//
+// RUN: mkdir -p %t.cann/bin %t.cann/tools/bisheng_compiler/bin
+// RUN: printf '#!/bin/sh\nexit 1\n' > %t.cann/bin/bisheng
+// RUN: chmod +x %t.cann/bin/bisheng
+// RUN: cp %t.cann/bin/bisheng %t.cann/bin/cce-ld
+// RUN: cp %t.cann/bin/bisheng %t.cann/bin/ld.lld
+// RUN: cp %t.cann/bin/bisheng %t.cann/tools/bisheng_compiler/bin/bisheng
+// RUN: cp %t.cann/bin/bisheng %t.cann/tools/bisheng_compiler/bin/llvm-link
+// RUN: echo 'version: 1' > %t.policy
+// RUN: echo 'families:' >> %t.policy
+// RUN: echo '  print: { enabled_ops: [pto.print] }' >> %t.policy
+// RUN: not env ASCEND_HOME_PATH=%t.cann ptoas --pto-arch=a5 --pto-backend=vpto --vpto-bridge-policy=%t.policy %s -o %t.o 2>&1 | FileCheck %s --check-prefix=WRAPPER
+//
+// Capture the IR handed to the device compile to check the argument naming.
+// RUN: printf '#!/bin/sh\nprev=""\nfor a in "$@"; do if [ "$prev" = "-o" ]; then : > "$a"; fi; prev="$a"; done\ncase "$*" in *"-x ir"*) cat > %t.device.ll;; esac\nexit 0\n' > %t.cann/bin/bisheng
+// RUN: chmod +x %t.cann/bin/bisheng
+// RUN: cp %t.cann/bin/bisheng %t.cann/tools/bisheng_compiler/bin/bisheng
+// RUN: cp %t.cann/bin/bisheng %t.cann/bin/cce-ld
+// RUN: cp %t.cann/bin/bisheng %t.cann/bin/ld.lld
+// RUN: printf '#!/bin/sh\nfirst=""\nout=""\nprev=""\nfor a in "$@"; do if [ "$prev" = "-o" ]; then out="$a"; fi; case "$a" in *.ll) if [ -z "$first" ]; then first="$a"; fi;; esac; prev="$a"; done\ncp "$first" "$out"\nexit 0\n' > %t.cann/tools/bisheng_compiler/bin/llvm-link
+// RUN: chmod +x %t.cann/tools/bisheng_compiler/bin/llvm-link
+// RUN: env ASCEND_HOME_PATH=%t.cann ptoas --pto-arch=a5 --pto-backend=vpto --vpto-bridge-policy=%t.policy %s -o %t.o > /dev/null 2>&1
+// RUN: FileCheck %s --check-prefix=IMPLICIT < %t.device.ll
+// RUN: env ASCEND_HOME_PATH=%t.cann ptoas --pto-arch=a5 --pto-backend=vpto --vpto-bridge-policy=%t.policy --vpto-print-dtdata=explicit %s -o %t.o > /dev/null 2>&1
+// RUN: FileCheck %s --check-prefix=EXPLICIT < %t.device.ll
+//
+// The host object of a printing kernel is built through the bisheng driver and
+// gets the DebugTunnel close override merged in. Log every invocation to check
+// the host steps.
+// RUN: printf '#!/bin/sh\necho "ARGV $*" >> %t.argv.log\nprev=""\nfor a in "$@"; do if [ "$prev" = "-o" ]; then : > "$a"; fi; prev="$a"; done\nexit 0\n' > %t.cann/bin/bisheng
+// RUN: chmod +x %t.cann/bin/bisheng
+// RUN: cp %t.cann/bin/bisheng %t.cann/tools/bisheng_compiler/bin/bisheng
+// RUN: cp %t.cann/bin/bisheng %t.cann/bin/cce-ld
+// RUN: cp %t.cann/bin/bisheng %t.cann/bin/ld.lld
+// RUN: rm -f %t.argv.log
+// RUN: env ASCEND_HOME_PATH=%t.cann ptoas --pto-arch=a5 --pto-backend=vpto --vpto-bridge-policy=%t.policy %s -o %t.o > /dev/null 2>&1
+// RUN: FileCheck %s --check-prefix=HOST < %t.argv.log
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @print_kernel(%tunnel: !pto.ptr<i8, gm>) attributes {pto.kernel} {
+    %f = arith.constant 1.5 : f32
+    pto.print ins("offset = %+08.3f\n", %f : f32)
+    return
+  }
+}
+
+// The print wrapper is compiled as device C++ with CCE print support enabled.
+// WRAPPER: bridge wrapper bitcode compilation failed
+// WRAPPER: Command:
+// WRAPPER-SAME: -xcce
+// WRAPPER-SAME: --cce-enable-print
+// WRAPPER-SAME: -D__CCE_ENABLE_PRINT_FOUND_CANN__
+
+// Both conventions name the hidden slot: with print enabled the CC1 print
+// pass crashes when the trailing .DTData argument is missing. What differs is
+// which value the lifecycle calls bind to, which is settled in the IR.
+// IMPLICIT: define void @print_kernel_mix_aiv(ptr addrspace(1) %{{[0-9]+}}, ptr addrspace(1) %.DTData)
+// IMPLICIT: call void @pto_vpto_print_init__{{[0-9]+}}(ptr addrspace(1) %.DTData)
+
+// EXPLICIT: define void @print_kernel_mix_aiv(ptr addrspace(1) %[[ARG0:[0-9]+]], ptr addrspace(1) %.DTData)
+// EXPLICIT: call void @pto_vpto_print_init__{{[0-9]+}}(ptr addrspace(1) %[[ARG0]])
+
+// Driver mode for the stub, with print enabled and the CC1-only options
+// forwarded, plus the close override compiled and merged.
+// HOST-DAG: ARGV {{.*}}-xcce{{.*}}--cce-enable-print{{.*}}-D__CCE_ENABLE_PRINT_FOUND_CANN__{{.*}}-Xclang -fcce-include-aibinary
+// HOST-DAG: ARGV {{.*}}-xc++{{.*}}ptoas-print-host-source-{{.*}}.cpp

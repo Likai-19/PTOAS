@@ -1,0 +1,10 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// CANN Open Software License Agreement Version 2.0.
+// RUN: pto-test-opt %s --verify-diagnostics
+module {
+  func.func @wrong_object(%local: i32, %extra: i32) {
+    // expected-error @+1 {{op expects 1 argument values, got 2}}
+    %object = pto.bridge.object.create #pto.bridge_entry<pipe_init>(%local, %extra : i32, i32) -> !pto.pipe
+    return
+  }
+}

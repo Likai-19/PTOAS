@@ -1,0 +1,75 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// Print and Pipe in one kernel, under the built-in default policy: the
+// specializations, the instances and the wrapper translation units stay
+// independent, and each core gets only what it calls.
+//
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s -o - 2>/dev/null | FileCheck %s --check-prefix=VPTO
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s -o - 2>/dev/null | FileCheck %s --check-prefix=UNITS
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto-llvm-ir %s -o - 2>/dev/null | FileCheck %s --check-prefix=LLVM
+
+module attributes {pto.target_arch = "a5"} {
+  func.func @print_and_pipe(%out: !pto.ptr<f32, gm>) {
+    %fifo_addr = arith.constant 0 : i32
+    %n = arith.constant 7 : i32
+    pto.section.cube {
+      %pipe = pto.initialize_l2l_pipe{dir_mask = 1, slot_size = 1024, slot_num = 8, flag_base = 0, nosplit = false} (%fifo_addr : i32) -> !pto.pipe
+      %acc = pto.alloc_tile
+        : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>
+      pto.tpush(%acc, %pipe : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>, !pto.pipe) {split = 1}
+      pto.print ins("pushed %d\n", %n : i32)
+    }
+    pto.section.vector {
+      %c0 = arith.constant 0 : i64
+      %c1 = arith.constant 1 : i64
+      %c512 = arith.constant 512 : i64
+      %pipe = pto.initialize_l2l_pipe{dir_mask = 1, slot_size = 1024, slot_num = 8, flag_base = 0, nosplit = false} (%fifo_addr : i32) -> !pto.pipe
+      %tile = pto.declare_tile -> !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=16, v_row=8, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+      pto.tpop(%tile, %pipe : !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=16, v_row=8, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>, !pto.pipe) {split = 1}
+      %ub = pto.tile_buf_addr %tile
+        : !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=16, v_row=8, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+       -> !pto.ptr<f32, ub>
+      pto.mte_ub_gm %ub, %out, %c512 nburst(%c1, %c0, %c0)
+        : !pto.ptr<f32, ub>, !pto.ptr<f32, gm>, i64, i64, i64, i64
+      pto.tfree(%pipe : !pto.pipe) {split = 1}
+      pto.print ins("popped %d\n", %n : i32)
+    }
+    return
+  }
+}
+
+// Each core module keeps its own pipe instances plus its own print instances;
+// a pipe instance carries a pipe spec and a print instance carries none. The
+// DTData lifecycle calls sit at the function entry and returns, outside both
+// sections, so they have no core context and are compiled per referencing core.
+// VPTO: pto.kernel_kind = #pto.kernel_kind<vector>
+// VPTO-DAG: <pipe_pop> core <vector> {spec = #pto.bridge_pipe_spec
+// VPTO-DAG: <pipe_free> core <vector> {spec = #pto.bridge_pipe_spec
+// VPTO-DAG: <print_i64> core <vector>{{$}}
+// VPTO-DAG: <print_init> core <any>{{$}}
+// VPTO-DAG: <print_finish> core <any>{{$}}
+// VPTO-NOT: pipe_push
+// VPTO: pto.kernel_kind = #pto.kernel_kind<cube>
+// VPTO-DAG: <pipe_push> core <cube> {spec = #pto.bridge_pipe_spec
+// VPTO-DAG: <print_i64> core <cube>{{$}}
+// VPTO-DAG: <print_init> core <any>{{$}}
+// VPTO-NOT: pipe_pop
+
+// The pipe and print wrappers are separate translation units, grouped by
+// renderer and core; the core-independent print unit is compiled for every
+// device module present.
+// UNITS-DAG: {core = #pto.bridge_core<cube>, renderer = "pipe"
+// UNITS-DAG: {core = #pto.bridge_core<vector>, renderer = "pipe"
+// UNITS-DAG: {core = #pto.bridge_core<cube>, renderer = "print"
+// UNITS-DAG: {core = #pto.bridge_core<vector>, renderer = "print"
+// UNITS-DAG: {core = #pto.bridge_core<any>, renderer = "print"
+
+// Both families reach the device IR of each core.
+// LLVM-DAG: declare void @pto_vpto_pipe_push__{{[0-9]+}}(ptr, i64)
+// LLVM-DAG: declare i64 @pto_vpto_pipe_pop__{{[0-9]+}}(ptr)
+// LLVM-DAG: declare void @pto_vpto_print_i64__{{[0-9]+}}(ptr addrspace(1), i64)

@@ -1,0 +1,48 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Entries registered for a specific core must resolve in that core's context,
+// and an instance may not contradict its entry.
+// RUN: pto-test-opt %s --split-input-file --vpto-resolve-bridge-instances --verify-diagnostics
+
+module {
+  func.func @wrong_section(%dst: i64, %lhs: i64, %rhs: i64) {
+    pto.section.vector {
+      // expected-error @+1 {{bridge entry 'cube.tmatmul' requires core 'cube', but its context is 'vector'}}
+      pto.bridge.call #pto.bridge_entry<cube_tmatmul>(%dst, %lhs, %rhs : i64, i64, i64)
+        {spec = #pto.bridge_cube_spec<dst = <<acc, 16x16xf32>>, lhs = <<left, 16x16xf16>>, rhs = <<right, 16x16xf16>>, accPhase = unspecified>}
+    }
+    return
+  }
+}
+
+// -----
+module {
+  func.func @no_core(%dst: i64, %lhs: i64, %rhs: i64) {
+    // expected-error @+1 {{bridge entry 'cube.tmatmul' requires core 'cube', but its context is 'none'}}
+    pto.bridge.call #pto.bridge_entry<cube_tmatmul>(%dst, %lhs, %rhs : i64, i64, i64)
+      {spec = #pto.bridge_cube_spec<dst = <<acc, 16x16xf32>>, lhs = <<left, 16x16xf16>>, rhs = <<right, 16x16xf16>>, accPhase = unspecified>}
+    return
+  }
+}
+
+// -----
+module {
+  // expected-error @+1 {{entry 'cube.tmatmul' requires core 'cube', got 'vector'}}
+  pto.bridge.instance @bad <cube_tmatmul> core <vector> {spec = #pto.bridge_cube_spec<dst = <<acc, 16x16xf32>>, lhs = <<left, 16x16xf16>>, rhs = <<right, 16x16xf16>>, accPhase = unspecified>}
+}
+
+// -----
+module {
+  pto.bridge.instance @pto_vpto_pipe_free__0 <pipe_free> core <vector> {spec = #pto.bridge_pipe_spec<dirMask = 1, slotSize = 1024, slotNum = 8, localSlotNum = 2, flagBase = 0, nosplit = false>}
+  func.func @entry_mismatch(%p: !pto.pipe) {
+    // expected-error @+1 {{entry differs from bridge instance @pto_vpto_pipe_free__0}}
+    pto.bridge.call #pto.bridge_entry<pipe_pop>(%p : !pto.pipe) {instance = @pto_vpto_pipe_free__0} -> i64
+    return
+  }
+}

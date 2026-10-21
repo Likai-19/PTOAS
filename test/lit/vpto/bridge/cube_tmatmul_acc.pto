@@ -1,0 +1,47 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// A second Cube operation on the direct path. It keeps its accumulator and
+// destination apart, so it has one more operand than the plain matmul and its
+// own entry, while sharing the operand collection and the tile specs.
+//
+// RUN: echo 'version: 1' > %t.policy
+// RUN: echo 'families:' >> %t.policy
+// RUN: echo '  cube: { enabled_ops: [pto.tmatmul.acc] }' >> %t.policy
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --vpto-bridge-policy=%t.policy --emit-vpto %s -o - 2>/dev/null | FileCheck %s --check-prefix=VPTO
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --vpto-bridge-policy=%t.policy --emit-vpto %s -o - 2>/dev/null | FileCheck %s --check-prefix=WRAPPER
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s -o - 2>/dev/null | FileCheck %s --check-prefix=UNROUTED
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<cube>} {
+  func.func @tmatmul_accumulate() attributes {pto.kernel} {
+    %lhs = pto.alloc_tile : !pto.tile_buf<loc=left, dtype=f16, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+    %rhs = pto.alloc_tile : !pto.tile_buf<loc=right, dtype=f16, rows=16, cols=16, v_row=16, v_col=16, blayout=row_major, slayout=col_major, fractal=512, pad=0>
+    %acc = pto.alloc_tile : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>
+    %dst = pto.alloc_tile : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>
+    pto.tmatmul.acc ins(%acc, %lhs, %rhs : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>, !pto.tile_buf<loc=left, dtype=f16, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=512, pad=0>, !pto.tile_buf<loc=right, dtype=f16, rows=16, cols=16, v_row=16, v_col=16, blayout=row_major, slayout=col_major, fractal=512, pad=0>)
+                    outs(%dst : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>)
+                    {accPhase = #pto<acc_phase final>}
+    return
+  }
+}
+
+// The spec carries the accumulator alongside the usual three tiles.
+// VPTO: pto.bridge.instance @[[I:pto_vpto_tmatmul_acc__[0-9]+]] <cube_tmatmul_acc> core <cube>
+// VPTO-SAME: accPhase = final
+// VPTO-SAME: accIn = <<acc, 16x16xf32
+// VPTO-NOT: pto.tmatmul.acc
+// VPTO: pto.bridge.call <cube_tmatmul_acc>(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}} : i64, i64, i64, i64)
+// VPTO-SAME: instance = @[[I]]
+
+// Four addresses in the PTO-ISA call order, and the accumulate call spelling.
+// WRAPPER: renderer = "cube_direct"
+// WRAPPER-SAME: void pto_vpto_tmatmul_acc__0(uint64_t dstAddress, uint64_t accAddress, uint64_t lhsAddress, uint64_t rhsAddress)
+// WRAPPER-SAME: using AccIn = pto::Tile<pto::TileType::Acc, float, 16, 16,
+// WRAPPER-SAME: pto::TMATMUL_ACC<pto::AccPhase::Final>(dst, accIn, lhs, rhs);
+
+// UNROUTED-NOT: pto.bridge
+// UNROUTED-NOT: pto_vpto_tmatmul_acc

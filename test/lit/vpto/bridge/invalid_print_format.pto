@@ -1,0 +1,58 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// The value type and the format's conversion must agree, and a 64-bit integer
+// needs a 64-bit length modifier or the host decoder reads the wrong width.
+//
+// RUN: echo 'version: 1' > %t.policy
+// RUN: echo 'families:' >> %t.policy
+// RUN: echo '  print: { enabled_ops: [pto.print] }' >> %t.policy
+// RUN: pto-test-opt %s "--pto-lower-bridge-ops=policy-path=%t.policy" --split-input-file --verify-diagnostics
+
+module {
+  func.func @wide_without_modifier(%w: i64) {
+    // expected-error @+1 {{print format for a 64-bit integer needs a 64-bit length modifier, as in %lld}}
+    pto.print ins("n = %d", %w : i64)
+    return
+  }
+}
+
+// -----
+module {
+  func.func @float_value_integer_format(%f: f32) {
+    // expected-error @+1 {{print format expects an integer conversion but the value is 'f32'}}
+    pto.print ins("n = %d", %f : f32)
+    return
+  }
+}
+
+// -----
+module {
+  func.func @integer_value_float_format(%i: i32) {
+    // expected-error @+1 {{print format expects a float conversion but the value is 'i32'}}
+    pto.print ins("x = %f", %i : i32)
+    return
+  }
+}
+
+// -----
+module {
+  func.func @two_conversions(%f: f32) {
+    // expected-error @+1 {{must hold exactly one supported conversion specifier}}
+    pto.print ins("%f %f", %f : f32)
+    return
+  }
+}
+
+// -----
+module {
+  func.func @no_conversion(%f: f32) {
+    // expected-error @+1 {{must hold exactly one supported conversion specifier}}
+    pto.print ins("literal only", %f : f32)
+    return
+  }
+}

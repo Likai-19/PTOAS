@@ -1,0 +1,30 @@
+// RUN: pto-test-opt %s --pto-lower-bridge-ops --split-input-file --verify-diagnostics
+
+module {
+  func.func @missing_address() {
+    %tile = pto.alloc_tile : !pto.tile_buf<vec, 2x8xf32>
+    // expected-error @+1 {{tprint bridge requires an alloc_tile with a planned i64 address}}
+    pto.tprint ins(%tile : !pto.tile_buf<vec, 2x8xf32>)
+    return
+  }
+}
+
+// -----
+module {
+  func.func @column_major(%address: i64) {
+    %tile = pto.alloc_tile addr = %address : !pto.tile_buf<vec, 8x8xf32, blayout=col_major>
+    // expected-error @+1 {{tprint bridge supports only ND row-major Vec tiles}}
+    pto.tprint ins(%tile : !pto.tile_buf<vec, 8x8xf32, blayout=col_major>)
+    return
+  }
+}
+
+// -----
+module {
+  func.func @dynamic_valid(%address: i64, %rows: index) {
+    %tile = pto.alloc_tile addr = %address valid_row = %rows : !pto.tile_buf<loc=vec, dtype=f32, rows=2, cols=8, v_row=?, v_col=8, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    // expected-error @+1 {{tprint bridge requires static valid dimensions}}
+    pto.tprint ins(%tile : !pto.tile_buf<loc=vec, dtype=f32, rows=2, cols=8, v_row=?, v_col=8, blayout=row_major, slayout=none_box, fractal=512, pad=0>)
+    return
+  }
+}

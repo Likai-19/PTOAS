@@ -119,6 +119,8 @@ struct PTOASCompileResult {
   void reset() {
     textOutput.clear();
     vptoStubSource.clear();
+    vptoBridgeWrappers.clear();
+    vptoPrintMode = PrintDTDataMode::None;
     vptoCubeModule.reset();
     vptoVectorModule.reset();
     kind = PTOASCompileResultKind::Text;
@@ -127,6 +129,10 @@ struct PTOASCompileResult {
   PTOASCompileResultKind kind = PTOASCompileResultKind::Text;
   std::string textOutput;
   std::string vptoStubSource;
+  // Bridge wrapper translation units to compile and link into the device
+  // modules; empty whenever no bridge instance was routed.
+  std::vector<BridgeWrapperTU> vptoBridgeWrappers;
+  PrintDTDataMode vptoPrintMode = PrintDTDataMode::None;
   EmittedLLVMModule vptoCubeModule;
   EmittedLLVMModule vptoVectorModule;
 };

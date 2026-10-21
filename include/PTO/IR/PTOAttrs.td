@@ -41,6 +41,44 @@ class PTO_Attr<string attrName, string attrMnemonic, list<Trait> traits = []>
 include "PTO/IR/VMIAttrs.td"
 include "PTO/IR/PTOGenericAttrs.td"
 
+// Logical bridge entries are compiler-owned IDs. Route policy may select an
+// operation, but it cannot redefine this ABI contract or its renderer.
+def PTO_BridgeEntryEnum : PTO_I32Enum<
+  "BridgeEntry", "VPTO bridge logical entry", [
+    I32EnumAttrCase<"PipeInit", 0, "pipe_init">,
+    I32EnumAttrCase<"PipePush", 2, "pipe_push">,
+    I32EnumAttrCase<"PipePop", 3, "pipe_pop">,
+    I32EnumAttrCase<"PipeFree", 4, "pipe_free">,
+    I32EnumAttrCase<"CubeTMatmul", 5, "cube_tmatmul">,
+    I32EnumAttrCase<"CubeTMatmulAcc", 12, "cube_tmatmul_acc">,
+    I32EnumAttrCase<"PrintF32", 6, "print_f32">,
+    I32EnumAttrCase<"PrintI64", 7, "print_i64">,
+    I32EnumAttrCase<"PrintU64", 8, "print_u64">,
+    I32EnumAttrCase<"PrintString", 9, "print_string">,
+    I32EnumAttrCase<"PrintInit", 10, "print_init">,
+    I32EnumAttrCase<"PrintFinish", 11, "print_finish">
+  ]>;
+
+def PTO_BridgeEntryAttr : EnumAttr<PTO_Dialect, PTO_BridgeEntryEnum,
+                                   "bridge_entry"> {
+  let assemblyFormat = "`<` params `>`";
+}
+
+// Core of a resolved bridge instance. Registry entries declare the core they
+// require; Any entries take the core of their context when one exists.
+def PTO_BridgeCoreKindEnum : PTO_I32Enum<
+  "BridgeCoreKind", "VPTO bridge instance core", [
+    I32EnumAttrCase<"Any", 0, "any">,
+    I32EnumAttrCase<"Vector", 1, "vector">,
+    I32EnumAttrCase<"Cube", 2, "cube">
+  ]>;
+
+def PTO_BridgeCoreKindAttr : EnumAttr<PTO_Dialect, PTO_BridgeCoreKindEnum,
+                                      "bridge_core"> {
+  let assemblyFormat = "`<` params `>`";
+}
+
+
 //===----------------------------------------------------------------------===//
 // Address Space
 //===----------------------------------------------------------------------===//
@@ -1002,6 +1040,49 @@ def PTO_AccPhaseEnum : PTO_I32Enum<
 def PTO_AccPhaseAttr : EnumAttr<PTO_Dialect, PTO_AccPhaseEnum, "acc_phase"> {
   let summary = "TMATMUL / TMATMUL_ACC accumulation phase attribute";
 }
+
+// Bridge specializations stay structured until WrapperGen renders C++ tokens.
+// Equal specs are equal uniqued attributes, which is the instance identity.
+def PTO_BridgeTileSpecAttr : PTO_Attr<"BridgeTileSpec", "bridge_tile_spec"> {
+  let summary = "Tile facts of one bridge operand (kind, dtype, shapes, layout)";
+  let parameters = (ins "mlir::pto::TileBufType":$tile);
+  let assemblyFormat = "`<` $tile `>`";
+  let genVerifyDecl = 1;
+}
+
+def PTO_BridgePipeSpecAttr : PTO_Attr<"BridgePipeSpec", "bridge_pipe_spec"> {
+  let summary = "Pipe object specialization shared by its whole lifecycle";
+  let parameters = (ins
+    "int32_t":$dirMask,
+    "int32_t":$slotSize,
+    "int32_t":$slotNum,
+    "int32_t":$localSlotNum,
+    "int32_t":$flagBase,
+    "mlir::BoolAttr":$nosplit,
+    OptionalParameter<"std::optional<int32_t>">:$split,
+    OptionalParameter<"mlir::pto::BridgeTileSpecAttr">:$producer,
+    OptionalParameter<"mlir::pto::BridgeTileSpecAttr">:$consumer
+  );
+  let assemblyFormat = "`<` struct(params) `>`";
+  let genVerifyDecl = 1;
+}
+
+def PTO_BridgeCubeSpecAttr : PTO_Attr<"BridgeCubeSpec", "bridge_cube_spec"> {
+  let summary = "Direct Cube specialization: destination, operands and phase";
+  let parameters = (ins
+    "mlir::pto::BridgeTileSpecAttr":$dst,
+    "mlir::pto::BridgeTileSpecAttr":$lhs,
+    "mlir::pto::BridgeTileSpecAttr":$rhs,
+    "mlir::pto::AccPhaseAttr":$accPhase,
+    // Present for the accumulate form, whose destination and accumulator are
+    // separate tiles.
+    OptionalParameter<"mlir::pto::BridgeTileSpecAttr">:$accIn
+  );
+  let assemblyFormat = "`<` struct(params) `>`";
+  let genVerifyDecl = 1;
+}
+
+def PTO_BridgeSpecAttr : AnyAttrOf<[PTO_BridgePipeSpecAttr, PTO_BridgeCubeSpecAttr]>;
 
 def PTO_AtomicTypeEnum : PTO_I32Enum<
   "AtomicType", "PTO TSTORE atomic mode", [

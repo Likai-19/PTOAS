@@ -460,6 +460,14 @@ void applyArtifactVisibilityLinkage(ModuleOp sourceModule, llvm::Module &llvmMod
     if (funcOp.isExternal()) {
       return;
     }
+    if (auto hidden = funcOp->getAttrOfType<IntegerAttr>("pto.print_dtdata_index")) {
+      if (auto *function = llvmModule.getFunction(funcOp.getSymName())) {
+        const unsigned index = hidden.getInt();
+        if (index < function->arg_size()) {
+          function->getArg(index)->setName(".DTData");
+        }
+      }
+    }
     // Keep applyFuncSpecifiers' precedence exactly: entry, then private, then
     // the explicit external marker. The order only matters for a function
     // carrying both `private` and `pto.visibility = "external"` --
@@ -588,6 +596,9 @@ static LogicalResult runPipeline(ModuleOp module, StringRef march, llvm::raw_ost
   PassManager pm(clonedModule.getContext());
   pm.enableVerifier();
   auto &kernelModulePM = pm.nest<ModuleOp>();
+  // Structured bridge IR survives every mid-level pass; it becomes func.call
+  // only inside each per-core kernel module, before VPTO ops are lowered.
+  kernelModulePM.addPass(pto::createVPTOBridgeCallLoweringPass());
   kernelModulePM.addPass(std::make_unique<PrepareVPTOLLVMLoweringPass>());
   kernelModulePM.addPass(std::make_unique<LowerVPTOOpsPass>(march.str()));
   kernelModulePM.addPass(std::make_unique<LowerVPTOTypesPass>());

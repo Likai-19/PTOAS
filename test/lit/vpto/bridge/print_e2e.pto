@@ -1,0 +1,63 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// ptoas-driven Print bridge. A print-only kernel has no tile ops, so it takes
+// the VPTO path that skips the mainline pipeline; the bridge has to run there
+// too. The DTData convention is selected explicitly, not inferred.
+//
+// RUN: echo 'version: 1' > %t.policy
+// RUN: echo 'families:' >> %t.policy
+// RUN: echo '  print: { enabled_ops: [pto.print] }' >> %t.policy
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --vpto-bridge-policy=%t.policy --emit-vpto %s -o - 2>/dev/null | FileCheck %s --check-prefix=VPTO
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --vpto-bridge-policy=%t.policy --emit-vpto-llvm-ir %s -o - 2>/dev/null | FileCheck %s --check-prefix=LLVM
+//
+// Explicit delivery binds the lifecycle to the kernel's first argument, which
+// the host runner fills; the hidden slot is still appended for the device
+// compile.
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --vpto-bridge-policy=%t.policy --vpto-print-dtdata=explicit --emit-vpto %s -o - 2>/dev/null | FileCheck %s --check-prefix=EXPLICIT
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @print_kernel(%tunnel: !pto.ptr<i8, gm>) attributes {pto.kernel} {
+    %f = arith.constant 1.5 : f32
+    %n = arith.constant 64 : i32
+    pto.print ins("offset = %+08.3f\n", %f : f32)
+    pto.print ins("n = %d\n", %n : i32)
+    return
+  }
+}
+
+// One instance per entry on the kernel's core, including the lifecycle pair.
+// VPTO-DAG: pto.bridge.instance @{{.*}} <print_init> core <vector>
+// VPTO-DAG: pto.bridge.instance @{{.*}} <print_f32> core <vector>
+// VPTO-DAG: pto.bridge.instance @{{.*}} <print_i64> core <vector>
+// VPTO-DAG: pto.bridge.instance @{{.*}} <print_finish> core <vector>
+// Implicit delivery: the hidden trailing argument carries the pointer.
+// VPTO: func.func @print_kernel(%arg0: !pto.ptr<i8, gm>, %[[DT:.*]]: !llvm.ptr<1>)
+// VPTO: pto.bridge.call <print_init>(%[[DT]] : !llvm.ptr<1>)
+// VPTO: pto.bridge.call <print_f32>
+// VPTO: pto.bridge.call <print_i64>
+// VPTO: pto.bridge.call <print_finish>(%[[DT]] : !llvm.ptr<1>)
+// VPTO-NOT: pto.print
+
+// Format strings are interned addrspace(1) constants and the device calls are
+// fixed-prototype, not variadic.
+// LLVM-DAG: @[[F0:pto_vpto_print_fmt_[0-9]+]] = private addrspace(1) constant [18 x i8] c"offset = %+08.3f\0A\00"
+// LLVM-DAG: @[[F1:pto_vpto_print_fmt_[0-9]+]] = private addrspace(1) constant [8 x i8] c"n = %d\0A\00"
+// LLVM-DAG: declare void @[[INIT:pto_vpto_print_init__[0-9]+]](ptr addrspace(1))
+// LLVM-DAG: declare void @[[F32:pto_vpto_print_f32__[0-9]+]](ptr addrspace(1), float)
+// LLVM-DAG: declare void @[[I64:pto_vpto_print_i64__[0-9]+]](ptr addrspace(1), i64)
+// LLVM-DAG: declare void @[[FIN:pto_vpto_print_finish__[0-9]+]](ptr addrspace(1))
+// LLVM: define void @print_kernel_mix_aiv(ptr addrspace(1) %0, ptr addrspace(1) %.DTData)
+// LLVM: call void @[[INIT]](ptr addrspace(1) %.DTData)
+// LLVM: call void @[[F32]](ptr addrspace(1) @[[F0]], float
+// LLVM: call void @[[I64]](ptr addrspace(1) @[[F1]], i64
+// LLVM: call void @[[FIN]](ptr addrspace(1) %.DTData)
+
+// Explicit: the lifecycle binds to the first argument, and the hidden slot is
+// still present.
+// EXPLICIT: func.func @print_kernel(%arg0: !pto.ptr<i8, gm>, %{{.*}}: !llvm.ptr<1>)
+// EXPLICIT: pto.bridge.call <print_init>(%arg0 : !pto.ptr<i8, gm>)

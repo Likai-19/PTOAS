@@ -1,0 +1,38 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Object storage is a fixed-size, fixed-alignment alloca in the function entry
+// block (registry storage contract); there is no runtime size entry. Objects
+// with equal specs share one init instance, and a create inside a loop does
+// not allocate per iteration.
+// RUN: pto-test-opt %s --vpto-resolve-bridge-instances --vpto-bridge-call-lowering | FileCheck %s --implicit-check-not=pipe_size
+module attributes {pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @objects(%local: i32, %n: index) {
+    %a = pto.bridge.object.create #pto.bridge_entry<pipe_init>(%local : i32) {spec = #pto.bridge_pipe_spec<dirMask = 1, slotSize = 1024, slotNum = 8, localSlotNum = 2, flagBase = 0, nosplit = false>} -> !pto.pipe
+    %b = pto.bridge.object.create #pto.bridge_entry<pipe_init>(%local : i32) {spec = #pto.bridge_pipe_spec<dirMask = 1, slotSize = 1024, slotNum = 8, localSlotNum = 2, flagBase = 0, nosplit = false>} -> !pto.pipe
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    scf.for %i = %c0 to %n step %c1 {
+      %c = pto.bridge.object.create #pto.bridge_entry<pipe_init>(%local : i32) {spec = #pto.bridge_pipe_spec<dirMask = 1, slotSize = 2048, slotNum = 8, localSlotNum = 2, flagBase = 0, nosplit = false>} -> !pto.pipe
+    }
+    return
+  }
+}
+// CHECK-LABEL: func.func @objects
+// CHECK: %[[SIZE2:.*]] = llvm.mlir.constant(256 : i64) : i64
+// CHECK: %[[S2:.*]] = llvm.alloca %[[SIZE2]] x i8 {alignment = 32 : i64}
+// CHECK: %[[SIZE1:.*]] = llvm.mlir.constant(256 : i64) : i64
+// CHECK: %[[S1:.*]] = llvm.alloca %[[SIZE1]] x i8 {alignment = 32 : i64}
+// CHECK: %[[SIZE0:.*]] = llvm.mlir.constant(256 : i64) : i64
+// CHECK: %[[S0:.*]] = llvm.alloca %[[SIZE0]] x i8 {alignment = 32 : i64}
+// CHECK: call @pto_vpto_pipe_init__0(%[[S0]], %arg0)
+// CHECK: call @pto_vpto_pipe_init__0(%[[S1]], %arg0)
+// CHECK: scf.for
+// CHECK-NOT: llvm.alloca
+// CHECK: call @pto_vpto_pipe_init__1(%[[S2]], %arg0)
+// CHECK: }

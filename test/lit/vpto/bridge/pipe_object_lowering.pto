@@ -1,0 +1,27 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF
+// CONDITIONS OF ANY KIND, either express or implied.
+
+// RUN: pto-test-opt %s --pto-lower-bridge-ops --vpto-resolve-bridge-instances --vpto-bridge-call-lowering | FileCheck %s
+module {
+  func.func @consumer(%local: i32) attributes {pto.kernel_kind = #pto.kernel_kind<vector>} {
+    %pipe = pto.initialize_l2l_pipe {dir_mask = 1, slot_size = 1024, slot_num = 8, flag_base = 0}(%local : i32) -> !pto.pipe
+    %tile = pto.declare_tile -> !pto.tile_buf<vec, 16x16xf32>
+    pto.tpop(%tile, %pipe : !pto.tile_buf<vec, 16x16xf32>, !pto.pipe) {split = 0}
+    pto.tfree(%pipe : !pto.pipe) {split = 0}
+    return
+  }
+}
+
+// CHECK: func.func private @pto_vpto_pipe_init__0(!llvm.ptr, i32)
+// CHECK-LABEL: func.func @consumer
+// CHECK: %[[SIZE:.*]] = llvm.mlir.constant(256 : i64) : i64
+// CHECK: %[[STORAGE:.*]] = llvm.alloca %[[SIZE]] x i8 {alignment = 32 : i64}
+// CHECK: call @pto_vpto_pipe_init__0(%[[STORAGE]], %{{.*}}) : (!llvm.ptr, i32) -> ()
+// The object handle is replaced by its storage pointer; no !pto.pipe cast.
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK: call @pto_vpto_pipe_pop__1(%[[STORAGE]]) : (!llvm.ptr) -> i64
+// CHECK: call @pto_vpto_pipe_free__2(%[[STORAGE]]) : (!llvm.ptr) -> ()

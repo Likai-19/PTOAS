@@ -12,6 +12,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
+#include "PTO/Transforms/VPTOBridgeTokens.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/STLExtras.h"
 
@@ -269,6 +270,20 @@ static void replaceSectionWithBody(Operation *sectionOp) {
   sectionOp->erase();
 }
 
+/// Keep only the bridge instances still referenced by this core's code; an
+/// instance used only by the other core's sections must not be compiled here.
+static void eraseUnreferencedBridgeInstances(ModuleOp module) {
+  SmallVector<BridgeInstanceOp> unused;
+  for (BridgeInstanceOp instance : module.getOps<BridgeInstanceOp>()) {
+    if (SymbolTable::symbolKnownUseEmpty(instance, module)) {
+      unused.push_back(instance);
+    }
+  }
+  for (BridgeInstanceOp instance : unused) {
+    instance.erase();
+  }
+}
+
 static void rewriteSectionsForKind(ModuleOp module, FunctionKernelKind kind) {
   SmallVector<Operation *> eraseSections;
   SmallVector<Operation *> inlineSections;
@@ -297,6 +312,7 @@ static void rewriteSectionsForKind(ModuleOp module, FunctionKernelKind kind) {
   if (!eraseSections.empty() || !inlineSections.empty()) {
     eraseUnusedSimtEntries(module);
   }
+  eraseUnreferencedBridgeInstances(module);
 }
 
 static ModuleOp cloneModuleForKind(ModuleOp source, FunctionKernelKind kind,
@@ -307,6 +323,9 @@ static ModuleOp cloneModuleForKind(ModuleOp source, FunctionKernelKind kind,
   cloned->removeAttr(SymbolTable::getSymbolAttrName());
   cloned->setAttr(FunctionKernelKindAttr::name,
                   FunctionKernelKindAttr::get(cloned.getContext(), kind));
+  // Wrapper translation units describe the whole compilation and are consumed
+  // by object emission from the container, not from a core module.
+  cloned->removeAttr(kBridgeWrapperSourceAttrName);
   eraseSectionSplitCandidatesWithoutSectionKind(cloned, kind);
   rewriteSectionsForKind(cloned, kind);
   builder.insert(cloned);

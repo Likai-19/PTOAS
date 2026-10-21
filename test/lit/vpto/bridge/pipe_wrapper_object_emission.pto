@@ -1,0 +1,66 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// Object emission compiles each wrapper translation unit for its own core and
+// links the bitcode into that core's device IR with the toolchain's llvm-link.
+// A stub toolchain stands in for Bisheng; a stub reports its argv only when it
+// fails, so the two steps are checked in two runs.
+//
+// RUN: mkdir -p %t.cann/bin %t.cann/tools/bisheng_compiler/bin
+// RUN: printf '#!/bin/sh\nexit 1\n' > %t.cann/bin/bisheng
+// RUN: chmod +x %t.cann/bin/bisheng
+// RUN: cp %t.cann/bin/bisheng %t.cann/bin/cce-ld
+// RUN: cp %t.cann/bin/bisheng %t.cann/bin/ld.lld
+// RUN: cp %t.cann/bin/bisheng %t.cann/tools/bisheng_compiler/bin/bisheng
+// RUN: cp %t.cann/bin/bisheng %t.cann/tools/bisheng_compiler/bin/llvm-link
+// RUN: not env ASCEND_HOME_PATH=%t.cann ptoas --pto-arch=a5 --pto-backend=vpto %s -o %t.o 2>&1 | FileCheck %s --check-prefix=WRAPPER --implicit-check-not=--cce-enable-print
+//
+// Now let the wrapper compile succeed so the link step is reached.
+// RUN: printf '#!/bin/sh\nprev=""\nfor a in "$@"; do if [ "$prev" = "-o" ]; then : > "$a"; fi; prev="$a"; done\nexit 0\n' > %t.cann/bin/bisheng
+// RUN: chmod +x %t.cann/bin/bisheng
+// RUN: cp %t.cann/bin/bisheng %t.cann/tools/bisheng_compiler/bin/bisheng
+// RUN: not env ASCEND_HOME_PATH=%t.cann ptoas --pto-arch=a5 --pto-backend=vpto %s -o %t.o 2>&1 | FileCheck %s --check-prefix=LINK
+
+module attributes {pto.target_arch = "a5"} {
+  func.func @pipe_wrapper(%out: !pto.ptr<f32, gm>) {
+    %fifo_addr = arith.constant 0 : i32
+    pto.section.cube {
+      %pipe = pto.initialize_l2l_pipe{dir_mask = 1, slot_size = 1024, slot_num = 8, flag_base = 0, nosplit = false} (%fifo_addr : i32) -> !pto.pipe
+      %acc = pto.alloc_tile
+        : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>
+      pto.tpush(%acc, %pipe : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>, !pto.pipe) {split = 1}
+    }
+    pto.section.vector {
+      %c0 = arith.constant 0 : i64
+      %c1 = arith.constant 1 : i64
+      %c512 = arith.constant 512 : i64
+      %pipe = pto.initialize_l2l_pipe{dir_mask = 1, slot_size = 1024, slot_num = 8, flag_base = 0, nosplit = false} (%fifo_addr : i32) -> !pto.pipe
+      %tile = pto.declare_tile -> !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=16, v_row=8, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+      pto.tpop(%tile, %pipe : !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=16, v_row=8, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>, !pto.pipe) {split = 1}
+      %ub = pto.tile_buf_addr %tile
+        : !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=16, v_row=8, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+       -> !pto.ptr<f32, ub>
+      pto.mte_ub_gm %ub, %out, %c512 nburst(%c1, %c0, %c0)
+        : !pto.ptr<f32, ub>, !pto.ptr<f32, gm>, i64, i64, i64, i64
+      pto.tfree(%pipe : !pto.pipe) {split = 1}
+    }
+    return
+  }
+}
+
+// The wrapper is compiled as device C++ for its own core, with the same
+// include dirs and macros a hand-written PTO-ISA wrapper needs.
+// WRAPPER: bridge wrapper bitcode compilation failed
+// WRAPPER: Command:
+// WRAPPER-SAME: -xcce
+// WRAPPER-SAME: --cce-aicore-arch=dav-c310-cube
+// WRAPPER-SAME: -DREGISTER_BASE
+
+// The bitcode is then linked into that core's device IR, not compiled separately.
+// LINK: bridge wrapper bitcode linking failed
+// LINK: Command:
+// LINK-SAME: llvm-link -S {{[^ ]*}}ptoas-device-{{[^ ]*}}.ll {{[^ ]*}}ptoas-vpto-bridge-wrapper-{{[^ ]*}}.bc -o {{[^ ]*}}ptoas-device-bridge-linked-{{[^ ]*}}.ll

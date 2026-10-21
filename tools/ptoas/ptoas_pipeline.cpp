@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ptoas_internal.h"
+#include "PTO/Transforms/VPTOBridgeTokens.h"
 
 #include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
@@ -878,34 +879,92 @@ buildVPTOEmissionOptions(const pto::CANNVersion &cannVersion,
   return options;
 }
 
-static int emitVPTOBackendResult(ModuleOp module, PTOASCompileResult &result,
-                                 bool emitHostStub,
-                                 const pto::CANNVersion &cannVersion) {
+// Moves the wrapper translation units rendered by VPTOBridgeWrapperGen off the
+// module and into the compile result, mapping each unit's core to its device
+// target. A core-independent unit keeps no target and is compiled for every
+// device module present.
+static std::vector<pto::BridgeWrapperTU> takeBridgeWrapperTUs(ModuleOp module) {
+  std::vector<pto::BridgeWrapperTU> wrappers;
+  auto units =
+      module->getAttrOfType<ArrayAttr>(pto::kBridgeWrapperSourceAttrName);
+  if (!units) {
+    return wrappers;
+  }
+  for (Attribute unit : units) {
+    auto fields = cast<DictionaryAttr>(unit);
+    auto source = fields.getAs<StringAttr>("source");
+    auto core = fields.getAs<pto::BridgeCoreKindAttr>("core");
+    auto renderer = fields.getAs<StringAttr>("renderer");
+    pto::BridgeWrapperTU wrapper;
+    wrapper.source = source.getValue().str();
+    wrapper.needsPrintSupport = renderer.getValue() == "print";
+    switch (core.getValue()) {
+    case pto::BridgeCoreKind::Cube:
+      wrapper.core = pto::ObjectEmissionDeviceTarget::Cube;
+      break;
+    case pto::BridgeCoreKind::Vector:
+      wrapper.core = pto::ObjectEmissionDeviceTarget::Vector;
+      break;
+    case pto::BridgeCoreKind::Any:
+      break;
+    }
+    wrappers.push_back(std::move(wrapper));
+  }
+  module->removeAttr(pto::kBridgeWrapperSourceAttrName);
+  return wrappers;
+}
+
+// Moves the wrapper units off the module and records whether this compilation
+// prints, together with the delivery convention the CLI selected.
+static void takeBridgeArtifacts(ModuleOp module, PTOASCompileResult &result) {
+  // The wrapper units are a compilation artifact, not part of the emitted IR.
+  result.vptoBridgeWrappers = takeBridgeWrapperTUs(module);
+  const bool printsAnywhere =
+      llvm::any_of(result.vptoBridgeWrappers,
+                   [](const pto::BridgeWrapperTU &wrapper) {
+                     return wrapper.needsPrintSupport;
+                   });
+  if (!printsAnywhere) {
+    return;
+  }
+  result.vptoPrintMode = vptoPrintDTData == "explicit"
+                             ? pto::PrintDTDataMode::Explicit
+                             : pto::PrintDTDataMode::Implicit;
+}
+
+static int emitVPTOTextResult(ModuleOp module, PTOASCompileResult &result,
+                              const pto::CANNVersion &cannVersion) {
+  result.kind = PTOASCompileResultKind::Text;
   if (emitVPTO) {
-    result.kind = PTOASCompileResultKind::Text;
     llvm::raw_string_ostream os(result.textOutput);
     module.print(os);
     os << "\n";
     os.flush();
     return 0;
   }
+  pto::VPTOEmissionOptions options = buildVPTOEmissionOptions(
+      cannVersion, resolveEffectiveTargetArch(module, ptoTargetArch));
+  if (failed(pto::lowerVPTOModuleToLLVMIRText(module, options,
+                                              result.textOutput,
+                                              llvm::errs()))) {
+    llvm::errs() << "Error: Failed to lower VPTO to LLVM IR.\n";
+    return 1;
+  }
+  return 0;
+}
 
-  if (emitVPTOLLVMDialect) {
-    result.kind = PTOASCompileResultKind::Text;
-    pto::VPTOEmissionOptions options =
-        buildVPTOEmissionOptions(
-            cannVersion, resolveEffectiveTargetArch(module, ptoTargetArch));
-    if (failed(pto::lowerVPTOModuleToLLVMIRText(
-            module, options, result.textOutput, llvm::errs()))) {
-      llvm::errs() << "Error: Failed to lower VPTO to LLVM IR.\n";
-      return 1;
-    }
-    return 0;
+static int emitVPTOBackendResult(ModuleOp module, PTOASCompileResult &result,
+                                 bool emitHostStub,
+                                 const pto::CANNVersion &cannVersion) {
+  if (emitVPTO || emitVPTOLLVMDialect) {
+    return emitVPTOTextResult(module, result, cannVersion);
   }
 
   pto::VPTOEmissionOptions options =
       buildVPTOEmissionOptions(
           cannVersion, resolveEffectiveTargetArch(module, ptoTargetArch));
+  takeBridgeArtifacts(module, result);
+
   std::string stubSource;
   if (emitHostStub) {
     if (failed(pto::emitVPTOHostStubSource(module, stubSource, llvm::errs()))) {
@@ -1442,6 +1501,19 @@ static void appendSyncOraclePasses(PassManager &pm, const CompilePipelineState &
 }
 
 // Populates the shared mainline lowering pass sequence (both backends).
+// Route, resolve and render the C++ bridge. Both VPTO entry paths append
+// this, and both do so before the CV split: the split clones the instances
+// each core still references, and the print DTData wiring has to reach both
+// core modules.
+static void appendVPTOBridgePasses(OpPassManager &pm) {
+  pm.addPass(pto::createPTOLowerBridgeOpsPass(vptoBridgePolicy));
+  // DTData wiring precedes instance resolution so the lifecycle calls get
+  // their instances like any other bridge call.
+  pm.addPass(pto::createVPTOPrintDTDataABIPass(vptoPrintDTData));
+  pm.addPass(pto::createVPTOResolveBridgeInstancesPass());
+  pm.addPass(pto::createVPTOBridgeWrapperGenPass());
+}
+
 static LogicalResult populateMainLoweringPasses(PassManager &pm,
                                                 PTOBackend effectiveBackend,
                                                 const CompilePipelineState &state) {
@@ -1504,6 +1576,9 @@ static LogicalResult populateMainLoweringPasses(PassManager &pm,
   // Materialize each `pto.multi_tile_get` as an addressed `pto.alloc_tile`;
   // dynamic selections use an `arith.select` chain over planned addresses.
   pm.addPass(pto::createPTOResolveBufferSelectPass());
+  if (effectiveBackend == PTOBackend::VPTO) {
+    appendVPTOBridgePasses(pm);
+  }
   if (effectiveBackend == PTOBackend::EmitC) {
     pm.addPass(createNarrowUnusedMultiResultProvenancePass());
   }
@@ -1617,6 +1692,18 @@ static int runVPTOSkipMainlinePipeline(OwningOpRef<ModuleOp> &module,
   if (ptoPrintSeamIR || !ptoSeamIRFile.empty()) {
     llvm::errs() << "Error: shared pre-backend seam IR is unavailable when "
                     "skipping the shared PTO-to-VPTO lowering pipeline.\n";
+    return 1;
+  }
+  // The mainline pipeline is skipped here, so the bridge runs on its own.
+  PassManager bridgePM(module->getContext());
+  bridgePM.enableVerifier();
+  appendVPTOBridgePasses(bridgePM);
+  if (failed(applyConfiguredPassManagerCLOptions(bridgePM,
+                                                 "VPTO bridge pipeline"))) {
+    return 1;
+  }
+  if (failed(bridgePM.run(*module))) {
+    llvm::errs() << "Error: VPTO bridge pipeline failed.\n";
     return 1;
   }
   if (failed(runVPTOBackendPipeline(module, state.hasTileOpsToExpand))) {

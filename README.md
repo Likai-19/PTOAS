@@ -331,10 +331,43 @@ ptoas input.pto --pto-arch=a5 --pto-backend=vpto --emit-vpto \
 ptoas input.pto --pto-arch=a5 --pto-backend=vpto --emit-vpto \
   --vpto-scheduler-remat=false -o output.cpp
 
+# 选择哪些 family / 操作走 VPTO C++ bridge（默认见下）
+ptoas input.pto --pto-arch=a5 --pto-backend=vpto \
+  --vpto-bridge-policy=my-policy.yaml -o output.o
+
+# 打印 kernel 如何拿到 DebugTunnel 指针：implicit（真实 NPU）/ explicit（simulator）
+ptoas input.pto --pto-arch=a5 --pto-backend=vpto \
+  --vpto-print-dtdata=explicit -o output.o
+
 # 查看当前 ptoas release 版本号
 ptoas --version
 
 ```
+
+`--vpto-bridge-policy` 指定一份 route policy YAML，决定哪些 family 与操作
+经由 VPTO C++ bridge 下降到 PTO-ISA wrapper。它只做选择，ABI 与 wrapper
+细节由编译器内的 registry 拥有：
+
+```yaml
+version: 1
+families:
+  pipe: { enabled: true }
+  cube: { enabled_ops: [pto.tmatmul, pto.tmatmul.acc] }
+  print: { enabled_ops: [pto.print, pto.tprint] }
+```
+
+内置默认开启 pipe 与 print（`pto.print` / `pto.tprint` 在 VPTO 上没有非
+bridge 实现，不经 bridge 无法编译），cube 操作默认保持原有 `ExpandTileOp`
+路径，需要时逐个选入。`--vpto-print-dtdata` 选择打印 kernel 的 DebugTunnel
+指针投递约定，这取决于运行时而非签名，因此必须显式指定。设计与分期验收详见
+[`docs/designs/vpto-bridge-reimplementation.md`](docs/designs/vpto-bridge-reimplementation.md)。
+
+当前 `pto.tprint` bridge 支持有已规划地址的二维、row-major ND Vec tile，
+按静态 `valid_shape` 打印，使用物理列数作为行跨度。支持 f16、bf16、f32 和
+无符号性标记的 i8/i16/i32；动态有效尺寸、其他布局、`tmp` 或显式
+`printFormat` 会明确报错。Pipe/Cube bridge 的 tile specialization 也要求
+静态有效尺寸。模块启用打印时，kernel entry 会追加独立的隐藏 DTData 槽，
+用户参数的位置和类型保持不变，不会被重新命名为 DTData。
 
 `--vpto-scheduler` 在 VPTO 发射流水线的最终 CSE 之后、发射合法性校验之前运行。
 目标模型仅支持 A5 Vector kernel；规范化后的 Cube 子模块会被跳过，不生成

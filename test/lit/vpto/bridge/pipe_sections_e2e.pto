@@ -1,0 +1,75 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// ptoas-driven Pipe bridge: mid-level passes and CV split only see structured
+// bridge IR; func.call and storage appear inside each per-core LLVM module.
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s -o - | FileCheck %s --check-prefix=VPTO --implicit-check-not=func.call --implicit-check-not=llvm.alloca --implicit-check-not=unrealized_conversion_cast
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto-llvm-ir %s -o - 2>/dev/null | FileCheck %s --check-prefix=LLVM
+
+module attributes {pto.target_arch = "a5"} {
+  func.func @fifo_sections(%out: !pto.ptr<f32, gm>) {
+    %fifo_addr = arith.constant 0 : i32
+    pto.section.cube {
+      %pipe = pto.initialize_l2l_pipe{dir_mask = 1, slot_size = 1024, slot_num = 8, flag_base = 0, nosplit = false} (%fifo_addr : i32) -> !pto.pipe
+      %acc = pto.alloc_tile
+        : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>
+      pto.tpush(%acc, %pipe : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>, !pto.pipe) {split = 1}
+    }
+    pto.section.vector {
+      %c0 = arith.constant 0 : i64
+      %c1 = arith.constant 1 : i64
+      %c512 = arith.constant 512 : i64
+      %pipe = pto.initialize_l2l_pipe{dir_mask = 1, slot_size = 1024, slot_num = 8, flag_base = 0, nosplit = false} (%fifo_addr : i32) -> !pto.pipe
+      %tile = pto.declare_tile -> !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=16, v_row=8, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+      pto.tpop(%tile, %pipe : !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=16, v_row=8, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>, !pto.pipe) {split = 1}
+      %ub = pto.tile_buf_addr %tile
+        : !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=16, v_row=8, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+       -> !pto.ptr<f32, ub>
+      pto.mte_ub_gm %ub, %out, %c512 nburst(%c1, %c0, %c0)
+        : !pto.ptr<f32, ub>, !pto.ptr<f32, gm>, i64, i64, i64, i64
+      pto.tfree(%pipe : !pto.pipe) {split = 1}
+    }
+    return
+  }
+}
+
+// The instance table is split per core: each module keeps only its own.
+// VPTO: module attributes {{{.*}}pto.kernel_kind = #pto.kernel_kind<vector>
+// VPTO-DAG: pto.bridge.instance @{{.*}} <pipe_init> core <vector>
+// VPTO-DAG: pto.bridge.instance @{{.*}} <pipe_pop> core <vector>
+// VPTO-DAG: pto.bridge.instance @{{.*}} <pipe_free> core <vector>
+// VPTO: %[[VPIPE:.*]] = pto.bridge.object.create <pipe_init>
+// VPTO: %[[POP:.*]] = pto.bridge.call <pipe_pop>(%[[VPIPE]] : !pto.pipe)
+// VPTO: pto.castptr %[[POP]] : i64 -> !pto.ptr<f32, ub>
+// VPTO: pto.bridge.call <pipe_free>(%[[VPIPE]] : !pto.pipe)
+// VPTO-NOT: pipe_push
+// VPTO: module attributes {{{.*}}pto.kernel_kind = #pto.kernel_kind<cube>
+// VPTO-DAG: pto.bridge.instance @{{.*}} <pipe_init> core <cube>
+// VPTO-DAG: pto.bridge.instance @{{.*}} <pipe_push> core <cube>
+// VPTO: %[[CPIPE:.*]] = pto.bridge.object.create <pipe_init>
+// VPTO: pto.bridge.call <pipe_push>(%[[CPIPE]], %{{.*}} : !pto.pipe, i64)
+// VPTO-NOT: pipe_pop
+
+// Each core module declares only the entries it calls; handles are storage
+// pointers.
+// LLVM-DAG: declare void @[[VFREE:pto_vpto_pipe_free__[0-9]+]](ptr)
+// LLVM-DAG: declare i64 @[[VPOP:pto_vpto_pipe_pop__[0-9]+]](ptr)
+// LLVM-DAG: declare void @[[VINIT:pto_vpto_pipe_init__[0-9]+]](ptr, i32)
+// LLVM: define void @fifo_sections(
+// LLVM: %[[VSTORAGE:[0-9]+]] = alloca i8, i64 256, align 32
+// LLVM: call void @[[VINIT]](ptr %[[VSTORAGE]], i32 0)
+// LLVM: call i64 @[[VPOP]](ptr %[[VSTORAGE]])
+// LLVM: call void @[[VFREE]](ptr %[[VSTORAGE]])
+// LLVM-NOT: pipe_push
+// LLVM-DAG: declare void @[[CPUSH:pto_vpto_pipe_push__[0-9]+]](ptr, i64)
+// LLVM-DAG: declare void @[[CINIT:pto_vpto_pipe_init__[0-9]+]](ptr, i32)
+// LLVM: define void @fifo_sections(
+// LLVM: %[[CSTORAGE:[0-9]+]] = alloca i8, i64 256, align 32
+// LLVM: call void @[[CINIT]](ptr %[[CSTORAGE]], i32 0)
+// LLVM: call void @[[CPUSH]](ptr %[[CSTORAGE]], i64 0)
+// LLVM-NOT: pipe_pop

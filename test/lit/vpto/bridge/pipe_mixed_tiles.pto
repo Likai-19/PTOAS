@@ -1,0 +1,32 @@
+// RUN: pto-test-opt %s --pto-lower-bridge-ops | FileCheck %s
+
+module {
+  func.func @producer(%local: i32, %dst: i64, %lhs: i64, %rhs: i64) attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {
+    %pipe = pto.initialize_l2l_pipe {dir_mask = 1, slot_size = 1024, slot_num = 8, flag_base = 0}(%local : i32) -> !pto.pipe
+    %a = pto.alloc_tile addr = %lhs : !pto.tile_buf<left, 16x16xf16>
+    %b = pto.alloc_tile addr = %rhs : !pto.tile_buf<right, 16x16xf16>
+    %c = pto.alloc_tile addr = %dst : !pto.tile_buf<acc, 16x16xf32>
+    pto.tmatmul ins(%a, %b : !pto.tile_buf<left, 16x16xf16>, !pto.tile_buf<right, 16x16xf16>) outs(%c : !pto.tile_buf<acc, 16x16xf32>)
+    pto.tpush(%c, %pipe : !pto.tile_buf<acc, 16x16xf32>, !pto.pipe) {split = 0}
+    return
+  }
+  func.func @consumer(%local: i32) attributes {pto.kernel_kind = #pto.kernel_kind<vector>} {
+    %pipe = pto.initialize_l2l_pipe {dir_mask = 1, slot_size = 1024, slot_num = 8, flag_base = 0}(%local : i32) -> !pto.pipe
+    %tile = pto.declare_tile -> !pto.tile_buf<vec, 16x16xf32>
+    pto.tpop(%tile, %pipe : !pto.tile_buf<vec, 16x16xf32>, !pto.pipe) {split = 0}
+    %one = arith.constant 1.0 : f32
+    pto.tadds ins(%tile, %one : !pto.tile_buf<vec, 16x16xf32>, f32) outs(%tile : !pto.tile_buf<vec, 16x16xf32>)
+    pto.tfree(%pipe : !pto.pipe) {split = 0}
+    return
+  }
+}
+
+// CHECK-LABEL: func.func @producer
+// CHECK: %[[TILE:.*]] = pto.alloc_tile addr = %arg1
+// CHECK: pto.tmatmul
+// CHECK-SAME: outs(%[[TILE]]
+// CHECK: pto.bridge.call <pipe_push>
+// CHECK-LABEL: func.func @consumer
+// CHECK: %[[ADDR:.*]] = pto.bridge.call <pipe_pop>
+// CHECK: %[[POP:.*]] = pto.alloc_tile addr = %[[ADDR]]
+// CHECK: pto.tadds ins(%[[POP]]

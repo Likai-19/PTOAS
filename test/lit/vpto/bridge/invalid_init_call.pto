@@ -1,0 +1,10 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// CANN Open Software License Agreement Version 2.0.
+// RUN: pto-test-opt %s --verify-diagnostics
+module {
+  func.func @init_as_call(%storage: !pto.ptr<i8, ub>, %local: i32) {
+    // expected-error @+1 {{requires a registered non-object entry}}
+    pto.bridge.call #pto.bridge_entry<pipe_init>(%storage, %local : !pto.ptr<i8, ub>, i32)
+    return
+  }
+}

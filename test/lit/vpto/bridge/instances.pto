@@ -1,0 +1,55 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Instance resolution writes one module-level pto.bridge.instance per
+// (entry, core, spec) and points each bridge op at it by symbol. Identity is
+// the uniqued spec attribute, so equal specs share one instance. Core comes
+// from the nearest section, then pto.kernel_kind; Any entries without a core
+// context resolve to core any.
+// RUN: pto-test-opt %s --vpto-resolve-bridge-instances | FileCheck %s --implicit-check-not=instance_key --implicit-check-not=pto.bridge.symbol
+module {
+  func.func @instances(%dst: i64, %lhs: i64, %rhs: i64)
+      attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {
+    pto.bridge.call #pto.bridge_entry<cube_tmatmul>(%dst, %lhs, %rhs : i64, i64, i64)
+      {spec = #pto.bridge_cube_spec<dst = <<acc, 16x16xf32>>, lhs = <<left, 16x16xf16>>, rhs = <<right, 16x16xf16>>, accPhase = unspecified>}
+    pto.bridge.call #pto.bridge_entry<cube_tmatmul>(%dst, %lhs, %rhs : i64, i64, i64)
+      {spec = #pto.bridge_cube_spec<dst = <<acc, 16x16xf32>>, lhs = <<left, 16x16xf16>>, rhs = <<right, 16x16xf16>>, accPhase = unspecified>}
+    pto.bridge.call #pto.bridge_entry<cube_tmatmul>(%dst, %lhs, %rhs : i64, i64, i64)
+      {spec = #pto.bridge_cube_spec<dst = <<acc, 32x16xf32>>, lhs = <<left, 32x16xf16>>, rhs = <<right, 16x16xf16>>, accPhase = unspecified>}
+    return
+  }
+  func.func @sections(%local: i32) {
+    pto.section.cube {
+      %p = pto.bridge.object.create #pto.bridge_entry<pipe_init>(%local : i32) {spec = #pto.bridge_pipe_spec<dirMask = 1, slotSize = 1024, slotNum = 8, localSlotNum = 2, flagBase = 0, nosplit = false>} -> !pto.pipe
+    }
+    pto.section.vector {
+      %p = pto.bridge.object.create #pto.bridge_entry<pipe_init>(%local : i32) {spec = #pto.bridge_pipe_spec<dirMask = 1, slotSize = 1024, slotNum = 8, localSlotNum = 2, flagBase = 0, nosplit = false>} -> !pto.pipe
+    }
+    return
+  }
+  func.func @no_core(%fmt: !pto.ptr<i8, gm>, %v: f32) {
+    pto.bridge.call #pto.bridge_entry<print_f32>(%fmt, %v : !pto.ptr<i8, gm>, f32)
+    return
+  }
+}
+// CHECK: pto.bridge.instance @[[MM0:pto_vpto_tmatmul__0]] <cube_tmatmul> core <cube> {spec = #pto.bridge_cube_spec<dst = <<acc, 16x16xf32>>
+// CHECK-NEXT: pto.bridge.instance @[[MM1:pto_vpto_tmatmul__1]] <cube_tmatmul> core <cube> {spec = #pto.bridge_cube_spec<dst = <<acc, 32x16xf32>>
+// CHECK-NEXT: pto.bridge.instance @[[PC:pto_vpto_pipe_init__2]] <pipe_init> core <cube>
+// CHECK-NEXT: pto.bridge.instance @[[PV:pto_vpto_pipe_init__3]] <pipe_init> core <vector>
+// CHECK-NEXT: pto.bridge.instance @[[PR:pto_vpto_print_f32__4]] <print_f32> core <any>{{$}}
+// CHECK-LABEL: func.func @instances
+// CHECK: instance = @[[MM0]]
+// CHECK: instance = @[[MM0]]
+// CHECK: instance = @[[MM1]]
+// CHECK-LABEL: func.func @sections
+// CHECK: pto.section.cube
+// CHECK: instance = @[[PC]]
+// CHECK: pto.section.vector
+// CHECK: instance = @[[PV]]
+// CHECK-LABEL: func.func @no_core
+// CHECK: instance = @[[PR]]

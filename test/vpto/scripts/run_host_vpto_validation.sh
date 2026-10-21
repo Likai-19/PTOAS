@@ -160,10 +160,31 @@ validate_case_path() {
     return 0
   fi
   [[ -d "${case_path}" ]] || die "case ${case_name} is neither a directory nor a PTODSL case file"
+  local harness_path
+  harness_path="$(resolve_harness_dir "${case_path}")"
   for f in launch.cpp main.cpp golden.py compare.py; do
-    [[ -f "${case_path}/${f}" ]] || die "case ${case_name} is missing ${f}"
+    [[ -f "${harness_path}/${f}" ]] || die "case ${case_name} is missing ${f}"
   done
   [[ -f "${case_path}/kernel.pto" ]] || die "case ${case_name} must provide kernel.pto"
+}
+
+# Resolves the directory holding a case's harness (launch.cpp, main.cpp,
+# golden.py, compare.py). A case that differs from another only in its kernel
+# names that case in a `harness.dir` file instead of copying the harness.
+resolve_harness_dir() {
+  local case_dir="$1"
+  if [[ ! -f "${case_dir}/harness.dir" ]]; then
+    printf '%s\n' "${case_dir}"
+    return 0
+  fi
+  local reference
+  read -r reference < "${case_dir}/harness.dir"
+  [[ -n "${reference}" ]] || die "empty harness.dir in ${case_dir}"
+  [[ "${reference}" != /* && "${reference}" != *..* ]] ||
+    die "harness.dir must name a sibling case directory: ${reference}"
+  local resolved="${case_dir}/../${reference}"
+  [[ -d "${resolved}" ]] || die "harness.dir points at a missing case: ${reference}"
+  printf '%s\n' "${resolved}"
 }
 
 discover_cases() {
@@ -187,8 +208,10 @@ discover_cases() {
     local rel="${dir#${CASES_ROOT}/}"
     if ! is_ptodsl_case_dir "${dir}"; then
       local ok=1
+      local harness
+      harness="$(resolve_harness_dir "${dir}")"
       for f in launch.cpp main.cpp golden.py compare.py; do
-        if [[ ! -f "${dir}/${f}" ]]; then
+        if [[ ! -f "${harness}/${f}" ]]; then
           ok=0
           break
         fi
@@ -240,10 +263,21 @@ case_output_token() {
 
 build_launch_object() {
   local case_dir="$1"
-  local out_obj="$2"
+  local harness_dir="$2"
+  local out_obj="$3"
+
+  # The <<<>>> launch call site fills the kernel's DTData slot, but only when
+  # the launch object is compiled with print enabled. Without these flags a
+  # printing kernel launches with an uninitialized slot and the device-side
+  # cce::printf drops every record.
+  local -a print_flags=()
+  if grep -qE "pto\.(print|tprint)" "${case_dir}/kernel.pto" 2>/dev/null; then
+    print_flags+=(--cce-enable-print -D__CCE_ENABLE_PRINT_FOUND_CANN__)
+  fi
 
   "${BISHENG_BIN}" \
     "${BISHENG_FLAG_ARGS[@]}" \
+    "${print_flags[@]}" \
     -c -fPIC -xcce -fenable-matrix --cce-aicore-enable-tl \
     -fPIC -Xhost-start -Xhost-end \
     -mllvm -cce-aicore-stack-size=0x8000 \
@@ -259,7 +293,7 @@ build_launch_object() {
     -I "${ASCEND_HOME_PATH}/pkg_inc" \
     -I "${ASCEND_HOME_PATH}/pkg_inc/profiling" \
     -I "${ASCEND_HOME_PATH}/pkg_inc/runtime/runtime" \
-    "${case_dir}/launch.cpp" \
+    "${harness_dir}/launch.cpp" \
     -o "${out_obj}"
 }
 
@@ -295,7 +329,7 @@ link_kernel_so() {
 
 build_host_executable() {
   local case_token="$1"
-  local case_dir="$2"
+  local harness_dir="$2"
   local out_dir="$3"
   local extra_ldflags=()
   local extra_lib_dirs=()
@@ -311,8 +345,8 @@ build_host_executable() {
   "${BISHENG_BIN}" \
     "${BISHENG_FLAG_ARGS[@]}" \
     -xc++ -include stdint.h -include stddef.h -std=c++17 \
-    "${case_dir}/main.cpp" \
-    -I "${case_dir}" \
+    "${harness_dir}/main.cpp" \
+    -I "${harness_dir}" \
     -I "${NPU_VALIDATION_COMMON_DIR}" \
     -I "${ASCEND_HOME_PATH}/include" \
     -L "${out_dir}" \
@@ -370,15 +404,22 @@ build_one_impl() {
 
   [[ -f "${case_dir}/kernel.pto" ]] || die "missing kernel.pto for ${case_name}"
 
-  [[ -f "${case_dir}/main.cpp" ]] || die "missing main.cpp for ${case_name}"
-  [[ -f "${case_dir}/launch.cpp" ]] || die "missing launch.cpp for ${case_name}"
-  [[ -f "${case_dir}/golden.py" ]] || die "missing golden.py for ${case_name}"
-  [[ -f "${case_dir}/compare.py" ]] || die "missing compare.py for ${case_name}"
+  local harness_dir
+  harness_dir="$(resolve_harness_dir "${case_dir}")"
+  [[ -f "${harness_dir}/main.cpp" ]] || die "missing main.cpp for ${case_name}"
+  [[ -f "${harness_dir}/launch.cpp" ]] || die "missing launch.cpp for ${case_name}"
+  [[ -f "${harness_dir}/golden.py" ]] || die "missing golden.py for ${case_name}"
+  [[ -f "${harness_dir}/compare.py" ]] || die "missing compare.py for ${case_name}"
 
   if [[ -f "${case_dir}/ptoas.flags" ]]; then
     read -r -a ptoas_args < "${case_dir}/ptoas.flags"
   else
     read -r -a ptoas_args <<< "${PTOAS_FLAGS}"
+  fi
+  # A case needing a non-default bridge route carries its own policy file. The
+  # path is resolved here, so nothing committed depends on a local checkout.
+  if [[ -f "${case_dir}/bridge-policy.yaml" ]]; then
+    ptoas_args+=(--vpto-bridge-policy="${case_dir}/bridge-policy.yaml")
   fi
 
   log "[$case_name] step 1/4: emit kernel fatobj"
@@ -386,7 +427,7 @@ build_one_impl() {
     "${case_dir}/kernel.pto" -o "${kernel_fatobj}"
 
   log "[$case_name] step 2/4: build launch object"
-  build_launch_object "${case_dir}" "${launch_obj}"
+  build_launch_object "${case_dir}" "${harness_dir}" "${launch_obj}"
 
   log "[$case_name] step 3/4: link kernel shared library"
   link_kernel_so "${case_token}" "${kernel_fatobj}" "${launch_obj}" "${kernel_so}"
@@ -398,10 +439,10 @@ build_one_impl() {
   fi
 
   log "[$case_name] step 4/4: build host executable and golden"
-  build_host_executable "${case_token}" "${case_dir}" "${out_dir}"
+  build_host_executable "${case_token}" "${harness_dir}" "${out_dir}"
   (
     cd "${out_dir}"
-    python3 "${case_dir}/golden.py"
+    python3 "${harness_dir}/golden.py"
   )
 
   log "[$case_name] run NPU validation"
@@ -430,7 +471,7 @@ EOF
 
   (
     cd "${out_dir}"
-    COMPARE_STRICT=1 python3 "${case_dir}/compare.py"
+    COMPARE_STRICT=1 python3 "${harness_dir}/compare.py"
   )
 
   log "[$case_name] compare passed"

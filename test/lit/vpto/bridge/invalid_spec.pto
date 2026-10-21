@@ -1,0 +1,85 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// Specializations are verified structurally: tile dtype and kind, pipe
+// direction against its tiles, matmul shape agreement, and the spec kind
+// against the entry's family. Tile rank and static shape are already enforced
+// by the tile_buf type itself.
+// RUN: pto-test-opt %s --split-input-file --verify-diagnostics
+
+module {
+  func.func @dynamic_valid(%p: i64) {
+    pto.bridge.call #pto.bridge_entry<cube_tmatmul>(%p, %p, %p : i64, i64, i64)
+      // expected-error @+2 {{bridge tile spec requires static valid dimensions}}
+      // expected-error @+1 {{failed to parse PTO_BridgeCubeSpecAttr parameter 'dst'}}
+      {spec = #pto.bridge_cube_spec<dst = <<loc=acc, dtype=f32, rows=16, cols=16, v_row=?, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>>, lhs = <<left, 16x16xf16>>, rhs = <<right, 16x16xf16>>, accPhase = unspecified>}
+    return
+  }
+}
+
+// -----
+
+module {
+  func.func @unsupported_element(%p: i64) {
+    pto.bridge.call #pto.bridge_entry<cube_tmatmul>(%p, %p, %p : i64, i64, i64)
+      // expected-error @+2 {{bridge tile spec has unsupported element type 'f64'}}
+      // expected-error @+1 {{failed to parse PTO_BridgeCubeSpecAttr parameter 'dst'}}
+      {spec = #pto.bridge_cube_spec<dst = <<acc, 16x16xf64>>, lhs = <<left, 16x16xf16>>, rhs = <<right, 16x16xf16>>, accPhase = unspecified>}
+    return
+  }
+}
+
+// -----
+module {
+  func.func @wrong_tile_kind(%p: i64) {
+    pto.bridge.call #pto.bridge_entry<cube_tmatmul>(%p, %p, %p : i64, i64, i64)
+      // expected-error @+1 {{bridge cube spec requires acc dst, left lhs and right rhs}}
+      {spec = #pto.bridge_cube_spec<dst = <<vec, 16x16xf32>>, lhs = <<left, 16x16xf16>>, rhs = <<right, 16x16xf16>>, accPhase = unspecified>}
+    return
+  }
+}
+
+// -----
+module {
+  func.func @mismatched_k(%p: i64) {
+    pto.bridge.call #pto.bridge_entry<cube_tmatmul>(%p, %p, %p : i64, i64, i64)
+      // expected-error @+1 {{bridge cube spec shapes do not form MxK * KxN = MxN}}
+      {spec = #pto.bridge_cube_spec<dst = <<acc, 16x16xf32>>, lhs = <<left, 16x32xf16>>, rhs = <<right, 16x16xf16>>, accPhase = unspecified>}
+    return
+  }
+}
+
+// -----
+module {
+  func.func @bad_dir_mask(%local: i32) {
+    %p = pto.bridge.object.create #pto.bridge_entry<pipe_init>(%local : i32)
+      // expected-error @+1 {{bridge pipe spec supports dir_mask 1 (C2V) or 2 (V2C), got 3}}
+      {spec = #pto.bridge_pipe_spec<dirMask = 3, slotSize = 1024, slotNum = 8, localSlotNum = 2, flagBase = 0, nosplit = false>} -> !pto.pipe
+    return
+  }
+}
+
+// -----
+module {
+  func.func @producer_contradicts_direction(%local: i32) {
+    // A C2V pipe produces from an Acc tile on cube, not from a Vec tile.
+    %p = pto.bridge.object.create #pto.bridge_entry<pipe_init>(%local : i32)
+      // expected-error @+1 {{bridge pipe spec producer tile does not match dir_mask 1}}
+      {spec = #pto.bridge_pipe_spec<dirMask = 1, slotSize = 1024, slotNum = 8, localSlotNum = 2, flagBase = 0, nosplit = false, producer = <<vec, 16x16xf32>>>} -> !pto.pipe
+    return
+  }
+}
+
+// -----
+module {
+  func.func @cube_spec_on_pipe_entry(%local: i32) {
+    // expected-error @+1 {{entry 'pipe.init' does not accept specialization}}
+    %p = pto.bridge.object.create #pto.bridge_entry<pipe_init>(%local : i32)
+      {spec = #pto.bridge_cube_spec<dst = <<acc, 16x16xf32>>, lhs = <<left, 16x16xf16>>, rhs = <<right, 16x16xf16>>, accPhase = unspecified>} -> !pto.pipe
+    return
+  }
+}

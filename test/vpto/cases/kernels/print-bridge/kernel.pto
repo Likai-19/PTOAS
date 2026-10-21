@@ -1,0 +1,57 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// The kernel prints two diagnostic scalars through the bridge-generated
+// cce::printf wrapper while performing an identity passthrough copy
+// (input -> UB -> output). The host validates the copy; the printed lines
+// surface through CANN's DebugTunnel host decoder.
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @print_bridge_kernel(%dt: !pto.ptr<i8, gm>,
+                                 %input: !pto.ptr<f32, gm>,
+                                 %output: !pto.ptr<f32, gm>,
+                                 %offset: f32,
+                                 %n: i32) attributes {pto.entry} {
+    %c0_i64 = arith.constant 0 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %c1024_i64 = arith.constant 1024 : i64
+    %c1152_i64 = arith.constant 1152 : i64
+
+    // Debug: print the kernel parameters via DebugTunnel.
+    pto.print ins("offset = %+08.3f\n", %offset : f32)
+    pto.print ins("n = %d\n", %n : i32)
+
+    // Allocate UB buffer at byte offset 1024.
+    %ub_buf = pto.castptr %c1024_i64 : i64 -> !pto.ptr<f32, ub>
+
+    // Load 64 x f32 (256 bytes) from GM to UB.
+    pto.mte_gm_ub %input, %ub_buf, %c0_i64, %c256_i64
+      nburst(%c1_i64, %c256_i64, %c256_i64)
+      : !pto.ptr<f32, gm>, !pto.ptr<f32, ub>, i64, i64, i64, i64, i64
+
+    pto.set_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+    pto.wait_flag["PIPE_MTE2", "PIPE_V", "EVENT_ID0"]
+
+    // Debug: dump two valid regions at different UB addresses via tprint.
+    %tile = pto.alloc_tile addr = %c1024_i64 : !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=8, v_row=2, v_col=3, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    pto.tprint ins(%tile : !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=8, v_row=2, v_col=3, blayout=row_major, slayout=none_box, fractal=512, pad=0>)
+    %partial = pto.alloc_tile addr = %c1152_i64 : !pto.tile_buf<loc=vec, dtype=f32, rows=4, cols=8, v_row=2, v_col=3, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    pto.tprint ins(%partial : !pto.tile_buf<loc=vec, dtype=f32, rows=4, cols=8, v_row=2, v_col=3, blayout=row_major, slayout=none_box, fractal=512, pad=0>)
+
+    // Store 64 x f32 (256 bytes) from UB to GM output.
+    pto.set_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+    pto.wait_flag["PIPE_V", "PIPE_MTE3", "EVENT_ID0"]
+
+    pto.mte_ub_gm %ub_buf, %output, %c256_i64
+      nburst(%c1_i64, %c256_i64, %c256_i64)
+      : !pto.ptr<f32, ub>, !pto.ptr<f32, gm>, i64, i64, i64, i64
+
+    pto.barrier #pto.pipe<PIPE_ALL>
+    return
+  }
+}

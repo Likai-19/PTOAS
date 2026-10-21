@@ -1,0 +1,3 @@
+#pragma once
+
+static constexpr char kPTOASPrintHostSource[] = R"PTOAS_PRINT_HOST(@PTOAS_PRINT_HOST_SOURCE@)PTOAS_PRINT_HOST";

@@ -105,6 +105,14 @@ add_mlir_dialect_library(PTOTransforms
   VPTOScheduler/VPTOSchedulerPass.cpp
   Passes/PTOVPTOPtrBoundary.cpp
   VPTO/VPTOBufferMaterialization.cpp
+  VPTOBridgeWhitelist.cpp
+  VPTOResolveBridgeInstances.cpp
+  VPTOBridgeCallLowering.cpp
+  VPTOPrintDTDataABI.cpp
+  VPTOBridgeWrapperGen.cpp
+  PTOLowerBridgeOps.cpp
+  PTOLowerPipeFamilyOps.cpp
+  VPTOBridgeTokens.cpp
   Passes/PTOValidateVPTOIR.cpp
   Passes/PTONarrowVPTOLoopCounters.cpp
   Passes/PTOConvertSCFToCFWithLoopHintsPass.cpp

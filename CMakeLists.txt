@@ -241,6 +241,7 @@ add_subdirectory(tools)
 # =========================================================
 if(BUILD_TESTING)
   enable_testing()
+  add_subdirectory(test/bridge)
   if(PTO_ENABLE_PYTHON_BINDING)
     get_filename_component(_pto_python_bin_dir "${Python3_EXECUTABLE}" DIRECTORY)
     set(_pto_python_test_pythonpath

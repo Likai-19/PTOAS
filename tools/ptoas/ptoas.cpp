@@ -135,6 +135,22 @@ llvm::cl::opt<bool> vptoSchedulerTrace(
     llvm::cl::desc("Print detailed VPTO on-mode scheduling results"),
     llvm::cl::init(false));
 
+llvm::cl::opt<std::string> vptoBridgePolicy(
+    "vpto-bridge-policy",
+    llvm::cl::desc("Path to a VPTO bridge route policy YAML file; selects "
+                   "which families and operations use the C++ bridge. "
+                   "Defaults to the built-in policy."),
+    llvm::cl::init(""));
+
+llvm::cl::opt<std::string> vptoPrintDTData(
+    "vpto-print-dtdata",
+    llvm::cl::desc("How a printing kernel receives its DebugTunnel pointer: "
+                   "'implicit' takes the hidden argument the CCE launch "
+                   "machinery fills (real NPU), 'explicit' takes the pointer "
+                   "the host runner passes as the first kernel argument "
+                   "(simulator)."),
+    llvm::cl::init("implicit"));
+
 llvm::cl::opt<bool> vptoSchedulerRemat(
     "vpto-scheduler-remat",
     llvm::cl::desc(

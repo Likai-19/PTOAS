@@ -58,6 +58,11 @@
 // PTO Attributes
 //===----------------------------------------------------------------------===//
 
+// Bridge tile specs carry a TileBufType; types are defined after attributes.
+namespace mlir::pto {
+class TileBufType;
+} // namespace mlir::pto
+
 #define GET_ATTRDEF_CLASSES
 #include "PTO/IR/PTOAttrs.h.inc"
 

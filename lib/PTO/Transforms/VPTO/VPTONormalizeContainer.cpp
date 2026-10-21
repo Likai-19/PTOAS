@@ -8,6 +8,7 @@
 
 #include "PTO/IR/PTO.h"
 #include "PTO/Transforms/Passes.h"
+#include "PTO/Transforms/VPTOBridgeTokens.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
@@ -100,6 +101,9 @@ struct VPTONormalizeContainerPass
 
       auto child = ModuleOp::create(module.getLoc());
       child->setAttrs(module->getAttrDictionary());
+      // Wrapper translation units describe the whole compilation and are read
+      // from the container, not from a kernel module.
+      child->removeAttr(kBridgeWrapperSourceAttrName);
       child.getBodyRegion().takeBody(module.getBodyRegion());
 
       module->setAttrs(DictionaryAttr::get(context, outerAttrs));

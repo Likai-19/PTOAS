@@ -1,0 +1,64 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// pto.tprint expands to the literal header and shape records plus one value
+// record per element, all through the same fixed Print entries. It does not
+// participate in TileLib template expansion.
+//
+// RUN: echo 'version: 1' > %t.policy
+// RUN: echo 'families:' >> %t.policy
+// RUN: echo '  print: { enabled_ops: [pto.tprint] }' >> %t.policy
+// RUN: pto-test-opt %s "--pto-lower-bridge-ops=policy-path=%t.policy" | FileCheck %s
+//
+// RUN: pto-test-opt %s --pto-insert-template-attributes | FileCheck %s --check-prefix=TILELIB
+
+module attributes {pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @tprint_tile() {
+    %addr = arith.constant 1024 : i64
+    %tile = pto.alloc_tile addr = %addr : !pto.tile_buf<vec, 2x8xf32>
+    pto.tprint ins(%tile : !pto.tile_buf<vec, 2x8xf32>)
+    return
+  }
+  func.func @tprint_partial(%address: i64) {
+    %tile = pto.alloc_tile addr = %address : !pto.tile_buf<loc=vec, dtype=f32, rows=4, cols=8, v_row=2, v_col=3, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    pto.tprint ins(%tile : !pto.tile_buf<loc=vec, dtype=f32, rows=4, cols=8, v_row=2, v_col=3, blayout=row_major, slayout=none_box, fractal=512, pad=0>)
+    return
+  }
+}
+
+// The header and shape lines are interned text records.
+// CHECK-DAG: llvm.mlir.global private constant @pto_vpto_print_fmt_{{[0-9]+}}(dense<[61, 61, 61, 32, 91, 84, 80, 82, 73, 78, 84
+// CHECK-DAG: llvm.mlir.global private constant @pto_vpto_print_fmt_{{[0-9]+}}(dense<[32, 32, 83, 104, 97, 112, 101
+// CHECK-DAG: llvm.mlir.global private constant @pto_vpto_print_fmt_{{[0-9]+}}(dense<[37, 54, 46, 50, 102, 0]>
+// CHECK-LABEL: func.func @tprint_tile
+// CHECK: %[[ADDR:.*]] = arith.constant 1024 : i64
+// CHECK: %[[H:.*]] = llvm.mlir.addressof @pto_vpto_print_fmt_{{[0-9]+}}
+// CHECK: pto.bridge.call <print_string>(%[[H]] : !llvm.ptr<1>)
+// CHECK: %[[S:.*]] = llvm.mlir.addressof @pto_vpto_print_fmt_{{[0-9]+}}
+// CHECK: pto.bridge.call <print_string>(%[[S]] : !llvm.ptr<1>)
+// CHECK: %[[V:.*]] = llvm.mlir.addressof @pto_vpto_print_fmt_{{[0-9]+}}
+// CHECK: llvm.inttoptr %[[ADDR]] : i64 to !llvm.ptr<6>
+// One value record per element, in a row/column loop nest.
+// CHECK: scf.for %{{.*}} = %{{.*}} to %[[ROWS:.*]] step
+// CHECK: scf.for %{{.*}} = %{{.*}} to %[[COLS:.*]] step
+// CHECK: %[[PTR:.*]] = llvm.getelementptr
+// CHECK: %[[VAL:.*]] = llvm.load %[[PTR]] : !llvm.ptr<6> -> f32
+// CHECK: pto.bridge.call <print_f32>(%[[V]], %[[VAL]] : !llvm.ptr<1>, f32)
+// CHECK-NOT: pto.tprint
+// CHECK-LABEL: func.func @tprint_partial
+// CHECK: %[[BASE:.*]] = llvm.inttoptr %arg0 : i64 to !llvm.ptr<6>
+// CHECK: %[[STRIDE:.*]] = llvm.mlir.constant(8 : i64)
+// CHECK: %[[TWO:.*]] = arith.constant 2 : index
+// CHECK: %[[THREE:.*]] = arith.constant 3 : index
+// CHECK: scf.for %{{.*}} = %{{.*}} to %[[TWO]] step
+// CHECK: scf.for %{{.*}} = %{{.*}} to %[[THREE]] step
+// CHECK: llvm.mul %{{.*}}, %[[STRIDE]] : i64
+// CHECK: llvm.getelementptr %[[BASE]]
+
+// TileLib must not claim tprint as a template candidate.
+// TILELIB: pto.tprint
+// TILELIB-NOT: candidates =

@@ -24,6 +24,7 @@
 #include "mlir/Pass/Pass.h"
 #include "PTO/IR/PTODialect.h"
 #include "PTO/Transforms/TileLibService.h"
+#include "PTO/Transforms/VPTOBridgeWhitelist.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -45,6 +46,15 @@ std::unique_ptr<Pass> createPTOValidatePhysicalSectionBoundariesPass();
 std::unique_ptr<Pass> createPTOMaterializeTileOpSectionsPass();
 std::unique_ptr<Pass> createVPTOSplitCVModulePass();
 std::unique_ptr<Pass> createVPTONormalizeContainerPass();
+std::unique_ptr<Pass> createVPTOResolveBridgeInstancesPass();
+std::unique_ptr<Pass> createVPTOBridgeCallLoweringPass();
+std::unique_ptr<Pass> createPTOLowerBridgeOpsPass(llvm::StringRef policyPath = "");
+std::unique_ptr<Pass>
+createVPTOPrintDTDataABIPass(llvm::StringRef mode = "implicit");
+std::unique_ptr<Pass> createVPTOBridgeWrapperGenPass();
+/// Pipe family typed lowering, used by the bridge routing pass.
+LogicalResult lowerPipeFamilyOps(mlir::func::FuncOp func,
+                                 const BridgeRoutePolicy &policy);
 std::unique_ptr<Pass> createPTOVerifyTFreePass();
 
 // Creates a pass for ...

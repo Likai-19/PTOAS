@@ -94,6 +94,59 @@ class PTO_DpsOp<string mnemonic, list<Trait> traits = []>
 class PTO_Op<string mnemonic, list<Trait> traits = []>
     : Op<PTO_Dialect, mnemonic, !listconcat(traits, [ ])>;
 
+// Structured bridge IR. Family passes create these ops; instance resolution
+// writes the module-level instance table and points each op at its entry.
+def BridgeInstanceOp : PTO_Op<"bridge.instance", [Symbol]> {
+  let summary = "A resolved bridge instance: entry, core and specialization";
+  let description = [{
+    Instances are written only by `vpto-resolve-bridge-instances`. Bridge ops
+    reference them by symbol; wrapper generation, call lowering and object
+    emission read this table. CV split keeps only the referenced instances in
+    each core module.
+  }];
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       PTO_BridgeEntryAttr:$entry,
+                       PTO_BridgeCoreKindAttr:$core,
+                       OptionalAttr<PTO_BridgeSpecAttr>:$spec);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $sym_name $entry `core` $core attr-dict
+  }];
+}
+
+def BridgeCallOp : PTO_Op<"bridge.call", [
+    MemoryEffects<[MemRead, MemWrite]>,
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
+  let summary = "Call a compiler-registered PTO bridge entry";
+  let arguments = (ins PTO_BridgeEntryAttr:$entry,
+                       OptionalAttr<PTO_BridgeSpecAttr>:$spec,
+                       OptionalAttr<FlatSymbolRefAttr>:$instance,
+                       Variadic<AnyType>:$args);
+  let results = (outs Variadic<AnyType>:$results);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $entry (`(` $args^ `:` type($args) `)`) ? attr-dict
+    (`->` type($results)^) ?
+  }];
+}
+
+def BridgeObjectCreateOp : PTO_Op<"bridge.object.create", [
+    MemoryEffects<[MemAlloc, MemWrite]>,
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
+  let summary = "Create storage for a stateful PTO bridge object";
+  let arguments = (ins PTO_BridgeEntryAttr:$entry,
+                       OptionalAttr<PTO_BridgeSpecAttr>:$spec,
+                       OptionalAttr<FlatSymbolRefAttr>:$instance,
+                       Variadic<AnyType>:$args);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $entry (`(` $args^ `:` type($args) `)`) ? attr-dict `->` type($result)
+  }];
+}
+
 include "PTO/IR/PTOGenericOps.td"
 
 include "PTO/IR/VMIOps.td"

@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. THIS SOFTWARE IS PROVIDED ON AN
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+// or implied. See the License in the root of the software repository.
+
+// RUN: echo 'version: 1' > %t.policy
+// RUN: echo 'families:' >> %t.policy
+// RUN: echo '  cube: { enabled_ops: [pto.tmatmul] }' >> %t.policy
+// RUN: pto-test-opt %s --pass-pipeline="builtin.module(pto-lower-bridge-ops{policy-path=%t.policy},vpto-resolve-bridge-instances,vpto-bridge-call-lowering)" | FileCheck %s
+// RUN: pto-test-opt %s --pto-lower-bridge-ops | FileCheck %s --check-prefix=FALLBACK
+module attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {
+  func.func @matmul(%dst: i64, %lhs: i64, %rhs: i64) {
+    %a = pto.alloc_tile addr = %lhs : !pto.tile_buf<left, 16x16xf16>
+    %b = pto.alloc_tile addr = %rhs : !pto.tile_buf<right, 16x16xf16>
+    %c = pto.alloc_tile addr = %dst : !pto.tile_buf<acc, 16x16xf32>
+    pto.tmatmul ins(%a, %b : !pto.tile_buf<left, 16x16xf16>, !pto.tile_buf<right, 16x16xf16>) outs(%c : !pto.tile_buf<acc, 16x16xf32>)
+    pto.tmatmul ins(%a, %b : !pto.tile_buf<left, 16x16xf16>, !pto.tile_buf<right, 16x16xf16>) outs(%c : !pto.tile_buf<acc, 16x16xf32>) {accPhase = #pto<acc_phase partial>}
+    pto.tmatmul ins(%a, %b : !pto.tile_buf<left, 16x16xf16>, !pto.tile_buf<right, 16x16xf16>) outs(%c : !pto.tile_buf<acc, 16x16xf32>) {accPhase = #pto<acc_phase final>}
+    return
+  }
+}
+// Each AccPhase is a distinct specialization; the instance table is consumed
+// by call lowering, leaving only declarations.
+// CHECK-NOT: pto.bridge.instance
+// CHECK: func.func private @pto_vpto_tmatmul__0(i64, i64, i64)
+// CHECK-LABEL: func.func @matmul
+// CHECK: call @pto_vpto_tmatmul__0(%arg0, %arg1, %arg2) : (i64, i64, i64) -> ()
+// CHECK: pto_vpto_tmatmul__1
+// CHECK: pto_vpto_tmatmul__2
+// FALLBACK: pto.tmatmul ins

@@ -1,0 +1,22 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// the CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. THIS SOFTWARE IS PROVIDED ON AN
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+// or implied. See the License in the root of the software repository for the
+// full text of the License.
+
+// RUN: pto-test-opt %s --vpto-resolve-bridge-instances --vpto-bridge-call-lowering | FileCheck %s
+module {
+  func.func @print_without_kernel_kind(%fmt: !pto.ptr<i8, gm>, %value: f32) {
+    pto.bridge.call #pto.bridge_entry<print_f32>(%fmt, %value : !pto.ptr<i8, gm>, f32)
+    return
+  }
+}
+
+// The declaration comes from the registry descriptor (GM pointer = addrspace 1),
+// not from the call-site PTO pointer type.
+// CHECK: func.func private @pto_vpto_print_f32__0(!llvm.ptr<1>, f32)
+// CHECK-LABEL: func.func @print_without_kernel_kind
+// CHECK: %[[FMT:.*]] = builtin.unrealized_conversion_cast %arg0 : !pto.ptr<i8, gm> to !llvm.ptr<1>
+// CHECK: call @pto_vpto_print_f32__0(%[[FMT]], %arg1) : (!llvm.ptr<1>, f32) -> ()

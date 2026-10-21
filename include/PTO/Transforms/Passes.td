@@ -412,6 +412,58 @@ def PTOMaterializeTileOpSections
   ];
 }
 
+def VPTOResolveBridgeInstances : Pass<"vpto-resolve-bridge-instances", "ModuleOp"> {
+  let summary = "Resolve registered bridge entries, specialization and core to wrapper instances";
+  let constructor = "mlir::pto::createVPTOResolveBridgeInstancesPass()";
+  let dependentDialects = ["mlir::pto::PTODialect"];
+}
+
+def VPTOPrintDTDataABI : Pass<"vpto-print-dtdata-abi", "ModuleOp"> {
+  let summary = "Wire the print DebugTunnel pointer and lifecycle into printing kernels";
+  let description = [{
+    Appends the hidden trailing DTData argument the CCE device compile needs
+    and calls the print init/finish entries on entry and before each return.
+    The delivery convention is selected explicitly: `implicit` takes the
+    hidden argument the CCE launch machinery fills, `explicit` takes the
+    pointer the host runner passes as the kernel's first argument.
+  }];
+  let constructor = "mlir::pto::createVPTOPrintDTDataABIPass()";
+  let options = [Option<"mode", "mode", "std::string", "\"implicit\"",
+                        "DTData delivery: implicit or explicit">];
+  let dependentDialects = ["mlir::pto::PTODialect", "mlir::func::FuncDialect",
+                           "mlir::cf::ControlFlowDialect",
+                           "mlir::LLVM::LLVMDialect"];
+}
+
+def VPTOBridgeCallLowering : Pass<"vpto-bridge-call-lowering", "ModuleOp"> {
+  let summary = "Lower resolved bridge calls to func.call declarations";
+  let constructor = "mlir::pto::createVPTOBridgeCallLoweringPass()";
+  let dependentDialects = ["mlir::pto::PTODialect", "mlir::func::FuncDialect",
+                           "mlir::LLVM::LLVMDialect"];
+}
+
+def VPTOBridgeWrapperGen : Pass<"vpto-bridge-wrapper-gen", "ModuleOp"> {
+  let summary = "Render registered bridge instances to per-core C++ sources";
+  let constructor = "mlir::pto::createVPTOBridgeWrapperGenPass()";
+  let dependentDialects = ["mlir::pto::PTODialect"];
+}
+
+def PTOLowerBridgeOps : Pass<"pto-lower-bridge-ops", "ModuleOp"> {
+  let summary = "Lower policy-selected operations to structured bridge IR";
+  let description = [{
+    Holds the typed family lowerings (Pipe, Cube direct, Print) and owns the
+    route policy, which is parsed once when the pass is initialized. The pass
+    is module scoped because the Print family interns its format strings as
+    module-level constants.
+  }];
+  let constructor = "mlir::pto::createPTOLowerBridgeOpsPass()";
+  let options = [Option<"policyPath", "policy-path", "std::string", "\"\"",
+                        "Bridge route policy path">];
+  let dependentDialects = ["mlir::pto::PTODialect", "mlir::arith::ArithDialect",
+                           "mlir::LLVM::LLVMDialect", "mlir::scf::SCFDialect"];
+}
+
+
 def VPTOSplitCVModule : Pass<"vpto-split-cv-module", "ModuleOp"> {
   let summary = "Split a VPTO module with cube/vector sections into kernel modules";
   let description = [{

@@ -1,0 +1,38 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// An op the policy routes but no family pattern consumed must be reported, not
+// left to reach emission unlowered. Unregistered ops are never attributed to a
+// family, so an ordinary module is unaffected.
+//
+// RUN: echo 'version: 1' > %t.policy
+// RUN: echo 'families:' >> %t.policy
+// RUN: echo '  cube: { enabled_ops: [pto.tmatmul] }' >> %t.policy
+// RUN: pto-test-opt %s "--pto-lower-bridge-ops=policy-path=%t.policy" --split-input-file --verify-diagnostics
+
+// The matmul bridge needs planned tile addresses; without them the adapter
+// reports why, and the op is not silently left behind.
+module attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {
+  func.func @unplanned(%dst: i64, %lhs: i64, %rhs: i64) {
+    %a = pto.alloc_tile : !pto.tile_buf<left, 16x16xf16>
+    %b = pto.alloc_tile : !pto.tile_buf<right, 16x16xf16>
+    %c = pto.alloc_tile : !pto.tile_buf<acc, 16x16xf32>
+    // expected-error @+1 {{matmul bridge dst requires an alloc_tile with a planned i64 address}}
+    pto.tmatmul ins(%a, %b : !pto.tile_buf<left, 16x16xf16>, !pto.tile_buf<right, 16x16xf16>) outs(%c : !pto.tile_buf<acc, 16x16xf32>)
+    return
+  }
+}
+
+// -----
+// Nothing here is a registry member, so no family claims these ops.
+module attributes {pto.kernel_kind = #pto.kernel_kind<cube>} {
+  func.func @unrelated(%a: i64) -> i64 {
+    %c1 = arith.constant 1 : i64
+    %sum = arith.addi %a, %c1 : i64
+    return %sum : i64
+  }
+}

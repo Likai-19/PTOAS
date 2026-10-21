@@ -1159,7 +1159,8 @@ static LogicalResult emitVPTOLLVMFatobj(
           mlir::pto::emitFatobjLLVM(
               jobResult.vptoCubeModule.module.get(), jobResult.vptoVectorModule.module.get(), stubSource, outputPath,
               moduleId, *toolchain, context.getTempFiles(), context.getVFSIMTSizeFixMode(), llvm::errs(),
-              context.getBishengSchedulerMode()))) {
+              context.getBishengSchedulerMode(), jobResult.vptoBridgeWrappers,
+              jobResult.vptoPrintMode))) {
       return failure();
   }
   return success();

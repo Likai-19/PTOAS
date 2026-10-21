@@ -118,22 +118,49 @@ LogicalResult emitFatobjCCE(llvm::StringRef cppSource,
                             TempFileRegistry &tempFiles,
                             llvm::raw_ostream &diagOS);
 
+/// One VPTO bridge wrapper translation unit, as produced by WrapperGen. An
+/// absent core means the unit is core-independent and is compiled for every
+/// device module present.
+struct BridgeWrapperTU {
+  std::string source;
+  std::optional<ObjectEmissionDeviceTarget> core;
+  /// A print unit needs the CCE print support enabled in its device compile.
+  bool needsPrintSupport = false;
+};
+
+/// How a printing kernel receives its DebugTunnel pointer. None means the
+/// module does not print, so no print support is enabled anywhere.
+enum class PrintDTDataMode { None, Implicit, Explicit };
+
+/// Bridge wrapper bitcode to link into one device module before the Bisheng
+/// object compile. `linkedLLPath` is where the linked IR is written.
+struct BridgeLinkInputs {
+  llvm::ArrayRef<std::string> bitcodePaths;
+  llvm::StringRef linkedLLPath;
+};
+
 LogicalResult emitVPTOVectorDeviceObject(
     llvm::Module& module, llvm::StringRef llPath, llvm::StringRef outObjPath, const CANNToolchain& toolchain,
     llvm::StringRef stderrPath, llvm::raw_ostream& diagOS,
-    BishengSchedulerMode schedulerMode = BishengSchedulerMode::Auto);
+    BishengSchedulerMode schedulerMode = BishengSchedulerMode::Auto,
+    BridgeLinkInputs bridge = {},
+    PrintDTDataMode printMode = PrintDTDataMode::None);
 
 LogicalResult emitVPTOCubeDeviceObject(
     llvm::Module &module, llvm::StringRef llPath, llvm::StringRef outObjPath,
     const CANNToolchain &toolchain, llvm::StringRef stderrPath,
     llvm::raw_ostream &diagOS,
-    BishengSchedulerMode schedulerMode = BishengSchedulerMode::Auto);
+    BishengSchedulerMode schedulerMode = BishengSchedulerMode::Auto,
+    BridgeLinkInputs bridge = {},
+    PrintDTDataMode printMode = PrintDTDataMode::None);
 
 LogicalResult emitFatobjLLVM(
     llvm::Module* cubeModule, llvm::Module* vectorModule, llvm::StringRef stubSource, llvm::StringRef outputPath,
     llvm::StringRef moduleId, const CANNToolchain& toolchain, TempFileRegistry& tempFiles,
     VFSIMTSizeFixMode vfsimtSizeFixMode, llvm::raw_ostream& diagOS,
-    BishengSchedulerMode schedulerMode = BishengSchedulerMode::Auto);
+    BishengSchedulerMode schedulerMode = BishengSchedulerMode::Auto,
+    llvm::ArrayRef<BridgeWrapperTU> bridgeWrappers = {},
+    PrintDTDataMode printMode = PrintDTDataMode::None);
 
 LogicalResult mergeDeviceObjects(llvm::ArrayRef<std::string> deviceObjPaths,
                                  llvm::StringRef outObjPath,
@@ -156,7 +183,9 @@ LogicalResult linkFatobjs(llvm::ArrayRef<std::string> fatobjPaths,
 LogicalResult emitFatobjLLVMWithRuntime(
     llvm::Module* cubeModule, llvm::Module* vectorModule, llvm::StringRef stubSource, llvm::ToolOutputFile& outputFile,
     VFSIMTSizeFixMode vfsimtSizeFixMode, llvm::raw_ostream& diagOS,
-    BishengSchedulerMode schedulerMode = BishengSchedulerMode::Auto);
+    BishengSchedulerMode schedulerMode = BishengSchedulerMode::Auto,
+    llvm::ArrayRef<BridgeWrapperTU> bridgeWrappers = {},
+    PrintDTDataMode printMode = PrintDTDataMode::None);
 
 } // namespace mlir::pto
 

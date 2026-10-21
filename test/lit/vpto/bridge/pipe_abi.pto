@@ -1,0 +1,44 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. THIS SOFTWARE IS PROVIDED ON AN
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+// or implied. See the License in the root of the software repository.
+
+// RUN: pto-test-opt %s --split-input-file --verify-diagnostics
+module {
+  func.func @pipe_calls(%pipe: !pto.pipe, %addr: i64) {
+    pto.bridge.call #pto.bridge_entry<pipe_push>(%pipe, %addr : !pto.pipe, i64)
+    pto.bridge.call #pto.bridge_entry<pipe_pop>(%pipe : !pto.pipe) -> i64
+    pto.bridge.call #pto.bridge_entry<pipe_free>(%pipe : !pto.pipe)
+    return
+  }
+}
+
+// -----
+module {
+  func.func @pointer_is_not_handle(%pointer: !pto.ptr<i8, ub>, %addr: i64) {
+    // expected-error @+1 {{argument #0 has incompatible ABI type}}
+    pto.bridge.call #pto.bridge_entry<pipe_push>(%pointer, %addr : !pto.ptr<i8, ub>, i64)
+    return
+  }
+}
+
+// -----
+module {
+  func.func @handle_is_not_pointer(%pipe: !pto.pipe) {
+    // expected-error @+1 {{argument #0 has incompatible ABI type}}
+    pto.bridge.call #pto.bridge_entry<print_string>(%pipe : !pto.pipe)
+    return
+  }
+}
+
+// -----
+module {
+  func.func @print_pointer(%fmt: !pto.ptr<i8, gm>, %dtdata: !pto.ptr<i8, gm>) {
+    pto.bridge.call #pto.bridge_entry<print_string>(%fmt : !pto.ptr<i8, gm>)
+    pto.bridge.call #pto.bridge_entry<print_init>(%dtdata : !pto.ptr<i8, gm>)
+    pto.bridge.call #pto.bridge_entry<print_finish>(%dtdata : !pto.ptr<i8, gm>)
+    return
+  }
+}

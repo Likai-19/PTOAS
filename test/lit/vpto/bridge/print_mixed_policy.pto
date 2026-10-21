@@ -1,0 +1,14 @@
+// RUN: echo 'version: 1' > %t.policy
+// RUN: echo 'families:' >> %t.policy
+// RUN: echo '  print: { enabled_ops: [pto.print] }' >> %t.policy
+// RUN: pto-test-opt %s "--pto-lower-bridge-ops=policy-path=%t.policy" --verify-diagnostics
+
+module {
+  func.func @mixed(%address: i64, %value: i32) {
+    pto.print ins("%d", %value : i32)
+    %tile = pto.alloc_tile addr = %address : !pto.tile_buf<vec, 2x8xf32>
+    // expected-error @+1 {{the route policy excludes pto.tprint, which has no non-bridge VPTO lowering}}
+    pto.tprint ins(%tile : !pto.tile_buf<vec, 2x8xf32>)
+    return
+  }
+}

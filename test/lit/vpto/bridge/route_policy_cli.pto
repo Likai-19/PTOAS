@@ -1,0 +1,60 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// The route policy comes from the ptoas CLI and is parsed once by
+// pto-lower-bridge-ops.
+//
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s -o - | FileCheck %s --check-prefix=ON
+//
+// A family the policy leaves off keeps its own lowering. Checked at the pass
+// level: the non-bridge path for a section-sugar pipe needs pto.kernel_kind on
+// the function, which a two-section kernel cannot carry.
+// RUN: echo 'version: 1' > %t.off
+// RUN: echo 'families:' >> %t.off
+// RUN: echo '  pipe: { enabled: false }' >> %t.off
+// RUN: pto-test-opt %s "--pto-lower-bridge-ops=policy-path=%t.off" | FileCheck %s --check-prefix=OFF
+//
+// RUN: not ptoas --pto-arch=a5 --pto-backend=vpto --vpto-bridge-policy=%t.missing --emit-vpto %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=BADPATH
+// BADPATH: VPTO bridge policy: cannot read
+
+module attributes {pto.target_arch = "a5"} {
+  func.func @routed(%out: !pto.ptr<f32, gm>) {
+    %fifo_addr = arith.constant 0 : i32
+    pto.section.cube {
+      %pipe = pto.initialize_l2l_pipe{dir_mask = 1, slot_size = 1024, slot_num = 8, flag_base = 0, nosplit = false} (%fifo_addr : i32) -> !pto.pipe
+      %acc = pto.alloc_tile
+        : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>
+      pto.tpush(%acc, %pipe : !pto.tile_buf<loc=acc, dtype=f32, rows=16, cols=16, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=1024, pad=0>, !pto.pipe) {split = 1}
+    }
+    pto.section.vector {
+      %c0 = arith.constant 0 : i64
+      %c1 = arith.constant 1 : i64
+      %c512 = arith.constant 512 : i64
+      %pipe = pto.initialize_l2l_pipe{dir_mask = 1, slot_size = 1024, slot_num = 8, flag_base = 0, nosplit = false} (%fifo_addr : i32) -> !pto.pipe
+      %tile = pto.declare_tile -> !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=16, v_row=8, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+      pto.tpop(%tile, %pipe : !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=16, v_row=8, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>, !pto.pipe) {split = 1}
+      %ub = pto.tile_buf_addr %tile
+        : !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=16, v_row=8, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+       -> !pto.ptr<f32, ub>
+      pto.mte_ub_gm %ub, %out, %c512 nburst(%c1, %c0, %c0)
+        : !pto.ptr<f32, ub>, !pto.ptr<f32, gm>, i64, i64, i64, i64
+      pto.tfree(%pipe : !pto.pipe) {split = 1}
+    }
+    return
+  }
+}
+
+// Routing on (built-in default): the lifecycle becomes bridge IR.
+// ON-NOT: pto.tpush
+// ON-NOT: pto.tpop
+// ON-DAG: pto.bridge.call <pipe_push>
+// ON-DAG: pto.bridge.call <pipe_pop>
+
+// Routing off: the pipe ops are left untouched for the regular path.
+// OFF-NOT: pto.bridge
+// OFF: pto.tpush
+// OFF: pto.tpop

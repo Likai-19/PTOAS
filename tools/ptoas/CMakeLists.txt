@@ -11,6 +11,11 @@
 # RPATHs; editable builds add the external LLVM directory explicitly below.
 set(CMAKE_INSTALL_REMOVE_ENVIRONMENT_RPATH ON)
 
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/cce/pt_print_host.cpp")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cce/pt_print_host.cpp" PTOAS_PRINT_HOST_SOURCE)
+configure_file(PrintHostSource.h.in PrintHostSource.h @ONLY)
+
 set(PTOAS_RUNTIME_SOURCES
   ptoas.cpp
   ptoas_name_hints.cpp
@@ -73,8 +78,12 @@ foreach(_ptoas_wrapper IN ITEMS
 endforeach()
 
 function(ptoas_configure_runtime_compile_target target_name)
+  target_include_directories(${target_name} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
   target_compile_definitions(${target_name} PRIVATE
     PTOAS_RELEASE_VERSION="${PTOAS_CLI_VERSION}"
+    # Host-side DebugTunnel close override for printing kernels. It is device
+    # host glue rather than part of the compiler, so it is compiled by object
+    # emission and merged into the fatobj, not built into this target.
     ${ARGN}
   )
   add_dependencies(${target_name}
