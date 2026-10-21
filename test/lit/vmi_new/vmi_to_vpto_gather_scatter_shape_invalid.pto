@@ -30,17 +30,21 @@ module {
 module {
   func.func @vmi_to_vpto_gather_tail_invalid(
       %src: !pto.ptr<f32, ub>,
-      %indices: !pto.vmi.vreg<32xi32, #pto.vmi.layout<contiguous>>,
-      %mask: !pto.vmi.mask<32xb32, #pto.vmi.layout<contiguous>>) {
+      %indices: !pto.vmi.vreg<96xi32, #pto.vmi.layout<contiguous>>,
+      %mask: !pto.vmi.mask<96xb32, #pto.vmi.layout<contiguous>>) {
     %out = pto.vmi.vgather %src, %indices, %mask
         : !pto.ptr<f32, ub>,
-          !pto.vmi.vreg<32xi32, #pto.vmi.layout<contiguous>>,
-          !pto.vmi.mask<32xb32, #pto.vmi.layout<contiguous>>
-        -> !pto.vmi.vreg<32xf32, #pto.vmi.layout<contiguous>>
+          !pto.vmi.vreg<96xi32, #pto.vmi.layout<contiguous>>,
+          !pto.vmi.mask<96xb32, #pto.vmi.layout<contiguous>>
+        -> !pto.vmi.vreg<96xf32, #pto.vmi.layout<contiguous>>
     return
   }
 }
 
+// 96 f32 lanes span two physical chunks with a 32-lane tail, so the partial
+// tail crosses a second register and full chunks are still required; a
+// single partially filled chunk is covered by
+// vmi_to_vpto_gather_b32_partial_chunk.pto.
 // CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.gather lowers through pto.vgather2/pto.vgather2_bc + pto.vsel only
 // CHECK-SAME: result requires full physical chunks
 // CHECK-SAME: found padding lane in physical chunk

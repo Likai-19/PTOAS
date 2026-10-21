@@ -3925,15 +3925,21 @@ vmi.gather:
     supported 32-bit mode:
       T must be a 32-bit element type
       indices must be signless or unsigned i32
-      result / indices / passthru / mask must be contiguous full physical chunks
+      result / indices / passthru / mask must be contiguous physical chunks;
+        a single partially filled chunk is allowed because padding lanes stay
+        masked off and both gather forms leave masked-off lanes unread and
+        fault-free
       mask granularity must be b32
       for each physical chunk i:
         gathered_i = pto.vgather2_bc source, indices_i, mask_i
         result_i   = pto.vsel gathered_i, passthru_i, mask_i
-    supported ui16 mode:
-      T must be ui16
-      indices must be unsigned i16
-      result / indices / passthru / mask must be one contiguous physical chunk
+    supported 16-bit mode:
+      T must be i16/ui16/f16/bf16, or i8/ui8 gathering into the matching
+      i16/ui16 result through per-lane zero-extension
+      indices must be unsigned ui16
+      result / indices / passthru / mask must be contiguous physical chunks;
+        a single partially filled chunk is allowed under the same padding-lane
+        argument as the 32-bit mode
       mask granularity must be b16
       gathered = pto.vgather2 source, indices, mask
       result   = pto.vsel gathered, passthru, mask
@@ -3944,8 +3950,8 @@ vmi.gather:
   reason for vsel:
     VPTO gather false predicate lanes do not read memory but produce zero; VMI false lanes preserve passthru.
   unsupported cases:
-    f16/b16/f8/i8 result element types
-    partial/tail chunks
+    8-bit result element types
+    partial/tail chunks spanning multiple physical chunks
     non-contiguous layouts
     memref/gm source
     guarded/scratch fallback

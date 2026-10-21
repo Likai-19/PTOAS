@@ -226,9 +226,10 @@ static std::optional<WalkResult> verifySupportedVMIGatherOp(Operation *op) {
     return verifySupportedShapeOp(
         gather, checkSupportedGatherShape,
         "pto.vmi.gather lowers through pto.vgather2/pto.vgather2_bc + pto.vsel "
-        "only for UB pointer sources, contiguous full physical chunks, "
-        "ui16/i16/f16/bf16 results with ui16 indices and b16 masks, or "
-        "32-bit results with i32 indices and b32 masks (");
+        "only for UB pointer sources, contiguous physical chunks with a "
+        "partially filled single chunk allowed, ui16/i16/f16/bf16 results "
+        "with ui16 indices and b16 masks, or 32-bit results with i32 indices "
+        "and b32 masks (");
   }
   return std::nullopt;
 }

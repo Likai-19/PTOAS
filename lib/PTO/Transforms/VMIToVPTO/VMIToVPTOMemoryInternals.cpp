@@ -1377,16 +1377,17 @@ checkGatherPhysicalChunkRequirement(VMIVRegType resultType,
                                     VMIVRegType indicesType,
                                     VMIVRegType passthruType,
                                     VMIMaskType maskType,
-                                    bool isB16Gather, bool isB32Gather,
                                     std::string *reason) {
   FailureOr<int64_t> resultArity = getVMIPhysicalArity(resultType);
   if (failed(resultArity)) {
     return failure();
   }
-  bool requiresFullChunks = isB32Gather;
-  if (isB16Gather) {
-    requiresFullChunks = *resultArity != 1;
-  }
+  // Both pto.vgather2 and pto.vgather2_bc leave masked-off lanes unread and
+  // fault-free, and the lowering zeroes every padding mask lane, so a
+  // partially filled single physical chunk lowers exactly like a full one.
+  // Results spanning several chunks keep requiring full chunks: a partial
+  // multi-chunk tail is not a supported gather surface at either granularity.
+  bool requiresFullChunks = *resultArity != 1;
   return checkSupportedGatherPhysicalShape(
       resultType, indicesType, passthruType, maskType, requiresFullChunks,
       reason);
@@ -1417,19 +1418,8 @@ checkSupportedGatherShape(VMIGatherOp op, std::string *reason) {
     return fail(elementReason);
   }
 
-  unsigned resultBits =
-      pto::getPTOStorageElemBitWidth(resultType.getElementType());
-  auto indexElementType = dyn_cast<IntegerType>(indicesType.getElementType());
-  bool isB16Gather = resultBits == mlir::pto::kValue16 && indexElementType &&
-                     indexElementType.getWidth() == mlir::pto::kValue16 &&
-                     maskType.getGranularity() == "b16";
-  bool isB32Gather = resultBits == 32 && indexElementType &&
-                     indexElementType.getWidth() == 32 &&
-                     maskType.getGranularity() == "b32";
-
-  return checkGatherPhysicalChunkRequirement(
-      resultType, indicesType, passthruType, maskType, isB16Gather,
-      isB32Gather, reason);
+  return checkGatherPhysicalChunkRequirement(resultType, indicesType,
+                                             passthruType, maskType, reason);
 }
 
 LogicalResult checkSupportedScatterPhysicalShape(

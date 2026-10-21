@@ -474,6 +474,10 @@ loads at 64/128 lanes use bounded 2/4-block reads at aligned addresses.
 - **attributes:** `pmode`
 - **datatypes:** B32 -- `i32`/`ui32`/`f32`; B16 -- `i16`/`ui16`/`f16`/`bf16`,
   plus `i8`/`ui8` -> `i16`/`ui16` zero-extension.
+- **shape constraints:** `L` may partially fill a single physical chunk
+  (64 lanes for B32, 128 for B16); padding lanes stay masked off, do not read
+  memory, and do not participate in the result. Once `L` spans several
+  physical chunks, every chunk must be full.
 - **lowering:** B16 -> `K × pto.vgather2`; B32 -> `K × pto.vgather2_bc`.
   A statically all-active mask omits the trailing `vsel`.
 
