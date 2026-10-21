@@ -1171,6 +1171,31 @@ struct ExpandA5Bf16VmulsPattern : public OpRewritePattern<pto::VmulsOp> {
   }
 };
 
+struct ExpandA5Bf16VnegPattern : public OpRewritePattern<pto::VnegOp> {
+  DmaArch arch;
+
+  ExpandA5Bf16VnegPattern(MLIRContext *ctx, DmaArch arch)
+      : OpRewritePattern(ctx), arch(arch) {}
+
+  LogicalResult matchAndRewrite(pto::VnegOp op,
+                                PatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<pto::VRegType>(op.getResult().getType());
+    if (arch != DmaArch::A5 || !resultType ||
+        !resultType.getElementType().isBF16()) {
+      return failure();
+    }
+
+    // Bisheng cannot select A5 bf16 vneg. Lower it to vmuls(-1); the existing
+    // bf16 vmuls pattern expands that operation before scheduling.
+    Value minusOne = rewriter.create<arith::ConstantOp>(
+        op.getLoc(), rewriter.getFloatAttr(resultType.getElementType(), -1.0));
+    auto product = rewriter.create<pto::VmulsOp>(
+        op.getLoc(), resultType, op.getInput(), minusOne, op.getMask());
+    rewriter.replaceOp(op, product.getResult());
+    return success();
+  }
+};
+
 struct ExpandDmaLoadPattern : public OpRewritePattern<pto::MteGmUbOp> {
   DmaArch dmaArch;
   explicit ExpandDmaLoadPattern(MLIRContext *ctx, DmaArch arch)
@@ -1959,6 +1984,7 @@ struct VPTOExpandWrapperOpsPass : public pto::impl::VPTOExpandWrapperOpsBase<VPT
         patterns.add(std::make_unique<ExpandDmaLoadPattern>(&getContext(), dmaArch));
         patterns.add(std::make_unique<ExpandDmaStorePattern>(&getContext(), dmaArch));
         patterns.add(std::make_unique<ExpandA5Bf16VmulsPattern>(&getContext(), dmaArch));
+        patterns.add(std::make_unique<ExpandA5Bf16VnegPattern>(&getContext(), dmaArch));
         patterns.add<
             ExpandUvldPattern, ExpandMteUbUbPattern, ExpandMteUbL1Pattern, ExpandCubeLoadPattern,
             ExpandCubeStorePattern, ExpandBiasLoadPattern, ExpandFpLoadPattern, ExpandCubeLoadFracPattern,

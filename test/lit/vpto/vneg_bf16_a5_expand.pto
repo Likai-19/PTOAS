@@ -1,0 +1,43 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software; you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ( ptoas --pto-arch=a5 --pto-backend=vpto --vpto-scheduler=off %s -o /dev/null --mlir-print-ir-after=vpto-expand-wrapper-ops 2>&1 || true ) | FileCheck %s --check-prefix=EXPAND
+// RUN: ( ptoas --pto-arch=a5 --pto-backend=vpto --vpto-scheduler=off %s -o /dev/null --mlir-print-ir-after=convert-func-to-llvm 2>&1 || true ) | FileCheck %s --check-prefix=LLVM
+
+module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
+  func.func @bf16_vneg(%src: !pto.ptr<bf16, ub>, %dst: !pto.ptr<bf16, ub>) attributes {pto.kernel} {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %mask = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+      %value = pto.vlds %src[%c0] : !pto.ptr<bf16, ub> -> !pto.vreg<128xbf16>
+      %negated = pto.vneg %value, %mask : !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<128xbf16>
+      pto.vsts %negated, %dst[%c0], %mask : !pto.vreg<128xbf16>, !pto.ptr<bf16, ub>, !pto.mask<b16>
+    }
+    return
+  }
+}
+
+// EXPAND-LABEL: func.func @bf16_vneg
+// EXPAND-NOT: pto.vneg
+// EXPAND: arith.constant {{.*}} : bf16
+// EXPAND-NOT: pto.vneg
+// EXPAND: %[[BROADCAST:.*]] = pto.vdup %{{.*}}, %{{.*}} : bf16, !pto.mask<b16> -> !pto.vreg<128xbf16>
+// EXPAND-NOT: pto.vneg
+// EXPAND: pto.vmul %{{.*}}, %[[BROADCAST]], %{{.*}} : !pto.vreg<128xbf16>, !pto.vreg<128xbf16>, !pto.mask<b16> -> !pto.vreg<128xbf16>
+// EXPAND-NOT: pto.vneg
+// EXPAND-NOT: pto.vmuls
+
+// LLVM-LABEL: llvm.func @bf16_vneg_mix_aiv
+// LLVM-NOT: llvm.hivm.vneg
+// LLVM-NOT: llvm.hivm.vmuls.s.x.v128bf16
+// LLVM: llvm.call @llvm.hivm.vdups.z.v128bf16
+// LLVM-NOT: llvm.hivm.vneg
+// LLVM-NOT: llvm.hivm.vmuls.s.x.v128bf16
+// LLVM: llvm.call @llvm.hivm.vmul.s.x.v128bf16
+// LLVM-NOT: llvm.hivm.vneg
+// LLVM-NOT: llvm.hivm.vmuls.s.x.v128bf16
